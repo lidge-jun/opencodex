@@ -13,7 +13,10 @@
  *   codexAutoStart gate), mark recycle so exit cleanup keeps injection, exit(0).
  * - If detached spawn fails (sync throw or pre-start `error`): exit(1) without
  *   markRecycling — after drain the listen socket is already closed, so a latch
- *   reset cannot recover serving.
+ *   reset cannot recover serving. Clear inherited `OCX_SERVICE` so exit cleanup
+ *   can restore Codex/Grok fences (ensure/tray daemons set the marker without a
+ *   real supervisor). Log only a stable errno code — never the raw message
+ *   (paths in ENOENT often include the OS username).
  */
 import { spawn } from "node:child_process";
 import {
@@ -65,6 +68,15 @@ function resolveListenPort(): number | undefined {
 
 function isSupervisedServiceChild(): boolean {
   return process.env.OCX_SERVICE === "1" && isServiceInstalled();
+}
+
+/** Stable, path-free spawn failure label for logs (never interpolate err.message). */
+function spawnFailureCode(err: unknown): string {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (typeof code === "string" && code.length > 0 && code.length <= 64) return code;
+  }
+  return "spawn_failed";
 }
 
 function spawnDetachedStart(port?: number): Promise<void> {
@@ -136,9 +148,13 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
       try {
         await (io.spawnStart ?? spawnDetachedStart)(port);
       } catch (err) {
-        const detail = err instanceof Error ? err.message : "unknown error";
-        console.warn(`⚠️  Drain-and-restart spawn failed (${detail}); exiting without replacement`);
+        console.warn(
+          `⚠️  Drain-and-restart spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
+        );
         // Listen socket is already stopped; do not markRecycling — no child to inherit fences.
+        // ensure/tray children inherit OCX_SERVICE=1 without an installed service; clear it so
+        // syncCleanup can restore Codex/Grok fences instead of leaving clients pointed at a dead port.
+        delete process.env.OCX_SERVICE;
         exitProcess(1);
         return;
       }

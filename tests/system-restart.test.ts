@@ -87,25 +87,40 @@ describe("acceptSystemRestart", () => {
   test("spawn sync throw exits 1 without marking recycle", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
 
-    acceptSystemRestart({
-      isDraining: () => false,
-      getActiveTurnCount: () => 0,
-      isSupervisedServiceChild: () => false,
-      listenPort: () => 10123,
-      schedule: (fn) => { scheduled = fn; },
-      setDraining: () => {},
-      drainAndShutdown: async () => { calls.push("drain"); },
-      spawnStart: () => {
-        calls.push("start");
-        throw new Error("ENOENT");
-      },
-      markRecycling: () => { calls.push("recycle"); },
-      exitProcess: (code) => { calls.push(`exit:${code}`); },
-    });
+    try {
+      acceptSystemRestart({
+        isDraining: () => false,
+        getActiveTurnCount: () => 0,
+        isSupervisedServiceChild: () => false,
+        listenPort: () => 10123,
+        schedule: (fn) => { scheduled = fn; },
+        setDraining: () => {},
+        drainAndShutdown: async () => { calls.push("drain"); },
+        spawnStart: () => {
+          calls.push("start");
+          const err = new Error(
+            "ENOENT: no such file or directory, uv_spawn 'C:\\Users\\Alice\\AppData\\Local\\bun\\bun.exe'",
+          ) as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        },
+        markRecycling: () => { calls.push("recycle"); },
+        exitProcess: (code) => { calls.push(`exit:${code}`); },
+      });
 
-    await scheduled!();
-    expect(calls).toEqual(["drain", "start", "exit:1"]);
+      await scheduled!();
+      expect(calls).toEqual(["drain", "start", "exit:1"]);
+      expect(warnings.some((w) => w.includes("ENOENT"))).toBe(true);
+      expect(warnings.some((w) => /Alice|AppData|bun\.exe/i.test(w))).toBe(false);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("spawn async rejection exits 1 without marking recycle", async () => {
@@ -130,6 +145,39 @@ describe("acceptSystemRestart", () => {
 
     await scheduled!();
     expect(calls).toEqual(["drain", "start", "exit:1"]);
+  });
+
+  test("spawn failure clears OCX_SERVICE so exit cleanup can restore fences", async () => {
+    const calls: string[] = [];
+    let scheduled: (() => void | Promise<void>) | null = null;
+    const prev = process.env.OCX_SERVICE;
+    process.env.OCX_SERVICE = "1";
+
+    try {
+      acceptSystemRestart({
+        isDraining: () => false,
+        getActiveTurnCount: () => 0,
+        // ensure/tray: marker set, but no installed service → unsupervised spawn path
+        isSupervisedServiceChild: () => false,
+        listenPort: () => 10123,
+        schedule: (fn) => { scheduled = fn; },
+        setDraining: () => {},
+        drainAndShutdown: async () => { calls.push("drain"); },
+        spawnStart: () => {
+          calls.push("start");
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        },
+        markRecycling: () => { calls.push("recycle"); },
+        exitProcess: (code) => { calls.push(`exit:${code}`); },
+      });
+
+      await scheduled!();
+      expect(calls).toEqual(["drain", "start", "exit:1"]);
+      expect(process.env.OCX_SERVICE).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prev;
+    }
   });
 
   test("does not schedule a second drain while already draining", async () => {
