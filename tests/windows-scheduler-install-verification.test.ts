@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   buildWindowsTaskXml,
+  decodeSchtasksOutput,
   evaluateWindowsSchedulerInstallVerification,
   probeWindowsSchedulerTask,
   setQuerySchtasksForTests,
@@ -11,6 +12,30 @@ import {
 
 afterEach(() => {
   setQuerySchtasksForTests(null);
+});
+
+describe("decodeSchtasksOutput", () => {
+  test("decodes UTF-16LE BOM XML that would fail as UTF-8", () => {
+    const xml = buildWindowsTaskXml(
+      "C:\\Users\\x\\.opencodex\\opencodex-service.cmd",
+      "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs",
+    );
+    const utf16 = Buffer.from(`\uFEFF${xml}`, "utf16le");
+    const decoded = decodeSchtasksOutput(utf16);
+    expect(decoded.startsWith("<?xml")).toBe(true);
+    expect(windowsTaskRegistrationHealthy(
+      decoded,
+      "C:\\WINDOWS\\System32\\wscript.exe",
+      "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs",
+    )).toBe(true);
+    // Sanity: the historical utf8 mis-decode is unhealthy.
+    expect(windowsTaskRegistrationHealthy(utf16.toString("utf8"))).toBe(false);
+  });
+
+  test("keeps plain UTF-8 schtasks text listings intact", () => {
+    const text = "Folder: \\\nTaskName: opencodex-proxy";
+    expect(decodeSchtasksOutput(Buffer.from(text, "utf8"))).toBe(text);
+  });
 });
 
 describe("windowsSchedulerCsvIncludesTask", () => {

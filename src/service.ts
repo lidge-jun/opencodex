@@ -351,8 +351,41 @@ function sh(cmd: string): string {
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
+/**
+ * Decode schtasks stdout. `/query /xml` emits UTF-16LE (often with BOM) because the
+ * registered task document is UTF-16; reading that as UTF-8 makes every health check
+ * fail ("registration present but unhealthy") and rolls back a successful elevated create.
+ */
+export function decodeSchtasksOutput(buffer: Buffer): string {
+  if (buffer.length === 0) return "";
+  const bomUtf16Le = buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe;
+  const bomUtf16Be = buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff;
+  const looksUtf16Le = buffer.length >= 4
+    && buffer[1] === 0x00
+    && buffer[3] === 0x00
+    && buffer[0] !== 0x00;
+  if (bomUtf16Le || looksUtf16Le) {
+    return buffer.toString("utf16le").replace(/^\uFEFF/, "").trim();
+  }
+  if (bomUtf16Be) {
+    // Swap pairs then decode as utf16le.
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let i = 2; i + 1 < buffer.length; i += 2) {
+      swapped[i - 2] = buffer[i + 1]!;
+      swapped[i - 1] = buffer[i]!;
+    }
+    return swapped.toString("utf16le").trim();
+  }
+  return buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+}
+
 function runFile(file: string, args: string[]): string {
-  return execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+  const buffer = execFileSync(file, args, {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  }) as Buffer;
+  return decodeSchtasksOutput(buffer);
 }
 
 function windowsSchtasks(): string {
