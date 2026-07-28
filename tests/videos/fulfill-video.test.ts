@@ -90,6 +90,8 @@ describe("pollVideoWithHeartbeats", () => {
   });
 
   test("yields at least one heartbeat before returning", async () => {
+    // Mock sleep to resolve immediately so the 5s poll interval doesn't block CI.
+    const origSetTimeout = globalThis.setTimeout;
     let callCount = 0;
     mock.module("../../src/images/xai-video-client", () => ({
       pollVideoJob: mock(() => {
@@ -100,6 +102,8 @@ describe("pollVideoWithHeartbeats", () => {
         });
       }),
     }));
+    // Override setTimeout globally — sleep() uses it internally.
+    globalThis.setTimeout = ((fn: () => void) => { fn(); return 0 as unknown as NodeJS.Timeout; }) as typeof globalThis.setTimeout;
 
     const ac = new AbortController();
     const gen = pollVideoWithHeartbeats("r1", { baseUrl: "https://api.x.ai/v1", token: "t" }, ac.signal, 60_000);
@@ -110,9 +114,10 @@ describe("pollVideoWithHeartbeats", () => {
       if (done) { result = value; break; }
       heartbeats.push(value.message);
     }
+    globalThis.setTimeout = origSetTimeout;
     expect(heartbeats.length).toBeGreaterThanOrEqual(1);
     expect(result.ok).toBe(true);
-  }, 15_000); // 5s initial poll interval means ~10s for 2 polls
+  }, 5_000);
 
   test("returns failed status", async () => {
     mock.module("../../src/images/xai-video-client", () => ({

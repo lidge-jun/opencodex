@@ -12,6 +12,7 @@
  */
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
@@ -704,8 +705,28 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           pruneArtifacts(videoPlan?.artifactsKeepCount ?? plan?.artifactsKeepCount);
           // Drop results whose artifact files were pruned — never hand the model a dead path.
           for (const f of fulfilled) {
-            if (f.result.ok && f.result.path && !existsSync(f.result.path)) {
-              f.result = { ...f.result, ok: false, path: undefined, files: [], count: 0, error: "artifact was pruned before delivery (increase artifactsKeepCount)" };
+            if (!f.result.ok || !f.result.files || f.result.files.length === 0) continue;
+            const survivors = f.result.files.filter(p => existsSync(p));
+            if (survivors.length === f.result.files.length) continue; // nothing pruned
+            if (survivors.length === 0) {
+              f.result = {
+                ok: false, model: f.result.model, prompt: f.result.prompt ?? "",
+                files: [], count: 0,
+                error: "artifact was pruned before delivery (increase artifactsKeepCount)",
+              } as typeof f.result;
+            } else {
+              // Some files survived — refresh from survivors
+              f.result = { ...f.result, files: survivors, count: survivors.length };
+              const primary = survivors[0]!;
+              (f.result as { path?: string }).path = primary;
+              if ("markdown" in f.result && f.result.markdown) {
+                // Image markdown references the primary path; video uses pathToFileURL
+                if (f.result.markdown.startsWith("![")) {
+                  (f.result as { markdown: string }).markdown = `![image](${pathToFileURL(primary).href})`;
+                } else {
+                  (f.result as { markdown: string }).markdown = `[video](${pathToFileURL(primary).href})`;
+                }
+              }
             }
           }
           const now = Date.now();

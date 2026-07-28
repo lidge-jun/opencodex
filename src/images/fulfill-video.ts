@@ -17,7 +17,7 @@ const MAX_POLL_INTERVAL_MS = 15_000;
 const POLL_BACKOFF = 1.5;
 const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new Error("aborted"));
   return new Promise((resolve, reject) => {
     const onAbort = (): void => { clearTimeout(timer); reject(new Error("aborted")); };

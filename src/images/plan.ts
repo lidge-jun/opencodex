@@ -110,6 +110,8 @@ export async function planVideoBridge(
   // Collect any existing function tools whose name matches a video_gen alias
   // so the loop can intercept and replace them (image-bridge parity).
   for (const t of parsed.context?.tools ?? []) {
+    // Skip namespaced tools — a namespaced MCP video_gen must not be intercepted.
+    if (t.namespace) continue;
     const fnName = typeof t.name === "string" ? t.name
       : (t as unknown as { function?: { name?: string } }).function?.name;
     if (typeof fnName === "string" && isVideoGenName(fnName)) {
