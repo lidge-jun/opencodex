@@ -8,9 +8,13 @@
  *
  * Intentionally narrower than the Codex pool: no mid-session quota rotation,
  * soft-avoid ladders, or probe leases. Anthropic OAuth is ToS-sensitive.
+ *
+ * Affinity is process-local (lost on restart). Cooldown uses Retry-After when present,
+ * otherwise a default backoff. 401/403 credential failures should set needsReauth on the
+ * store (existing OAuth path) so the account is excluded from eligibility.
  */
 import { createHash } from "node:crypto";
-import { setActiveAccount, getAccountSet } from "./store";
+import { setActiveAccount, getAccountSet, getAccountCredential } from "./store";
 import { getCachedProviderAccountQuota } from "../providers/quota";
 import { fallbackCodexAccountLogLabel } from "../codex/account-label";
 import type { OcxConfig } from "../types";
@@ -19,8 +23,11 @@ const PROVIDER = "anthropic";
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
 const AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
+const MAX_AFFINITY_ENTRIES = 2_000;
 const UNKNOWN_USAGE_SCORE = 100;
 const DEFAULT_AUTO_SWITCH_THRESHOLD = 80;
+/** Cap same-request 429 rotations so short Retry-After cannot infinite-loop. */
+export const ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST = 3;
 
 export interface AnthropicAccountPoolConfig {
   enabled?: boolean;
@@ -99,6 +106,11 @@ function isCooled(accountId: string, now: number): boolean {
   return getAnthropicAccountHealthSnapshot(accountId, now) !== null;
 }
 
+function hasKnownUsage(accountId: string): boolean {
+  const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
+  return typeof quota?.fiveHourPercent === "number" && Number.isFinite(quota.fiveHourPercent);
+}
+
 function usageScore(accountId: string): number {
   const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
   if (!quota || typeof quota.fiveHourPercent !== "number" || !Number.isFinite(quota.fiveHourPercent)) {
@@ -107,12 +119,40 @@ function usageScore(accountId: string): number {
   return Math.max(0, Math.min(100, quota.fiveHourPercent));
 }
 
+const TOKEN_SKEW_MS = 60_000;
+
+/** Background `local-cli` slots with expired access are not pool-eligible (identity adoption risk). */
+function isPoolCredentialUsable(accountId: string, now: number): boolean {
+  const cred = getAccountCredential(PROVIDER, accountId);
+  if (!cred) return false;
+  if (cred.source !== "local-cli") return true;
+  if (canRefreshAnthropicPoolAccount(accountId)) return true;
+  return cred.expires > now + TOKEN_SKEW_MS;
+}
+
 export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
   const set = getAccountSet(PROVIDER);
   if (!set) return [];
   return set.accounts
-    .filter(account => account.needsReauth !== true && !isCooled(account.id, now))
+    .filter(account =>
+      account.needsReauth !== true
+      && !isCooled(account.id, now)
+      && isPoolCredentialUsable(account.id, now))
     .map(account => account.id);
+}
+
+/** Earliest remaining cooldown among cooled Anthropic accounts, for client Retry-After. */
+export function getAnthropicPoolRetryAfterSeconds(now = Date.now()): number | null {
+  const set = getAccountSet(PROVIDER);
+  if (!set) return null;
+  let earliest: number | null = null;
+  for (const account of set.accounts) {
+    const snap = getAnthropicAccountHealthSnapshot(account.id, now);
+    if (!snap?.cooldownUntil) continue;
+    if (earliest === null || snap.cooldownUntil < earliest) earliest = snap.cooldownUntil;
+  }
+  if (earliest === null || earliest <= now) return null;
+  return Math.max(1, Math.ceil((earliest - now) / 1000));
 }
 
 function pickLowestUsage(excludeId: string | undefined, now: number): string | null {
@@ -131,13 +171,24 @@ function pickLowestUsage(excludeId: string | undefined, now: number): string | n
   return best;
 }
 
+function pruneExpiredAffinity(now: number): void {
+  for (const [key, entry] of sessionAffinity) {
+    if (now - entry.lastUsedAt > AFFINITY_IDLE_TTL_MS) sessionAffinity.delete(key);
+  }
+  if (sessionAffinity.size <= MAX_AFFINITY_ENTRIES) return;
+  const sorted = [...sessionAffinity.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+  const drop = sessionAffinity.size - MAX_AFFINITY_ENTRIES;
+  for (let i = 0; i < drop; i++) sessionAffinity.delete(sorted[i]![0]);
+}
+
 export type AnthropicAccountSelectionReason =
   | "pool-disabled"
   | "affinity"
   | "active"
   | "lowest-usage"
   | "only-eligible"
-  | "none";
+  | "none"
+  | "all-cooled";
 
 export interface AnthropicAccountSelection {
   accountId: string | null;
@@ -153,6 +204,7 @@ export function resolveAnthropicAccountForSession(
   config: OcxConfig,
   now = Date.now(),
 ): AnthropicAccountSelection {
+  pruneExpiredAffinity(now);
   const set = getAccountSet(PROVIDER);
   if (!set || set.accounts.length === 0) return { accountId: null, reason: "none" };
 
@@ -165,7 +217,7 @@ export function resolveAnthropicAccountForSession(
     const affined = sessionAffinity.get(key);
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
       const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
-      if (stillThere && !isCooled(affined.accountId, now)) {
+      if (stillThere && !isCooled(affined.accountId, now) && isPoolCredentialUsable(affined.accountId, now)) {
         affined.lastUsedAt = now;
         return { accountId: affined.accountId, reason: "affinity" };
       }
@@ -175,14 +227,15 @@ export function resolveAnthropicAccountForSession(
 
   const threshold = anthropicAutoSwitchThreshold(config);
   const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
-    && !isCooled(set.activeAccountId, now);
+    && !isCooled(set.activeAccountId, now)
+    && isPoolCredentialUsable(set.activeAccountId, now);
 
   let accountId: string | null = null;
   let reason: AnthropicAccountSelectionReason = "none";
 
   if (threshold > 0) {
-    const activeScore = activeOk ? usageScore(set.activeAccountId) : UNKNOWN_USAGE_SCORE;
-    if (activeOk && activeScore < threshold) {
+    // Unknown usage must NOT force a switch away from the healthy active account.
+    if (activeOk && (!hasKnownUsage(set.activeAccountId) || usageScore(set.activeAccountId) < threshold)) {
       accountId = set.activeAccountId;
       reason = "active";
     } else {
@@ -206,8 +259,14 @@ export function resolveAnthropicAccountForSession(
     }
   }
 
-  if (accountId && key) {
+  if (!accountId) {
+    const anyCooled = set.accounts.some(a => isCooled(a.id, now));
+    return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
+  }
+
+  if (key) {
     sessionAffinity.set(key, { accountId, lastUsedAt: now });
+    pruneExpiredAffinity(now);
   }
   return { accountId, reason };
 }
@@ -220,6 +279,7 @@ export function bindAnthropicSessionAffinity(
   const key = sessionKey?.trim();
   if (!key) return;
   sessionAffinity.set(key, { accountId, lastUsedAt: now });
+  pruneExpiredAffinity(now);
 }
 
 export function clearAnthropicSessionAffinityForAccount(accountId: string): void {
@@ -230,7 +290,8 @@ export function clearAnthropicSessionAffinityForAccount(accountId: string): void
 
 /**
  * Record a 429 for `failedAccountId`, cool it, clear its affinity, and pick a failover
- * account. Optionally promotes the store active account to the failover for dashboard parity.
+ * account. Does NOT promote the store active account — caller should promote only after a
+ * successful retry (or token resolve).
  */
 export function rotateAnthropicAccountOn429(
   config: OcxConfig,
@@ -241,10 +302,11 @@ export function rotateAnthropicAccountOn429(
 ): string | null {
   if (!isAnthropicAccountPoolEnabled(config)) return null;
 
-  const cooldownMs = parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
+  const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
+  const cooldownMs = parsedRetry ?? DEFAULT_COOLDOWN_MS;
   upstreamHealth.set(failedAccountId, {
     cooldownUntil: now + cooldownMs,
-    cooldownSource: parseRetryAfterMs(retryAfterHeader, now) ? "retry-after" : "default",
+    cooldownSource: parsedRetry ? "retry-after" : "default",
   });
   clearAnthropicSessionAffinityForAccount(failedAccountId);
 
@@ -254,14 +316,50 @@ export function rotateAnthropicAccountOn429(
     return null;
   }
 
-  void setActiveAccount(PROVIDER, next).catch(() => { /* best-effort dashboard sync */ });
   if (sessionKey?.trim()) {
     sessionAffinity.set(sessionKey.trim(), { accountId: next, lastUsedAt: now });
+    pruneExpiredAffinity(now);
   }
   console.warn(
     `[anthropic-pool] 429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
   );
   return next;
+}
+
+/** Promote dashboard active account after a validated failover target is usable. */
+export function promoteAnthropicActiveAccount(accountId: string): void {
+  void setActiveAccount(PROVIDER, accountId).catch(() => { /* best-effort */ });
+}
+
+/**
+ * Resolve a bearer for pool traffic without adopting a newer global Claude CLI
+ * credential into a background multiauth `local-cli` slot (same fail-closed rule
+ * as quota probes).
+ */
+export async function getAnthropicPoolAccessToken(accountId: string): Promise<string> {
+  const stored = getAccountCredential(PROVIDER, accountId);
+  if (!stored) {
+    const { OAuthLoginRequiredError } = await import("./index");
+    throw new OAuthLoginRequiredError(PROVIDER);
+  }
+  if (stored.expires > Date.now() + TOKEN_SKEW_MS) return stored.access;
+  if (!canRefreshAnthropicPoolAccount(accountId)) {
+    throw new Error("background local-cli token expired; refuse CLI-adopting refresh for pool");
+  }
+  const { getValidAccessTokenForAccount } = await import("./index");
+  return getValidAccessTokenForAccount(PROVIDER, accountId);
+}
+
+/**
+ * Whether the pool may refresh this account's token. Background `local-cli` slots must not
+ * adopt the global Claude CLI credential (same fail-closed rule as quota probes).
+ */
+export function canRefreshAnthropicPoolAccount(accountId: string): boolean {
+  const set = getAccountSet(PROVIDER);
+  const cred = getAccountCredential(PROVIDER, accountId);
+  if (!cred) return false;
+  if (cred.source !== "local-cli") return true;
+  return set?.activeAccountId === accountId;
 }
 
 export function formatAnthropicAccountOrdinal(accountId: string): string {
@@ -277,22 +375,30 @@ export function formatAnthropicProviderForLog(
   return `${providerName}-${formatAnthropicAccountOrdinal(accountId)}`;
 }
 
-/** Build a sticky session key from common Claude / Responses headers and cache keys. */
+/**
+ * Build a sticky session key from Claude/Responses headers.
+ * Prefer true session/thread ids; do not use Desktop shared cache-cohort prompt_cache_key
+ * alone (those collide across conversations).
+ */
 export function anthropicSessionKeyFromParts(input: {
   sessionIdHeader?: string | null;
   threadIdHeader?: string | null;
   promptCacheKey?: string | null;
   clientThreadId?: string | null;
+  /** When true, prompt_cache_key is a shared Desktop cohort — ignore it for affinity. */
+  promptCacheKeyIsSharedCohort?: boolean;
 }): string | null {
-  const raw = (
+  const preferred = (
     input.clientThreadId
     ?? input.sessionIdHeader
     ?? input.threadIdHeader
-    ?? input.promptCacheKey
     ?? ""
   ).trim();
-  if (!raw) return null;
-  // Cap length / normalize — affinity map should not store huge cache keys verbatim.
-  if (raw.length <= 128) return raw;
-  return createHash("sha256").update(raw).digest("hex");
+  if (preferred) {
+    return preferred.length <= 128 ? preferred : createHash("sha256").update(preferred).digest("hex");
+  }
+  if (input.promptCacheKeyIsSharedCohort) return null;
+  const cacheKey = input.promptCacheKey?.trim() ?? "";
+  if (!cacheKey) return null;
+  return cacheKey.length <= 128 ? cacheKey : createHash("sha256").update(cacheKey).digest("hex");
 }

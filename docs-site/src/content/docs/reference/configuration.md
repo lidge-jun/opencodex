@@ -114,7 +114,16 @@ organization can share quota; pooling those will not help.
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | When true, sticky session affinity + 429 cooldown failover across eligible Anthropic OAuth accounts. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. `0` disables quota-based picking (affinity + active only). |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's **known** cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. Unknown usage does not force a switch. `0` disables quota-based picking (affinity + active only). |
+
+Reliability contract when enabled:
+
+- A provider **429** records cooldown from `Retry-After` (capped) or a default backoff, clears
+  that account's affinities, and may rotate within the request (bounded attempts).
+- Affinity maps are **process-local** (lost on restart) and size-bounded.
+- Credential **401/403** failures mark `needsReauth` and exclude the account until login is fixed.
+- When all eligible accounts are cooling, clients receive **429** with `Retry-After` when known —
+  not an authentication error.
 
 Toggle and warning also appear on **Providers → anthropic → Accounts** in the GUI.
 :::caution[Experimental]

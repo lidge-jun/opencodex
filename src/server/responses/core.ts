@@ -40,10 +40,14 @@ import {
   UnsupportedOAuthProviderError,
 } from "../../oauth";
 import {
+  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicSessionKeyFromParts,
   bindAnthropicSessionAffinity,
   formatAnthropicProviderForLog,
+  getAnthropicPoolAccessToken,
+  getAnthropicPoolRetryAfterSeconds,
   isAnthropicAccountPoolEnabled,
+  promoteAnthropicActiveAccount,
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
@@ -313,6 +317,11 @@ export interface HandleResponsesOptions {
   setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined) => void;
   onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
   onNativePassthroughCancel?: () => void;
+  /**
+   * When true, body `prompt_cache_key` is a Claude Desktop shared cache cohort
+   * (system/tools hash), not a per-session id — do not use it for Anthropic pool affinity.
+   */
+  promptCacheKeyIsSharedCohort?: boolean;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -1034,12 +1043,14 @@ export async function handleResponses(
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   let anthropicPoolAccountId: string | null = null;
+  let anthropicPoolFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
       threadIdHeader: req.headers.get("thread-id"),
       promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
       clientThreadId: typeof parsed._clientThreadId === "string" ? parsed._clientThreadId : null,
+      promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort === true,
     })
     : null;
   if (route.provider.authMode === "oauth") {
@@ -1047,11 +1058,21 @@ export async function handleResponses(
       if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
         const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config);
         if (!selection.accountId) {
+          if (selection.reason === "all-cooled") {
+            const retryAfterSec = getAnthropicPoolRetryAfterSeconds();
+            return formatErrorResponse(
+              429,
+              "rate_limit_error",
+              "All Anthropic OAuth accounts are temporarily rate-limited",
+              retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
+            );
+          }
           return formatErrorResponse(401, "authentication_error", "No eligible Anthropic OAuth account available");
         }
-        const accessToken = await getValidAccessTokenForAccount("anthropic", selection.accountId);
+        const accessToken = await getAnthropicPoolAccessToken(selection.accountId);
         anthropicPoolAccountId = selection.accountId;
         bindAnthropicSessionAffinity(anthropicSessionKey, selection.accountId);
+        promoteAnthropicActiveAccount(selection.accountId);
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
       } else {
@@ -1990,12 +2011,13 @@ export async function handleResponses(
         upstreamResponse = result;
       }
 
-      // Opt-in Anthropic OAuth account pool (#294): cool the failed account and retry once
-      // with another eligible OAuth account. Disabled by default.
+      // Opt-in Anthropic OAuth account pool (#294): cool the failed account and retry
+      // with another eligible OAuth account (bounded per request). Disabled by default.
       while (
         upstreamResponse.status === 429
         && anthropicPoolAccountId
         && isAnthropicAccountPoolEnabled(config)
+        && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
         const nextAccountId = rotateAnthropicAccountOn429(
           config,
@@ -2006,9 +2028,11 @@ export async function handleResponses(
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
-          const accessToken = await getValidAccessTokenForAccount("anthropic", nextAccountId);
+          const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
           anthropicPoolAccountId = nextAccountId;
+          anthropicPoolFailovers += 1;
           route.provider = { ...route.provider, apiKey: accessToken };
+          promoteAnthropicActiveAccount(nextAccountId);
           logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
           activeAdapter = resolveAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
@@ -2144,6 +2168,38 @@ export async function handleResponses(
             config.cacheRetention,
           );
           continue;
+        }
+      }
+      if (
+        response.status === 429
+        && anthropicPoolAccountId
+        && isAnthropicAccountPoolEnabled(config)
+        && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateAnthropicAccountOn429(
+          config,
+          anthropicPoolAccountId,
+          response.headers.get("retry-after"),
+          anthropicSessionKey,
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
+            anthropicPoolAccountId = nextAccountId;
+            anthropicPoolFailovers += 1;
+            route.provider = { ...route.provider, apiKey: accessToken };
+            promoteAnthropicActiveAccount(nextAccountId);
+            logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
+            activeAdapter = resolveAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+              config.cacheRetention,
+            );
+            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
+            continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
         }
       }
       if (shouldAttemptImageTierRetry({

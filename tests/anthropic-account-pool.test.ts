@@ -103,6 +103,24 @@ describe("anthropic account pool", () => {
     expect(after.accountId).toBe(bId);
   });
 
+  test("all cooled returns all-cooled rather than none", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    expect(rotateAnthropicAccountOn429(cfg(true), aId, "120")).toBe(bId);
+    expect(rotateAnthropicAccountOn429(cfg(true), bId, "120")).toBeNull();
+    const sel = resolveAnthropicAccountForSession("cooled-sess", cfg(true));
+    expect(sel.accountId).toBeNull();
+    expect(sel.reason).toBe("all-cooled");
+  });
+
+  test("unknown active usage does not force a switch", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    // Only B has known usage; active A is unknown and must stay selected under threshold rules.
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 5 });
+    const sel = resolveAnthropicAccountForSession("unknown-usage", cfg(true, 80));
+    expect(sel.accountId).toBe(aId);
+    expect(sel.reason).toBe("active");
+  });
+
   test("new session prefers lower fiveHour usage when above threshold", async () => {
     const { aId, bId } = await seedTwoAccounts();
     setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 90 });
@@ -117,6 +135,17 @@ describe("anthropic account pool", () => {
       sessionIdHeader: "sess-a",
       promptCacheKey: "cache-b",
     })).toBe("sess-a");
+  });
+
+  test("shared Desktop cache cohort alone does not create affinity key", () => {
+    expect(anthropicSessionKeyFromParts({
+      promptCacheKey: "shared-cohort-hash",
+      promptCacheKeyIsSharedCohort: true,
+    })).toBeNull();
+    expect(anthropicSessionKeyFromParts({
+      promptCacheKey: "per-session-hash",
+      promptCacheKeyIsSharedCohort: false,
+    })).toBe("per-session-hash");
   });
 
   test("log label is non-PII ordinal", () => {

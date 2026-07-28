@@ -295,6 +295,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeAccount, getAccountSet } = await import("../../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
+    if (provider === "anthropic") {
+      const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
+      clearAnthropicAccountCooldown(id);
+      clearAnthropicSessionAffinityForAccount(id);
+    }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();

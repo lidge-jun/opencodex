@@ -38,7 +38,7 @@ export default function AnthropicAccountPoolSettings({
         const nextEnabled = json.enabled === true;
         const nextThreshold = typeof json.autoSwitchThreshold === "number" ? json.autoSwitchThreshold : 80;
         setState({ enabled: nextEnabled, threshold: nextThreshold });
-        setDraft(String(nextThreshold > 0 ? nextThreshold : 80));
+        setDraft(String(nextThreshold));
         setLoadError(false);
       } catch {
         if (cancelled || ac.signal.aborted) return;
@@ -66,7 +66,7 @@ export default function AnthropicAccountPoolSettings({
       });
       if (!res.ok) throw new Error("save");
       setState({ enabled: nextEnabled, threshold: nextThreshold });
-      setDraft(String(nextThreshold > 0 ? nextThreshold : 80));
+      setDraft(String(nextThreshold));
     } catch {
       setError(t("anthropicPool.saveFailed"));
     } finally {
@@ -77,6 +77,8 @@ export default function AnthropicAccountPoolSettings({
   const enabled = state?.enabled === true;
   const threshold = state?.threshold ?? 80;
   const loading = state === null && !loadError;
+  // Always allow turning the pool off; only block enabling when fewer than 2 accounts.
+  const toggleDisabled = loading || saving || loadError || (!enabled && accountCount < 2);
 
   return (
     <div className="card" style={{ marginTop: 12 }} aria-busy={loading || saving}>
@@ -97,10 +99,10 @@ export default function AnthropicAccountPoolSettings({
           <input
             type="checkbox"
             checked={enabled}
-            disabled={loading || saving || loadError || accountCount < 2}
+            disabled={toggleDisabled}
             onChange={(event) => {
               const next = event.target.checked;
-              void save(next, threshold > 0 ? threshold : 80);
+              void save(next, threshold);
             }}
           />
           <span>{enabled ? t("anthropicPool.on") : t("anthropicPool.off")}</span>
@@ -139,7 +141,7 @@ export default function AnthropicAccountPoolSettings({
             aria-label={t("anthropicPool.thresholdAria")}
             onChange={(event) => setDraft(event.target.value)}
             onBlur={() => {
-              const parsed = Number.parseInt(draft, 10);
+              const parsed = Number(draft);
               if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
                 setDraft(String(threshold));
                 setError(t("anthropicPool.thresholdInvalid"));

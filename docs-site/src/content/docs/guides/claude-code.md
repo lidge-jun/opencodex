@@ -16,7 +16,20 @@ An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`)
 session affinity and 429 cooldown failover across those OAuth accounts, with optional
 new-session lowest-usage pick from the 5-hour quota bars. It is **off by default**, shows a
 GUI warning, and is not battle-tested — Anthropic may restrict accounts that look like
-automated rotation. See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
+automated rotation.
+
+Operational contract when enabled:
+
+- Upstream **429** cools that account using `Retry-After` when present (else a default backoff),
+  clears its affinities, and may rotate to another eligible account within the same request
+  (bounded).
+- Affinity is **process-local** (lost on proxy restart).
+- **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
+  selection until re-authenticated.
+- If every eligible account is cooling, the proxy returns **429** (not 401) with `Retry-After`
+  when known.
+
+See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
 
 ## Quickstart
 
