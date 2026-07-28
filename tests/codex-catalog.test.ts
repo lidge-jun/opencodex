@@ -2538,7 +2538,10 @@ describe("OpenAI API trusted catalog augmentation", () => {
       });
     };
     try {
-      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true }));
+      // This test exercises the catalog fetch/augmentation path, not DNS destination
+      // classification. Keep it hermetic on NAT64 hosts whose resolver also returns
+      // 64:ff9b::/96 answers for api.openai.com.
+      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true, allowPrivateNetwork: true }));
       const apiRows = rows.filter(row => row.provider === "openai-apikey");
       expect(calls).toEqual(["https://api.openai.com/v1/models"]);
       expect(apiRows.map(row => row.id)).toEqual([...exactIds].sort());

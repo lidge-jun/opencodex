@@ -144,7 +144,7 @@ token の代わりに使えます。すべての候補は timing side channel �
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 複数キーを納める pool。`apiKey` はアクティブ項目を反映します。各項目には `id`、`key`、選択 `label`、選択数値 `addedAt` があります。 |
 | `defaultModel?` | `string` | 明示的なモデルなしでこのプロバイダーを選んだときに使うモデル。 |
 | `models?` | `string[]` | seed/fallback モデル一覧。`liveModels` が `false` ならここにあるモデルだけが発見されます。 |
-| `liveModels?` | `boolean` | 起動/同期時にプロバイダーのリアルタイム `/models` カタログを取得します（デフォルト `true`）。`false` なら設定された `models` だけを使います。 |
+| `liveModels?` | `boolean` | 起動/同期時にプロバイダーのライブモデルカタログを取得します（デフォルト `true`）。組み込み preset は registry の信頼済み URL・クエリ・フィルターを使用でき、カスタム provider は `${baseUrl}/models` がデフォルトです。`false` なら設定された `models` だけを使います。 |
 | `selectedModels?` | `string[]` | モデル発見後に適用するカタログ allowlist。空でなければその id だけを Codex に公開し、空または省略なら発見したモデルをすべて公開します。 |
 | `contextWindow?` | `number` | ルーティングカタログ項目に表示するプロバイダー単位の context-window cap。リアルタイム metadata がより小さければそのままにします。 |
 | `modelContextWindows?` | `Record<string,number>` | モデル別 context-window cap。一致するモデルでは `contextWindow` より優先し、より小さいリアルタイム metadata を上げません。 |
@@ -231,6 +231,11 @@ Codex の承認と sandbox ルールを迂回する Cursor ネイティブロー
 
 一部のプロバイダーはリアルタイムモデルカタログが非常に大きいか遅いです。Codex に `models` で固定したモデルだけ
 見せるには `liveModels` を `false` に設定してください。
+
+ライブ discovery は 4 MiB または 2,000 件の生モデル行を超える応答をキャッシュ前に拒否します。
+組み込み preset は上限をさらに下げ、混在カタログをチャット対応行だけに絞れます。超過または
+不正な応答は stale/static fallback に戻り、不適格な行は除外されます。有効な応答に適格な行が
+なければ権威ある空カタログとなり、上限超過の応答が暗黙に切り詰められることはありません。
 
 `liveModels` が `false` で `models` が空または省略されると opencodex はそのプロバイダーのルーティング
 モデルを 1 つも公開しません。

@@ -15,6 +15,7 @@ import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUr
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
+import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
@@ -480,13 +481,19 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
     providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
   );
   const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
+  const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
+    providerName,
+    prov,
+    effectiveProvider.baseUrl,
+    defaultUrl,
+  );
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
     // enough to list everything without a pageToken loop. Vertex/antigravity keep the
     // generic branch (they fall back to their static model lists).
     if (apiKey) headers["x-goog-api-key"] = apiKey;
-    return { url: `${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`, headers };
+    return { url: discoveryUrl(`${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`), headers };
   }
   if (effectiveProvider.adapter === "anthropic") {
     const base = effectiveProvider.baseUrl.replace(/\/v1\/?$/, "");
@@ -498,10 +505,10 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
       if (effectiveProvider.apiKeyTransport === "bearer") headers["Authorization"] = `Bearer ${apiKey}`;
       else headers["x-api-key"] = apiKey;
     }
-    return { url: `${base}/v1/models?limit=1000`, headers };
+    return { url: discoveryUrl(`${base}/v1/models?limit=1000`), headers };
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return { url: `${effectiveProvider.baseUrl}/models`, headers };
+  return { url: discoveryUrl(`${effectiveProvider.baseUrl}/models`), headers };
 }
 
 /**

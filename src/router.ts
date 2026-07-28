@@ -3,7 +3,7 @@ import { preservesPhysicalComboProvider, tryPickComboModel, type ComboPick } fro
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
-import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
+import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
 import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
@@ -40,7 +40,9 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
 export function knownModelIdsForProvider(provName: string, prov: OcxProviderConfig): string[] {
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
-  const registry = PROVIDER_REGISTRY.find(entry => entry.id === provName);
+  const registry = providerMatchesRegistryTransport(provName, prov)
+    ? PROVIDER_REGISTRY.find(entry => entry.id === provName)
+    : undefined;
   for (const id of registry?.models ?? []) ids.add(id);
   // Registry model-keyed hint maps double as known native ids (e.g. NVIDIA carries no
   // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps).
@@ -192,7 +194,7 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 
 function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
-  if (!registryEntry) {
+  if (!registryEntry || !providerMatchesRegistryTransport(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
   }

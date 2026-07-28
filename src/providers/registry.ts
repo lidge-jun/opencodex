@@ -17,6 +17,53 @@ import {
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
 
+export type ProviderModelDiscoveryScalar = string | number | boolean;
+
+export type ProviderModelDiscoveryPredicate =
+  | {
+      path: readonly string[];
+      equalsAny: readonly ProviderModelDiscoveryScalar[];
+      caseInsensitive?: boolean;
+    }
+  | {
+      path: readonly string[];
+      containsAny: readonly ProviderModelDiscoveryScalar[];
+      caseInsensitive?: boolean;
+    }
+  | {
+      path: readonly string[];
+      containsAll: readonly ProviderModelDiscoveryScalar[];
+      caseInsensitive?: boolean;
+    };
+
+export interface ProviderModelDiscoveryFilter {
+  /** Every predicate must match. */
+  allOf?: readonly ProviderModelDiscoveryPredicate[];
+  /** At least one predicate must match. */
+  anyOf?: readonly ProviderModelDiscoveryPredicate[];
+  /** No predicate may match. */
+  noneOf?: readonly ProviderModelDiscoveryPredicate[];
+}
+
+/**
+ * Trusted live-model discovery policy. This metadata is registry-only: it must never be copied
+ * into config.json, where a same-named custom provider could otherwise redirect a stored key.
+ */
+export interface ProviderModelDiscoverySpec {
+  /** Registry-owned absolute endpoint. Mutually exclusive with `path`. */
+  url?: string;
+  /** Resource path relative to baseUrl; a leading slash resolves from the origin. */
+  path?: string;
+  /** Query parameters applied to the resolved discovery URL. */
+  query?: Readonly<Record<string, string>>;
+  /** Declarative eligibility rules evaluated against each untrusted model row. */
+  filter?: ProviderModelDiscoveryFilter;
+  /** Optional lower byte ceiling; the process-wide hard ceiling still wins. */
+  maxResponseBytes?: number;
+  /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */
+  maxModels?: number;
+}
+
 export interface ProviderRegistryEntry {
   id: string;
   label: string;
@@ -36,6 +83,11 @@ export interface ProviderRegistryEntry {
   freeTier?: boolean;
   allowBaseUrlOverride?: boolean;
   /**
+   * Do not claim an existing same-named key provider whose fixed destination differs from this
+   * preset. Enable for newly promoted ids so an older custom key cannot be silently retargeted.
+   */
+  preserveCustomDestination?: boolean;
+  /**
    * Optional endpoint picker for providers with multiple official hosts
    * (e.g. Qwen Cloud token plan vs pay-as-you-go). Requires `allowBaseUrlOverride`
    * so the selected URL is honored at route time. A choice without `baseUrl` is "Custom".
@@ -51,6 +103,7 @@ export interface ProviderRegistryEntry {
   defaultModel?: string;
   models?: string[];
   liveModels?: boolean;
+  modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
@@ -1119,6 +1172,41 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(entry => entry.id === id);
+}
+
+function normalizedProviderEndpoint(value: string): string {
+  const trimmed = value.trim();
+  try {
+    const parsed = new URL(trimmed);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+/**
+ * Whether registry transport defaults own this configured row.
+ *
+ * OAuth/forward providers stay pinned because their credentials must never be sent to an
+ * arbitrary same-named host. Existing key presets keep their historical pinning behavior; a new
+ * preset can opt into collision preservation, in which case its fixed endpoint owns only rows
+ * that still match that destination.
+ */
+export function providerMatchesRegistryTransport(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+): boolean {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry) return false;
+  if (entry.authKind !== "key" || entry.preserveCustomDestination !== true) return true;
+  // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
+  // registry edit combines it with an override/template despite the registry parity tests.
+  if (entry.allowBaseUrlOverride || /\{[^}]*\}/.test(entry.baseUrl)) return false;
+  if (typeof provider.baseUrl !== "string") return false;
+  if (provider.adapter !== entry.adapter) return false;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return false;
+  return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
 }
 
 /**

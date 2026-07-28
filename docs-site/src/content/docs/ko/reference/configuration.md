@@ -151,7 +151,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 여러 키를 담는 pool. `apiKey`는 활성 항목을 반영합니다. 각 항목에는 `id`, `key`, 선택 `label`, 선택 숫자 `addedAt`이 있습니다. |
 | `defaultModel?` | `string` | 명시적인 모델 없이 이 프로바이더를 선택했을 때 쓸 모델. |
 | `models?` | `string[]` | seed/fallback 모델 목록. `liveModels`가 `false`이면 여기 있는 모델만 발견됩니다. |
-| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 `/models` 카탈로그를 가져옵니다(기본 `true`). `false`이면 설정된 `models`만 사용합니다. |
+| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 모델 카탈로그를 가져옵니다(기본 `true`). 기본 제공 preset은 registry의 신뢰된 URL·쿼리·필터를 사용할 수 있고, 사용자 지정 provider는 `${baseUrl}/models`가 기본입니다. `false`이면 설정된 `models`만 사용합니다. |
 | `selectedModels?` | `string[]` | 모델 발견 뒤 적용할 카탈로그 allowlist. 비어 있지 않으면 해당 id만 Codex에 노출하고, 비어 있거나 생략하면 발견한 모델을 모두 노출합니다. |
 | `contextWindow?` | `number` | 라우팅 카탈로그 항목에 표시할 프로바이더 단위 context-window cap. 실시간 metadata가 더 작으면 그대로 둡니다. |
 | `modelContextWindows?` | `Record<string,number>` | 모델별 context-window cap. 일치하는 모델에서는 `contextWindow`보다 우선하며 더 작은 실시간 metadata를 올리지 않습니다. |
@@ -258,6 +258,11 @@ OpenRouter에서 같은 모델을 제공하는 endpoint마다 prompt cache 지�
 
 일부 프로바이더는 실시간 모델 카탈로그가 매우 크거나 느립니다. Codex에 `models`로 고정한 모델만
 보이게 하려면 `liveModels`를 `false`로 설정하세요.
+
+실시간 discovery 응답이 4 MiB 또는 원시 모델 행 2,000개를 넘으면 캐시 전에 거부됩니다. 기본 제공
+preset은 이 한도를 더 낮추고 혼합 카탈로그를 채팅 가능 행으로 필터링할 수 있습니다. 한도 초과 또는
+손상된 응답은 stale/static fallback을 사용하고, 부적격 행은 제외됩니다. 유효한 응답에 적격 행이
+없으면 권위 있는 빈 카탈로그가 되며, 한도 초과 응답을 조용히 잘라 사용하지 않습니다.
 
 `liveModels`가 `false`이고 `models`가 비어 있거나 생략되면 opencodex는 해당 프로바이더의 라우팅
 모델을 하나도 노출하지 않습니다.

@@ -26,6 +26,11 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
+import {
+  extractModelEnvelopeRows,
+  readBoundedDiscoveryJson,
+  resolveProviderModelDiscovery,
+} from "../../providers/model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -332,23 +337,41 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
     const { url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
+    const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
-      const res = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) });
+      const res = await fetch(modelsUrl, {
+        headers,
+        redirect: "error",
+        signal: AbortSignal.timeout(8000),
+      });
       const latencyMs = Date.now() - started;
       if (!res.ok) {
         return jsonResponse({ ok: false, latencyMs, error: `upstream /models returned ${res.status}` });
       }
-      const json = await res.json().catch(() => null) as { data?: unknown; models?: unknown } | null;
+      const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+      if (!bounded.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: bounded.reason === "response_too_large"
+            ? `upstream /models exceeded the ${discovery.maxResponseBytes}-byte response limit`
+            : "upstream /models returned invalid JSON",
+        });
+      }
       // OpenAI-style lists use { data: [...] }; Google's /v1beta/models (the other shape
       // buildModelsRequest can produce) returns { models: [...] }.
-      const list = json && typeof json === "object" && !Array.isArray(json)
-        ? (Array.isArray(json.data) ? json.data : Array.isArray(json.models) ? json.models : undefined)
-        : undefined;
-      if (!Array.isArray(list)) {
-        return jsonResponse({ ok: false, latencyMs, error: "upstream /models returned an unexpected shape" });
+      const envelope = extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["data", "models"]);
+      if (!envelope.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: envelope.reason === "too_many_models"
+            ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
+            : "upstream /models returned an unexpected shape",
+        });
       }
-      const models = list.length;
+      const models = envelope.rows.length;
       return jsonResponse({
         ok: true,
         latencyMs,
