@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -530,6 +531,7 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
       body: JSON.stringify({
         model: "native/gpt-test",
         max_tokens: 128,
+        system: "cache-stable instructions",
         messages: [{ role: "user", content: "hi" }],
         metadata: { user_id: "user_abc123_account__session_11111111-2222-3333-4444-555555555555" },
         thinking: { type: "adaptive", display: "omitted" },
@@ -545,7 +547,10 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
     expect(capture.body?.user).toBeUndefined();
     expect(capture.body?.max_output_tokens).toBeUndefined();
     expect(capture.body?.reasoning?.effort).toBe("high");
-    expect(capture.headers?.["session_id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+    const metadataUserId = "user_abc123_account__session_11111111-2222-3333-4444-555555555555";
+    const h = createHash("sha256").update(metadataUserId).digest("hex").slice(0, 32);
+    const expectedSessionId = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    expect(capture.headers?.["session_id"]).toBe(expectedSessionId);
   } finally {
     server.stop(true);
     upstream.stop(true);

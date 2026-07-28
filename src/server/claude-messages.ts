@@ -6,6 +6,7 @@
  * internal Request, so routing/OAuth/account-pool/failover/sidecars are inherited
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
+import { createHash } from "node:crypto";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { enforceAnthropicImageLimits } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
@@ -102,6 +103,11 @@ function wantsNativePassthrough(req: Request, config: OcxConfig, model: unknown)
 function uuidFromHex(hex32: string): string {
   const h = (hex32 + "0".repeat(32)).slice(0, 32);
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+function claudeMetadataUserId(body: unknown): string | undefined {
+  if (!isRec(body) || !isRec(body.metadata)) return undefined;
+  return typeof body.metadata.user_id === "string" ? body.metadata.user_id : undefined;
 }
 
 function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
@@ -649,15 +655,16 @@ export async function handleClaudeMessages(
       headers.set("authorization", `Bearer ${token.accessToken}`);
       headers.set("chatgpt-account-id", token.chatgptAccountId);
     }
-    // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
-    // clients always send their session uuid; devlog 090 follow-up: body-level
-    // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
-    // the header, so synthesize a stable per-session uuid from the same cache key —
-    // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
-    // key is shared across Desktop conversations, and a shared session_id's backend
-    // semantics are unproven (audit 133 R2#3): body prompt_cache_key only there.
-    if (cacheKeySource === "metadata" && !headers.has("session_id") && typeof internalBody.prompt_cache_key === "string") {
-      headers.set("session_id", uuidFromHex(internalBody.prompt_cache_key));
+    // ChatGPT-backend prompt-cache affinity rides the session_id HEADER. Keep it
+    // session-scoped even when prompt_cache_key is content-first: metadata.user_id
+    // identifies the Claude Code session, while the content hash is shared across
+    // equivalent conversations and must never become a shared session identifier.
+    const metadataUserId = claudeMetadataUserId(anthropicBody);
+    if (!headers.has("session_id") && metadataUserId) {
+      headers.set(
+        "session_id",
+        uuidFromHex(createHash("sha256").update(metadataUserId).digest("hex").slice(0, 32)),
+      );
     }
   }
   const internalReq = new Request("http://localhost/v1/responses", {
