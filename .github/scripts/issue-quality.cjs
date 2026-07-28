@@ -704,11 +704,11 @@ function validateIssue(issue) {
     } else if (
       !softPass &&
       isNewBugForm &&
-      version !== null &&
-      (isEmpty(version) || isRawPlaceholder(version))
+      (version === null || isEmpty(version) || isRawPlaceholder(version))
     ) {
-      // New form requires Version. Legacy N/A / No response soft-pass stays
-      // only for bodies without Client or integration.
+      // New form requires Version (including when the heading was removed).
+      // Legacy N/A / No response soft-pass stays only for bodies without
+      // Client or integration.
       reasons.push("Version is missing.");
       guidance.push("Add your OpenCodex version so we can reproduce the environment.");
     }
@@ -719,8 +719,7 @@ function validateIssue(issue) {
     } else if (
       !softPass &&
       isNewBugForm &&
-      os !== null &&
-      (isEmpty(os) || isRawPlaceholder(os))
+      (os === null || isEmpty(os) || isRawPlaceholder(os))
     ) {
       reasons.push("Operating system is missing.");
       guidance.push("Add your OS name and version (for example Windows 11 24H2).");

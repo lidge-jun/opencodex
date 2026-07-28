@@ -799,6 +799,46 @@ describe("validateIssue - bug", () => {
     assert.ok(result.reasons.some((r) => /Operating system/i.test(r)));
   });
 
+  it("rejects a new-form bug when the Version heading was removed", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "Proxy returns 502 when streaming is enabled on Windows.",
+      "### Reproduction",
+      "1. ocx start",
+      "2. Send a streaming /v1/responses request",
+      "### Operating system",
+      "Windows 11",
+    ].join("\n");
+    const result = validateIssue({ title: "Streaming 502", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Version/i.test(r) && /missing/i.test(r)));
+  });
+
+  it("rejects a new-form bug when the Operating system heading was removed", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "Proxy returns 502 when streaming is enabled on Windows.",
+      "### Reproduction",
+      "1. ocx start",
+      "2. Send a streaming /v1/responses request",
+      "### Version",
+      "2.7.42",
+    ].join("\n");
+    const result = validateIssue({ title: "Streaming 502", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Operating system/i.test(r) && /missing/i.test(r)));
+  });
+
   it("rejects a new-form bug whose Reproduction is only a vague phrase", () => {
     const body = [
       "### Client or integration",

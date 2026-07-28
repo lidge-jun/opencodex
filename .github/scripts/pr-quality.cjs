@@ -84,14 +84,18 @@ function collectPrQualityFailures({
   behindBase,
   authorPermission,
   permissionLookupFailed = false,
+  ancestryLookupFailed = false,
 }) {
   const failures = [];
   const wrongBase = !allowedBases.includes(baseRef);
   if (wrongBase) {
     failures.push({ code: "wrong_base" });
   } else {
+    // Permission lookup fails closed (still evaluate ancestry). Compare API
+    // failures skip ancestry — zeros would falsely pass the #644 heuristic.
     const skipAncestry =
-      !permissionLookupFailed && authorHasPushPermission(authorPermission);
+      ancestryLookupFailed ||
+      (!permissionLookupFailed && authorHasPushPermission(authorPermission));
     if (!skipAncestry && isWrongAncestry({ behindMain, behindBase })) {
       failures.push({ code: "wrong_ancestry" });
     }

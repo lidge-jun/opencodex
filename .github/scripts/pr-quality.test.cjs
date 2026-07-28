@@ -170,4 +170,24 @@ describe("collectPrQualityFailures", () => {
     });
     assert.ok(failures.some((f) => f.code === "wrong_ancestry"));
   });
+
+  it("skips ancestry when compare lookup failed (cannot evaluate)", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "dev",
+      allowedBases: allowed,
+      body: [
+        "## Summary",
+        "This change updates the Windows tray launcher so it resolves CODEX_HOME through the shared helper instead of a hardcoded path.",
+        "",
+        "## Test plan",
+        "- Launch the tray app after setting CODEX_HOME",
+        "- Confirm the listener and launcher use the same workspace root",
+      ].join("\n"),
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+      ancestryLookupFailed: true,
+    });
+    assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
+  });
 });

@@ -713,7 +713,13 @@ describe("GitHub Actions hardening", () => {
     // nobody reviewed.
     const restWrites = [...script.matchAll(/github\.rest\.[\w.]+/g)]
       .map(match => match[0])
-      .filter(name => !name.endsWith(".get") && !name.endsWith(".listComments") && !name.includes(".repos."));
+      .filter(
+        name =>
+          !name.endsWith(".get") &&
+          !name.endsWith(".listComments") &&
+          name !== "github.rest.repos.getCollaboratorPermissionLevel" &&
+          name !== "github.rest.repos.compareCommitsWithBasehead",
+      );
     expect([...new Set(restWrites)].sort()).toEqual([
       "github.rest.issues.createComment",
       "github.rest.issues.updateComment",

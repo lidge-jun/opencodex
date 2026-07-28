@@ -398,6 +398,11 @@ export async function runEnforcePrTarget(
   const outputs: { name: string; value: unknown }[] = [];
   const states = new Map<string, unknown>();
   const failOn = new Set(options.failOn ?? []);
+  if (options.failPermissionLookup) {
+    // Route through `record` so the call appears in the recording even when it
+    // rejects (same semantics as `failOn`).
+    failOn.add("repos.getCollaboratorPermissionLevel");
+  }
   const failStatus = options.failStatus ?? 500;
 
   const pr = {
@@ -452,19 +457,21 @@ export async function runEnforcePrTarget(
 
   const nodeRequire = createRequire(path.join(process.cwd(), "package.json"));
   const scriptsRoot = path.resolve(process.cwd(), ".github", "scripts");
+  /** Bare modules the workflow script may load (see enforce-pr-target.yml). */
+  const ALLOWED_MODULES = new Set(["path", "node:path"]);
 
   function scopedRequire(id: string) {
     calls.push({ method: "require", args: [id] });
-    const isRelative = id.startsWith(".") || id.startsWith("/") || path.isAbsolute(id);
-    if (!isRelative) {
-      return nodeRequire(id);
-    }
-    const resolved = path.isAbsolute(id) ? id : path.resolve(process.cwd(), id);
-    if (!resolved.startsWith(scriptsRoot + path.sep) && resolved !== scriptsRoot) {
-      const norm = resolved.replace(/\\/g, "/");
-      if (!norm.includes("/.github/scripts/")) {
+    const isPathLike = id.startsWith(".") || path.isAbsolute(id);
+    if (!isPathLike) {
+      if (!ALLOWED_MODULES.has(id)) {
         throw new Error(`the script must not require ${id}`);
       }
+      return nodeRequire(id);
+    }
+    const resolved = path.isAbsolute(id) ? path.resolve(id) : path.resolve(process.cwd(), id);
+    if (!resolved.startsWith(scriptsRoot + path.sep) && resolved !== scriptsRoot) {
+      throw new Error(`the script must not require ${id}`);
     }
     return nodeRequire(resolved);
   }
@@ -494,14 +501,10 @@ export async function runEnforcePrTarget(
       updateComment: (args: unknown) => respond("issues.updateComment", args, { id: 7 }),
     },
     repos: {
-      getCollaboratorPermissionLevel: (args: unknown) => {
-        if (options.failPermissionLookup) {
-          return Promise.reject(octokitError("repos.getCollaboratorPermissionLevel", failStatus));
-        }
-        return respond("repos.getCollaboratorPermissionLevel", args, {
+      getCollaboratorPermissionLevel: (args: unknown) =>
+        respond("repos.getCollaboratorPermissionLevel", args, {
           permission: options.authorPermission ?? "read",
-        });
-      },
+        }),
       compareCommitsWithBasehead: (args: unknown) => {
         const basehead = String((args as { basehead?: string })?.basehead ?? "");
         return respond("repos.compareCommitsWithBasehead", args, compareResult(basehead));

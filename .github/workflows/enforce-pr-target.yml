@@ -277,25 +277,33 @@ jobs:
 
             let behindMain = 0;
             let behindBase = 0;
+            let ancestryLookupFailed = false;
             const baseAllowed = ALLOWED_BASES.includes(pr.base.ref);
 
             if (baseAllowed) {
               const headSha = pr.head.sha;
-              const { data: mainCompare } =
-                await github.rest.repos.compareCommitsWithBasehead({
-                  owner,
-                  repo,
-                  basehead: `main...${headSha}`
-                });
-              behindMain = mainCompare.behind_by;
+              try {
+                const { data: mainCompare } =
+                  await github.rest.repos.compareCommitsWithBasehead({
+                    owner,
+                    repo,
+                    basehead: `main...${headSha}`
+                  });
+                behindMain = mainCompare.behind_by;
 
-              const { data: baseCompare } =
-                await github.rest.repos.compareCommitsWithBasehead({
-                  owner,
-                  repo,
-                  basehead: `${pr.base.ref}...${headSha}`
-                });
-              behindBase = baseCompare.behind_by;
+                const { data: baseCompare } =
+                  await github.rest.repos.compareCommitsWithBasehead({
+                    owner,
+                    repo,
+                    basehead: `${pr.base.ref}...${headSha}`
+                  });
+                behindBase = baseCompare.behind_by;
+              } catch (error) {
+                ancestryLookupFailed = true;
+                core.warning(
+                  `Could not compare commits for ancestry check: ${error.message}`
+                );
+              }
             }
 
             const failures = collectPrQualityFailures({
@@ -305,7 +313,8 @@ jobs:
               behindMain,
               behindBase,
               authorPermission,
-              permissionLookupFailed
+              permissionLookupFailed,
+              ancestryLookupFailed
             });
 
             if (failures.length > 0) {

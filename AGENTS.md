@@ -80,10 +80,12 @@ integration line to another, or rebasing a stale branch onto the current head,
 is ordinary maintenance rather than noise — open it as a normal pull request
 and name the source commits in the description.
 
-The required **`enforce-target`** CI check rejects pull requests whose head
+The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`** or **`dev2-go`**,
 and rejects empty, thin, or malformed descriptions; authors with repository
-push permission skip the ancestry heuristic only.
+push permission skip the ancestry heuristic only. As with approval requirements
+in [`MAINTAINERS.md`](./MAINTAINERS.md), this is enforced by convention until
+branch protection is configured.
 
 [`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for review and merge
 policy (approvals, CI requirements, security review, promotion). This file
