@@ -16,6 +16,7 @@ import {
   clearThreadAccountMapForAccount,
   computeCodexUsageScore,
   getCodexAccountCooldownUntil,
+  getEffectiveActiveCodexAccountId,
   getCodexQuotaHealthSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
@@ -351,6 +352,7 @@ describe("codex routing", () => {
     // active account or the same thread's shared-scope affinity.
     expect(resolveCodexAccountForThread("scoped-thread", config, now + 2, "spark")).toBe("b");
     expect(config.activeCodexAccountId).toBe("a");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
     expect(resolveCodexAccountForThread("scoped-thread", config, now + 3, "shared")).toBe("a");
     expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "spark")).toBe("b");
   });
@@ -832,6 +834,27 @@ describe("codex routing", () => {
 
     expect(resolveCodexAccountForThread("lru-1", config, now + CODEX_THREAD_AFFINITY_MAX_ENTRIES + 1)).toBe("a");
     expect(resolveCodexAccountForThread("lru-0", config, now + CODEX_THREAD_AFFINITY_MAX_ENTRIES + 2)).toBe("b");
+  });
+
+  test("thread affinity LRU cap includes legacy and native quota scopes", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const threads = Math.floor(CODEX_THREAD_AFFINITY_MAX_ENTRIES / 3) + 1;
+
+    for (let i = 0; i < threads; i++) {
+      const threadId = `scoped-lru-${i}`;
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 1, "shared")).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 2, "spark")).toBe("a");
+    }
+
+    // The oldest legacy entry was evicted, while the same thread's later
+    // shared and Spark entries remain independently affined to A.
+    config.activeCodexAccountId = "b";
+    const after = now + threads * 3;
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 1, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 2)).toBe("b");
   });
 
   test("generation mismatch invalidates a mapped thread before reuse", () => {

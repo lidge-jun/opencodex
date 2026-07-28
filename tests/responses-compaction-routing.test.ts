@@ -218,31 +218,31 @@ describe("native Codex pool compaction", () => {
     let releaseBody!: () => void;
     const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
     const bodyReleased = new Promise<void>(resolve => { releaseBody = resolve; });
-    process.env.OPENCODEX_HOME = testDir;
-    process.env.CODEX_HOME = testDir;
-    Date.now = () => now;
-    clearCodexUpstreamHealth();
-    saveCodexAccountCredential("pool-a", {
-      accessToken: "pool-access-token",
-      refreshToken: "pool-refresh-token",
-      expiresAt: now + 30 * 60_000,
-      chatgptAccountId: "pool_acc",
-    });
-    recordCodexUpstreamOutcome(config, "pool-a", 429, {
-      now,
-      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
-      modelId: "gpt-5.3-codex-spark",
-    });
-    Date.now = () => probeAt;
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        markReadStarted();
-        await bodyReleased;
-        controller.enqueue(new TextEncoder().encode("{\"partial\":"));
-        controller.close();
-      },
-    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
     try {
+      process.env.OPENCODEX_HOME = testDir;
+      process.env.CODEX_HOME = testDir;
+      Date.now = () => now;
+      clearCodexUpstreamHealth();
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-access-token",
+        refreshToken: "pool-refresh-token",
+        expiresAt: now + 30 * 60_000,
+        chatgptAccountId: "pool_acc",
+      });
+      recordCodexUpstreamOutcome(config, "pool-a", 429, {
+        now,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.3-codex-spark",
+      });
+      Date.now = () => probeAt;
+      globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          markReadStarted();
+          await bodyReleased;
+          controller.enqueue(new TextEncoder().encode("{\"partial\":"));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
       const pending = handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" }), abort.signal),
         config,
@@ -265,6 +265,7 @@ describe("native Codex pool compaction", () => {
       releaseCodexAuthContextProbeLease(nextProbe);
     } finally {
       Date.now = originalNow;
+      globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
       rmSync(testDir, { recursive: true, force: true });
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -285,29 +286,29 @@ describe("native Codex pool compaction", () => {
     const abort = new AbortController();
     let markFetchStarted!: () => void;
     const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
-    process.env.OPENCODEX_HOME = testDir;
-    process.env.CODEX_HOME = testDir;
-    Date.now = () => now;
-    clearCodexUpstreamHealth();
-    saveCodexAccountCredential("pool-a", {
-      accessToken: "pool-access-token",
-      refreshToken: "pool-refresh-token",
-      expiresAt: now + 30 * 60_000,
-      chatgptAccountId: "pool_acc",
-    });
-    recordCodexUpstreamOutcome(config, "pool-a", 429, {
-      now,
-      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
-      modelId: "gpt-5.3-codex-spark",
-    });
-    Date.now = () => probeAt;
-    globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      const signal = init?.signal;
-      if (!signal) throw new Error("expected compact request abort signal");
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-      markFetchStarted();
-    })) as typeof fetch;
     try {
+      process.env.OPENCODEX_HOME = testDir;
+      process.env.CODEX_HOME = testDir;
+      Date.now = () => now;
+      clearCodexUpstreamHealth();
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-access-token",
+        refreshToken: "pool-refresh-token",
+        expiresAt: now + 30 * 60_000,
+        chatgptAccountId: "pool_acc",
+      });
+      recordCodexUpstreamOutcome(config, "pool-a", 429, {
+        now,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.3-codex-spark",
+      });
+      Date.now = () => probeAt;
+      globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("expected compact request abort signal");
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        markFetchStarted();
+      })) as typeof fetch;
       const pending = handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" }), abort.signal),
         config,
@@ -329,6 +330,7 @@ describe("native Codex pool compaction", () => {
       releaseCodexAuthContextProbeLease(nextProbe);
     } finally {
       Date.now = originalNow;
+      globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
       rmSync(testDir, { recursive: true, force: true });
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;

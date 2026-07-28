@@ -139,6 +139,14 @@ const NATIVE_MODEL_QUOTA_SCOPES: Readonly<Record<string, CodexQuotaScope>> = {
   "gpt-5.3-codex-spark": "spark",
 };
 
+// A thread can have one legacy binding plus one binding for each known scope.
+// This upper-bound guard avoids an exact map scan until it can be over capacity.
+const MAX_THREAD_AFFINITY_SCOPES = new Set([
+  LEGACY_THREAD_AFFINITY_SCOPE,
+  "shared",
+  ...Object.values(NATIVE_MODEL_QUOTA_SCOPES),
+]).size;
+
 export function codexQuotaScopeForModel(modelId: string | undefined): CodexQuotaScope | undefined {
   if (!modelId?.trim()) return undefined;
   return NATIVE_MODEL_QUOTA_SCOPES[modelId.trim().toLowerCase()] ?? "shared";
@@ -634,6 +642,7 @@ function pruneExpiredThreadAffinities(now: number): void {
 }
 
 function pruneLruThreadAffinities(): void {
+  if (threadAccountMap.size * MAX_THREAD_AFFINITY_SCOPES <= CODEX_THREAD_AFFINITY_MAX_ENTRIES) return;
   while (threadAffinityEntryCount() > CODEX_THREAD_AFFINITY_MAX_ENTRIES) {
     let oldestThreadId: string | null = null;
     let oldestScope: ThreadAffinityScope | null = null;
