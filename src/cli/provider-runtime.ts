@@ -15,6 +15,7 @@ import {
 const USAGE = `Usage:
   ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->]
       [--auth-mode <key|forward|oauth|local|->] [--note <text|->]
+      [--api-key-transport <x-api-key|bearer|->]
       [--enabled <on|off>] [--live-models <on|off>] [--allow-private-network <on|off>] [--json]
   ocx provider test <name> [--json]
   ocx provider quota [--refresh] [--json]
@@ -37,6 +38,7 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const defaultModel = cleared(takeOption(args, "--default-model"));
   const authMode = cleared(takeOption(args, "--auth-mode"));
   const note = cleared(takeOption(args, "--note"));
+  const apiKeyTransport = cleared(takeOption(args, "--api-key-transport"));
   const enabled = takeBooleanOption(args, "--enabled");
   const liveModels = takeBooleanOption(args, "--live-models");
   const allowPrivateNetwork = takeBooleanOption(args, "--allow-private-network");
@@ -46,6 +48,7 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (defaultModel !== undefined) patch.defaultModel = defaultModel;
   if (authMode !== undefined) patch.authMode = authMode;
   if (note !== undefined) patch.note = note;
+  if (apiKeyTransport !== undefined) patch.apiKeyTransport = apiKeyTransport;
   if (enabled !== undefined) patch.disabled = !enabled;
   if (liveModels !== undefined) patch.liveModels = liveModels;
   if (allowPrivateNetwork !== undefined) patch.allowPrivateNetwork = allowPrivateNetwork;

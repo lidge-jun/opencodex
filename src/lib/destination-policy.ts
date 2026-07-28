@@ -19,7 +19,7 @@ const BLOCKED_METADATA_IPV6 = new Set([
   "fd00:ec2::254",
 ]);
 
-type DestinationKind =
+export type DestinationKind =
   | "public"
   | "hostname"
   | "localhost"
@@ -79,13 +79,33 @@ function classifyIpv6(hostname: string): DestinationAssessment {
   if (BLOCKED_METADATA_IPV6.has(hostname)) return { kind: "metadata", detail: "blocked metadata endpoint" };
   const mappedIpv4 = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
   if (mappedIpv4) return classifyIpv4(mappedIpv4);
+  // Decode hex IPv4-mapped IPv6: ::ffff:7f00:1 → 127.0.0.1
+  // The dotted-decimal regex above only matches ::ffff:127.0.0.1; without this,
+  // hex form bypasses all private/loopback checks (hextet is 0 → classified "public").
+  const hexMapped = hostname.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (hexMapped) {
+    const hi = Number.parseInt(hexMapped[1], 16);
+    const lo = Number.parseInt(hexMapped[2], 16);
+    const ipv4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+    return classifyIpv4(ipv4);
+  }
   if (hostname === "::1") return { kind: "loopback", detail: "loopback address" };
   if (hostname === "::") return { kind: "unspecified", detail: "unspecified address" };
   const hextet = firstIpv6Hextet(hostname);
-  if (hextet === null) return { kind: "public", detail: "public IP" };
-  if (hextet >= 0xfc00 && hextet <= 0xfdff) return { kind: "private", detail: "private-network address" };
+  if (hextet === null) return { kind: "private", detail: "non-global address" };
+  // Multicast ff00::/8, deprecated site-local fec0::/10, ULA fc00::/7, link-local fe80::/10.
+  if (hextet >= 0xff00) return { kind: "private", detail: "multicast address" };
   if (hextet >= 0xfe80 && hextet <= 0xfebf) return { kind: "link-local", detail: "link-local address" };
-  return { kind: "public", detail: "public IP" };
+  if (hextet >= 0xfec0 && hextet <= 0xfeff) return { kind: "private", detail: "site-local address" };
+  if (hextet >= 0xfc00 && hextet <= 0xfdff) return { kind: "private", detail: "private-network address" };
+  // Documentation 2001:db8::/32 (inside global-unicast 2000::/3).
+  if (hextet === 0x2001) {
+    const second = Number.parseInt(hostname.split(":")[1] || "0", 16);
+    if (second === 0xdb8) return { kind: "private", detail: "documentation address" };
+  }
+  // Only global unicast 2000::/3 is treated as a public image/CDN peer.
+  if (hextet >= 0x2000 && hextet <= 0x3fff) return { kind: "public", detail: "public IP" };
+  return { kind: "private", detail: "non-global address" };
 }
 
 function assessDestination(baseUrl: string): DestinationAssessment | null {
@@ -177,4 +197,77 @@ export async function providerDestinationResolvedError(
     return `baseUrl hostname ${hostname} resolves to a ${assessment.detail} (${address}); set allowPrivateNetwork:true only for intentionally local/self-hosted providers`;
   }
   return null;
+}
+
+export interface UrlDestinationAssessment {
+  kind: DestinationKind;
+  detail: string;
+}
+
+/**
+ * Synchronous literal URL destination assessment — classifies the hostname
+ * without DNS resolution. Returns null for unparseable URLs.
+ */
+export function assessUrlDestination(url: string): UrlDestinationAssessment | null {
+  return assessDestination(url);
+}
+
+/**
+ * Async DNS-resolved URL safety check. Resolves A/AAAA records and rejects
+ * if any address is loopback, private, link-local, unspecified, or metadata.
+ * Throws on unsafe destination; returns the validated public addresses on success
+ * so callers can pin the connect peer and avoid a second, rebindable resolution.
+ * DNS resolution failures are treated as unsafe (fail-closed).
+ */
+export async function resolvePublicAddresses(url: string): Promise<{
+  hostname: string;
+  addresses: { address: string; family: number }[];
+}> {
+  let hostname: string;
+  try {
+    hostname = normalizeHostname(new URL(url.trim()).hostname);
+  } catch {
+    throw new Error("image URL is not a valid URL");
+  }
+  if (!hostname) throw new Error("image URL has no hostname");
+  const literalAssessment = assessDestination(url);
+  if (literalAssessment && literalAssessment.kind !== "public" && literalAssessment.kind !== "hostname") {
+    throw new Error(`image URL targets ${literalAssessment.detail}`);
+  }
+  // Literal public IPs: no DNS round-trip; pin the literal itself.
+  const literalKind = isIP(hostname);
+  if (literalKind !== 0) {
+    return { hostname, addresses: [{ address: hostname, family: literalKind }] };
+  }
+  let addresses: { address: string; family: number }[];
+  try {
+    addresses = await lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    // If DNS fails, we can't verify — fail-closed (unlike provider config-time validation,
+    // this is a runtime fetch to an untrusted URL, so be conservative).
+    throw new Error(`image URL hostname ${hostname} could not be resolved`);
+  }
+  if (addresses.length === 0) {
+    throw new Error(`image URL hostname ${hostname} could not be resolved`);
+  }
+  const publicAddresses: { address: string; family: number }[] = [];
+  for (const { address, family } of addresses) {
+    // Prefer classifying from the address string itself — do not trust a mislabeled
+    // resolver `family` that could skip IPv4/IPv6 private checks.
+    const ipKind = isIP(address) || (family === 4 || family === 6 ? family : 0);
+    const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
+    if (!assessment || assessment.kind !== "public") {
+      throw new Error(`image URL hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
+    }
+    publicAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
+  }
+  return { hostname, addresses: publicAddresses };
+}
+
+/**
+ * Void assertion wrapper around {@link resolvePublicAddresses} for call sites
+ * that only need the safety check.
+ */
+export async function assertUrlResolvesPublic(url: string): Promise<void> {
+  await resolvePublicAddresses(url);
 }

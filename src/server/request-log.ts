@@ -77,6 +77,8 @@ export interface RequestLogContext {
   upstreamError?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  /** Structured reason from `response.incomplete`; internal-only input to log classification. */
+  terminalIncompleteReason?: string;
   affinity?: "reused" | "new_bind" | "rebound" | "cleared";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
@@ -532,7 +534,7 @@ export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload:
  * run it through redactSecretString so secrets never reach /api/logs. Pure; safe on any text.
  */
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
-  if (!text || logCtx.upstreamError) return;
+  if (!text) return;
   try {
     const json = JSON.parse(text) as {
       type?: unknown;
@@ -544,6 +546,14 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
       };
     };
     captureTerminalHttpStatus(logCtx, json);
+    const reason = json?.response?.incomplete_details?.reason;
+    if (json.type === "response.incomplete"
+      && logCtx.terminalIncompleteReason === undefined
+      && typeof reason === "string"
+      && reason.trim()) {
+      logCtx.terminalIncompleteReason = reason.trim();
+    }
+    if (logCtx.upstreamError) return;
     const message = json?.error?.message
       ?? json?.last_error?.message
       ?? json?.response?.error?.message;
@@ -555,11 +565,11 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
     // the bridge on a stall-timeout or adapter EOF (response.incomplete). Maps the raw reason to a
     // reader-facing label so a generic 502 in /api/logs explains WHY the turn ended, not just the
     // mapped HTTP code.
-    const reason = json?.response?.incomplete_details?.reason;
     if (typeof reason === "string" && reason.trim()) {
       logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
     }
   } catch {
+    if (logCtx.upstreamError) return;
     const trimmed = text.trim();
     if (trimmed) {
       logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
@@ -570,6 +580,8 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
 /** Map a raw `incomplete_details.reason` (emitted by the bridge) to a reader-facing label. */
 function incompleteReasonLabel(reason: string): string {
   switch (reason) {
+    case "max_output_tokens":
+      return `Output reached the requested token limit (${reason})`;
     case "upstream_stall_timeout":
       return `Upstream stalled: no data for the stall-timeout window (${reason})`;
     case "adapter_eof":
@@ -614,6 +626,21 @@ export function httpStatusForRequestLogTerminal(
   status: ResponsesTerminalStatus,
   logCtx?: RequestLogContext,
 ): number {
+  /**
+   * [Decision Log]
+   * - 목적과 의도: Keep request logs aligned with the successful HTTP/SSE contract.
+   * - 기존 구현 및 제약 조건: All incomplete terminals were recorded as 502 even when the
+   *   client-requested output limit was reached normally.
+   * - 검토한 주요 대안: Treat every incomplete as success, or infer the reason from display text.
+   * - 선택한 방식: Only structured max_output_tokens incompletes map to 200.
+   * - 다른 대안 대신 이 방식을 선택한 이유: Stall, EOF, and unknown incompletes must remain
+   *   visible failures, and display text is not a stable classification contract.
+   * - 장점, 단점 및 영향: Logs stop reporting false upstream errors while retaining the
+   *   incomplete terminal detail; native callers without a structured reason keep old behavior.
+   */
+  if (status === "incomplete" && logCtx?.terminalIncompleteReason === "max_output_tokens") {
+    return 200;
+  }
   if (status === "failed" && logCtx?.terminalHttpStatus !== undefined) {
     return logCtx.terminalHttpStatus;
   }

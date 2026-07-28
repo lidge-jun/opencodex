@@ -678,6 +678,7 @@ export async function handleClaudeMessages(
   };
   const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
     abortSignal: req.signal,
+    promptCacheKeyIsSharedCohort: cacheKeySource === "system",
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),

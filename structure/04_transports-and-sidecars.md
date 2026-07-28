@@ -23,19 +23,21 @@ Native passthrough SSE has TWO shapes, selected per request in
 `src/server/responses/core.ts`:
 
 - **Default: tee + background inspection.** `upstreamResponse.body.tee()` sends
-  branch[0] to the client (pure native relay on win32 without item-id repair —
-  the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
+  branch[0] to the client (pure native relay on win32 without any client-facing
+  rewrite — the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
   drained eagerly by `consumeForInspection`/`consumeForResponseLogMetadata`
   for terminal-outcome recording, quota, the passthrough continuation cache,
   and request logs. This is the only shape on the bundled Bun 1.3.14.
-- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32-no-repair
-  only, armed by `decideEagerRelay(config.streamMode)` from
+- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32 with no
+  client-facing rewrite only (neither image-gen aliases nor item-id repair), armed by
+  `decideEagerRelay(config.streamMode)` from
   `src/lib/bun-stream-caps.ts` — default-on only for runtimes proven to carry
   the Bun#32111 fix (`MIN_FIXED_BUN_VERSION`, null until a bundle bump), or by
   explicit `streamMode: "eager-relay"` opt-in. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee, preserving
-  the full inspection side-effect set (shared `createSseInspector` factory in
-  `relay.ts`) including the #44 late-terminal semantics.
+  client queue + post-cancel bounded discard-drain replaces the tee and goes
+  directly to the response without a JS rewrite wrapper, preserving the full
+  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
+  including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts` and
 source-invariant-tested by `tests/passthrough-abort.test.ts`; keep both in
@@ -47,22 +49,68 @@ Codex's local `image_gen.imagegen` tool makes a second Images request after the 
 `POST /v1/images/generations` for generation or `POST /v1/images/edits` for reference-image edits.
 These are standalone Images API routes, not the hosted Responses `image_generation` tool.
 
-`src/server/images.ts` selects only an enabled forward-mode `openai-responses` provider, resolves
-the same thread-affined Codex account as Responses, and relays the bounded opaque body without
-rewriting Codex's JSON edit schema or a compatible multipart body. Each paid Images POST receives
+`src/server/images.ts` uses the existing ChatGPT/OpenAI fallback unless `images.provider` explicitly
+selects a custom API-key `openai-responses` provider. Explicit selection fails closed when the
+provider is missing, disabled, registry-managed, incompatible, or lacks a usable key; it never
+falls through to another paid upstream. The relay accepts bounded JSON generation and edit requests,
+then forwards the decoded JSON without rewriting Codex's edit schema. Each paid Images POST receives
 one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
 existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
-On non-loopback binds, data-plane authentication and origin policy cover both Images routes just as
-they cover `/v1/responses`; clients must send the configured `x-opencodex-api-key`.
+On non-loopback binds, data-plane authentication and origin policy cover both Images routes. An
+explicit keyed Images provider accepts the proxy admission secret as either an OpenAI-style bearer
+or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
+ChatGPT forward path still requires the dedicated header so its upstream bearer remains distinct.
 
-The API-key `openai-responses` path also prevents the standalone client tool from colliding with the
-hosted Responses tool. When a request declares `image_gen.imagegen` (as a flat function or an
-`image_gen` namespace), the adapter drops hosted `image_generation` while preserving unrelated
-tools. Conflict discovery spans both top-level `body.tools` and Codex Desktop Responses Lite
-`input[].type = "additional_tools"` containers because the platform validates their merged tool
-namespace. ChatGPT forward mode preserves the pair because that backend accepts it and owns native
-image generation.
+The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
+Responses tool surface. A complete `image_gen` namespace is lowered to safe
+`image_gen__<inner-name>` function aliases even when no hosted image tool is present, because public
+Responses runtimes may reserve the namespace itself and reject dotted function names. Native and
+legacy dotted calls replayed in `body.input` are encoded to the same aliases. When any client
+image-gen declaration is replaced by a usable `image_gen__<inner-name>` alias, the adapter also drops
+hosted `image_generation` and deduplicates aliases in stable container order. Empty or malformed
+namespaces do not remove the hosted fallback. Discovery and normalization span both top-level
+`body.tools` and Codex Desktop Responses Lite `input[].type = "additional_tools"` containers.
+
+Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
+items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
+extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify
+pass (`src/server/sse-payload-rewrite.ts`) rather than chaining separate JS pull wrappers.
+Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
+replays to return upstream without leaking a client-only namespace shape. Malformed, empty, and
+unrelated namespaces remain untouched. ChatGPT forward mode preserves the private namespace and
+hosted tool because that backend understands their native semantics.
+
+Per-model `modelReasoningSummaryDelivery` is a narrow compatibility layer for
+`openai-responses` gateways whose summary capability is real but whose accepted delivery enum
+differs from Codex. Presence advertises reasoning summaries in the routed catalog and rewrites only
+an already-present `stream_options.reasoning_summary_delivery` at the adapter boundary. It never
+injects summary generation into a request, and config validation rejects a delivery map that
+conflicts with `modelSupportsReasoningSummaries: false` for the same model.
+
+[Decision Log]
+- 목적과 의도: Preserve Codex Desktop reasoning summaries while adapting only the delivery enum rejected by a specific Responses-compatible upstream.
+- 기존 구현 및 제약 조건: The existing boolean capability either passed Codex's enum unchanged or disabled summaries entirely; stale running clients can keep sending the old enum after a catalog refresh.
+- 검토한 주요 대안: Disable summaries; rewrite the enum globally; inject a delivery field when absent; configure a provider-wide value.
+- 선택한 방식: Use a validated per-model allowlisted map, imply summary capability for that model, and rewrite only a caller-provided delivery field at the Responses adapter boundary.
+- 다른 대안 대신 이 방식을 선택한 이유: Upstream enum support differs by model and provider, while global rewriting or injection would change unrelated requests and disabling summaries removes Desktop UX.
+- 장점, 단점 및 영향: Configured models retain the native summary UI and stale clients self-heal; each incompatible model needs an explicit map entry and contradictory opt-out configuration now fails closed.
+
+## Claude Desktop config-library resolution
+
+The Desktop profile writer and management status probe share
+`resolveDesktop3pConfigLibraryPath`. Explicit opencodex and Claude user-data overrides win; otherwise
+the resolver follows Electron's platform user-data convention under the `Claude` application
+directory. The retired hardcoded `Claude-3p` path is neither read nor migrated implicitly, so the
+status endpoint cannot report a self-consistent file that Desktop never sees.
+
+[Decision Log]
+- 목적과 의도: Make the generated Claude Desktop profile land in the directory the installed Desktop application actually reads and keep dashboard status consistent with that write target.
+- 기존 구현 및 제약 조건: Both callers duplicated a macOS-only `Claude-3p` fallback, which made their internal status agree while Electron used `Claude/configLibrary`; users may also set explicit profile roots.
+- 검토한 주요 대안: Rename only the CLI fallback; scan both directories; move or delete legacy files automatically; centralize a cross-platform resolver.
+- 선택한 방식: Centralize override-aware macOS, Windows, and Linux resolution and use it for both write and status paths without destructive migration.
+- 다른 대안 대신 이 방식을 선택한 이유: One resolver prevents drift, platform defaults match Electron, and leaving the legacy directory untouched avoids deleting user data or guessing which copy should win.
+- 장점, 단점 및 영향: New applies become visible to Desktop on every supported platform; old `Claude-3p` files remain harmless and users with nonstandard layouts must use the documented override.
 
 ## Cursor Native Exec
 
@@ -236,6 +284,22 @@ lookalike hosts, and custom proxy paths fail validation. A model override replac
 merges the provider-wide default, keeping precedence deterministic. With no preference configured,
 the request body is byte-for-byte unchanged in this area and OpenRouter retains its default routing.
 
+## Kimi Coding Plan prompt-cache affinity
+
+The canonical `kimi` OAuth and `kimi-code` API-key presets opt into forwarding the internal
+request's `prompt_cache_key` to Kimi's Chat Completions body. Kimi Code Plan documents a stable
+session/task key as required to improve cache hit rates. The chat adapter never invents a key of
+its own: it forwards what the request already carries — Codex's session key on
+`/v1/responses`, or the session-scoped key the Claude `/v1/messages` inbound derives
+(metadata.user_id hash, else the system+tools cohort hash) — and a request with no key stays
+keyless. An explicit provider-level `promptCacheKey: false` continues to opt out, and the flag is
+persisted through `providerConfigSeed`/`enrichProviderFromRegistry` for new configs; key-pool 429
+rotation keeps it — along with every other registry backfill — because the retry inherits the
+request's routed provider and swaps only the API key (`rotateProviderTransportOn429` in
+src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
+backends may reject the OpenAI-specific field.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
@@ -291,6 +355,26 @@ Codex app, so tool cells group like native models — while the text still round
 `content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
 `devlog/_plan/260709_native_response_pattern/`.
 
+## Chat-to-Responses message phase inference
+
+Chat Completions streams do not carry the Responses `message.phase` field. The bridge keeps an
+unphased live message provisional while its deltas arrive, then assigns `commentary` when a later
+tool, search, reasoning, or assistant boundary proves that more work follows, and assigns
+`final_answer` only when a clean terminal `done` closes the current message. Explicit adapter
+phases always win. Streaming `output_item.added` remains unphased until that future boundary is
+known; `output_item.done` and the terminal response snapshot carry the authoritative inferred phase
+with the same item id. The batch/non-streaming bridge follows the same rule.
+
+```text
+[Decision Log]
+- 목적과 의도: Prevent Codex App from rendering one bridged Chat Completions answer as both live commentary and a second persisted final answer.
+- 기존 구현 및 제약 조건: openai-chat emits text deltas without phase, the bridge streamed them immediately, and whether text is pre-tool commentary or the terminal answer is unknowable until a later boundary arrives.
+- 검토한 주요 대안: Mark every delta final_answer; mark every delta commentary; buffer the entire answer before emitting; infer phase only when the message is finalized.
+- 선택한 방식: Keep the live added item provisional and infer commentary or final_answer at the authoritative close boundary, preserving explicit phases and item identity in done/completed output.
+- 다른 대안 대신 이 방식을 선택한 이유: Eager defaults misclassify either tool preambles or final answers, while full buffering removes live streaming; close-time inference provides correct persisted semantics without adding latency.
+- 장점, 단점 및 영향: Codex App receives a definitive phase for persisted bridged messages and avoids the duplicate-final rendering path; the provisional output_item.added event intentionally has no phase because its classification is not yet knowable.
+```
+
 ## Upstream reset retry
 
 `src/lib/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
@@ -302,6 +386,26 @@ retried. Guarded paths: the ChatGPT passthrough and generic adapter fetch in
 `src/server/responses.ts`, the vision/web-search sidecars, and the web-search loop's direct-fetch
 fallback. Adapters with their own `fetchResponse` (kiro, cursor, google) keep their own retry
 policies; kiro imports the shared abort/sleep helpers from this module.
+
+## Same-provider combo quota fallback
+
+For a failover combo with multiple models on the same Codex-login OpenAI provider, a pre-stream
+429/402 carrying only `x-codex-*-reset-at` may advance to the later model on the same account. The
+failed physical combo target still enters its normal target cooldown. An explicit `Retry-After`
+remains an account-wide instruction and blocks the later target; a quota response with neither an
+explicit retry delay nor a usable reset timestamp keeps the conservative default account cooldown.
+This exception is request-scoped and is not applied to direct requests, round-robin combos, or a
+combo whose remaining eligible targets use other providers.
+
+```text
+[Decision Log]
+- 목적과 의도: Let an ordered combo recover when one model-specific Codex quota window is exhausted but another model on the same account remains usable.
+- 기존 구현 및 제약 조건: Account health is shared across models, and recording a reset-derived 429 before combo advancement rejected the later model locally.
+- 검토한 주요 대안: Make every quota cooldown model-scoped; ignore all combo 429 cooldowns; or defer only reset-derived cooldown recording for an eligible later same-provider failover target.
+- 선택한 방식: Use the narrow request-scoped deferral while retaining target cooldown and all explicit Retry-After/default account cooldown behavior.
+- 다른 대안 대신 이 방식을 선택한 이유: Reset timestamps identify quota windows rather than a literal account-wide retry instruction, but widening the exception would risk hot retries and provider abuse.
+- 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
+```
 
 ## Sidecars
 

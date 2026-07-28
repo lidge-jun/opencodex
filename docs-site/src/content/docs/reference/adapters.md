@@ -54,7 +54,7 @@ streams the response back **untranslated**.
 ## `anthropic`
 
 **Targets:** Anthropic **Messages** (`/v1/messages`).
-**Auth:** `key` (`x-api-key`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
+**Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
 - **Extended thinking math:** Anthropic requires `max_tokens > thinking.budget_tokens`. The adapter
@@ -79,6 +79,15 @@ streams the response back **untranslated**.
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
   `thoughtSignature` values so reasoning continuity survives later turns.
+- **Inline image output:** when the model is one of the explicit image-capable chat IDs
+  (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
+  `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
+  Standalone media-generation IDs such as `gemini-3-pro-image` are not included. Returned
+  `inlineData` parts are materialized under the configured OpenCodex `artifacts/` directory and
+  surfaced as markdown image links to the authenticated opaque route
+  `/v1/opencodex/artifacts/<id>` (not `file:` URIs or host filesystem paths). Each image is capped
+  at 50 MB and each response at 100 MB of decoded data; malformed base64 payloads are rejected.
+  Artifacts are pruned automatically when the count exceeds 200 files.
 
 ## `kiro`
 

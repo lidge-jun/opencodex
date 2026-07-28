@@ -457,11 +457,12 @@ export function mergeCatalogEntriesForSync(
 export async function syncCatalogModels(config: OcxConfig): Promise<{
   added: number;
   path: string;
+  catalogWritten: boolean;
   comboOmissions: ComboCatalogOmission[];
 }> {
   const catalogPath = readCodexCatalogPath();
   const catalog = loadCatalogForSync(catalogPath);
-  if (!catalog) return { added: 0, path: catalogPath, comboOmissions: [] };
+  if (!catalog) return { added: 0, path: catalogPath, catalogWritten: false, comboOmissions: [] };
 
   const template = findNativeTemplate(catalog);
 
@@ -500,7 +501,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
-  return { added: goEntries.length, path: catalogPath, comboOmissions };
+  return { added: goEntries.length, path: catalogPath, catalogWritten: true, comboOmissions };
 }
 
 export function restoreCodexCatalog(): { removed: number; kept: number; path: string } {
@@ -531,10 +532,11 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
   return { removed, kept: native.length, path: catalogPath };
 }
 
-export function invalidateCodexModelsCache(): void {
+/** Force Codex's models_cache stale from the on-disk catalog. Returns whether a cache write occurred. */
+export function invalidateCodexModelsCache(): boolean {
   try {
     const catalogPath = readCodexCatalogPath();
-    if (!existsSync(catalogPath)) return;
+    if (!existsSync(catalogPath)) return false;
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const models = catalog.models ?? catalog;
     const wrapper = {
@@ -543,5 +545,8 @@ export function invalidateCodexModelsCache(): void {
       models,
     };
     atomicWriteFile(activeCodexModelsCachePath(), JSON.stringify(wrapper, null, 2) + "\n");
-  } catch { /* best-effort */ }
+    return true;
+  } catch {
+    return false;
+  }
 }

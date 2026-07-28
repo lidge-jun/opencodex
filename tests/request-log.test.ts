@@ -986,6 +986,42 @@ describe("request log metadata", () => {
     expect(entries[0].upstreamError).toContain("Upstream stalled");
   });
 
+  test("deferred SSE logging treats the requested output limit as a successful terminal", async () => {
+    const entries: RequestLogEntry[] = [];
+    const incompletePayload = JSON.stringify({
+      type: "response.incomplete",
+      response: {
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: { input_tokens: 9, output_tokens: 64 },
+      },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${incompletePayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-requested-output-limit",
+      Date.now(),
+      { model: "anthropic/claude-sonnet-5", provider: "anthropic" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "incomplete",
+      status: 200,
+      usageStatus: "reported",
+      usage: { inputTokens: 9, outputTokens: 64 },
+      upstreamError: "Output reached the requested token limit (max_output_tokens)",
+    });
+    expect(entries[0]).not.toHaveProperty("errorCode");
+  });
+
   test("deferred SSE logging surfaces adapter_eof reason as upstreamError", async () => {
     const entries: RequestLogEntry[] = [];
     const incompletePayload = JSON.stringify({

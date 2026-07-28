@@ -11,6 +11,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  subagentDefaultSyncEffective,
 } from "../../config";
 import {
   clearLoginState,
@@ -33,7 +34,6 @@ import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
-import { scanStorage } from "../../storage/scanner";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
@@ -191,6 +191,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       )));
     return jsonResponse({
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+      syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
@@ -208,6 +209,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     const body = parsedBody as {
       multiAgentGuidanceEnabled?: unknown;
+      syncCodexSubagentDefaults?: unknown;
       model?: unknown;
       effort?: unknown;
       prompt?: unknown;
@@ -215,6 +217,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { isCodexReasoningEffort } = await import("../../reasoning-effort");
 
     let nextEnabled = config.multiAgentGuidanceEnabled;
+    // Start from the effective state reported by GET. A stale hand-edited
+    // `true` without a model must not spring back on during a model-only PUT.
+    let nextSyncCodexSubagentDefaults = subagentDefaultSyncEffective(config);
     let nextModel = config.injectionModel;
     let nextEffort = config.injectionEffort;
     let nextPrompt = config.injectionPrompt;
@@ -225,10 +230,16 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       nextEnabled = body.multiAgentGuidanceEnabled;
     }
+    if ("syncCodexSubagentDefaults" in body) {
+      if (typeof body.syncCodexSubagentDefaults !== "boolean") {
+        return jsonResponse({ error: "syncCodexSubagentDefaults must be a boolean" }, 400);
+      }
+      nextSyncCodexSubagentDefaults = body.syncCodexSubagentDefaults;
+    }
     if ("model" in body) {
       if (body.model === null || body.model === "") nextModel = undefined;
-      else if (typeof body.model === "string" && body.model.length > 0) nextModel = body.model;
-      else return jsonResponse({ error: "model must be a non-empty string or null" }, 400);
+      else if (typeof body.model === "string" && body.model.trim().length > 0) nextModel = body.model;
+      else return jsonResponse({ error: "model must be a nonblank string or null" }, 400);
     }
     if ("effort" in body) {
       if (body.effort === null || body.effort === "") nextEffort = undefined;
@@ -243,10 +254,21 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       else if (body.prompt === null || body.prompt === "") nextPrompt = undefined;
       else return jsonResponse({ error: "prompt must be a string or null" }, 400);
     }
-    // Clearing the model always clears the effort (it is meaningless alone).
-    if (!nextModel) nextEffort = undefined;
+    // Clearing the model always clears model-dependent settings before sync/effort gates.
+    if (!nextModel) {
+      nextEffort = undefined;
+      nextSyncCodexSubagentDefaults = false;
+    }
+    if (body.syncCodexSubagentDefaults === true && !nextModel?.trim()) {
+      return jsonResponse({ error: "syncCodexSubagentDefaults requires an injection model" }, 400);
+    }
+    if (nextSyncCodexSubagentDefaults && nextEffort !== undefined && !isCodexReasoningEffort(nextEffort)) {
+      return jsonResponse({ error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort" }, 400);
+    }
 
     config.multiAgentGuidanceEnabled = nextEnabled;
+    if (nextSyncCodexSubagentDefaults) config.syncCodexSubagentDefaults = true;
+    else delete config.syncCodexSubagentDefaults;
     if (nextModel) config.injectionModel = nextModel;
     else delete config.injectionModel;
     if (nextEffort) config.injectionEffort = nextEffort;
@@ -258,6 +280,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({
       ok: true,
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
+      syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
       model: config.injectionModel ?? null,
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
@@ -543,16 +566,22 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const { readFileSync: readFile, existsSync } = await import("node:fs");
       const { createHash } = await import("node:crypto");
       const { join } = await import("node:path");
-      const { homedir } = await import("node:os");
-      const libraryPath = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim()
-        || join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
+      const { resolveDesktop3pConfigLibraryPath } = await import("../../claude/desktop-3p");
+      const libraryPath = resolveDesktop3pConfigLibraryPath();
       const metaPath = join(libraryPath, "_meta.json");
       let onDiskFingerprint: string | null = null;
       let configPath: string | null = null;
+      // Desktop serves ONLY the profile named by _meta.json's appliedId, so an
+      // opencodex entry that merely EXISTS does not mean Desktop is using it.
+      // null = undeterminable (no metadata / unreadable / no appliedId).
+      let activeProfile: boolean | null = null;
       if (existsSync(metaPath)) {
         try {
           const meta = JSON.parse(readFile(metaPath, "utf8"));
           const entry = Array.isArray(meta.entries) ? meta.entries.find((e: { name?: string }) => e?.name === "opencodex") : undefined;
+          const appliedId = typeof meta.appliedId === "string" ? meta.appliedId : null;
+          // A readable appliedId with no opencodex entry is a KNOWN false, not unknown.
+          activeProfile = appliedId === null ? null : (entry?.id ? appliedId === entry.id : false);
           if (entry?.id) {
             configPath = join(libraryPath, `${entry.id}.json`);
             if (existsSync(configPath)) {
@@ -574,6 +603,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         onDiskFingerprint,
         configPath,
         stale,
+        activeProfile,
         health,
       });
     } catch (error) {

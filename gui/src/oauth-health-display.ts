@@ -122,29 +122,52 @@ export function formatOAuthHealthSummary(
   return t("pws.healthSummary.staleCredentials", { provider, account });
 }
 
-/** Safe clipboard write: no throw when Clipboard API is missing (non-secure contexts). */
+/**
+ * Safe clipboard write: never throws, and reports honestly whether the text
+ * landed. The legacy `execCommand` path is not decoration — `navigator.clipboard`
+ * is undefined outside a secure context, which is exactly what a LAN-bound GUI
+ * (`hostname: 0.0.0.0` over plain HTTP) serves. Without the fallback, copying
+ * would be permanently unavailable on that deployment.
+ */
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   const write = navigator.clipboard?.writeText?.bind(navigator.clipboard);
-  if (!write) return false;
+  if (write) {
+    try {
+      await write(text);
+      return true;
+    } catch {
+      // Permission denied or a non-secure context: fall through to the legacy path.
+    }
+  }
+  return copyViaExecCommand(text);
+}
+
+function copyViaExecCommand(text: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.setAttribute("aria-hidden", "true");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
   try {
-    await write(text);
-    return true;
+    area.select();
+    return document.execCommand("copy");
   } catch {
     return false;
+  } finally {
+    area.remove();
   }
 }
 
-export type DoctorCopyFeedback = {
-  accountId: string;
-  outcome: "copied" | "unavailable";
-};
-
+/** Scope resolution moved to useCopyFeedback; this only maps an outcome to copy. */
 export function doctorCopyButtonLabel(
   t: TFn,
-  feedback: DoctorCopyFeedback | null | undefined,
-  accountId: string,
+  outcome: "copied" | "unavailable" | null | undefined,
 ): string {
-  if (feedback?.accountId !== accountId) return t("pws.copyDoctor");
-  return feedback.outcome === "copied" ? t("pws.doctorCopied") : t("pws.doctorCopyUnavailable");
+  if (!outcome) return t("pws.copyDoctor");
+  return outcome === "copied" ? t("pws.doctorCopied") : t("pws.doctorCopyUnavailable");
 }
 

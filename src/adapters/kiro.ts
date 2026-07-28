@@ -1445,8 +1445,8 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
       throw new Error("kiro token missing — run ocx login kiro");
     }
-    const region = resolveKiroApiRegion();
-    const profileArn = resolveKiroProfileArn();
+    const region = resolveKiroApiRegion(parsed._kiroAuthContext);
+    const profileArn = resolveKiroProfileArn(parsed._kiroAuthContext);
     const fp = fingerprint().slice(0, 64);
     const headers: Record<string, string> = {
       authorization: `Bearer ${provider.apiKey}`,

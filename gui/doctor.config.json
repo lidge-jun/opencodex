@@ -1,7 +1,7 @@
 {
   "$schema": "https://react.doctor/schema/config.json",
   "scope": "full",
-  "blocking": "none",
+  "blocking": "warning",
   "ignore": {
     "files": ["dist/**", "node_modules/**"]
   },

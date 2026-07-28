@@ -154,20 +154,15 @@ jobs:
 
           echo "Cross-platform CI passed for ${GITHUB_SHA}: ${ci_url}"
 
-          # Compare within the release channel so preview and stable gates use matching history.
-          if [[ "$RELEASE_VERSION" == *-preview.* ]]; then
-            previous_tag="$(
-              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-                grep -- '-preview\.' |
-                head -n 1 || true
-            )"
-          else
-            previous_tag="$(
-              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-                grep -v -- '-preview\.' |
-                head -n 1 || true
-            )"
-          fi
+          # Notes / service baseline:
+          # - Preview: newest prior release of either channel (stable or preview). A
+          #   preview→preview-only baseline skips a shipped stable and restates it.
+          # - Stable: newest prior stable only (matching preview carry adjusts the
+          #   generate-notes range separately below).
+          previous_tag="$(
+            git tag --merged HEAD --list 'v[0-9]*' |
+              bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"
+          )"
           if [ -n "$previous_tag" ]; then
             changed_files="$(git diff --name-only "${previous_tag}..HEAD")"
           else
@@ -299,22 +294,12 @@ jobs:
             exit 1
           fi
 
-          # Channel previous tag (stable↔stable / preview↔preview) for the Full Changelog link.
-          if [[ "$RELEASE_VERSION" == *-preview.* ]]; then
-            previous_tag="$(
-              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-                grep -- '-preview\.' |
-                grep -vx "$release_tag" |
-                head -n 1 || true
-            )"
-          else
-            previous_tag="$(
-              git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
-                grep -v -- '-preview\.' |
-                grep -vx "$release_tag" |
-                head -n 1 || true
-            )"
-          fi
+          # Channel previous tag for Full Changelog + default notes baseline.
+          # Preview baselines any prior release; stable baselines prior stable only.
+          previous_tag="$(
+            git tag --merged HEAD --list 'v[0-9]*' |
+              bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"
+          )"
           npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
 
           # Preview builds must be marked prerelease so GitHub "latest" keeps pointing at the

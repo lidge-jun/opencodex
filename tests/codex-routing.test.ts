@@ -197,6 +197,7 @@ describe("codex routing", () => {
     expect(classifyCodexUpstreamOutcome(401)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(403)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(429)).toBe("quota");
+    expect(classifyCodexUpstreamOutcome(402)).toBe("quota");
     expect(classifyCodexUpstreamOutcome(422)).toBe("caller");
     expect(classifyCodexUpstreamOutcome(503)).toBe("transient");
     expect(classifyCodexUpstreamOutcome("connect_error")).toBe("transient");
@@ -1073,6 +1074,19 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("b");
   });
 
+  test("bound thread over threshold switches immediately without waiting for re-eval (#584)", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    // Depleted primary must not stay pinned for up to 60s while a cooler account exists.
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("b");
+  });
+
   test("bound thread under threshold stays even if a lower account exists", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -1087,7 +1101,21 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
-  test("bound thread does not flap within the re-eval interval, then switches once", () => {
+  test("bound thread under threshold does not flap within the re-eval interval", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
+    // Still under threshold — must not rebind on every reuse.
+    updateAccountQuota("a", 50);
+    updateAccountQuota("b", 5);
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("a");
+    const later = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(resolveCodexAccountForThread("t1", config, later)).toBe("a");
+  });
+
+  test("bound thread over threshold switches once and does not ping-pong", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
@@ -1095,13 +1123,9 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
     updateAccountQuota("a", 95);
     updateAccountQuota("b", 5);
-    // Within the interval: no rebind yet.
-    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("a");
-    // After the interval: switches once.
-    const later = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
-    expect(resolveCodexAccountForThread("t1", config, later)).toBe("b");
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("b");
     // A subsequent interval does not ping-pong back: b is now the lowest.
-    const later2 = later + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    const later2 = now + 1_000 + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
     expect(resolveCodexAccountForThread("t1", config, later2)).toBe("b");
   });
 

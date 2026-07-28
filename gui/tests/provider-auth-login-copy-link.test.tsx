@@ -101,7 +101,7 @@ async function mountPanel(hint: LoginHint) {
 
 /** Located structurally: its label changes to "Copied" after the first click. */
 function copyLinkButton(): HTMLButtonElement {
-  const button = host.querySelector(".pwi-auth-url-actions button");
+  const button = host.querySelector(".login-url-block-actions button");
   expect(button).toBeTruthy();
   return button as HTMLButtonElement;
 }

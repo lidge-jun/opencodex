@@ -11,6 +11,10 @@ import {
   stripOpencodexConfig,
   stripRootContextWindowOverrides,
 } from "../src/codex/inject";
+import {
+  MANAGED_AGENTS_TABLE_MARKER,
+  MANAGED_SUBAGENT_DEFAULT_MARKER,
+} from "../src/codex/subagent-defaults";
 
 describe("Codex config injection", () => {
   test("omits provider-level Responses WebSocket support by default", () => {
@@ -183,6 +187,26 @@ describe("Codex config injection", () => {
     expect(stripped).toContain('model = "gpt-5.5"');
     expect(stripped).not.toContain("[model_providers.opencodex]");
     expect(stripped).not.toContain("[profiles.opencodex]");
+  });
+
+  test("strip removes only marker-owned native subagent defaults", () => {
+    const stripped = stripOpencodexConfig([
+      MANAGED_AGENTS_TABLE_MARKER,
+      "[agents]",
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      'default_subagent_model = "gpt-5.6-sol"',
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      'default_subagent_reasoning_effort = "high"',
+      "max_threads = 8",
+      "",
+    ].join("\n"));
+
+    expect(stripped).toContain("[agents]");
+    expect(stripped).toContain("max_threads = 8");
+    expect(stripped).not.toContain(MANAGED_AGENTS_TABLE_MARKER);
+    expect(stripped).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(stripped).not.toContain("default_subagent_model");
+    expect(stripped).not.toContain("default_subagent_reasoning_effort");
   });
 });
 

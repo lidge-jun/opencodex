@@ -31,7 +31,7 @@ import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
-import { drainAndShutdown, startServer } from "../server";
+import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
@@ -227,24 +227,40 @@ async function handleStart(options: { block?: boolean } = {}) {
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
 
   let cleaned = false;
+  let cleanupSucceeded = true;
   const syncCleanup = () => {
-    if (cleaned) return;
+    if (cleaned) return cleanupSucceeded;
     cleaned = true;
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
-    try { revertSystemEnv(); } catch { /* best-effort */ }
+    // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
+    // process expects Codex/Grok/env fences to still be in place.
+    const recycling = isRecyclingForExit();
+    if (!recycling) {
+      try { revertSystemEnv(); } catch { /* best-effort */ }
+    }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
-      try { restoreNativeCodex(); } catch { /* best-effort restore */ }
+    if (!recycling && !process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
+      try {
+        const restored = restoreNativeCodex();
+        if (!restored.success) {
+          cleanupSucceeded = false;
+          console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+        }
+      } catch (error) {
+        cleanupSucceeded = false;
+        console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     // Same ownership rule as `ocx stop`: if the installed service belongs to another home, the
     // Grok fence is shared state we must not remove — that service keeps running and would be
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
-    if (!process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
+    if (!recycling && !process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
       try { stripGrokConfig(); } catch { /* best-effort restore */ }
     }
+    return cleanupSucceeded;
   };
 
   let shuttingDown = false;
@@ -269,8 +285,8 @@ async function handleStart(options: { block?: boolean } = {}) {
       try {
         await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
       } finally {
-        syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
-        process.exit(0);
+        const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
+        process.exit(restored ? 0 : 1);
       }
     })();
   };
@@ -288,7 +304,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Auto-install .zshrc hook (idempotent — skips if already present).
   installShellHook();
 
-  await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
+  await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
   if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();
@@ -499,7 +515,11 @@ async function handleStop() {
   }
   if (!ownershipBlocked) {
     const r = restoreNativeCodex();
-    console.log(`↩️  ${r.message}`);
+    if (r.success) console.log(`↩️  ${r.message}`);
+    else {
+      stopFailed = true;
+      console.error(`⚠️  ${r.message}`);
+    }
   }
   // revertSystemEnv is NOT gated: it carries its own ownership check and concerns launchctl
   // user env, not CODEX_HOME. Safety net for when the daemon's syncCleanup didn't run (SIGKILL).
@@ -716,19 +736,40 @@ switch (command) {
         console.error("No running proxy found. Run 'ocx start' — it injects opencodex automatically.");
         process.exit(1);
       }
-      await syncModelsToCodex(live.port);
+      const synced = await syncModelsToCodex(live.port);
+      if (!synced.ok) {
+        process.exitCode = 1;
+        console.error("Plain `codex` was not switched back to opencodex. Fix the reported Codex config issue and retry.");
+        break;
+      }
       const target = collectOrcaCodexHomeDiagnostic();
       console.log(`Plain \`codex\` now routes through opencodex in ${target.effectiveCodexHome} (undo with: ocx restore).`);
       break;
     }
-    const r = restoreNativeCodex();
-    console.log(r.success ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+    let r: { success: boolean; message: string };
+    try {
+      r = restoreNativeCodex();
+    } catch (err) {
+      r = { success: false, message: err instanceof Error ? err.message : String(err) };
+    }
+    if (r.success) console.log(`✅ ${r.message}`);
+    else {
+      console.error(`⚠️  ${r.message}`);
+      process.exitCode = 1;
+    }
     try {
       const g = stripGrokConfig();
       if (g.changed) console.log(`✅ ${g.message}`);
-      else if (!g.ok) console.error(`⚠️  ${g.message}`);
+      else if (!g.ok) {
+        console.error(`⚠️  ${g.message}`);
+        process.exitCode = 1;
+      }
     } catch { /* best-effort */ }
-    console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
+    if (r.success) {
+      console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
+    } else {
+      console.error("Plain `codex` was not fully restored. Inspect $CODEX_HOME/config.toml before using native Codex.");
+    }
     break;
   }
   case "recover-history":
@@ -767,7 +808,20 @@ switch (command) {
     break;
   }
   case "sync": {
-    await syncModelsToCodex((await findLiveProxy())?.port);
+    const restartCodex = args.slice(1).includes("--restart-codex");
+    const synced = await syncModelsToCodex((await findLiveProxy())?.port);
+    if (!synced.ok) {
+      process.exitCode = 1;
+      console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
+    }
+    // Only warn/restart when a catalog or models_cache write actually happened. This is
+    // deliberately not an `else`: refreshCodexModelCatalog runs before injectCodexConfig,
+    // so a sync can fail (`ok: false`) after the catalog was already rewritten — which is
+    // exactly when a long-lived app-server is holding the stale list.
+    if (synced.catalogWritten || synced.cacheSynced) {
+      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    }
     break;
   }
   case "v2": {
@@ -776,8 +830,13 @@ switch (command) {
     break;
   }
   case "sync-cache": {
+    const restartCodex = args.slice(1).includes("--restart-codex");
     const { invalidateCodexModelsCache } = await import("../codex/catalog");
-    invalidateCodexModelsCache();
+    // Only warn/restart when models_cache was actually rewritten from a readable catalog.
+    if (invalidateCodexModelsCache()) {
+      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
+      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
+    }
     break;
   }
   case "gui": {
@@ -1005,6 +1064,10 @@ switch (command) {
       break;
     }
     process.exit(await cmdClaude(args.slice(1)));
+  }
+  case "opencode": {
+    const { cmdOpencode } = await import("./opencode");
+    process.exit(await cmdOpencode(args.slice(1)));
   }
     case "help":
   case "--help":

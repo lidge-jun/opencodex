@@ -32,12 +32,13 @@ namespaced selected id를 bare id로 바꿉니다.
 | `openaiProviderTierVersion?` | `2` | migration 설정 | 단일 옵션형 OpenAI projection 완료 마커. |
 | `defaultProvider` | `string` | `"openai"` | 라우팅에서 더 나은 match를 찾지 못했을 때 쓸 프로바이더. |
 | `subagentModels?` | `string[]` | `gpt-5.5`, GPT-5.6 3종, `gpt-5.4-mini` | Codex 서브에이전트 선택기 앞쪽에 표시할 네이티브 slug 또는 `provider/model` id. 최대 5개이며, 명시적인 빈 배열도 그대로 보존합니다. v2 가이던스 로스터는 설정 목록과 Codex의 picker-visible·v2 호환·priority 순 상위 5개의 교집합이며 정규 카탈로그 slug와 사용 가능한 effort 사다리를 씁니다. 제외된 항목도 설정에는 남습니다. |
-| `injectionModel?` | `string` | — | 주입되는 multi-agent 안내(v2 표면)에 들어갈 네이티브/라우팅 모델. 위임 안내에서 이 모델을 `fork_turns: "none"`과 함께 `spawn_agent`에 넘기게 합니다. |
-| `injectionEffort?` | `string` | — | 선호하는 `spawn_agent` reasoning effort(`low`부터 `ultra`). `injectionModel`과 함께 쓸 때만 의미가 있습니다. |
+| `injectionModel?` | `string` | — | 선호하는 네이티브/라우팅 서브에이전트 모델. 별도 `multiAgentGuidanceEnabled`가 제어하는 OpenCodex 작성 v2 위임 가이드에서 사용하며, `syncCodexSubagentDefaults`를 선택하면 새 task의 Codex 네이티브 기본값으로도 적용할 수 있습니다. |
+| `injectionEffort?` | `string` | — | 선호하는 서브에이전트 reasoning effort(`low`부터 `ultra`). `injectionModel`과 함께 쓸 때만 의미가 있으며, 위임 가이드와 선택적인 Codex 네이티브 기본값에서 사용합니다. |
+| `syncCodexSubagentDefaults?` | `boolean` | `false` | OpenCodex가 활성 Codex 라우팅을 관리할 때 선택한 `injectionModel`/`injectionEffort`를 다음 sync 또는 restart에서 Codex 네이티브 `[agents]` 서브에이전트 기본값으로 적용하는 선택 기능. 외부 사용자 관리 provider 설정은 변경하지 않습니다. 새로 생성되는 Codex task에만 적용하고 위임 자체를 일으키지는 않습니다. 기존 사용자 소유 대상 항목은 충돌로 취급해 덮어쓰지 않고 보존합니다. `injectionModel`이 필요하며 모델을 지우면 이 옵션도 꺼집니다. `GET/PUT /api/injection-model`의 부분 업데이트 필드로 제공됩니다. |
 | `effortCap?` | `string` | — | reasoning effort에 요청별로 적용하는 강제 상한입니다. 멀티 에이전트 V2 전용 기능으로, 자체 도구 목록에 V2 협업 표면이 있는 메인 턴과, `x-openai-subagent: collab_spawn` 헤더 또는 `x-codex-turn-metadata`의 `"subagent_kind": "thread_spawn"` 표식이 정확히 일치하는 스폰된 자식 턴에 적용됩니다(표식이 붙은 자식은 자체 도구 표면과 무관하게 적용 대상입니다). 일반 메인 턴과 V1 표면 메인 턴은 건드리지 않고, 컴팩션 턴은 항상 상한을 우회하며, `multiAgentMode: "v1"`은 상한 기능 전체를 비활성화합니다(대시보드도 패널을 숨깁니다). `low`부터 `ultra`까지 허용하며 값을 높이지 않고 낮추기만 합니다. 상한 이하에서 모델이 지원하는 가장 높은 단계로 내립니다. 모델이 effort 제어를 노출하지 않거나 상한 이하에 지원 단계가 없으면 effort 필드를 제거하고 프로바이더 기본값을 적용합니다. `max`와 `ultra`도 허용하지만 더 낮은 rank 상한을 만들지는 않습니다(클라이언트가 `ultra`를 `max`로 변환하므로 요청은 `low`부터 `max`로 들어옵니다). 단, 알려진 모델 effort 사다리에 따라 단계가 내려가거나 필드가 제거될 수 있습니다. 대시보드 선택기는 `low`부터 `xhigh`까지 제공합니다. `GET /api/effort-caps`와 `PUT /api/effort-caps`로 관리합니다. |
 | `subagentEffortCap?` | `string` | — | 같은 강제 상한을 codex-rs 표식이 정확히 일치하는 스폰된 자식 턴에만 적용합니다: `x-openai-subagent: collab_spawn` 또는 `x-codex-turn-metadata`의 `"subagent_kind": "thread_spawn"`. 그 외 내부 서브에이전트 범주(리뷰, 컴팩션, 메모리 정리)는 이 상한에 걸리지 않으며, `multiAgentMode: "v1"`은 기능 전체를 비활성화합니다. `low`부터 `ultra`까지 허용하며 두 상한이 모두 설정되면 더 낮은 값이 적용되고, 값을 높이지 않고 낮추기만 합니다. 상한 이하에서 모델이 지원하는 가장 높은 단계로 내립니다. 모델이 effort 제어를 노출하지 않거나 상한 이하에 지원 단계가 없으면 effort 필드를 제거하고 프로바이더 기본값을 적용합니다. `max`와 `ultra`도 허용하지만 더 낮은 rank 상한을 만들지는 않습니다(클라이언트가 `ultra`를 `max`로 변환하므로 요청은 `low`부터 `max`로 들어옵니다). 단, 알려진 모델 effort 사다리에 따라 단계가 내려가거나 필드가 제거될 수 있습니다. 대시보드 선택기는 `low`부터 `xhigh`까지 제공합니다. `GET /api/effort-caps`와 `PUT /api/effort-caps`로 관리합니다. |
 | `injectionPrompt?` | `string` | — | 주입되는 v2 안내 본문을 통째로 교체하는 커스텀 텍스트. `{{model}}`, `{{effort}}`, `{{roster}}` 플레이스홀더가 치환되며 발화 조건은 그대로입니다. `PUT /api/injection-model`의 `prompt` 키로도 설정할 수 있습니다. |
-| `multiAgentGuidanceEnabled?` | `boolean` | `true` | OpenCodex가 작성하는 multi-agent developer 가이던스만 제어합니다. 미설정/`true`는 v1/v2 가이던스를 유지하고, `false`는 collaboration surface, `subagentModels`, routing, effort cap을 바꾸지 않고 둘 다 억제합니다. `GET/PUT /api/injection-model`은 유효값을 제공하며 PUT은 부분 업데이트입니다. |
+| `multiAgentGuidanceEnabled?` | `boolean` | `true` | OpenCodex가 작성하는 multi-agent developer 가이던스만 제어합니다. 미설정/`true`는 v1/v2 가이던스를 유지하고, `false`는 Codex 네이티브 `[agents]` 기본값, collaboration surface, `subagentModels`, routing, effort cap을 바꾸지 않고 둘 다 억제합니다. `GET/PUT /api/injection-model`은 유효값을 제공하며 PUT은 부분 업데이트입니다. |
 | `disabledModels?` | `string[]` | — | Codex에서 숨길 모델. 라우팅된 `provider/model` id는 카탈로그와 `/v1/models`에서 제외합니다. `gpt-5.4` 같은 일반 네이티브 GPT slug는 카탈로그 항목을 `visibility: "hide"`로 바꾸고 일반 `/v1/models` 목록에서 뺍니다. 대시보드 Models 페이지에서 모델별로 전환할 수 있습니다. |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | 3단계 multi-agent surface override. `"v1"`은 업스트림 pin보다 우선해 모든 모델을 v1로, `"default"`는 업스트림 model pin(sol/terra=v2, luna=v1)을 따르고, `"v2"`는 모두 v2로 강제합니다. 대시보드 Models 페이지나 `ocx v2 mode`에서 설정합니다. |
 | `providerContextCaps?` | `Record<string,number>` | `{}` | 프로바이더별 Codex 표시 context cap. 알려진 context window를 낮추기만 합니다. |
@@ -52,7 +53,9 @@ namespaced selected id를 bare id로 바꿉니다.
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App 기록 호환 모드. opencodex가 원래 Codex thread metadata를 백업하고, 예전 OpenAI interactive row를 `opencodex`로 재매핑하며, opencodex가 만든 `exec` row를 App에 보이는 source로 잠시 승격합니다. `ocx stop` / `ocx restore`는 백업한 OpenAI row를 복원하고 남은 opencodex user thread를 OpenAI로 돌려 네이티브 Codex가 `config.toml`에서 프록시를 제거한 뒤에도 이어서 열 수 있게 합니다. 끄려면 `false`로 설정합니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 대시보드에서 관리하는 ChatGPT/Codex pool 계정 metadata. secret은 `codex-accounts.json`에 따로 둡니다. |
 | `activeCodexAccountId?` | `string` | — | 수동으로 선택한 pool 계정. 선택 시 기존 thread affinity를 지우고 다음 요청부터 적용하며, 진행 중인 요청은 기존 계정을 유지합니다. |
-| `autoSwitchThreshold?` | `number` | `80` | 새 세션 자동 전환용 사용량 백분율 threshold. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`이면 quota 자동 전환을 끕니다. |
+| `autoSwitchThreshold?` | `number` | `80` | 새 세션 자동 전환용 사용량 백분율 threshold. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`이면 quota 자동 전환을 끕니다. `quota` 전략과 `fill-first` drain threshold에도 사용됩니다. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool의 새 세션 rotation 전략. **새 세션에만** 적용되며 기존 thread id는 affinity를 유지합니다. `quota`(기본) — 활성 계정이 `autoSwitchThreshold`를 넘으면 알려진 usage가 가장 낮은 계정 선택. `round-robin` — 적격 계정 간 smooth weighted 균등 분배. `fill-first` — cooldown, 사용 불가 또는(설정 시) `autoSwitchThreshold`까지 활성 계정을 소진(알 수 없는 usage는 강제 전환하지 않음)한 뒤 안정 정렬 순으로 다음 계정. |
+| `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 성공적 새 세션 bind 수. 범위 1–100. `accountPoolStrategy`가 `round-robin`일 때만 적용. |
 | `upstreamFailoverThreshold?` | `number` | `3` | 일시적인 업스트림 실패가 연속으로 발생한 뒤, 이후 새 세션을 다른 적합한 pool 계정으로 failover할 횟수. `0`이면 실패 기반 failover를 끕니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 프로바이더별 `/models` 캐시의 유효 기간(5분). |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt cache 정책. 끔, 5분 ephemeral, 1시간 extended 중 하나입니다. |
@@ -72,8 +75,14 @@ namespaced selected id를 bare id로 바꿉니다.
 :::note[Codex 계정 풀]
 pool 계정 추가와 quota 갱신은 대시보드의 **Codex Auth** 페이지에서 처리하세요. 설정에는 secret이
 아닌 계정 metadata만 저장하고, access/refresh token은 강화된 Codex 계정 credential store에 따로
-보관합니다. 기존 thread id는 계정 affinity를 유지하며, 새 세션은 quota, cooldown, health에 따라
-자동 라우팅될 수 있습니다.
+보관합니다. 기존 thread id는 계정 affinity를 유지하며, 새 세션은 `accountPoolStrategy`, quota,
+cooldown, health에 따라 자동 라우팅됩니다.
+
+**rotation 전략**(새 세션만; bound thread는 변경 없음): `quota`(기본) — `autoSwitchThreshold` 초과 시
+최저 usage 선택; `round-robin` — 균등 분배, `accountPoolStickyLimit`(기본 `1`, 1–100)로 한 선택당
+성공 bind 수; `fill-first` — 활성 계정을 cooldown, 재인증 또는 threshold까지 소진(알 수 없는 usage는
+강제 전환하지 않음)한 뒤 안정 정렬 순으로 다음 계정. rotation은 provider enforcement를 우회하지
+않습니다 — 다계정 사용은 ToS 위반일 수 있습니다.
 :::
 
 ### 관리형 레코드 형태
@@ -138,6 +147,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `responsesPath?` | `string` | `key` 인증 `openai-responses` 요청에 사용할 선택적 상대 resource path. `/`로 시작해야 하며 URL scheme, query, fragment를 포함할 수 없습니다. 생략하면 기존 `/v1/responses` URL 구성을 유지합니다. |
 | `disabled?` | `boolean` | 설정은 디스크에 남기되 라우팅과 모델/카탈로그 목록에서 제외합니다. |
 | `apiKey?` | `string` | API 키 또는 요청 시점에 해석할 `${ENV_VAR}` / `$ENV_VAR` 참조. |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic API 키 헤더 방식입니다. 기본값은 네이티브 `x-api-key`이며, `Authorization: Bearer <key>`를 요구하는 호환 gateway에는 `"bearer"`를 설정합니다. key 인증 `anthropic` 프로바이더에서만 유효합니다. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 여러 키를 담는 pool. `apiKey`는 활성 항목을 반영합니다. 각 항목에는 `id`, `key`, 선택 `label`, 선택 숫자 `addedAt`이 있습니다. |
 | `defaultModel?` | `string` | 명시적인 모델 없이 이 프로바이더를 선택했을 때 쓸 모델. |
 | `models?` | `string[]` | seed/fallback 모델 목록. `liveModels`가 `false`이면 여기 있는 모델만 발견됩니다. |
@@ -155,6 +165,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `reasoningEfforts?` | `string[]` | 알리고 전송할 프로바이더 단위 Codex reasoning 레이블(`low`, `medium`, `high`, `xhigh`, `max`, `ultra`). |
 | `modelReasoningEfforts?` | `Record<string,string[]>` | 모델별 reasoning 레이블. 빈 배열은 해당 모델의 effort control을 숨깁니다. |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | 모델별 reasoning summary capability. 모델 값을 `false`로 두면 summary 지원을 알리지 않고 `openai-responses` 요청 전에 summary-delivery 필드를 제거합니다. |
+| `modelReasoningSummaryDelivery?` | `Record<string,"sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 모델별 Responses delivery enum입니다. 설정된 모델은 summary 지원을 유지하며 기존 `stream_options.reasoning_summary_delivery` 값만 바꿉니다. 같은 모델의 summary capability를 `false`로 설정할 수 없습니다. |
 | `modelAdapters?` | `Record<string,string>` | 여러 wire를 쓰는 모델이 한 게이트웨이에 섞여 있을 때의 모델별 wire 지정. 키는 upstream native 모델 ID이고 값은 `openai-chat` 또는 `openai-responses`만 허용합니다. `web_search` 같은 hosted tool 때문에 한 모델만 Responses API가 필요할 때 씁니다. upstream이 wire를 고정한 모델과 canonical ChatGPT forward provider에서는 override가 거부됩니다. |
 | `reasoningEffortMap?` | `Record<string,string>` | 프로바이더 단위 reasoning 레이블 wire alias. 업스트림이 다른 값을 요구할 때만 사용합니다. |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | 모델별 reasoning 레이블 wire alias. |

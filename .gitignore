@@ -8,8 +8,14 @@ devlog/
 .opencode/
 
 # Local agent/session artifacts
+# These are per-machine agent state (goalplans, ledgers, evidence scratch).
+# They are never part of the product and must not be committed, not even with
+# `git add -f` — see tests/repo-hygiene.test.ts, which fails if any path here
+# becomes tracked again.
 .codexclaw/
+**/.codexclaw/
 .omo/
+**/.omo/
 
 # Test-generated artifacts
 tests/.tmp-*/

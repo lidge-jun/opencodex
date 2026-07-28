@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { IconExternal, IconLink, IconLock } from "../icons";
+import { IconLock } from "../icons";
 import { useT } from "../i18n/shared";
-import { copyTextToClipboard } from "../oauth-health-display";
+import { LoginUrlBlock } from "./login-url-block";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 
 export function AddProviderOAuthPane({
@@ -38,21 +37,6 @@ export function AddProviderOAuthPane({
   onBack: () => void;
 }) {
   const t = useT();
-  const [linkCopyState, setLinkCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
-  const linkCopyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => { if (linkCopyTimer.current) clearTimeout(linkCopyTimer.current); }, []);
-
-  const copyAuthUrl = () => {
-    void copyTextToClipboard(oauthUrl).then((ok) => {
-      setLinkCopyState(ok ? "copied" : "unavailable");
-      if (linkCopyTimer.current) clearTimeout(linkCopyTimer.current);
-      linkCopyTimer.current = setTimeout(() => {
-        linkCopyTimer.current = null;
-        setLinkCopyState("idle");
-      }, 2500);
-    });
-  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -72,26 +56,7 @@ export function AddProviderOAuthPane({
           {oauthMsg}
         </div>
       )}
-      {oauthBusy && oauthUrl && (
-        <div className="pwi-auth-url-wrap">
-          <code className="pwi-auth-url">{oauthUrl}</code>
-          <div className="pwi-auth-url-actions">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={copyAuthUrl}>
-              <IconLink style={{ width: 13, height: 13 }} aria-hidden="true" />
-              <span aria-live="polite">
-                {linkCopyState === "copied"
-                  ? t("prov.linkCopied")
-                  : linkCopyState === "unavailable"
-                    ? t("prov.linkCopyUnavailable")
-                    : t("prov.copyLink")}
-              </span>
-            </button>
-            <a href={oauthUrl} target="_blank" rel="noreferrer" className="pwi-auth-open-link">
-              <IconExternal style={{ width: 13, height: 13 }} aria-hidden="true" /> {t("prov.didntOpen")}
-            </a>
-          </div>
-        </div>
-      )}
+      {oauthBusy && <LoginUrlBlock url={oauthUrl} />}
       {oauthBusy && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div className="muted text-label">

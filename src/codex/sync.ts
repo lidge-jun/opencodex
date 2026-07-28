@@ -11,10 +11,12 @@ export interface CodexSyncResult {
   added: number;
   catalogPath: string | null;
   catalogExists: boolean;
+  catalogWritten: boolean;
   cacheSynced: boolean;
   message: string;
   warning?: string;
   comboOmissions?: ComboCatalogOmission[];
+  nativeSubagentDefaultsWarning?: string;
   projectConfigWarnings?: ProjectCodexConfigWarning[];
   projectConfigGrouped?: { path: string; issues: string[]; bypass: string }[];
 }
@@ -61,8 +63,10 @@ export async function syncModelsToCodex(
       added: 0,
       catalogPath: null,
       catalogExists: false,
+      catalogWritten: false,
       cacheSynced: false,
       message: result.message,
+      ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     };
   }
 
@@ -71,6 +75,7 @@ export async function syncModelsToCodex(
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;
   let catalogExists = false;
+  let catalogWritten = false;
   let cacheSynced = false;
   let warning: string | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
@@ -79,6 +84,7 @@ export async function syncModelsToCodex(
     const cat = await deps.refreshCodexModelCatalog(config);
     added = cat.added;
     catalogExists = cat.catalogExists;
+    catalogWritten = cat.catalogWritten;
     cacheSynced = cat.cacheSynced;
     catalogPathForInjection = cat.catalogExists ? cat.path : null;
     catalogPath = catalogPathForInjection;
@@ -110,10 +116,12 @@ export async function syncModelsToCodex(
     added,
     catalogPath,
     catalogExists,
+    catalogWritten,
     cacheSynced,
     message: result.message,
     ...(warning ? { warning } : {}),
     ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
+    ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     ...(projectConfigWarnings.length > 0 ? {
       projectConfigWarnings,
       projectConfigGrouped: groupProjectCodexConfigWarningsByPath(projectConfigWarnings),

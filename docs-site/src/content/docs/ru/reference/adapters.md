@@ -57,7 +57,7 @@ interface ProviderAdapter {
 ## `anthropic`
 
 **Назначение:** Anthropic **Messages** (`/v1/messages`).
-**Аутентификация:** `key` (`x-api-key`) или `oauth` (Bearer + `anthropic-beta`, для Claude Pro/Max).
+**Аутентификация:** `key` (по умолчанию `x-api-key`, либо `Authorization: Bearer` при `apiKeyTransport: "bearer"`) или `oauth` (Bearer + `anthropic-beta`, для Claude Pro/Max).
 
 - Преобразует сообщения в блоки контента Anthropic (text, base64 image, `tool_use`, `thinking`).
 - **Арифметика extended thinking:** Anthropic требует `max_tokens > thinking.budget_tokens`.

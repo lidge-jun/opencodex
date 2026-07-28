@@ -12,6 +12,7 @@ import {
   fetchDashboardModels,
   fetchProjectConfigDiagnostics,
   fetchStartupHealth,
+  normalizeInjectionSelection,
   type DashboardEpochRefs,
 } from "./dashboard-core-poll";
 import {
@@ -70,6 +71,7 @@ export function useDashboardData(apiBase: string) {
   const [injectionAvailable, setInjectionAvailable] = useState<Array<{ provider: string; model: string; namespaced: string }>>([]);
   const [injectionSaving, setInjectionSaving] = useState(false);
   const [multiAgentGuidanceEnabled, setMultiAgentGuidanceEnabled] = useState(true);
+  const [syncCodexSubagentDefaults, setSyncCodexSubagentDefaults] = useState(false);
   const [effortCap, setEffortCap] = useState<string>("");
   const [subagentEffortCap, setSubagentEffortCap] = useState<string>("");
   const [effortCapSaving, setEffortCapSaving] = useState(false);
@@ -200,6 +202,7 @@ export function useDashboardData(apiBase: string) {
     setMaModeResolved(data.maModeResolved);
     if (data.injection) {
       setMultiAgentGuidanceEnabled(data.injection.multiAgentGuidanceEnabled);
+      setSyncCodexSubagentDefaults(data.injection.syncCodexSubagentDefaults);
       setInjectionModel(data.injection.injectionModel);
       setInjectionEffort(data.injection.injectionEffort);
       setInjectionEfforts(data.injection.injectionEfforts);
@@ -351,6 +354,41 @@ export function useDashboardData(apiBase: string) {
     finally { setMaBusy(false); }
   };
 
+  const saveInjection = async (patch: {
+    multiAgentGuidanceEnabled?: boolean;
+    syncCodexSubagentDefaults?: boolean;
+    model?: string | null;
+    effort?: string | null;
+  }) => {
+    if (injectionSaving) return;
+    setInjectionSaving(true);
+    try {
+      const res = await fetch(`${apiBase}/api/injection-model`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error("injection save failed");
+      const getRes = await fetch(`${apiBase}/api/injection-model`);
+      const data = await requireJson<{
+        multiAgentGuidanceEnabled?: boolean;
+        syncCodexSubagentDefaults?: boolean;
+        model?: string | null;
+        effort?: string | null;
+        efforts?: string[];
+        available?: Array<{ provider: string; model: string; namespaced: string }>;
+      }>(getRes);
+      const normalized = normalizeInjectionSelection(data);
+      setMultiAgentGuidanceEnabled(normalized.multiAgentGuidanceEnabled);
+      setSyncCodexSubagentDefaults(normalized.syncCodexSubagentDefaults);
+      setInjectionModel(normalized.injectionModel);
+      setInjectionEffort(normalized.injectionEffort);
+      if (Array.isArray(data.efforts)) setInjectionEfforts(data.efforts);
+      if (Array.isArray(data.available)) setInjectionAvailable(data.available);
+    } catch { /* keep the last committed UI state */ }
+    finally { setInjectionSaving(false); }
+  };
+
   const toggleCodexAutoStart = async () => {
     if (!settings || settingsSaving) return;
     const next = !settings.codexAutoStart;
@@ -484,8 +522,7 @@ export function useDashboardData(apiBase: string) {
     maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
     effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
     injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
-    setInjectionModel, setInjectionEffort, setInjectionSaving,
-    multiAgentGuidanceEnabled, setMultiAgentGuidanceEnabled,
+    multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
     effortCap, subagentEffortCap, effortCapSaving, setEffortCap, setSubagentEffortCap, setEffortCapSaving,
     syncResult, syncError, projectConfigWarnings,
     updateOpen, updateChannel, setUpdateRestart, updateRestart, updateLoading,

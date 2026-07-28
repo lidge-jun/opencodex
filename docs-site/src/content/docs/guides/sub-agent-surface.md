@@ -39,7 +39,9 @@ The override is the final pass in both the live `/v1/models` catalog response an
 
 ### Delegation model and effort
 
-The dashboard's **Sub-agent delegation** picker stores an `injectionModel` and, optionally, an `injectionEffort`. These are delegation guidance settings, not a proxy-side spawn router. An optional `injectionPrompt` replaces the built-in guidance text entirely.
+The dashboard's **Sub-agent delegation** picker stores an `injectionModel` and, optionally, an `injectionEffort`. OpenCodex-authored delegation guidance can use these selections, but it remains controlled separately by **OpenCodex multi-agent guidance**. These settings are not a proxy-side spawn router. An optional `injectionPrompt` replaces the built-in guidance text entirely.
+
+The default-off **Use as native Codex subagent defaults** switch sets `syncCodexSubagentDefaults`. When OpenCodex manages the active Codex routing, a sync or restart applies the selected model and effort as native Codex `[agents]` defaults for newly created Codex tasks. External user-managed provider configs remain untouched. This does not trigger delegation. Existing user-owned `[agents]` defaults are preserved rather than overwritten, so they remain authoritative.
 
 `multiAgentGuidanceText` identifies the surface from the request's tools — including the Codex Desktop WebSocket path (`responses_lite`), where tools arrive inside an `additional_tools` input item instead of the request's `tools` array.
 
@@ -56,7 +58,7 @@ To replace the built-in v2 guidance, set `injectionPrompt` (config key, or `PUT 
 - **Dashboard** → first stat cell: click **v1**, **base**, or **v2**.
 - **Models** page → top-row segmented control.
 - Both pages have a **?** button that opens a help modal with a link back here.
-- **Dashboard** → **Sub-agent delegation**: choose a preferred model and optional reasoning effort. On v2 the injected guidance instructs the agent to spawn with `fork_turns: "none"` so the model override applies. If a native→routed child receives only encrypted task content, use a native target or v1; external-only delivery now fails explicitly with `unreadable_encrypted_agent_task` ([#92](https://github.com/lidge-jun/opencodex/issues/92)).
+- **Dashboard** → **Sub-agent delegation**: choose a preferred model and optional reasoning effort. Enable **OpenCodex multi-agent guidance** for delegation instructions, or independently enable **Use as native Codex subagent defaults** to apply the selection to new Codex tasks after sync/restart. The defaults switch does not cause delegation, and existing user-owned `[agents]` defaults are preserved rather than overwritten. On v2 the injected guidance instructs the agent to spawn with `fork_turns: "none"` so the model override applies. If a native→routed child receives only encrypted task content, use a native target or v1; external-only delivery now fails explicitly with `unreadable_encrypted_agent_task` ([#92](https://github.com/lidge-jun/opencodex/issues/92)).
 
 ### CLI
 
@@ -92,6 +94,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
   -d '{"model": "anthropic/claude-sonnet-5", "effort": "xhigh"}'
 
+# Opt in to native Codex defaults for new tasks after sync/restart (requires a model)
+curl -X PUT http://localhost:10100/api/injection-model \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "anthropic/claude-sonnet-5", "syncCodexSubagentDefaults": true}'
+
 # Set a custom guidance prompt ({{model}}/{{effort}}/{{roster}} placeholders)
 curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
@@ -103,11 +110,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -d '{"model": null}'
 ```
 
-`GET /api/injection-model` returns `model`, `effort`, `prompt`, the global `efforts` ladder, and enabled native/routed `available` models. For PUT, omitting `effort` or `prompt` keeps the current value, `null` clears it, and clearing `model` always clears the effort too. The API validates effort against the global Codex ladder; Codex still validates a spawn effort against the target catalog entry.
+`GET /api/injection-model` returns `model`, `effort`, `prompt`, `multiAgentGuidanceEnabled`, `syncCodexSubagentDefaults`, the global `efforts` ladder, and enabled native/routed `available` models. PUT is partial: omitted fields keep their current values, `null` clears nullable values, and clearing `model` always clears both the effort and native-default opt-in. Enabling `syncCodexSubagentDefaults` requires a model. The API validates effort against the global Codex ladder; Codex still validates a spawn effort against the target catalog entry.
 
 ## Reasoning effort
 
-The optional sub-agent effort setting is stored as `injectionEffort` and is meaningful only with an injection model. It adds a `reasoning_effort` instruction to the injected v2 guidance; it does not change the parent session's effort. On any fork that accepts overrides, Codex applies a `reasoning_effort` passed to `spawn_agent` directly.
+The optional sub-agent effort setting is stored as `injectionEffort` and is meaningful only with an injection model. It adds a `reasoning_effort` instruction to the injected v2 guidance; with native-default sync enabled, it also becomes the `[agents]` reasoning default for new Codex tasks after sync/restart. It does not change the parent session's effort. On any fork that accepts overrides, Codex applies a `reasoning_effort` passed to `spawn_agent` directly.
 
 `ultra` ranks above `max` in the Codex catalog and adds automatic-delegation semantics, but it never reaches a provider as a literal wire value. Codex converts `ultra` to `max` at the client boundary. opencodex then keeps the provider request valid:
 

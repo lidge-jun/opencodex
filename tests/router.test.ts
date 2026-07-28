@@ -39,6 +39,33 @@ describe("routeModel registry effort defaults", () => {
     expect(routeModel(cursorKeyAttempt, "cursor/auto").provider.authMode).toBe("oauth");
   });
 
+  test("falls back to OAuth routing for allowKeyAuthOverride providers when the active key is unresolved", () => {
+    const envName = "OCX_TEST_XAI_ROUTER_ENV";
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: `\${${envName}}`,
+        },
+      },
+    };
+    const previous = process.env[envName];
+    delete process.env[envName];
+    try {
+      const routed = routeModel(config, "xai/grok-4.5").provider;
+      expect(routed.authMode).toBe("oauth");
+      expect(routed.apiKey).toBeUndefined();
+      expect(config.providers.xai!.authMode).toBe("key");
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
+  });
+
   test("routes bare OpenAI/Codex model ids to OpenAI before adopted Cursor model lists", () => {
     const config: OcxConfig = {
       port: 10100,

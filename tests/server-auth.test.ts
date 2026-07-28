@@ -124,6 +124,7 @@ type PoolRetryHarness = {
   config: OcxConfig;
   dispatches: string[];
   request: (init?: { stream?: boolean; signal?: AbortSignal }) => Promise<Response>;
+  restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
   upstream: ReturnType<typeof Bun.serve>;
 };
@@ -151,6 +152,7 @@ async function startPoolRetryHarness(
     },
   });
   redirectCanonicalCodexTo(upstream.url.toString());
+  const redirectedFetch = globalThis.fetch;
 
   const secondAccount = options.secondAccount ?? true;
   const config = {
@@ -190,6 +192,9 @@ async function startPoolRetryHarness(
   return {
     config,
     dispatches,
+    restoreFetch: () => {
+      if (globalThis.fetch === redirectedFetch) globalThis.fetch = originalGlobalFetch;
+    },
     server,
     upstream,
     request: ({ stream = false, signal } = {}) => originalGlobalFetch(
@@ -205,6 +210,7 @@ async function startPoolRetryHarness(
 }
 
 async function stopPoolRetryHarness(harness: PoolRetryHarness): Promise<void> {
+  harness.restoreFetch();
   await harness.server.stop(true);
   await harness.upstream.stop(true);
 }
@@ -1684,6 +1690,66 @@ describe("server local API auth", () => {
     }
   });
 
+  test("#584: pre-stream 429 retries once on another eligible pool account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "60" },
+      })
+      : Response.json({ id: "quota-failover-success", status: "completed", output: [] }));
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("quota-failover-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({ cooldownUntil: expect.any(Number) });
+      // Server persists the rotated active account; the harness snapshot may be stale.
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#584: pre-stream 429 with one eligible account preserves the original 429", async () => {
+    const body = JSON.stringify({ error: { message: "rate limited" } });
+    const harness = await startPoolRetryHarness(
+      () => new Response(body, {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "60", "x-pool-retry-test": "original" },
+      }),
+      { secondAccount: false },
+    );
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-pool-retry-test")).toBe("original");
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#584: streamed pre-stream 429 retries before SSE relay", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "30" },
+      })
+      : new Response(
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"from-b","status":"completed","output":[]}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      ));
+    try {
+      const text = await (await harness.request({ stream: true })).text();
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(text).toContain('"id":"from-b"');
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
   test("Activation B: allow-listed 400 with one eligible account preserves the original response", async () => {
     const body = unsupportedModelBody();
     const harness = await startPoolRetryHarness(() => rejectionResponse(body), { secondAccount: false });
@@ -1892,7 +1958,7 @@ describe("server local API auth", () => {
     } finally {
       await stopPoolRetryHarness(positive);
     }
-  });
+  }, 12_000);
 
   test("valid JSON wrong top-level shape never authorizes a pool retry", async () => {
     for (const body of ['"string"', "42", "true", "null", '["detail"]']) {

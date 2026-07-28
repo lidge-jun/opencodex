@@ -34,7 +34,6 @@ import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { getProviderDiscoveryStatus } from "../../codex/model-cache";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
-import { scanStorage } from "../../storage/scanner";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
@@ -77,6 +76,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       liveModels: p.liveModels !== false,
       models: p.models ?? [],
       authMode: p.authMode,
+      apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
@@ -212,6 +212,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         touched = true;
       } else {
         return jsonResponse({ error: "authMode must be key, forward, oauth, or local" }, 400);
+      }
+    }
+    if (Object.hasOwn(rawBody, "apiKeyTransport")) {
+      const transport = rawBody.apiKeyTransport;
+      if (transport === "x-api-key" || transport === "bearer") {
+        next.apiKeyTransport = transport;
+        touched = true;
+      } else if (transport === "") {
+        delete next.apiKeyTransport;
+        touched = true;
+      } else {
+        return jsonResponse({ error: "apiKeyTransport must be x-api-key, bearer, or empty to clear" }, 400);
       }
     }
    if (Object.hasOwn(rawBody, "note")) {

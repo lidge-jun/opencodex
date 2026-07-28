@@ -251,6 +251,32 @@ describe("google provider hardening", () => {
     }
   });
 
+  test("non-streaming responses reject oversized Content-Length before buffering", async () => {
+    const adapter = createGoogleAdapter(provider());
+    const oversized = new Response("{}", {
+      status: 200,
+      headers: { "content-length": String(101 * 1024 * 1024) },
+    });
+
+    const events = await adapter.parseResponse!(oversized);
+
+    expect(events).toEqual([{ type: "error", message: expect.stringContaining("google response too large") }]);
+    expect(events[0].type).toBe("error");
+  });
+
+  test("non-streaming responses accept Content-Length under the cap", async () => {
+    const adapter = createGoogleAdapter(provider());
+    const body = { candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }] };
+    const response = new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-length": String(JSON.stringify(body).length) },
+    });
+
+    const events = await adapter.parseResponse!(response);
+    expect(events.some(e => e.type === "done")).toBe(true);
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
   test("sends Gemini Flash thinkingLevel only for direct AI Studio requests", async () => {
     const direct = createGoogleAdapter(provider({
       modelReasoningEfforts: {

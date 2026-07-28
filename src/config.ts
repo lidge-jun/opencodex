@@ -11,11 +11,13 @@ import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
+  REASONING_SUMMARY_DELIVERY_VALUES,
   type OcxConfig,
   type OcxProviderConfig,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider } from "./providers/openai-tiers";
 import { parseDesktopProfile } from "./claude/desktop-profile";
+import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 
 let _atomicSeq = 0;
 
@@ -337,6 +339,7 @@ const warnedConfigFallbacks = new Set<string>();
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   allowPrivateNetwork: z.boolean().optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
@@ -408,6 +411,23 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   return null;
 }
 
+/** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
+export function apiKeyTransportConfigError(
+  provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "apiKeyTransport">,
+): string | null {
+  if (provider.apiKeyTransport === undefined) return null;
+  if (provider.apiKeyTransport !== "x-api-key" && provider.apiKeyTransport !== "bearer") {
+    return 'apiKeyTransport must be "x-api-key" or "bearer"';
+  }
+  if (provider.adapter !== "anthropic") {
+    return "apiKeyTransport is supported only by the anthropic adapter";
+  }
+  if (provider.authMode === "oauth" || provider.authMode === "forward" || provider.authMode === "local") {
+    return "apiKeyTransport requires Anthropic API-key authentication";
+  }
+  return null;
+}
+
 export function positiveIntegerRecordConfigError(value: unknown, field: string): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
@@ -438,6 +458,34 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
   for (const [key, entry] of Object.entries(value)) {
     if (!key.trim()) return `${field} keys must be nonblank model ids`;
     if (typeof entry !== "boolean") return `${field}.${key} must be a boolean`;
+  }
+  return null;
+}
+
+const REASONING_SUMMARY_DELIVERY_SET = new Set<string>(REASONING_SUMMARY_DELIVERY_VALUES);
+
+export function reasoningSummaryDeliveryRecordConfigError(
+  value: unknown,
+  supportsReasoningSummaries: unknown,
+  field = "modelReasoningSummaryDelivery",
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+
+  const supports = booleanRecordConfigError(supportsReasoningSummaries, "modelSupportsReasoningSummaries") === null
+    && supportsReasoningSummaries && typeof supportsReasoningSummaries === "object"
+    ? supportsReasoningSummaries as Record<string, boolean>
+    : undefined;
+  for (const [key, entry] of Object.entries(value)) {
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (typeof entry !== "string" || !REASONING_SUMMARY_DELIVERY_SET.has(entry)) {
+      return `${field}.${key} must be one of: ${REASONING_SUMMARY_DELIVERY_VALUES.join(", ")}`;
+    }
+    if (modelRecordValue(supports, key) === false) {
+      return `${field}.${key} conflicts with modelSupportsReasoningSummaries=false`;
+    }
   }
   return null;
 }
@@ -485,6 +533,13 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // These selections pre-date schema validation and used to pass through as
+  // unknown fields. Invalid hand edits must disable only the optional
+  // delegation/native-default feature, not reject the whole config and hide
+  // otherwise valid providers, accounts, or the configured listen port.
+  injectionModel: z.string().optional().catch(undefined),
+  injectionEffort: z.string().optional().catch(undefined),
+  syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
@@ -570,6 +625,14 @@ const configSchema = z.object({
         message: headersError,
       });
     }
+    const apiKeyTransportError = apiKeyTransportConfigError(provider as OcxProviderConfig);
+    if (apiKeyTransportError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "apiKeyTransport"],
+        message: apiKeyTransportError,
+      });
+    }
     const modelAdaptersError = modelAdapterRecordConfigError(
       (provider as { modelAdapters?: unknown }).modelAdapters,
       "modelAdapters",
@@ -603,6 +666,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "modelSupportsReasoningSummaries"],
         message: reasoningSummariesError,
+      });
+    }
+    const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
+      (provider as { modelReasoningSummaryDelivery?: unknown }).modelReasoningSummaryDelivery,
+      (provider as { modelSupportsReasoningSummaries?: unknown }).modelSupportsReasoningSummaries,
+    );
+    if (reasoningSummaryDeliveryError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelReasoningSummaryDelivery"],
+        message: reasoningSummaryDeliveryError,
       });
     }
     const defaultMaxOutputError = positiveIntegerConfigError(
@@ -732,6 +806,64 @@ function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void 
   }
 }
 
+type NativeSubagentPersistedField = "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults";
+
+function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
+  return rawParsed !== null && typeof rawParsed === "object" && !Array.isArray(rawParsed)
+    ? rawParsed as Record<string, unknown>
+    : null;
+}
+
+function malformedNativeSubagentFields(rawParsed: unknown): NativeSubagentPersistedField[] {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw) return [];
+  const malformed: NativeSubagentPersistedField[] = [];
+  if (Object.hasOwn(raw, "injectionModel") && typeof raw.injectionModel !== "string") {
+    malformed.push("injectionModel");
+  }
+  if (Object.hasOwn(raw, "injectionEffort") && typeof raw.injectionEffort !== "string") {
+    malformed.push("injectionEffort");
+  }
+  if (Object.hasOwn(raw, "syncCodexSubagentDefaults") && typeof raw.syncCodexSubagentDefaults !== "boolean") {
+    malformed.push("syncCodexSubagentDefaults");
+  }
+  return malformed;
+}
+
+function malformedNativeSubagentFieldWarning(field: NativeSubagentPersistedField): string {
+  const expected = field === "syncCodexSubagentDefaults" ? "a boolean" : "a string";
+  return `${field} ignored: expected ${expected}`;
+}
+
+function nativeSubagentSyncDisabledReason(config: OcxConfig, rawParsed?: unknown): string | null {
+  if (config.syncCodexSubagentDefaults !== true) return null;
+  const malformed = malformedNativeSubagentFields(rawParsed);
+  if (malformed.includes("injectionModel")) return "injectionModel must be a string";
+  if (!config.injectionModel?.trim()) return "a nonblank injectionModel is required";
+  if (malformed.includes("injectionEffort")) return "injectionEffort must be a string or omitted";
+  if (config.injectionEffort !== undefined && !isCodexReasoningEffort(config.injectionEffort)) {
+    return "injectionEffort must be a supported Codex reasoning effort";
+  }
+  return null;
+}
+
+function normalizeNativeSubagentSync(config: OcxConfig, rawParsed?: unknown): OcxConfig {
+  if (!nativeSubagentSyncDisabledReason(config, rawParsed)) return config;
+  const normalized = { ...config };
+  delete normalized.syncCodexSubagentDefaults;
+  return normalized;
+}
+
+function warnDegradedNativeSubagentConfig(rawParsed: unknown, config: OcxConfig): void {
+  for (const field of malformedNativeSubagentFields(rawParsed)) {
+    console.warn(`⚠️  config.json ${malformedNativeSubagentFieldWarning(field)}. Other settings were preserved.`);
+  }
+  const reason = nativeSubagentSyncDisabledReason(config, rawParsed);
+  if (reason) {
+    console.warn(`⚠️  config.json syncCodexSubagentDefaults was disabled: ${reason}. Other settings were preserved.`);
+  }
+}
+
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -746,8 +878,10 @@ export function loadConfig(): OcxConfig {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      warnDegradedStreamMode(parsed, result.data as OcxConfig);
-      return result.data as OcxConfig;
+      const config = result.data as OcxConfig;
+      warnDegradedStreamMode(parsed, config);
+      warnDegradedNativeSubagentConfig(parsed, config);
+      return normalizeNativeSubagentSync(config, parsed);
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -761,7 +895,9 @@ export function loadConfig(): OcxConfig {
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
-      return retryResult.data as OcxConfig;
+      const config = retryResult.data as OcxConfig;
+      warnDegradedNativeSubagentConfig(parsed, config);
+      return normalizeNativeSubagentSync(config, parsed);
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
@@ -791,14 +927,29 @@ function configPlaceholderWarnings(config: OcxConfig): string[] {
   return warnings;
 }
 
-function validFileConfigDiagnostics(config: OcxConfig): ConfigDiagnostics {
-  const warnings = configPlaceholderWarnings(config);
+function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): ConfigDiagnostics {
+  // An unsafe hand-edited opt-in is disabled in memory instead of rejecting
+  // the entire config, which would hide unrelated providers/accounts. The next
+  // ordinary save persists the normalized absence.
+  const syncDisabledReason = nativeSubagentSyncDisabledReason(config, rawParsed);
+  const normalized = normalizeNativeSubagentSync(config, rawParsed);
+  const warnings = configPlaceholderWarnings(normalized);
+  warnings.push(...malformedNativeSubagentFields(rawParsed).map(malformedNativeSubagentFieldWarning));
+  if (syncDisabledReason) {
+    warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
+  }
   return {
-    config,
+    config: normalized,
     source: "file",
     error: null,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
+}
+
+export function subagentDefaultSyncEffective(
+  config: Pick<OcxConfig, "syncCodexSubagentDefaults" | "injectionModel">,
+): boolean {
+  return config.syncCodexSubagentDefaults === true && Boolean(config.injectionModel?.trim());
 }
 
 function mergeConfigDefaults(parsed: unknown): unknown {
@@ -837,12 +988,12 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      return validFileConfigDiagnostics(result.data as OcxConfig);
+      return validFileConfigDiagnostics(result.data as OcxConfig, parsed);
     }
 
     const retryResult = configSchema.safeParse(mergeConfigDefaults(parsed));
     if (retryResult.success) {
-      return validFileConfigDiagnostics(retryResult.data as OcxConfig);
+      return validFileConfigDiagnostics(retryResult.data as OcxConfig, parsed);
     }
 
     return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };

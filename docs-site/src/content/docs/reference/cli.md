@@ -142,14 +142,21 @@ opencodex local config only if all restore steps succeeded. `remove` is an alias
 
 ## Models & Codex
 
-### `ocx sync`
+### `ocx sync [--restart-codex]`
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
 
-### `ocx sync-cache`
+If long-lived Codex `app-server` processes are still running, `ocx sync` warns that they may keep
+serving the previous in-memory model list even though `opencodex-catalog.json` / `models_cache.json`
+were updated. Pass `--restart-codex` to send `SIGTERM` only to matching `codex … app-server` and
+`codex-code-mode-host` processes owned by the current user (active turns may be interrupted). Broad
+`pkill -f codex` matching is intentionally avoided.
 
-Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog.
+### `ocx sync-cache [--restart-codex]`
+
+Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog. The
+same stale-`app-server` warning and optional `--restart-codex` behavior as `ocx sync` apply.
 
 ### `ocx v2 [subcommand]`
 
@@ -530,3 +537,8 @@ Two dispatch targets are intentionally omitted from normal help: `__refresh-vers
 refreshes the update-notification cache in a detached process, and
 `__gui-update-worker <job-id> [latest|preview] [restart]` runs a dashboard update job. They are
 implementation details, not stable user-facing commands.
+
+The dashboard persists the detached update worker PID and automatically recovers an active job if
+that worker is no longer alive. Active records written by older releases without a PID are treated
+as stale after ten minutes. A live worker remains protected from concurrent updates even if the
+update takes longer than that window.

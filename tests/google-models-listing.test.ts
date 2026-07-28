@@ -49,6 +49,34 @@ describe("buildModelsRequest google routing", () => {
   });
 });
 
+describe("buildModelsRequest anthropic routing", () => {
+  test("normalizes a /v1 baseUrl and keeps the Anthropic models path singular", () => {
+    const prov = {
+      adapter: "anthropic",
+      authMode: "key",
+      apiKeyTransport: "bearer",
+      baseUrl: "https://gateway.example.com/v1",
+    } as OcxProviderConfig;
+    const { url, headers } = buildModelsRequest(prov, "sk-ant", "gateway");
+    expect(url).toBe("https://gateway.example.com/v1/models?limit=1000");
+    expect(headers["Authorization"]).toBe("Bearer sk-ant");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+  });
+
+  test("uses x-api-key by default for key-auth Anthropic providers", () => {
+    const prov = {
+      adapter: "anthropic",
+      authMode: "key",
+      baseUrl: "https://gateway.example.com",
+    } as OcxProviderConfig;
+    const { url, headers } = buildModelsRequest(prov, "sk-ant", "gateway");
+    expect(url).toBe("https://gateway.example.com/v1/models?limit=1000");
+    expect(headers["x-api-key"]).toBe("sk-ant");
+    expect(headers["Authorization"]).toBeUndefined();
+  });
+});
+
 describe("google models listing via catalog", () => {
   test("treats a { models } 2xx shape as malformed and degrades to the static seed", async () => {
     clearModelCache("google");

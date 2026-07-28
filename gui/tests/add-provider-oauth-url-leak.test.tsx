@@ -119,7 +119,7 @@ test("an authorization URL arriving after a preset switch is never rendered", as
   });
 
   expect(host.textContent).not.toContain(A_URL);
-  expect(host.querySelector(".pwi-auth-url")).toBeNull();
+  expect(host.querySelector(".login-url-block-text")).toBeNull();
 });
 
 test("the in-flight provider's own authorization URL does render", async () => {
@@ -135,7 +135,7 @@ test("the in-flight provider's own authorization URL does render", async () => {
     await new Promise((r) => setTimeout(r, 40));
   });
 
-  expect(host.querySelector(".pwi-auth-url")?.textContent).toBe(A_URL);
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(A_URL);
 });
 
 test("a late URL for an abandoned provider cannot overwrite the one already shown", async () => {
@@ -164,6 +164,6 @@ test("a late URL for an abandoned provider cannot overwrite the one already show
     await new Promise((r) => setTimeout(r, 30));
   });
 
-  expect(host.querySelector(".pwi-auth-url")?.textContent).toBe(B_URL);
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(B_URL);
   expect(host.textContent).not.toContain(A_URL);
 });

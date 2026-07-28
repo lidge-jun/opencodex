@@ -13,6 +13,7 @@ import {
   cursorToolInputSchema,
   cursorToolWireName,
   isGenericToolUseCountDemoPrompt,
+  nonEmptyShellBridgeCommandFromArgs,
 } from "../src/adapters/cursor/tool-definitions";
 import type { OcxTool } from "../src/types";
 
@@ -141,6 +142,33 @@ describe("Cursor tool definitions", () => {
       cmd: "git status",
       workdir: "C:/repo",
     });
+  });
+
+  test("shell bridge command validation honors the schema-required command key", () => {
+    const execSchema = cursorToolArgNormalizeSchema({
+      name: "exec_command",
+      description: "Run a command",
+      parameters: {
+        type: "object",
+        properties: { cmd: { type: "string" } },
+        required: ["cmd"],
+      },
+    } as OcxTool);
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "exec_command", execSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "exec_command", execSchema)).toBeUndefined();
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "", command: "echo hi" }), "exec_command", execSchema)).toBeUndefined();
+
+    const shellSchema = cursorToolArgNormalizeSchema({
+      name: "shell_command",
+      description: "Run a command",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string" } },
+        required: ["command"],
+      },
+    } as OcxTool);
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ command: "echo hi" }), "shell_command", shellSchema)).toBe("echo hi");
+    expect(nonEmptyShellBridgeCommandFromArgs(JSON.stringify({ cmd: "echo hi" }), "shell_command", shellSchema)).toBeUndefined();
   });
 
   test("does not alias namespaced exec_command tools", () => {

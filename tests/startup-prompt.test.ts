@@ -28,6 +28,47 @@ describe("startup star prompt", () => {
     expect(promptIndex).toBeLessThan(syncIndex);
   });
 
+  test("GitHub star prompt asks with an explicit Yes/No selector and names gh", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    expect(prompt).toContain("interactiveConfirm");
+    expect(prompt).toContain("defaultYes: true");
+    expect(prompt).toContain("Star it on GitHub (via gh)?");
+  });
+
+  test("an agent driving ocx is told to ask the user instead of answering", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+    const guardIndex = prompt.indexOf("if (isAgentDriven()) {");
+    const markerIndex = prompt.indexOf("writeFileSync(marker");
+
+    expect(guardIndex).toBeGreaterThan(-1);
+    // The guard must precede the marker write, otherwise an agent run would
+    // consume the one-time prompt the user never saw.
+    expect(guardIndex).toBeLessThan(markerIndex);
+    // The agent path relays the question rather than selecting a choice.
+    expect(prompt).toContain("printAgentDeferral");
+    expect(prompt).toContain("do not answer this yourself");
+    expect(prompt).toContain("Ask the user whether to star");
+    expect(prompt).not.toMatch(/isAgentDriven\(\)[\s\S]{0,80}starRepo\(\)/);
+  });
+
+  test("the star prompt only appears when gh can actually star", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    expect(prompt).toContain('spawnSync("gh", ["auth", "status"]');
+    expect(prompt).toContain("if (!ghAvailable()) return;");
+  });
+
+  test("declining the star prompt does not steer the agent afterwards", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    // A "No" ends the feature: no persisted decline state, and nothing injected
+    // into any model prompt to keep nudging the user later.
+    expect(prompt).toContain("if (!yes) return;");
+    expect(prompt).not.toMatch(/declined/i);
+    expect(prompt).not.toMatch(/system\s*prompt|encourage|remind the user/i);
+  });
+
   test("ocx init offers the Codex autostart shim by default", async () => {
     const init = await readText("src/cli/init.ts");
 

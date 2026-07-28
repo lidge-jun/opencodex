@@ -329,6 +329,10 @@ Every non-empty family has one default. You can drag a route, or use its visible
 a mouse, touch, or keyboard. **Save and apply** writes the profile to Claude Desktop. JSON export
 and import are available for backup or moving the same setup to another machine.
 
+If Claude Desktop's footer picker does not change the model for an already-running 3P
+conversation, use `/model <id>` in that conversation. OpenCodex routes the model id carried by
+each request; **Logs → requestedModel** shows which id Desktop actually sent.
+
 ```bash
 ocx claude desktop [apply]                         # save and apply the current profile
 ocx claude desktop show [--json]                   # inspect routes, families, and defaults

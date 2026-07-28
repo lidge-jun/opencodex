@@ -39,7 +39,9 @@ opencodex 允许你为目录中的所有模型选择多代理协作界面。仪�
 
 ### 委托模型与推理强度
 
-仪表盘中的 **子代理委托** 选择器会保存 `injectionModel`，以及可选的 `injectionEffort`。它们用于生成委托指引，并不是由 proxy 执行的子代理路由规则。设置 `injectionPrompt` 可以把内置指引文本整体替换为自定义内容。
+仪表盘中的 **子代理委托** 选择器会保存 `injectionModel`，以及可选的 `injectionEffort`。所选值会用于由 OpenCodex 编写的委派指引，而该指引由 `multiAgentGuidanceEnabled` 单独控制。它们并不是由 proxy 执行的子代理路由规则。设置 `injectionPrompt` 可以把内置指引文本整体替换为自定义内容。
+
+显式启用 `syncCodexSubagentDefaults` 后，当 OpenCodex 管理当前 Codex 路由时，下一次同步或重启会把所选模型和 effort 应用为 Codex 原生 `[agents]` 子代理默认值。外部用户管理的 provider 配置不会被修改。这些默认值只影响新建的 Codex 任务，该设置本身不会触发委派。已有的用户自有 `[agents]` 默认值会保留而不会被覆盖，因此请求的默认值可能与 Codex 实际使用的默认值不同。
 
 `multiAgentGuidanceText` 根据请求中的工具列表判断当前界面 —— 包括 Codex Desktop 的 WebSocket 路径（`responses_lite`），此时工具位于 `additional_tools` input 项中而不是请求的 `tools` 数组。
 
@@ -56,7 +58,7 @@ opencodex 允许你为目录中的所有模型选择多代理协作界面。仪�
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
 - **Models** 页面 → 使用顶部的分段控件。
 - 两个页面都有 **?** 按钮，可打开帮助弹窗并返回本文。
-- **Dashboard** → **子代理委托**：选择首选模型和可选的推理强度。在 v2 上，注入的指引会要求以 `fork_turns: "none"` 生成，使模型覆盖得以应用。如果原生→路由子代理只收到加密任务内容，请使用原生目标或 v1；仅外部目标的传输现在会明确返回 `unreadable_encrypted_agent_task`（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。
+- **Dashboard** → **子代理委托**：选择首选模型和可选的推理强度。启用 **用作原生 Codex 子代理默认值** 后，当 OpenCodex 管理当前 Codex 路由时，下一次同步或重启会把相同选择应用于新建 Codex 任务；外部用户管理的 provider 配置不会被修改。此开关与委派指引开关相互独立。在 v2 上，注入的指引会要求以 `fork_turns: "none"` 生成，使模型覆盖得以应用。如果原生→路由子代理只收到加密任务内容，请使用原生目标或 v1；仅外部目标的传输现在会明确返回 `unreadable_encrypted_agent_task`（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。
 
 ### CLI
 
@@ -92,6 +94,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
   -d '{"model": "anthropic/claude-sonnet-5", "effort": "xhigh"}'
 
+# 将所选值同步为 Codex 原生子代理默认值（需先设置 model）
+curl -X PUT http://localhost:10100/api/injection-model \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "anthropic/claude-sonnet-5", "syncCodexSubagentDefaults": true}'
+
 # 设置自定义指引提示词（{{model}}/{{effort}}/{{roster}} 占位符）
 curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
@@ -103,11 +110,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -d '{"model": null}'
 ```
 
-`GET /api/injection-model` 返回 `model`、`effort`、`prompt`、全局 `efforts` 阶梯，以及由已启用原生/路由模型组成的 `available` 列表。PUT 请求省略 `effort` 或 `prompt` 时会保留当前值，传入 `null` 时会清除它；清除 `model` 一定会同时清除推理强度。API 会按全局 Codex 阶梯验证推理强度，Codex 仍会在生成时检查目标目录条目是否支持该强度。
+`GET /api/injection-model` 返回 `model`、`effort`、`prompt`、`multiAgentGuidanceEnabled`、`syncCodexSubagentDefaults`、全局 `efforts` 阶梯，以及由已启用原生/路由模型组成的 `available` 列表。PUT 为部分更新：省略 `effort` 或 `prompt` 时会保留当前值，传入 `null` 时会清除它。`syncCodexSubagentDefaults: true` 要求已经选择模型；清除 `model` 一定会同时清除推理强度，并关闭原生默认值同步。API 会按全局 Codex 阶梯验证推理强度，Codex 仍会在生成时检查目标目录条目是否支持该强度。
 
 ## 推理强度
 
-可选的子代理推理强度保存在 `injectionEffort` 中，只有同时设置注入模型时才有意义。它会向注入的 v2 指引加入 `reasoning_effort` 要求，但不会改变父会话的推理强度。在接受覆盖的 fork 上，Codex 会直接应用传给 `spawn_agent` 的 `reasoning_effort`。
+可选的子代理推理强度保存在 `injectionEffort` 中，只有同时设置注入模型时才有意义。它会向注入的 v2 指引加入 `reasoning_effort` 要求，但不会改变父会话的推理强度。启用 `syncCodexSubagentDefaults` 且 OpenCodex 管理当前 Codex 路由时，下一次同步或重启还会把它作为新建 Codex 任务的原生子代理默认 effort。在接受覆盖的 fork 上，Codex 会直接应用传给 `spawn_agent` 的 `reasoning_effort`。
 
 在 Codex 目录中，`ultra` 的级别高于 `max`，并带有自动委托语义；但 provider 永远不会在线路上收到字面量 `ultra`。Codex 会在客户端边界将 `ultra` 转成 `max`，随后 opencodex 再确保 provider 收到有效值：
 

@@ -22,6 +22,7 @@ export interface ProviderRegistryEntry {
   label: string;
   adapter: string;
   baseUrl: string;
+  apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
@@ -88,7 +89,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "apiKeyTransport" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
@@ -180,6 +181,19 @@ const THINKING_TOGGLE_MAP: Record<string, string> = {
 const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
   "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-omni", "mimo-v2-pro", "glm-5", "glm-5.1",
 ];
+/**
+ * Zhipu's domestic BigModel platform. Text families first, then the vision member: modalities are
+ * declared per model because `noVisionModels` means the opposite of "text only" here — it routes
+ * images through the proxy's vision sidecar (src/codex/catalog/provider-fetch.ts), a claim nobody
+ * has verified for BigModel-hosted GLM.
+ */
+const ZHIPU_BIGMODEL_TEXT_MODELS = ["glm-4.6", "glm-4.7", "glm-4.7-flash", "glm-5", "glm-5.1"];
+const ZHIPU_BIGMODEL_MODELS = [...ZHIPU_BIGMODEL_TEXT_MODELS, "glm-4.6v"];
+const ZHIPU_BIGMODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  ...Object.fromEntries(ZHIPU_BIGMODEL_TEXT_MODELS.map(id => [id, ["text"]])),
+  "glm-4.6v": ["text", "image"],
+};
+const ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS = ["glm-4.6", "glm-4.7", "glm-5", "glm-5.1"];
 const THINKING_BUDGET_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
@@ -467,6 +481,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.kimi.com/coding/v1",
     authKind: "oauth",
     modelSuffixBracketStrip: true,
+    // Kimi Code Plan documents a stable session/task prompt_cache_key as required to improve
+    // cache hit rates.
+    // The chat adapter only forwards a key already on the internal request (Codex's session key,
+    // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
+    // Evidence: https://platform.kimi.com/docs/api/chat
+    promptCacheKey: true,
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
@@ -493,7 +513,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://runtime.us-east-1.kiro.dev",
     authKind: "oauth",
     oauthId: "kiro",
-    note: "Import-first: reuses your installed Kiro CLI login — requires kiro-cli installed and signed in (`kiro-cli login`). Experimental third-party harness — see Kiro ToS.",
+    note: "Import-first: reuses your installed and signed-in Kiro CLI session (requires `kiro-cli login`). Add account logs `kiro-cli` out, switches it through a fresh browser login, stores the account by profile ARN, and restores the previous CLI session on cancellation or failure. Experimental third-party harness — see Kiro ToS.",
     models: KIRO_MODELS,
     defaultModel: "kiro-auto",
     // Kiro speaks CodeWhisperer wire, not OpenAI-style GET /models. Keep the static
@@ -785,6 +805,45 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
     preserveReasoningContentModels: ZAI_GLM_52_MODELS,
   },
+  // Zhipu's domestic BigModel platform: OpenAI-compatible pay-as-you-go on open.bigmodel.cn — a
+  // different host and billing product from the `zai` coding-plan subscription above.
+  // The id is deliberately NOT `glm` or `glm-cn`: both are already bound in FREE_PROVIDER_DIRECTORY
+  // (to api.z.ai and to the BigModel *coding* path), and routedProviderConfig() canonicalizes a
+  // saved provider onto the registry baseUrl — reusing either id would silently retarget an
+  // existing config's endpoint and send its API key to another host.
+  // Evidence: docs.bigmodel.cn/api-reference (OpenAI-compatible chat completions),
+  // docs.bigmodel.cn/cn/guide/models/text/glm-4.6 (thinking: {type: enabled|disabled}).
+  // Originally proposed in #536 by @Lucinegogo.
+  {
+    id: "zhipu-bigmodel",
+    label: "Zhipu AI — BigModel",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
+    defaultModel: "glm-4.6",
+    models: ZHIPU_BIGMODEL_MODELS,
+    // The GLM families here are the same ones the `zai` metadata bundle already describes, so the
+    // bundle owns context windows and modalities for the whole list instead of a hand-copied table.
+    jawcodeBundle: "zai",
+    // Declared explicitly for the default model so its window survives a bundle-lookup miss:
+    // without it, catalog normalization falls back to a generic 128k and compacts ~76,800 early.
+    modelContextWindows: { "glm-4.6": 204_800 },
+    modelInputModalities: ZHIPU_BIGMODEL_INPUT_MODALITIES,
+    // GLM exposes a binary thinking knob, not an effort ladder: the adapter emits
+    // `thinking: {type}` for these ids and would otherwise send a rejected reasoning_effort.
+    thinkingToggleModels: ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
+    modelReasoningEfforts: Object.fromEntries(
+      ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS]),
+    ),
+    modelReasoningEffortMap: Object.fromEntries(
+      ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP]),
+    ),
+    preserveReasoningContentModels: ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
+    // No liveModels: GET /api/paas/v4/models has not been observed to answer on this host, and a
+    // false live claim yields an empty picker at runtime. Flip it on once someone verifies it.
+    note: "Domestic BigModel pay-as-you-go endpoint (open.bigmodel.cn)",
+  },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },
   // SiliconFlow publishes an OpenAI-compatible chat endpoint and a dynamic model catalog. Do not
@@ -926,7 +985,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://ollama.com/settings/keys",
     // Live IDs verified 2026-07-10; qwen3-coder:480b retires 2026-07-15.
-    // Evidence: .codexclaw/evidence/260710_wp9_ollama_cloud_model_ids.md.
     models: ["glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
     defaultModel: "glm-5.2",
     noVisionModels: [
@@ -967,6 +1025,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
     modelSuffixBracketStrip: true,
+    // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
+    promptCacheKey: true,
     models: KIMI_CODING_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,

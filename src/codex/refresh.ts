@@ -9,6 +9,7 @@ export interface CodexCatalogRefreshResult {
   added: number;
   path: string;
   catalogExists: boolean;
+  catalogWritten: boolean;
   cacheSynced: boolean;
   comboOmissions: ComboCatalogOmission[];
 }
@@ -42,8 +43,11 @@ export async function refreshCodexModelCatalog(
 ): Promise<CodexCatalogRefreshResult> {
   const result = await deps.syncCatalogModels(config);
   const catalogExists = deps.existsSync(result.path);
+  const catalogWritten = result.catalogWritten === true;
   const comboOmissions = result.comboOmissions ?? [];
-  if (!catalogExists) return { ...result, catalogExists, cacheSynced: false, comboOmissions };
-  deps.invalidateCodexModelsCache();
-  return { ...result, catalogExists, cacheSynced: true, comboOmissions };
+  if (!catalogExists) {
+    return { ...result, catalogExists, catalogWritten: false, cacheSynced: false, comboOmissions };
+  }
+  const cacheSynced = deps.invalidateCodexModelsCache();
+  return { ...result, catalogExists, catalogWritten, cacheSynced, comboOmissions };
 }

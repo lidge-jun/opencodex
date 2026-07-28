@@ -39,7 +39,9 @@ v2 サーフェス(`multi_agent_v2`)のサブエージェントは**デフォル
 
 ### 委任モデルと推論強度
 
-ダッシュボードの **サブエージェント委任** セレクターは `injectionModel` とオプションの `injectionEffort` を保存します。この値は委任ガイドを作る設定であり、プロキシがスポーンリクエストを別モデルに再ルーティングする設定ではありません。`injectionPrompt` を指定すると内蔵ガイド文言全体を希望テキストに差し替えできます。
+ダッシュボードの **サブエージェント委任** セレクターは `injectionModel` とオプションの `injectionEffort` を保存します。選択値は OpenCodex が作成する委任ガイダンスで使われ、そのガイダンスは `multiAgentGuidanceEnabled` で別に制御されます。これらはプロキシがスポーンリクエストを別モデルに再ルーティングする規則ではありません。`injectionPrompt` を指定すると内蔵ガイド文言全体を希望テキストに差し替えできます。
+
+`syncCodexSubagentDefaults` を明示的に有効にすると、OpenCodex が有効な Codex ルーティングを管理している場合、次回の sync または restart で選択したモデルと effort が Codex ネイティブの `[agents]` サブエージェント既定値として適用されます。外部のユーザー管理 provider 設定は変更しません。この既定値は新しく作成される Codex タスクだけに適用され、設定自体が委任を発生させることはありません。既存のユーザー所有 `[agents]` 既定値は上書きせず保持するため、要求した既定値と実際の Codex 既定値が異なる場合があります。
 
 `multiAgentGuidanceText` はリクエストに入ってきたツール一覧でサーフェスを判定します。Codex Desktop の WebSocket 経路(`responses_lite`)のようにツールがリクエストの `tools` 配列ではなく `additional_tools` input 項目として届く場合も認識します。
 
@@ -56,7 +58,7 @@ v2 サーフェス(`multi_agent_v2`)のサブエージェントは**デフォル
 - **ダッシュボード** → 最初のスタットセルで **v1**、**base**、**v2** を選択します。
 - **モデル** ページ → 上部セグメントコントロールで選択します。
 - 両ページとも **?** ボタンを押すとこのドキュメントに繋がるヘルプモーダルが開きます。
-- **ダッシュボード** → **サブエージェント委任** で推奨モデルとオプションの推論強度を選びます。v2 では注入ガイドが `fork_turns: "none"` スポーンを指示しモデルオーバーライドを適用させます — ただしネイティブ→ルーティング子はタスク本文が暗号化状態で到着する可能性があります([#92](https://github.com/lidge-jun/opencodex/issues/92))。
+- **ダッシュボード** → **サブエージェント委任** で推奨モデルとオプションの推論強度を選びます。**ネイティブ Codex サブエージェント既定値として使用**を有効にすると、OpenCodex が有効な Codex ルーティングを管理している場合、次回の sync または restart から新しい Codex タスクにも同じ選択値が適用されます。外部のユーザー管理 provider 設定は変更しません。このトグルは委任ガイダンスのトグルとは独立しています。v2 では注入ガイドが `fork_turns: "none"` スポーンを指示しモデルオーバーライドを適用させます — ただしネイティブ→ルーティング子はタスク本文が暗号化状態で到着する可能性があります([#92](https://github.com/lidge-jun/opencodex/issues/92))。
 
 ### CLI
 
@@ -92,6 +94,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
   -d '{"model": "anthropic/claude-sonnet-5", "effort": "xhigh"}'
 
+# 選択値を Codex ネイティブのサブエージェント既定値へ同期するよう設定（モデルが必要）
+curl -X PUT http://localhost:10100/api/injection-model \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "anthropic/claude-sonnet-5", "syncCodexSubagentDefaults": true}'
+
 # カスタムガイドプロンプトを設定({{model}}/{{effort}}/{{roster}} プレースホルダ)
 curl -X PUT http://localhost:10100/api/injection-model \
   -H 'Content-Type: application/json' \
@@ -103,11 +110,11 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -d '{"model": null}'
 ```
 
-`GET /api/injection-model` は `model`、`effort`、`prompt`、グローバル `efforts` 段階、有効化されたネイティブ・ルーティングモデルである `available` を返します。PUT で `effort` や `prompt` を省略すると既存値を維持し、`null` なら消去します。`model` を消去すると推論強度も常に一緒に消去されます。API はグローバル Codex 段階に合う推論強度か検証し、Codex はスポーン時に対象カタログ項目がその強度をサポートするか再検証します。
+`GET /api/injection-model` は `model`、`effort`、`prompt`、`multiAgentGuidanceEnabled`、`syncCodexSubagentDefaults`、グローバル `efforts` 段階、有効化されたネイティブ・ルーティングモデルである `available` を返します。PUT は部分更新です。`effort` や `prompt` を省略すると既存値を維持し、`null` なら消去します。`syncCodexSubagentDefaults: true` には選択済みモデルが必要で、`model` を消去すると推論強度の消去とネイティブ既定値の同期解除も行われます。API はグローバル Codex 段階に合う推論強度か検証し、Codex はスポーン時に対象カタログ項目がその強度をサポートするか再検証します。
 
 ## 推論強度
 
-サブエージェント推論強度は `injectionEffort` に保存され注入モデルがあるときのみ意味を持ちます。この値は注入 v2 ガイドに `reasoning_effort` 指示を追加し、親セッションの推論強度は変えません。オーバーライドが許可される fork では `spawn_agent` に渡された `reasoning_effort` を Codex がそのまま適用します。
+サブエージェント推論強度は `injectionEffort` に保存され注入モデルがあるときのみ意味を持ちます。この値は注入 v2 ガイドに `reasoning_effort` 指示を追加し、親セッションの推論強度は変えません。`syncCodexSubagentDefaults` が有効で OpenCodex が有効な Codex ルーティングを管理している場合は、次回の sync または restart から新しい Codex タスクのネイティブなサブエージェント既定 effort としても使われます。オーバーライドが許可される fork では `spawn_agent` に渡された `reasoning_effort` を Codex がそのまま適用します。
 
 `ultra` は Codex カタログで `max` より高い段階で自動委任の意味が加わりますが、プロバイダー wire に `ultra` という値がそのまま渡るわけではありません。Codex がクライアント境界で `ultra` を `max` に変え、opencodex がプロバイダーに合う有効な値に調整します。
 

@@ -13,7 +13,6 @@ import {
   oauthHealthIsCooldown,
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
-  type DoctorCopyFeedback,
 } from "../oauth-health-display";
 
 export function CodexAccountPoolCards({
@@ -28,7 +27,7 @@ export function CodexAccountPoolCards({
   onEditAlias,
   onRemove,
   onCopyDoctor,
-  copiedDoctorFor,
+  doctorCopyOutcomeFor,
 }: {
   pool: CodexAccountEntry[];
   activeId: string | null;
@@ -41,7 +40,7 @@ export function CodexAccountPoolCards({
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
   onCopyDoctor?: (accountId: string) => void;
-  copiedDoctorFor?: DoctorCopyFeedback | null;
+  doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
   const t = useT();
   const isNext = (id: string) => activeId === id;
@@ -84,7 +83,7 @@ export function CodexAccountPoolCards({
             )}
             {onCopyDoctor && oauthHealthShowsDoctor(healthStatus) && (
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopyDoctor(a.id)}>
-                {doctorCopyButtonLabel(t, copiedDoctorFor, a.id)}
+                <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopyOutcomeFor?.(a.id))}</span>
               </button>
             )}
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void onEditAlias(a)}>

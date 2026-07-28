@@ -41,10 +41,29 @@ ChatGPT bearer 인증으로 직접 POST합니다. 주입된 `base_url`이 openco
   bearer를 사용합니다. 설정된 모드는 이미지 요청에도 동일하게 적용됩니다.
 - **OpenAI API key:** forward 후보가 인증 실패를 소유하지 않을 때만 사용합니다. 깨진 Pool 인증을
   별도 과금 API 사용으로 숨기지 않습니다.
-- **둘 다 없음:** 모호한 404 대신 명확한 오류를 반환합니다. 라우팅되는 다른 프로바이더(Cursor,
+- **명시적 커스텀 프로바이더:** `images.provider`에 OpenAI Images API를 구현한 커스텀 API-key
+  `openai-responses` 프로바이더를 지정할 수 있습니다. 명시적 선택이 실패해도 다른 유료 업스트림으로
+  fallback하지 않습니다. 내장 프로바이더 id에는 사용하지 말고, 기본 OpenAI 경로를 쓰려면 생략하세요.
+- **Google Antigravity (CCA) 폴백:** OpenAI forward 후보와 API key 프로바이더 모두 없을 때,
+  `/v1/images/generations`(`/images/edits` 제외)가 Antigravity **Cloud Code Assist** 엔드포인트로
+  폴백되며 `gemini-3.1-flash-image` 모델을 사용합니다. OpenAI 인증 해석이 실패할 때(예: ChatGPT 자격
+  증명이 만료되거나 누락된 경우)에도 동일하게 폴백이 트리거되며, OpenAI 후보가 아예 없을 때만
+  발생하는 것은 아닙니다. `ocx login google-antigravity`가 필요합니다.
+  OAuth 토큰은 CCA 레지스트리 호스트로만 전송되며 설정의 `baseUrl` 재정의로는 가지 않습니다.
+  응답은 Codex가 기대하는 `{created, data:[{b64_json}]}` 형식으로 반환됩니다.
+- **모두 없음:** 모호한 404 대신 명확한 오류를 반환합니다. 라우팅되는 다른 프로바이더(Cursor,
   Gemini, Kiro 등)는 이미지 생성을 제공할 수 없습니다. 도구 자체를 끄고 싶다면 Codex에서
   `codex features disable image_generation`(`config.toml`의 `[features] image_generation = false`)을
   사용하세요.
+
+도구 선언은 모델의 Responses 요청에도 계속 포함됩니다. API key 방식 Responses 프로바이더에서는
+opencodex가 Codex의 비공개 `image_gen` namespace를 업스트림에서 안전한
+`image_gen__<inner-name>` alias(예: `image_gen__imagegen`)로 변환합니다. 이 사용 가능한 alias가
+클라이언트 선언을 대체할 때만 중복된 hosted `image_generation` 선언을 제거합니다. 함수 호출은
+Codex에 도달하기 전에 명시적인 `image_gen` namespace로 복원되고, 이후 기록을 업스트림으로
+replay할 때 다시 인코딩됩니다. 따라서 namespace를 예약하거나 점이 포함된 함수 이름을 거부하는
+OpenAI 호환 업스트림에서도 클라이언트 측 이미지 생성을 호출할 수 있습니다. ChatGPT forward
+모드는 변경되지 않으며 네이티브 Responses Lite 형식을 유지합니다.
 
 `hostname`이 loopback 주소가 아니면 Codex가 자동 생성된 API 인증 헤더를 보내야 합니다. 이때는 전용
 프로바이더를 주입합니다.

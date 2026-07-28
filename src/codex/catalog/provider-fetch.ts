@@ -50,10 +50,6 @@ import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpen
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 
-type OcxProviderConfigWithReasoningSummaries = OcxProviderConfig & {
-  modelSupportsReasoningSummaries?: Record<string, boolean>;
-};
-
 export type ProviderModelsApiItem = {
   id: string;
   owned_by?: string;
@@ -90,6 +86,13 @@ export function configuredMaxInputTokens(prov: OcxProviderConfig, id: string): n
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
+function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, id: string): boolean | undefined {
+  if (!prov) return undefined;
+  const explicit = modelRecordValue(prov.modelSupportsReasoningSummaries, id);
+  if (explicit !== undefined) return explicit;
+  return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
+}
+
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
   void name;
   const configuredCap = configuredContextWindow(prov, model.id);
@@ -105,10 +108,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
-  const supportsReasoningSummaries = modelRecordValue(
-    (prov as OcxProviderConfigWithReasoningSummaries).modelSupportsReasoningSummaries,
-    model.id,
-  );
+  const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
     ...(configuredCap !== undefined
@@ -560,8 +560,8 @@ export async function gatherRoutedModels(
   // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
   const enrichedByName = new Map(activeProviders);
   const customModels = (config.customModels ?? []).map(cm => {
-    const rawProvider = config.providers[cm.provider] as OcxProviderConfigWithReasoningSummaries | undefined;
-    const supportsReasoningSummaries = modelRecordValue(rawProvider?.modelSupportsReasoningSummaries, cm.modelId);
+    const rawProvider = config.providers[cm.provider];
+    const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,

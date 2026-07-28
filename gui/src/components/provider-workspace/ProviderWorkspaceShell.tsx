@@ -65,6 +65,8 @@ export default function ProviderWorkspaceShell({
   jsonSaving = false,
   modelsRefreshToken = 0,
   activeAccountNeedsReauth,
+  /** Stable key of active OAuth account ids — refetch overview quotas after account switch. */
+  quotaRefreshKey = "",
   detail,
 }: {
   providers: Record<string, WorkspaceProvider>;
@@ -81,6 +83,11 @@ export default function ProviderWorkspaceShell({
   /** Bump after login/config changes so /api/selected-models is refetched. */
   modelsRefreshToken?: number;
   activeAccountNeedsReauth?: Record<string, boolean>;
+  /**
+   * Explicit active-account identity key (e.g. `anthropic:<id>|…`). Prefer this over
+   * `activeAccountNeedsReauth` object identity so healthy account switches still refresh.
+   */
+  quotaRefreshKey?: string;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
   detail?: (item: WorkspaceItem, data: DetailSlotData) => ReactNode;
 }) {
@@ -200,7 +207,9 @@ export default function ProviderWorkspaceShell({
       })
       .catch(() => { /* keep last-good */ });
     return () => { cancelled = true; };
-  }, [apiBase]);
+    // Key on active-account identity (not the reauth boolean map) so switching between two
+    // healthy accounts still re-reads /api/provider-quotas for the Usage/overview bars.
+  }, [apiBase, quotaRefreshKey]);
 
   useEffect(() => {
     if (!filterOpen) return;

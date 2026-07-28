@@ -3,6 +3,7 @@
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
  */
 import type { ProviderSortMode, WorkspaceItem } from "../../provider-workspace/catalog";
+import type { AccountQuota } from "../../codex-quota-utils";
 
 export type { ProviderSortMode, WorkspaceItem };
 
@@ -49,6 +50,9 @@ export type OAuthAccountRow = {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
+  /** Per-account rate limits, for providers that report usage per credential (anthropic). */
+  quota?: AccountQuota | null;
+  quotaUnavailable?: boolean;
 };
 
 export type ApiKeyRow = {
@@ -86,6 +90,7 @@ export type ProviderUpdatePatch = {
   baseUrl?: string;
   defaultModel?: string;
   apiKey?: string;
+  apiKeyTransport?: "x-api-key" | "bearer" | "";
   authMode?: string;
   note?: string;
   disabled?: boolean;

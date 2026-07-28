@@ -241,6 +241,127 @@ describe("Cursor Responses tool argument decoding", () => {
     ]);
   });
 
+  describe("shell bridge rejects empty or malformed command args", () => {
+    const dropped = (tool: string) =>
+      `Cursor emitted ${tool} without a non-empty command; the tool call was dropped.`;
+
+    function shellBridgeArgs(
+      toolName: "exec_command" | "shell_command",
+      args: Record<string, Uint8Array>,
+      callId: string,
+    ) {
+      return create(McpArgsSchema, {
+        name: toolName,
+        toolName: toolName,
+        toolCallId: callId,
+        providerIdentifier: "opencodex-responses",
+        args,
+      });
+    }
+
+    function expectDropped(state: CursorProtobufEventState, callId: string, toolName: string) {
+      expect(state.openToolCalls.has(callId)).toBe(false);
+      expect(state.completedToolCalls.has(callId)).toBe(true);
+      expect(dropped(toolName)).toContain(toolName);
+    }
+
+    test.each([
+      ["exec_command", "cmd", "echo hi"] as const,
+      ["shell_command", "command", "echo hi"] as const,
+    ])("%s accepts a valid %s payload", (toolName, field, command) => {
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, { [field]: jsonBytes(command) }, `toolu_valid_${toolName}`);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "tool_call_start", id: `toolu_valid_${toolName}`, name: toolName },
+        { type: "tool_call_delta", arguments: expect.stringContaining(command) },
+        { type: "tool_call_end", id: `toolu_valid_${toolName}` },
+      ]);
+    });
+
+    test.each([
+      ["exec_command", "cmd"] as const,
+      ["shell_command", "command"] as const,
+    ])("%s rejects missing args", (toolName, field) => {
+      void field;
+      const callId = `toolu_empty_${toolName}`;
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, {}, callId);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped(toolName) },
+      ]);
+      expectDropped(state, callId, toolName);
+    });
+
+    test.each([
+      ["exec_command", "cmd"] as const,
+      ["shell_command", "command"] as const,
+    ])("%s rejects whitespace-only %s", (toolName, field) => {
+      const callId = `toolu_blank_${toolName}`;
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, { [field]: jsonBytes("   ") }, callId);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped(toolName) },
+      ]);
+      expectDropped(state, callId, toolName);
+    });
+
+    test.each([
+      ["exec_command", "cmd", 42] as const,
+      ["exec_command", "cmd", {}] as const,
+      ["exec_command", "cmd", ""] as const,
+      ["shell_command", "command", 42] as const,
+      ["shell_command", "command", {}] as const,
+      ["shell_command", "command", ""] as const,
+    ])("%s rejects invalid %s=%s", (toolName, field, value) => {
+      const callId = `toolu_bad_${toolName}_${field}_${String(value)}`;
+      const state = createCursorProtobufEventState({ clientToolNames: [toolName] });
+      const args = shellBridgeArgs(toolName, { [field]: jsonBytes(value) }, callId);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped(toolName) },
+      ]);
+      expectDropped(state, callId, toolName);
+    });
+
+    test("exec_command rejects command-only payload when cmd is required", () => {
+      const callId = "toolu_command_only";
+      const state = createCursorProtobufEventState({ clientToolNames: ["exec_command"] });
+      const args = shellBridgeArgs("exec_command", { command: jsonBytes("echo hi") }, callId);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped("exec_command") },
+      ]);
+      expectDropped(state, callId, "exec_command");
+    });
+
+    test("exec_command rejects blank cmd even when command is present", () => {
+      const callId = "toolu_blank_cmd_with_command";
+      const state = createCursorProtobufEventState({ clientToolNames: ["exec_command"] });
+      const args = shellBridgeArgs("exec_command", {
+        cmd: jsonBytes(""),
+        command: jsonBytes("echo hi"),
+      }, callId);
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true, state })).toEqual([
+        { type: "error", message: dropped("exec_command") },
+      ]);
+      expectDropped(state, callId, "exec_command");
+    });
+
+    test("stateless exec_command rejects empty args when allowEmptyArgs is enabled", () => {
+      const args = shellBridgeArgs("exec_command", {}, "toolu_stateless_empty");
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true })).toEqual([
+        { type: "error", message: dropped("exec_command") },
+      ]);
+    });
+
+    test("stateless shell_command accepts cmd that normalizes to command", () => {
+      const args = shellBridgeArgs("shell_command", { cmd: jsonBytes("echo hi") }, "toolu_stateless_cmd");
+      expect(mapSyntheticMcpExecToToolEvents(args, "fallback", { allowEmptyArgs: true })).toEqual([
+        { type: "tool_call_start", id: "toolu_stateless_cmd", name: "shell_command" },
+        { type: "tool_call_delta", arguments: "{\"command\":\"echo hi\"}" },
+        { type: "tool_call_end", id: "toolu_stateless_cmd" },
+      ]);
+    });
+  });
+
   test("synthetic native mcp exec emits a self-contained atomic tool call", () => {
     // Native-exec delivers the whole call at once. With deferred-start emission the synthetic mapper
     // always emits its own start -> delta -> end unit (the old suppressStart option is gone).

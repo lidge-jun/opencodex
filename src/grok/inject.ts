@@ -172,6 +172,16 @@ function isLoopbackBaseUrl(value: string | undefined): boolean {
  */
 function findOpencodexOrphans(content: string, region: ManagedRegion | null): OrphanTable[] {
   const orphans: OrphanTable[] = [];
+  // A pre-fence orphan's body must stop AT the fence. The managed block opens with a
+  // COMMENT, not a table header, so a span that runs to "the next table header" swallows
+  // the BEGIN marker whenever no other table separates them — and removing the orphan then
+  // deletes the fence opener itself, which strands the END marker and makes every later
+  // sync re-append a block (the #511 duplicate loop, one layer down).
+  // `region` is null ONLY when BEGIN_MARKER is absent (see findManagedRegion), so -1
+  // disables the clamp for marker-less files without a redundant scan.
+  const fenceStart = region ? region.start : -1;
+  const clampEnd = (start: number, end: number): number =>
+    fenceStart >= 0 && start < fenceStart ? Math.min(end, fenceStart) : end;
   // Collect every table header first: a table body runs to the NEXT header, whatever it is.
   const headers: Array<{ index: number; length: number; segments: string[]; array: boolean }> = [];
   for (const match of content.matchAll(ANY_TABLE_HEADER)) {
@@ -186,7 +196,7 @@ function findOpencodexOrphans(content: string, region: ManagedRegion | null): Or
     if (header.array || header.segments.length !== 2 || header.segments[0] !== "model") continue;
     // Inside the fence the regular splice already owns it.
     if (region && header.index >= region.start && header.index < region.end) continue;
-    const bodyEnd = headers[position + 1]?.index ?? content.length;
+    const bodyEnd = clampEnd(header.index, headers[position + 1]?.index ?? content.length);
     const keys = tableBodyKeys(content.slice(header.index + header.length, bodyEnd));
     if (keys.get("api_key") !== OPENCODEX_API_KEY) continue;
     if (!isLoopbackBaseUrl(keys.get("base_url"))) continue;
@@ -197,9 +207,13 @@ function findOpencodexOrphans(content: string, region: ManagedRegion | null): Or
     let end = bodyEnd;
     for (let next = position + 1; next < headers.length; next += 1) {
       const child = headers[next]!;
+      // Only a PRE-fence parent may be cut short by the fence. Without the parent test a
+      // below-fence orphan would break on its first child (every index is past the fence),
+      // leaving the sub-table behind to keep the alias reserved — the -2 loop again.
+      if (fenceStart >= 0 && header.index < fenceStart && child.index >= fenceStart) break;
       if (child.segments.length <= 2) break;
       if (child.segments[0] !== "model" || child.segments[1] !== header.segments[1]) break;
-      end = headers[next + 1]?.index ?? content.length;
+      end = clampEnd(header.index, headers[next + 1]?.index ?? content.length);
     }
     orphans.push({ alias: header.segments[1]!, modelId: keys.get("model"), start: header.index, end });
   }
@@ -414,7 +428,11 @@ export function injectGrokConfig(
     if (output === rawContent) {
       return { ok: true, changed: false, message: "Grok config already contains the current opencodex managed block." };
     }
-    if (configExisted && !region) copyBackupOnce(configPath, backupPath);
+    // Back up before a first-time fence write AND before any sweep, since adopting an orphan
+    // deletes a table the user has in their file. Previously the adjacent-orphan layout got a
+    // backup only as a side effect of the fence being destroyed (which made `region` falsy);
+    // preserving the fence must not silently drop that safety net.
+    if (configExisted && (!region || orphans.length > 0)) copyBackupOnce(configPath, backupPath);
     atomicWriteFile(configPath, output);
     return {
       ok: true,

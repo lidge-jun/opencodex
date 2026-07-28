@@ -40,10 +40,27 @@ OpenAI 上游：
   OAuth bearer。图像请求遵循同一模式。
 - **OpenAI API key：** 仅当 forward 候选没有拥有认证失败时使用。不会用单独计费的 API 调用掩盖
   损坏或过期的 Pool 凭证。
-- **两者都没有：** proxy 返回明确的错误而不是含糊的 404。其他路由提供商（Cursor、Gemini、
+- **显式自定义 provider：** 可将 `images.provider` 设为一个自定义 API-key
+  `openai-responses` provider；该 endpoint 必须实现 OpenAI Images API。显式选择失败时不会
+  fallback 到其他付费上游。内置 provider id 不适用于此字段；省略它即可使用默认 OpenAI 路径。
+- **Google Antigravity（CCA）回退：** 当 OpenAI forward 候选和 API key 提供商都不存在时，
+  `/v1/images/generations`（不含 `/images/edits`）会回退到 Antigravity **Cloud Code Assist**
+  端点，使用 `gemini-3.1-flash-image` 模型。当 OpenAI 认证解析失败（例如 ChatGPT 凭证过期或缺失）时，
+  该回退同样会触发，而不仅仅在没有任何 OpenAI 候选时。需要 `ocx login google-antigravity`；OAuth token
+  只发送到 CCA 注册端点，不会发送到配置中的 `baseUrl` 覆盖地址。返回格式与 Codex 期望的
+  `{created, data:[{b64_json}]}` 一致。
+- **以上都没有：** proxy 返回明确的错误而不是含糊的 404。其他路由提供商（Cursor、Gemini、
   Kiro 等）无法提供图像生成；如果想完全关闭该工具，可在 Codex 中执行
   `codex features disable image_generation`（即 `config.toml` 的
   `[features] image_generation = false`）。
+
+工具声明仍会随模型的 Responses 请求一同发送。对于 API key 方式的 Responses 提供商，
+opencodex 会把 Codex 私有的 `image_gen` namespace 转换为上游安全的
+`image_gen__<inner-name>` alias（例如 `image_gen__imagegen`）。只有当这个可用 alias 替代了
+客户端声明时，才会移除重复的 hosted `image_generation` 声明。函数调用会在到达 Codex 前恢复为
+显式的 `image_gen` namespace，后续将历史记录重放到上游时再重新编码。因此，即使 OpenAI 兼容
+上游保留了该 namespace，或拒绝包含点号的函数名，客户端图像生成仍可正常调用。ChatGPT forward
+模式保持不变，并继续使用其原生 Responses Lite 格式。
 
 如果 `hostname` 不是 loopback 地址，Codex 必须发送自动生成的 API 认证请求头。此时注入器会改用
 专用提供商：

@@ -12,7 +12,7 @@ import {
   getCodexAccountHealthSnapshot,
   releaseCodexQuotaProbeLease,
   tryAcquireCodexQuotaProbeLease,
-  pickLowestUsageCodexAccount,
+  pickAlternateCodexAccount,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
 import type { CodexCooldownSource } from "./routing";
@@ -173,7 +173,7 @@ export async function resolveCodexAuthContext(
   const threadId = headers.get("x-codex-parent-thread-id");
   const resolution = options.excludeAccountId
     ? (() => {
-        const accountId = pickLowestUsageCodexAccount(config, options.excludeAccountId);
+        const accountId = pickAlternateCodexAccount(config, options.excludeAccountId!);
         return accountId
           ? { status: "selected" as const, accountId }
           : { status: "none" as const };

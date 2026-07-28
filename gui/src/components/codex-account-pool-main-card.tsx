@@ -13,7 +13,6 @@ import {
   oauthHealthIsCooldown,
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
-  type DoctorCopyFeedback,
 } from "../oauth-health-display";
 
 export function CodexAccountPoolMainCard({
@@ -26,7 +25,7 @@ export function CodexAccountPoolMainCard({
   onSwitch,
   onOpenReset,
   onCopyDoctor,
-  copiedDoctorFor,
+  doctorCopyOutcomeFor,
 }: {
   t: TFn;
   main: CodexAccountEntry | undefined;
@@ -37,7 +36,7 @@ export function CodexAccountPoolMainCard({
   onSwitch: (entry: CodexAccountEntry) => void;
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
-  copiedDoctorFor?: DoctorCopyFeedback | null;
+  doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
@@ -80,7 +79,7 @@ export function CodexAccountPoolMainCard({
         )}
         {onCopyDoctor && oauthHealthShowsDoctor(main?.health?.status) && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopyDoctor(mainId)}>
-            {doctorCopyButtonLabel(t, copiedDoctorFor, mainId)}
+            <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopyOutcomeFor?.(mainId))}</span>
           </button>
         )}
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>

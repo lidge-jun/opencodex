@@ -10,7 +10,13 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
-import { clearCodexAccountCooldown, resetCodexRoutingForManualSelection } from "./routing";
+import {
+  normalizeAccountPoolStickyLimit,
+  normalizeAccountPoolStrategy,
+  parseAccountPoolStickyLimit,
+  parseAccountPoolStrategy,
+} from "./pool-rotation";
+import { clearCodexAccountCooldown, getEffectiveActiveCodexAccountId, resetCodexRoutingForManualSelection } from "./routing";
 import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -615,9 +621,11 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/active" && req.method === "GET") {
     const runtimeConfig = getRuntimeConfig(config);
     return jsonResponse({
-      activeCodexAccountId: runtimeConfig.activeCodexAccountId ?? null,
+      activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
       autoSwitchThreshold: runtimeConfig.autoSwitchThreshold ?? 80,
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
+      accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
+      accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
     });
   }
 
@@ -631,6 +639,46 @@ export async function handleCodexAuthAPI(
     runtimeConfig.autoSwitchThreshold = body.threshold;
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true });
+  }
+
+  if (
+    url.pathname === "/api/codex-auth/pool-strategy"
+    && (req.method === "PUT" || req.method === "PATCH")
+  ) {
+    let parsedBody: unknown;
+    try { parsedBody = await req.json(); } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
+      return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const body = parsedBody as { strategy?: unknown; stickyLimit?: unknown };
+    if (body.strategy === undefined && body.stickyLimit === undefined) {
+      return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
+    }
+    const runtimeConfig = getRuntimeConfig(config);
+    let nextStrategy: NonNullable<ReturnType<typeof parseAccountPoolStrategy>> | undefined;
+    let nextSticky: NonNullable<ReturnType<typeof parseAccountPoolStickyLimit>> | undefined;
+    if (body.strategy !== undefined) {
+      const parsed = parseAccountPoolStrategy(body.strategy);
+      if (parsed === null) {
+        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first' }, 400);
+      }
+      nextStrategy = parsed;
+    }
+    if (body.stickyLimit !== undefined) {
+      const parsed = parseAccountPoolStickyLimit(body.stickyLimit);
+      if (parsed === null) {
+        return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+      }
+      nextSticky = parsed;
+    }
+    if (nextStrategy !== undefined) runtimeConfig.accountPoolStrategy = nextStrategy;
+    if (nextSticky !== undefined) runtimeConfig.accountPoolStickyLimit = nextSticky;
+    saveRuntimeConfig(config, runtimeConfig);
+    return jsonResponse({
+      ok: true,
+      accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
+      accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
+    });
   }
 
   if (url.pathname === "/api/codex-auth/failover" && req.method === "PUT") {

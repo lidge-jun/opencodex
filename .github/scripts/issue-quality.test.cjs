@@ -163,6 +163,55 @@ describe("detectIssueKind", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateIssue - feature", () => {
+  it("keeps nested sub-headings and fenced heading text inside a section (#541)", () => {
+    const body = [
+      "### What are you trying to accomplish?",
+      "Route Studio models through the user's WordPress.com account.",
+      "### What prevents this today?",
+      "The provider needs two wire formats and one shared OAuth identity.",
+      "### What should OpenCodex do?",
+      "Add a first-class provider with model-specific transport selection.",
+      "### Example usage or interface",
+      "#### CLI flow",
+      "```bash",
+      "# This heading-shaped shell comment must stay inside the fence",
+      "ocx login wordpress-studio",
+      "```",
+      "#### Dashboard flow",
+      "Providers -> WordPress Studio Code -> Log in",
+      "### Alternatives or workarounds",
+      "Use Studio directly.",
+    ].join("\n");
+
+    const example = extractSection(body, "Example usage or interface");
+    assert.match(example, /^#### CLI flow/);
+    assert.match(example, /# This heading-shaped shell comment/);
+    assert.match(example, /#### Dashboard flow/);
+    assert.doesNotMatch(example, /Alternatives or workarounds/);
+
+    const result = validateIssue({ title: "Add WordPress Studio provider", body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true, `Expected valid but got reasons: ${result.reasons.join(", ")}`);
+  });
+
+  it("ignores markdown headings inside backtick and tilde fences when finding section boundaries (#541)", () => {
+    for (const fence of ["```", "~~~~"]) {
+      const body = [
+        "### Example usage or interface",
+        fence,
+        "### pasted heading",
+        "real example content",
+        fence,
+        "### Next sibling",
+        "outside",
+      ].join("\n");
+      assert.equal(
+        extractSection(body, "Example usage or interface"),
+        [fence, "### pasted heading", "real example content", fence].join("\n"),
+      );
+    }
+  });
+
   it("rejects issue #208-style duplicate content", () => {
     const repeated = "Add support for streaming responses in the proxy";
     const body = [
@@ -313,8 +362,8 @@ describe("validateIssue - feature", () => {
       assert.equal(result.kind, "feature");
       assert.equal(result.valid, false, `Expected terse goal "${goal}" to be invalid`);
       assert.ok(
-        result.reasons.some((r) => r.includes("too vague")),
-        `Expected too vague reason for "${goal}", got: ${result.reasons.join(", ")}`,
+        result.reasons.some((r) => r.includes("too vague") || /missing or empty/i.test(r)),
+        `Expected too vague or empty reason for "${goal}", got: ${result.reasons.join(", ")}`,
       );
     }
   });
@@ -485,6 +534,70 @@ describe("validateIssue - bug", () => {
     const result = validateIssue({ title: "Bug", body, labels: ["bug"] });
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, false);
+  });
+
+  it("rejects a bug with Summary filled but Reproduction empty", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+      "### Reproduction",
+      "No response",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "macOS",
+    ].join("\n");
+    const result = validateIssue({ title: "Open Codex Error", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Reproduction is empty/i.test(r)));
+    assert.ok(!result.reasons.some((r) => /Summary is empty/i.test(r)));
+  });
+
+  it("rejects a bug whose Reproduction is only an ellipsis (#598)", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "{\"detail\":\"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.\"}",
+      "### Reproduction",
+      "...",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "mac os",
+    ].join("\n");
+    const result = validateIssue({ title: "Open Codex Error", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Reproduction is empty/i.test(r)));
+  });
+
+  it("rejects a bug with Reproduction filled but Summary empty", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "",
+      "### Reproduction",
+      "1. Run ocx start\n2. Send a request",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "macOS",
+    ].join("\n");
+    const result = validateIssue({ title: "Crash", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Summary is empty/i.test(r)));
   });
 
   it("accepts a terse real crash report", () => {
@@ -947,6 +1060,95 @@ describe("translated feature headings and soft-pass", () => {
     assert.equal(result.kind, "feature");
     assert.equal(result.softPass, true);
     assert.equal(result.valid, false);
+  });
+
+  it("soft-passes retitled feature reports that drop the [Feature]: prefix", () => {
+    const body = [
+      "### Concrete user workflow that fails",
+      "User pastes an image in Codex App while a text-only routed model is selected and the App blocks upload.",
+      "### Why this matters",
+      "Vision sidecar is advertised but never reached from the App client path.",
+      "### Verification",
+      "Same proxy config works end-to-end in Claude Code with the sidecar describing the image.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Vision sidecar unusable from Codex App",
+      body,
+      labels: ["enhancement"],
+      storedKind: "feature",
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.softPass, true);
+  });
+
+  it("soft-passes retitled bug reports with substantial non-English structure (#545)", () => {
+    // Maintainer retitle removed `[Bug]:`; Korean structured body has no English
+    // Summary/Reproduction headings but is clearly actionable.
+    const body = [
+      "## 환경",
+      "- opencodex 2.7.41 (launchd, port 10100)",
+      "- Claude Desktop 3P + Anthropic OAuth (Pro/Max)",
+      "- Auto Mode classifier model = `claude-sonnet-5`",
+      "",
+      "## 증상",
+      "Auto Mode classifier requests truncate at outputTokens=64 with max_output_tokens,",
+      "then retry the same payload up to 5 times. Dashboard previously showed 502.",
+      "",
+      "## 재현",
+      "1. `ocx login anthropic` and enable Claude Desktop 3P gateway key mode",
+      "2. Enable Auto Mode and trigger a tool permission classifier turn",
+      "3. Observe five identical 64-token incomplete terminals for one approval",
+      "",
+      "## 증거",
+      "Inbound+outbound correlated captures show max_tokens:64 and stop_sequences preserved.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Claude Desktop 3P Auto Mode classifier retries after 64-token Anthropic OAuth outputs",
+      body,
+      labels: ["bug", "provider-compatibility"],
+      storedKind: "bug",
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.softPass, true, `Expected soft-pass but got: ${result.reasons.join("; ")}`);
+    assert.equal(result.valid, false);
+  });
+
+  it("does not soft-pass a single arbitrary rich heading (Codex #564)", () => {
+    const result = validateIssue({
+      title: "Something broke after upgrade",
+      body: [
+        "## Notes",
+        "x".repeat(80),
+      ].join("\n"),
+      labels: ["bug"],
+      storedKind: "bug",
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.softPass, false);
+    assert.equal(result.valid, false);
+    assert.match(result.reasons.join(" "), /Summary and Reproduction are empty/);
+  });
+
+  it("does not soft-pass provider reports that only fill mapped metadata headings", () => {
+    const result = validateIssue({
+      title: "Provider X fails on Responses",
+      body: [
+        "### Provider or upstream service",
+        "custom-openai-compatible gateway hosted on our internal mesh",
+        "### OpenCodex version",
+        "2.7.41",
+        "### Endpoint or capability",
+        "`POST /v1/responses` with streaming tool calls",
+        "## Extra notes",
+        "We see intermittent 502s after rotating the upstream API key for this gateway.",
+      ].join("\n"),
+      labels: ["provider-compatibility"],
+      storedKind: "provider-compatibility",
+    });
+    assert.equal(result.kind, "provider-compatibility");
+    assert.equal(result.softPass, false);
+    assert.equal(result.valid, false);
+    assert.match(result.reasons.join(" "), /current behaviour|expected behaviour/i);
   });
 
   it("still rejects empty [Feature]: bodies", () => {

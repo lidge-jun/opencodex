@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { atomicWriteFile, loadConfig, websocketsEnabled } from "../config";
+import { atomicWriteFile, loadConfig, subagentDefaultSyncEffective, websocketsEnabled } from "../config";
 import { markJournalInjectedState, removeJournal, restoreJournalState, writeJournal } from "./journal";
 import { restoreCodexCatalog } from "./catalog";
 import { migrateHistoryToOpenai, syncCodexHistoryProvider } from "./history-provider";
@@ -15,6 +15,10 @@ import {
 } from "./injected-marker";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH, parseTomlString, readRootTomlString, resolveCodexConfigPath, tomlString } from "./paths";
 import { resolveEffectiveProjectModelProvider } from "./project-config-warnings";
+import {
+  transformManagedSubagentDefaults,
+  type ManagedSubagentDefaults,
+} from "./subagent-defaults";
 import type { OcxConfig } from "../types";
 
 // Ownership predicates live in `./injected-marker` so `journal.ts` can reach them
@@ -66,6 +70,16 @@ export interface InjectCodexOptions {
    * failing on a missing model_catalog_json file.
    */
   catalogPath?: string | null;
+}
+
+function configuredManagedSubagentDefaults(
+  config: Pick<OcxConfig, "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults"> | undefined,
+): ManagedSubagentDefaults | null {
+  if (!subagentDefaultSyncEffective(config ?? {})) return null;
+  return {
+    model: config!.injectionModel!.trim(),
+    ...(config!.injectionEffort?.trim() ? { reasoningEffort: config!.injectionEffort.trim() } : {}),
+  };
 }
 
 /**
@@ -458,7 +472,13 @@ export function chooseCatalogPathForInjection(content: string, requested?: strin
   return existsSync(DEFAULT_CATALOG_PATH) ? DEFAULT_CATALOG_PATH : null;
 }
 
-export async function injectCodexConfig(port: number, config?: OcxConfig, options: InjectCodexOptions = {}): Promise<{ success: boolean; message: string }> {
+export interface CodexInjectResult {
+  success: boolean;
+  message: string;
+  nativeSubagentDefaultsWarning?: string;
+}
+
+export async function injectCodexConfig(port: number, config?: OcxConfig, options: InjectCodexOptions = {}): Promise<CodexInjectResult> {
   if (!existsSync(CODEX_CONFIG_PATH)) {
     return { success: false, message: `Codex config not found at ${CODEX_CONFIG_PATH}. Is Codex installed?` };
   }
@@ -469,8 +489,12 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
     removeJournal();
+    const nativeSubagentDefaultsWarning = configuredManagedSubagentDefaults(config)
+      ? `Native Codex sub-agent defaults were not injected: external model_provider ${tomlString(activeProvider)} owns config.toml.`
+      : undefined;
     return {
       success: true,
+      ...(nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning } : {}),
       message: `⚠️ Codex routing NOT injected: config.toml selects the external model_provider ${tomlString(activeProvider)}.\n` +
         `  OpenCodex preserves external provider configuration so existing ${tomlString(activeProvider)} session history stays visible.\n` +
         `  Configure that provider for Responses passthrough at http://${providerBaseHost(config?.hostname)}:${port}/v1` +
@@ -479,16 +503,31 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     };
   }
 
+  // Marker-owned native defaults are OpenCodex residue, never part of the
+  // user's journal baseline. Clean them before either snapshotting or adding a
+  // root routing key: inserting that key ahead of a marker-owned first table
+  // would otherwise separate the table marker from its header. Ambiguous
+  // markers fail closed without writing config, profile, or journal state.
+  const nativeDefaultsBaseline = transformManagedSubagentDefaults(rawContent, null);
+  if (!nativeDefaultsBaseline.ok) {
+    return {
+      success: false,
+      message: `Codex config injection refused: existing OpenCodex-managed native sub-agent defaults are ambiguous: ${nativeDefaultsBaseline.error}. `
+        + `No files were changed; inspect ${CODEX_CONFIG_PATH}.`,
+    };
+  }
+  const baselineContent = nativeDefaultsBaseline.content;
+
   // Classify and journal the same bytes: a native config is a valid original and
   // supersedes a stale snapshot (#477), while an injected one must never become
   // one — that is how opencodex routing would survive `ocx stop`.
   writeJournal({
     currentStateIsNative: !hasInjectedCodexRouting(rawContent),
-    configContent: rawContent,
+    configContent: baselineContent,
   });
   // EOL boundary: transforms below are LF-pure; preserve the file's dominant ending on write.
   const eol = dominantEol(rawContent);
-  let content = applyEol(rawContent, "\n");
+  let content = applyEol(baselineContent, "\n");
 
   // Idempotent clean-up of any prior injection: drop the provider table (marker-based) and every
   // stray/mis-nested model_provider line, so re-injecting can't duplicate keys or leave the buggy
@@ -526,6 +565,31 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     keptUserBaseUrl = result.keptUserBaseUrl;
   }
 
+  const desiredSubagentDefaults = configuredManagedSubagentDefaults(config);
+  const routingOwnershipWarning = keptUserBaseUrl && desiredSubagentDefaults
+    ? "Native Codex sub-agent defaults were not injected: a user-owned root openai_base_url prevents OpenCodex from managing active Codex routing."
+    : undefined;
+  const managedDefaults = transformManagedSubagentDefaults(
+    content,
+    keptUserBaseUrl ? null : desiredSubagentDefaults,
+  );
+  let nativeSubagentDefaultsWarning = routingOwnershipWarning;
+  let managedDefaultsMessage = routingOwnershipWarning ? `  ⚠️ ${routingOwnershipWarning}\n` : "";
+  if (managedDefaults.ok) {
+    content = managedDefaults.content;
+    if (desiredSubagentDefaults && managedDefaults.conflicts.length > 0) {
+      const keys = managedDefaults.conflicts.map(conflict => `agents.${conflict.key}`).join(", ");
+      nativeSubagentDefaultsWarning = `Native Codex sub-agent defaults were not injected: user-owned ${keys} preserved.`;
+      managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
+    }
+  } else {
+    const action = desiredSubagentDefaults && !keptUserBaseUrl
+      ? "were not injected"
+      : "could not be safely removed";
+    nativeSubagentDefaultsWarning = `Native Codex sub-agent defaults ${action}: ${managedDefaults.error}.`;
+    managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
+  }
+
   const profileContent = buildProfileFile(port, catalogPath, websocketsEnabled(config ?? {}), legacyMode, config?.hostname);
   content = applyEol(content, eol);
   atomicWriteFile(CODEX_CONFIG_PATH, content);
@@ -560,9 +624,11 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
   if (keptUserBaseUrl) {
     return {
       success: true,
+      ...(nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning } : {}),
       message: `⚠️ Codex routing NOT injected: your config already sets a root openai_base_url, and opencodex never overwrites a user-owned override.\n` +
         catalogMessage +
         historyMessage +
+        managedDefaultsMessage +
         `  To route plain codex through the proxy, remove your openai_base_url line from ~/.codex/config.toml and rerun 'ocx start'.\n` +
         `  Reference config: ${CODEX_PROFILE_PATH}`,
     };
@@ -572,9 +638,11 @@ export async function injectCodexConfig(port: number, config?: OcxConfig, option
     : `Pointed Codex's built-in openai provider at the opencodex proxy (openai_base_url).\n`;
   return {
     success: true,
+    ...(nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning } : {}),
     message: headline +
       catalogMessage +
       historyMessage +
+      managedDefaultsMessage +
       `  All models now route through opencodex proxy (like OpenRouter).\n` +
       `  OpenAI models (gpt-5.5, etc.) are passed through to OpenAI.\n` +
       `  Custom models route to their configured providers.\n` +
@@ -607,8 +675,17 @@ function removeOcxSection(content: string): string {
   return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
-/** Pure transform: strip the opencodex provider block + `model_provider = "opencodex"` lines. */
-export function stripOpencodexConfig(content: string): string {
+interface StripOpencodexConfigResult {
+  content: string;
+  managedDefaultsError: string | null;
+}
+
+/**
+ * Detailed form used by the on-disk restore path. A damaged ownership marker is
+ * ambiguous: keep the associated value, but return the transform error so the
+ * caller cannot report a complete restore.
+ */
+function stripOpencodexConfigResult(content: string): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider = readRootTomlString(out, "model_provider") === "opencodex";
   const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out);
@@ -623,8 +700,18 @@ export function stripOpencodexConfig(content: string): string {
   // Routed root model ids (`model = "provider/slug"`) only make sense while the proxy serves
   // them — strip on both the legacy re-tag form and the Design B injected-base-url form.
   if (hadRootOcxProvider || hadInjectedBaseUrl) out = stripRootRoutedModel(out);
+  const managedDefaults = transformManagedSubagentDefaults(out, null);
+  if (managedDefaults.ok) out = managedDefaults.content;
   out = stripOpencodexCatalogPath(out);
-  return out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  return {
+    content: out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n",
+    managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
+  };
+}
+
+/** Pure transform: strip the opencodex provider block + `model_provider = "opencodex"` lines. */
+export function stripOpencodexConfig(content: string): string {
+  return stripOpencodexConfigResult(content).content;
 }
 
 function hasOpencodexRouting(content: string): boolean {
@@ -635,7 +722,11 @@ function hasOpencodexRouting(content: string): boolean {
 
 export function removeCodexConfig(options: { preserveProfile?: boolean } = {}): { success: boolean; message: string } {
   if (!existsSync(CODEX_CONFIG_PATH)) {
-    return { success: false, message: "Codex config not found." };
+    if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH)) unlinkSync(CODEX_PROFILE_PATH);
+    return {
+      success: true,
+      message: `Codex config not found; no native restore was needed${options.preserveProfile ? "." : ", and the opencodex profile was removed if present."}`,
+    };
   }
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
   // Same EOL boundary as inject: strip in LF space, write back in the file's own ending.
@@ -643,16 +734,25 @@ export function removeCodexConfig(options: { preserveProfile?: boolean } = {}): 
   const eol = dominantEol(rawContent);
   const content = applyEol(rawContent, "\n");
   const had = hasOpencodexRouting(content);
-  const stripped = stripOpencodexConfig(content);
-  if (had || stripped !== content) {
-    atomicWriteFile(CODEX_CONFIG_PATH, applyEol(stripped, eol));
+  const stripped = stripOpencodexConfigResult(content);
+  if (had || stripped.content !== content) {
+    atomicWriteFile(CODEX_CONFIG_PATH, applyEol(stripped.content, eol));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH)) unlinkSync(CODEX_PROFILE_PATH);
+  const removedMessage = had
+    ? `Removed opencodex routing from Codex config${options.preserveProfile ? "." : " + profile."}`
+    : "opencodex not present in Codex config.";
+  if (stripped.managedDefaultsError) {
+    const routingMessage = had ? removedMessage : "No opencodex routing was present in Codex config.";
+    return {
+      success: false,
+      message: `${routingMessage} Native Codex sub-agent defaults could not be safely removed: ${stripped.managedDefaultsError}. ` +
+        "The ambiguous marker and adjacent value were preserved; inspect $CODEX_HOME/config.toml before using native Codex.",
+    };
+  }
   return {
     success: true,
-    message: had
-      ? `Removed opencodex routing from Codex config${options.preserveProfile ? "." : " + profile."}`
-      : "opencodex not present in Codex config.",
+    message: removedMessage,
   };
 }
 

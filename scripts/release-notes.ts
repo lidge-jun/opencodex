@@ -8,9 +8,76 @@
  *   bun scripts/release-notes.ts strip-carried <body-file>
  *   bun scripts/release-notes.ts matching-preview-tag <version>
  *   bun scripts/release-notes.ts matching-preview-tags <version>
+ *   bun scripts/release-notes.ts previous-release-tag <version>
  *   bun scripts/release-notes.ts has-meaningful [body-file]
  *   bun scripts/release-notes.ts assemble --npm-metadata ... --out ...
  */
+
+type ParsedReleaseTag = {
+  major: number;
+  minor: number;
+  patch: number;
+  /** null = stable release; otherwise the SemVer prerelease identifier string. */
+  prerelease: string | null;
+};
+
+function parseReleaseTag(tag: string): ParsedReleaseTag | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(tag.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ?? null,
+  };
+}
+
+/** SemVer identifier compare: numeric parts by number; numeric < non-numeric. */
+function comparePrereleaseIds(a: string, b: string): number {
+  const aParts = a.split(".");
+  const bParts = b.split(".");
+  const len = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < len; i += 1) {
+    const ap = aParts[i];
+    const bp = bParts[i];
+    if (ap === undefined) return -1;
+    if (bp === undefined) return 1;
+    const aNum = /^\d+$/.test(ap);
+    const bNum = /^\d+$/.test(bp);
+    if (aNum && bNum) {
+      const diff = Number(ap) - Number(bp);
+      if (diff !== 0) return diff;
+      continue;
+    }
+    if (aNum !== bNum) return aNum ? -1 : 1;
+    const cmp = ap.localeCompare(bp);
+    if (cmp !== 0) return cmp;
+  }
+  return 0;
+}
+
+/**
+ * Ascending SemVer-aware tag compare. Stable ranks after prereleases with the
+ * same core version (`v2.7.42-preview.*` < `v2.7.42`).
+ */
+export function compareReleaseTags(a: string, b: string): number {
+  const pa = parseReleaseTag(a);
+  const pb = parseReleaseTag(b);
+  if (!pa || !pb) {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  }
+  if (pa.major !== pb.major) return pa.major - pb.major;
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+  if (pa.patch !== pb.patch) return pa.patch - pb.patch;
+  if (pa.prerelease === null && pb.prerelease === null) return 0;
+  if (pa.prerelease === null) return 1;
+  if (pb.prerelease === null) return -1;
+  return comparePrereleaseIds(pa.prerelease, pb.prerelease);
+}
+
+function sortVersionTagsAscending(tags: string[]): string[] {
+  return [...tags].sort(compareReleaseTags);
+}
 
 /** Newest matching preview tag for a stable version, or null. */
 export function matchingPreviewTag(version: string, tags: string[]): string | null {
@@ -29,8 +96,29 @@ export function matchingPreviewTags(version: string, tags: string[]): string[] {
   const matches = tags
     .map(tag => tag.trim())
     .filter(tag => tag.startsWith(prefix));
-  matches.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-  return matches;
+  return sortVersionTagsAscending(matches);
+}
+
+/**
+ * Previous release tag used as the generate-notes / changelog baseline.
+ *
+ * - Preview releases: newest prior tag of either channel (stable or preview).
+ *   Channel-isolated preview→preview baselines skip a shipped stable and restate
+ *   that stable's changelog (e.g. 2.7.41-preview → 2.7.43-preview after 2.7.42).
+ * - Stable releases: newest prior stable only. Matching preview carry adjusts the
+ *   notes range start separately when assembling latest notes.
+ */
+export function previousReleaseNotesTag(version: string, tags: string[]): string | null {
+  if (!version) return null;
+  const releaseTag = version.startsWith("v") ? version : `v${version}`;
+  const candidates = tags
+    .map(tag => tag.trim())
+    .filter(tag => /^v\d/.test(tag) && compareReleaseTags(tag, releaseTag) < 0);
+  const filtered = version.includes("-preview.")
+    ? candidates
+    : candidates.filter(tag => !tag.includes("-preview."));
+  const sorted = sortVersionTagsAscending(filtered);
+  return sorted.length === 0 ? null : sorted[sorted.length - 1]!;
 }
 
 /** Drop npm blurb, Commits section, and Full Changelog link from a prior release body. */
@@ -212,7 +300,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  if (cmd === "matching-preview-tag" || cmd === "matching-preview-tags") {
+  if (cmd === "matching-preview-tag" || cmd === "matching-preview-tags" || cmd === "previous-release-tag") {
     const version = rest[0];
     if (!version) {
       console.error(`Usage: bun scripts/release-notes.ts ${cmd} <version>`);
@@ -222,6 +310,11 @@ async function main(argv: string[]): Promise<void> {
     const tags = tagsText.split(/\r?\n/);
     if (cmd === "matching-preview-tag") {
       const tag = matchingPreviewTag(version, tags);
+      if (tag) process.stdout.write(tag + "\n");
+      return;
+    }
+    if (cmd === "previous-release-tag") {
+      const tag = previousReleaseNotesTag(version, tags);
       if (tag) process.stdout.write(tag + "\n");
       return;
     }
@@ -278,6 +371,7 @@ Usage:
   bun scripts/release-notes.ts join-carried --out <file> <part-file>...
   bun scripts/release-notes.ts matching-preview-tag <version>   # tags on stdin
   bun scripts/release-notes.ts matching-preview-tags <version>  # tags on stdin, oldest→newest
+  bun scripts/release-notes.ts previous-release-tag <version>   # tags on stdin
   bun scripts/release-notes.ts assemble --npm-metadata ... --out ...`);
   process.exit(1);
 }

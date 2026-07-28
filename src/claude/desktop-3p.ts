@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
 import type { OcxClaudeDesktopProfile } from "../types";
+import { claudeDesktopConfigLibraryDir, resolveConfigLibraryDir } from "./desktop-3p-paths";
 import {
   reconcileDesktopProfile,
   renderDesktopProfile,
@@ -48,6 +49,33 @@ export interface Desktop3pRoutedModel {
  * claude/desktop-profile.
  */
 export const DESKTOP_SUPPORTS_1M_THRESHOLD = 1_000_000;
+
+export interface Desktop3pConfigLibraryOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+}
+
+/**
+ * Resolve the config library from the same user-data root Claude Desktop uses. Keeping this in one
+ * helper prevents the writer and dashboard status probe from agreeing on a path Desktop never reads.
+ *
+ * The resolution itself lives in `./desktop-3p-paths`, which ports Claude Desktop's own `GE()`
+ * branch for branch — including the `-3p` suffix the app appends to its userData root. Dropping
+ * that suffix points us at a directory Desktop never reads (GitHub #539).
+ */
+export function resolveDesktop3pConfigLibraryPath(
+  options: Desktop3pConfigLibraryOptions = {},
+): string {
+  if (options.env === undefined && options.platform === undefined && options.homeDir === undefined) {
+    return claudeDesktopConfigLibraryDir();
+  }
+  return resolveConfigLibraryDir({
+    env: options.env ?? process.env,
+    platform: options.platform ?? process.platform,
+    home: options.homeDir ?? homedir(),
+  });
+}
 
 /** CLI arg parsing for `ocx claude desktop` mode flags (mutually exclusive). */
 export function parseDesktop3pModeArgs(flags: string[]): { mode: Desktop3pConfigMode } | { error: string } {
@@ -308,8 +336,7 @@ export function writeDesktop3pConfig(
   mode: Desktop3pConfigMode = "static",
   profile?: OcxClaudeDesktopProfile,
 ): { written: boolean; path: string; reason?: string; fingerprint?: string } {
-  const libraryPath = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR?.trim()
-    || join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
+  const libraryPath = resolveDesktop3pConfigLibraryPath();
   const metadataPath = join(libraryPath, "_meta.json");
   let configPath = libraryPath;
 

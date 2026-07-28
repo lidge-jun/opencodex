@@ -4,6 +4,10 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  MANAGED_AGENTS_TABLE_MARKER,
+  MANAGED_SUBAGENT_DEFAULT_MARKER,
+} from "../src/codex/subagent-defaults";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -132,6 +136,140 @@ describe("codex-journal", () => {
     expect(JSON.parse(r.stdout).exists).toBe(false);
   });
 
+  test("removeCodexConfig is a successful no-op when Codex is not installed", () => {
+    writeFileSync(join(testDir, "opencodex.config.toml"), 'openai_base_url = "http://127.0.0.1:10100/v1"\n', "utf8");
+    rmSync(join(testDir, "config.toml"));
+    const r = runScript(testDir, `
+      const { removeCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
+      console.log(JSON.stringify({ remove: removeCodexConfig(), restore: restoreNativeCodex() }));
+    `);
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.remove.success).toBe(true);
+    expect(result.remove.message).toContain("no native restore was needed");
+    expect(result.restore.success).toBe(true);
+    expect(existsSync(join(testDir, "opencodex.config.toml"))).toBe(false);
+  });
+
+  test("removeCodexConfig reports damaged managed-default cleanup and preserves the ambiguous value", () => {
+    writeFileSync(join(testDir, "config.toml"), [
+      "# Auto-injected by opencodex",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "",
+      MANAGED_AGENTS_TABLE_MARKER,
+      "[agents]",
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      "",
+      'default_subagent_model = "gpt-5.6-sol"',
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runScript(testDir, `
+      const { removeCodexConfig } = require("./src/codex/inject");
+      console.log(JSON.stringify(removeCodexConfig()));
+    `);
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("could not be safely removed");
+    expect(result.message).toContain("orphaned managed subagent default marker");
+    const after = readFileSync(join(testDir, "config.toml"), "utf8");
+    expect(after).not.toContain("openai_base_url");
+    expect(after).toContain("# Managed by opencodex: native subagent default");
+    expect(after).toContain('default_subagent_model = "gpt-5.6-sol"');
+  });
+
+  test("removeCodexConfig ignores unsupported user-owned agents syntax when no managed marker exists", () => {
+    const userAgents = 'agents = { default_subagent_model = "user/model" }';
+    writeFileSync(join(testDir, "config.toml"), [
+      "# Auto-injected by opencodex",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      userAgents,
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runScript(testDir, `
+      const { removeCodexConfig } = require("./src/codex/inject");
+      console.log(JSON.stringify(removeCodexConfig()));
+    `);
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.success).toBe(true);
+    const after = readFileSync(join(testDir, "config.toml"), "utf8");
+    expect(after).not.toContain("openai_base_url");
+    expect(after).toContain(userAgents);
+  });
+
+  test("restoreNativeCodex restores an exact unchanged journal snapshot with managed defaults", () => {
+    const original = '# original config\nmodel_provider = "openai"\n';
+    writeFileSync(join(testDir, "config.toml"), original, "utf8");
+
+    const r = runScript(testDir, `
+      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
+      (async () => {
+        await injectCodexConfig(10100, {
+          port: 10100,
+          providers: {},
+          defaultProvider: "openai",
+          injectionModel: "gpt-5.6-sol",
+          injectionEffort: "high",
+          syncCodexSubagentDefaults: true,
+        }, { catalogPath: null });
+        console.log(JSON.stringify(restoreNativeCodex()));
+      })();
+    `);
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("restored from opencodex journal");
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
+    expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(false);
+  });
+
+  test("restoreNativeCodex reports damaged managed-default cleanup during fallback restore", () => {
+    const original = '# original config\nmodel_provider = "openai"\n';
+    writeFileSync(join(testDir, "config.toml"), original, "utf8");
+
+    const r = runScript(testDir, `
+      const fs = require("fs");
+      const path = require("path");
+      const { injectCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
+      (async () => {
+        const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+        await injectCodexConfig(10100, {
+          port: 10100,
+          providers: {},
+          defaultProvider: "openai",
+          injectionModel: "gpt-5.6-sol",
+          injectionEffort: "high",
+          syncCodexSubagentDefaults: true,
+        }, { catalogPath: null });
+        const marker = ${JSON.stringify(MANAGED_SUBAGENT_DEFAULT_MARKER)};
+        const injected = fs.readFileSync(configPath, "utf8");
+        fs.writeFileSync(configPath, injected.replace(
+          marker + '\\ndefault_subagent_model',
+          marker + '\\n\\ndefault_subagent_model',
+        ), "utf8");
+        console.log(JSON.stringify(restoreNativeCodex()));
+      })();
+    `);
+
+    expect(r.status).toBe(0);
+    const result = JSON.parse(r.stdout);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("could not be safely removed");
+    expect(result.message).toContain("orphaned managed subagent default marker");
+    const after = readFileSync(join(testDir, "config.toml"), "utf8");
+    expect(after).not.toContain("openai_base_url");
+    expect(after).toContain("# Managed by opencodex: native subagent default");
+    expect(after).toContain('default_subagent_model = "gpt-5.6-sol"');
+    expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(true);
+  });
+
   test("restoreNativeCodex uses journal snapshot for normal stop without losing custom defaults", () => {
     const originalConfig = [
       'model = "openrouter/foo"',
@@ -214,7 +352,14 @@ describe("codex-journal", () => {
       const path = require("path");
       const { injectCodexConfig, restoreNativeCodex } = require("./src/codex/inject");
       (async () => {
-        await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
+        await injectCodexConfig(10100, {
+          port: 10100,
+          providers: {},
+          defaultProvider: "openai",
+          injectionModel: "gpt-5.6-sol",
+          injectionEffort: "high",
+          syncCodexSubagentDefaults: true,
+        }, { catalogPath: null });
         fs.appendFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "\\n[tools]\\nweb_search = true\\n", "utf8");
         const result = restoreNativeCodex();
         console.log(JSON.stringify({ success: result.success, message: result.message }));
@@ -226,6 +371,9 @@ describe("codex-journal", () => {
     expect(restored).toContain("[tools]");
     expect(restored).toContain("web_search = true");
     expect(restored).not.toContain("[model_providers.opencodex]");
+    expect(restored).not.toContain("Managed by opencodex: native subagent");
+    expect(restored).not.toContain("default_subagent_model");
+    expect(restored).not.toContain("default_subagent_reasoning_effort");
     expect(existsSync(join(testDir, "opencodex-journal.json"))).toBe(true);
   });
 

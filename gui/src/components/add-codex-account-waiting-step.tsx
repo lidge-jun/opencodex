@@ -1,11 +1,10 @@
-import { IconLink } from "../icons";
 import { useT } from "../i18n/shared";
+import { LoginUrlBlock } from "./login-url-block";
 import type { StatusTone } from "./add-codex-account-reducer";
 
 export function AddCodexAccountWaitingStep({
   reauthAccountId,
   authUrl,
-  copied,
   manualCode,
   manualCodeBusy,
   manualCodeWaiting,
@@ -13,14 +12,12 @@ export function AddCodexAccountWaitingStep({
   statusTone,
   flowId,
   error,
-  onCopyLoginLink,
   onManualCodeChange,
   onSubmitManualCode,
   onClose,
 }: {
   reauthAccountId?: string;
   authUrl: string;
-  copied: boolean;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeWaiting: boolean;
@@ -28,7 +25,6 @@ export function AddCodexAccountWaitingStep({
   statusTone: StatusTone;
   flowId: string | null;
   error: string;
-  onCopyLoginLink: () => void;
   onManualCodeChange: (value: string) => void;
   onSubmitManualCode: () => void;
   onClose: () => void;
@@ -39,9 +35,7 @@ export function AddCodexAccountWaitingStep({
     <>
       <h3 style={{ marginBottom: 4 }}>{reauthAccountId ? t("codexAuth.reauthenticate") : t("codexAuth.oauthLogin")}</h3>
       <p className="modal-desc">{t("codexAuth.oauthWaiting")}</p>
-      <button type="button" className="btn btn-ghost" onClick={onCopyLoginLink} disabled={!authUrl} style={{ width: "100%", justifyContent: "center", marginTop: 12 }}>
-        <IconLink width={14} /> {copied ? t("codexAuth.loginLinkCopied") : t("codexAuth.copyLoginLink")}
-      </button>
+      <LoginUrlBlock url={authUrl} />
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
         <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
         <div style={{ display: "flex", gap: 8 }}>
