@@ -81,5 +81,5 @@ The `video_gen` tool accepts:
 - **Cost**: Video generation is a paid xAI feature (~$0.05/sec @480p, ~$0.07/sec @720p)
 - **One video per call**: Each `video_gen` call produces one video
 - **Coexists with Image Bridge**: Both bridges can be enabled simultaneously
-- **Web search priority**: When web search is active for a turn, the video bridge is skipped (web search and media bridging cannot run concurrently). A `console.warn` is emitted so you can detect this in logs.
+- **Web search priority**: When a web search sidecar is active for a turn (non-`runTurn` adapter), the video bridge is skipped — the two cannot run concurrently. A `console.warn` is emitted so you can detect this in logs.
 - **Timeout covers submit + poll**: The `videoTimeoutMs` budget starts before job submission, so the submit call (60 s) and subsequent polling share the same deadline.

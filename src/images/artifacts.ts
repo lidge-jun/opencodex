@@ -562,28 +562,37 @@ export async function downloadVideoToArtifact(
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("video download returned no body");
 
-  // Peek the first chunk for magic-byte sniffing before opening the file.
-  // If anything fails between acquiring the reader and opening the file, cancel + release the reader.
+  // Buffer at least 12 bytes for magic-byte sniffing before opening the file.
+  // A single read() can return fewer bytes; accumulate until we have enough.
   let dest: string | undefined;
   let fh: { close(): Promise<void>; writeFile(data: Uint8Array): Promise<void> } | undefined;
   try {
-    const first = await reader.read();
-    if (first.done || !first.value) {
+    const sniffChunks: Uint8Array[] = [];
+    let sniffLen = 0;
+    while (sniffLen < 12) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      sniffChunks.push(value);
+      sniffLen += value.byteLength;
+    }
+    if (sniffLen === 0) {
       throw new Error("video download returned empty body");
     }
-    const ext = guessVideoExtFromMagic(first.value);
+    const sniffBuf = Buffer.concat(sniffChunks);
+    const ext = guessVideoExtFromMagic(new Uint8Array(sniffBuf));
     const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
     dest = join(dir, name);
     fh = await open(dest, "w", 0o600);
-    // Write first chunk and set up accounting
-    let totalBytes = first.value.byteLength;
+    // Write all buffered chunks and set up accounting
+    let totalBytes = sniffBuf.byteLength;
     if (budget && !chargeVideoBudget(budget, totalBytes)) {
       throw new Error("video download exceeds per-turn budget");
     }
     if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
       throw new Error("video download exceeds size cap");
     }
-    await fh.writeFile(first.value);
+    await fh.writeFile(new Uint8Array(sniffBuf));
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;

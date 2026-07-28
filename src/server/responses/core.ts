@@ -1634,16 +1634,18 @@ export async function handleResponses(
     if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
     parsed.context.tools = bridgeTools;
     // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
+    // Gate on imgPlan — in a video-only turn buildImageTool() was never injected, so rewriting
+    // image_generation/image_gen aliases would add an undeclared tool that strict upstreams reject.
     const tc = parsed.options.toolChoice;
-    if (tc && typeof tc === "object" && "allowedTools" in tc && Array.isArray(tc.allowedTools)) {
+    if (imgPlan && tc && typeof tc === "object" && "allowedTools" in tc && Array.isArray(tc.allowedTools)) {
       const mapped = tc.allowedTools.map(name =>
-        name === "image_generation" || name === "image_gen" || (imgPlan?.toolNames.has(name) ?? false)
+        name === "image_generation" || name === "image_gen" || (imgPlan.toolNames.has(name) ?? false)
           ? IMAGE_GEN_TOOL_NAME
           : name,
       );
       parsed.options.toolChoice = { ...tc, allowedTools: [...new Set(mapped)] };
-    } else if (tc && typeof tc === "object" && "name" in tc && typeof tc.name === "string"
-      && (tc.name === "image_generation" || (imgPlan?.toolNames.has(tc.name) ?? false))) {
+    } else if (imgPlan && tc && typeof tc === "object" && "name" in tc && typeof tc.name === "string"
+      && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
       parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
     }
     const imgResponse = await runWithImageBridge({

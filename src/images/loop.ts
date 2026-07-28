@@ -610,7 +610,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               } else {
                 paidVideoCalls += 1;
                 try {
-                  const videoDeadline = Date.now() + (videoTimeoutMs ?? 300_000);
+                  const videoTimeout = videoTimeoutMs ?? 300_000;
+                  const videoDeadline = Date.now() + videoTimeout;
+                  // Bind submit to the shared deadline so submit + poll fit one budget.
+                  const deadlineSignal = AbortSignal.timeout(videoTimeout);
+                  const linkedDeadline = signal
+                    ? AbortSignal.any([signal, deadlineSignal])
+                    : deadlineSignal;
                   const { requestId } = await submitVideoJob(
                     {
                       prompt: vArgs.prompt, model: videoPlan!.model,
@@ -618,9 +624,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                       ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
                       ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
                     },
-                    videoPlan!.auth, signal,
+                    videoPlan!.auth, linkedDeadline,
                   );
-                  const remainingMs = Math.max(5_000, videoDeadline - Date.now());
+                  const remainingMs = videoDeadline - Date.now();
+                  if (remainingMs <= 0) {
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
+                  } else {
                   const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, signal, remainingMs);
                   let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
                   try {
@@ -638,6 +647,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                     vResult = buildVideoResult(dlPath, vArgs.prompt, videoPlan!.model);
                   } else {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: pollResult.error };
+                  }
                   }
                 } catch (e) {
                   if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
