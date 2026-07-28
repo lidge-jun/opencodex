@@ -480,7 +480,8 @@ export async function runEnforcePrTarget(
     const override = options.compareByBasehead?.[basehead];
     if (override) return override;
     if (basehead.startsWith("main...")) {
-      return { ahead_by: 0, behind_by: 5 };
+      // Default: not the #644 shape (several commits ahead of main).
+      return { ahead_by: 8, behind_by: 0 };
     }
     return { ahead_by: 0, behind_by: 0 };
   }

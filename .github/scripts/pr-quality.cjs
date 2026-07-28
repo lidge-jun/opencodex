@@ -8,13 +8,37 @@ const {
 } = require(path.join(__dirname, "issue-quality.cjs"));
 
 const ANCESTRY_BEHIND_THRESHOLD = 20;
+/** Cap on ahead_by vs main so stale `dev` forks (many commits ahead of main) are not flagged. */
+const ANCESTRY_AHEAD_MAIN_MAX = 5;
 const MIN_SECTION_LEN = 40;
 const MIN_RICH_SECTIONS = 2;
 const UNSTRUCTURED_MIN_LEN = 120;
 const UNSTRUCTURED_MIN_BLOCKS = 2;
 
-function isWrongAncestry({ behindMain, behindBase, threshold = ANCESTRY_BEHIND_THRESHOLD }) {
-  return behindMain === 0 && behindBase >= threshold;
+/**
+ * Exact instruction / checklist lines from `.github/PULL_REQUEST_TEMPLATE.md`.
+ * Untouched templates must not count as substance.
+ */
+const PR_TEMPLATE_BOILERPLATE_LINES = new Set([
+  "explain the user-visible or maintainer-facing change.",
+  "list the commands or checks you ran.",
+  "scope stays focused and avoids unrelated cleanup.",
+  "docs or release notes were updated when needed.",
+  "security-sensitive changes were reviewed for secrets, auth, and unsafe defaults.",
+]);
+
+function isWrongAncestry({
+  behindMain,
+  behindBase,
+  aheadMain = 0,
+  threshold = ANCESTRY_BEHIND_THRESHOLD,
+  aheadMainMax = ANCESTRY_AHEAD_MAIN_MAX,
+}) {
+  return (
+    behindMain === 0 &&
+    behindBase >= threshold &&
+    aheadMain <= aheadMainMax
+  );
 }
 
 function authorHasPushPermission(permission) {
@@ -45,6 +69,29 @@ function countContentBlocks(text) {
   return Math.max(blocks.length, bullets.length);
 }
 
+function normalizeTemplateLine(line) {
+  return line
+    .replace(/^\s*[-*+]\s+/, "")
+    .replace(/^\s*\[[ xX]\]\s+/, "")
+    .replace(/^\s*#{1,6}\s+/, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Drop stock PR template headings, instructions, and checklist lines. */
+function stripPrTemplateBoilerplate(text) {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const normalized = normalizeTemplateLine(line);
+      if (!normalized) return true;
+      if (PR_TEMPLATE_BOILERPLATE_LINES.has(normalized)) return false;
+      if (/^(summary|verification|checklist)$/.test(normalized)) return false;
+      return true;
+    })
+    .join("\n");
+}
+
 function assessPrDescription(body) {
   if (typeof body !== "string" || !body.trim()) {
     return { ok: false, reason: "empty" };
@@ -52,9 +99,10 @@ function assessPrDescription(body) {
   if (hasEscapedNewlines(body)) {
     return { ok: false, reason: "escaped_newlines" };
   }
-  const cleaned = clean(body);
+  const withoutTemplate = stripPrTemplateBoilerplate(body);
+  const cleaned = clean(withoutTemplate);
   if (!cleaned) {
-    const strippedComments = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+    const strippedComments = withoutTemplate.replace(/<!--[\s\S]*?-->/g, "").trim();
     if (!strippedComments) return { ok: false, reason: "empty" };
     if (isPlaceholderOnlyValue(strippedComments)) {
       return { ok: false, reason: "placeholder" };
@@ -82,6 +130,7 @@ function collectPrQualityFailures({
   body,
   behindMain,
   behindBase,
+  aheadMain = 0,
   authorPermission,
   permissionLookupFailed = false,
   ancestryLookupFailed = false,
@@ -96,7 +145,10 @@ function collectPrQualityFailures({
     const skipAncestry =
       ancestryLookupFailed ||
       (!permissionLookupFailed && authorHasPushPermission(authorPermission));
-    if (!skipAncestry && isWrongAncestry({ behindMain, behindBase })) {
+    if (
+      !skipAncestry &&
+      isWrongAncestry({ behindMain, behindBase, aheadMain })
+    ) {
       failures.push({ code: "wrong_ancestry" });
     }
   }
@@ -110,9 +162,11 @@ function collectPrQualityFailures({
 
 module.exports = {
   ANCESTRY_BEHIND_THRESHOLD,
+  ANCESTRY_AHEAD_MAIN_MAX,
   isWrongAncestry,
   authorHasPushPermission,
   assessPrDescription,
   collectPrQualityFailures,
   hasEscapedNewlines,
+  stripPrTemplateBoilerplate,
 };

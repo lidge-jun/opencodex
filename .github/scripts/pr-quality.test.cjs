@@ -11,21 +11,28 @@ const {
 } = require("./pr-quality.cjs");
 
 describe("isWrongAncestry", () => {
-  it("flags #644-shaped compares (0 behind main, far behind base)", () => {
+  it("flags #644-shaped compares (0 behind main, far behind base, few ahead of main)", () => {
     assert.equal(
-      isWrongAncestry({ behindMain: 0, behindBase: 44 }),
+      isWrongAncestry({ behindMain: 0, behindBase: 44, aheadMain: 1 }),
       true,
     );
   });
 
   it("uses threshold 20 by default", () => {
     assert.equal(ANCESTRY_BEHIND_THRESHOLD, 20);
-    assert.equal(isWrongAncestry({ behindMain: 0, behindBase: 20 }), true);
-    assert.equal(isWrongAncestry({ behindMain: 0, behindBase: 19 }), false);
+    assert.equal(isWrongAncestry({ behindMain: 0, behindBase: 20, aheadMain: 1 }), true);
+    assert.equal(isWrongAncestry({ behindMain: 0, behindBase: 19, aheadMain: 1 }), false);
   });
 
   it("passes when head is behind main (not sitting on main tip)", () => {
-    assert.equal(isWrongAncestry({ behindMain: 1, behindBase: 44 }), false);
+    assert.equal(isWrongAncestry({ behindMain: 1, behindBase: 44, aheadMain: 1 }), false);
+  });
+
+  it("passes stale dev-based branches that are many commits ahead of main", () => {
+    assert.equal(
+      isWrongAncestry({ behindMain: 0, behindBase: 44, aheadMain: 50 }),
+      false,
+    );
   });
 });
 
@@ -63,6 +70,27 @@ describe("assessPrDescription", () => {
 
   it("rejects thin real-newline bodies", () => {
     assert.equal(assessPrDescription("fix stuff").reason, "thin");
+  });
+
+  it("rejects an untouched GitHub PR template as empty/thin", () => {
+    const body = [
+      "## Summary",
+      "",
+      "- Explain the user-visible or maintainer-facing change.",
+      "",
+      "## Verification",
+      "",
+      "- List the commands or checks you ran.",
+      "",
+      "## Checklist",
+      "",
+      "- [ ] Scope stays focused and avoids unrelated cleanup.",
+      "- [ ] Docs or release notes were updated when needed.",
+      "- [ ] Security-sensitive changes were reviewed for secrets, auth, and unsafe defaults.",
+    ].join("\n");
+    const result = assessPrDescription(body);
+    assert.equal(result.ok, false);
+    assert.ok(result.reason === "empty" || result.reason === "thin");
   });
 
   it("accepts two rich markdown sections", () => {
@@ -130,6 +158,7 @@ describe("collectPrQualityFailures", () => {
       ].join("\n"),
       behindMain: 0,
       behindBase: 44,
+      aheadMain: 1,
       authorPermission: "read",
     });
     assert.deepEqual(
@@ -145,6 +174,7 @@ describe("collectPrQualityFailures", () => {
       body: "",
       behindMain: 0,
       behindBase: 44,
+      aheadMain: 1,
       authorPermission: "write",
     });
     assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
@@ -165,10 +195,31 @@ describe("collectPrQualityFailures", () => {
       ].join("\n"),
       behindMain: 0,
       behindBase: 44,
+      aheadMain: 1,
       authorPermission: null,
       permissionLookupFailed: true,
     });
     assert.ok(failures.some((f) => f.code === "wrong_ancestry"));
+  });
+
+  it("does not flag stale dev-based branches that are far ahead of main", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "dev",
+      allowedBases: allowed,
+      body: [
+        "## Summary",
+        "This change updates the Windows tray launcher so it resolves CODEX_HOME through the shared helper instead of a hardcoded path.",
+        "",
+        "## Test plan",
+        "- Launch the tray app after setting CODEX_HOME",
+        "- Confirm the listener and launcher use the same workspace root",
+      ].join("\n"),
+      behindMain: 0,
+      behindBase: 44,
+      aheadMain: 50,
+      authorPermission: "read",
+    });
+    assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
   });
 
   it("skips ancestry when compare lookup failed (cannot evaluate)", () => {
@@ -185,6 +236,7 @@ describe("collectPrQualityFailures", () => {
       ].join("\n"),
       behindMain: 0,
       behindBase: 0,
+      aheadMain: 0,
       authorPermission: "read",
       ancestryLookupFailed: true,
     });

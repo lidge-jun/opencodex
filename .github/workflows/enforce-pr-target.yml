@@ -277,6 +277,7 @@ jobs:
 
             let behindMain = 0;
             let behindBase = 0;
+            let aheadMain = 0;
             let ancestryLookupFailed = false;
             const baseAllowed = ALLOWED_BASES.includes(pr.base.ref);
 
@@ -290,6 +291,7 @@ jobs:
                     basehead: `main...${headSha}`
                   });
                 behindMain = mainCompare.behind_by;
+                aheadMain = mainCompare.ahead_by;
 
                 const { data: baseCompare } =
                   await github.rest.repos.compareCommitsWithBasehead({
@@ -312,6 +314,7 @@ jobs:
               body: pr.body,
               behindMain,
               behindBase,
+              aheadMain,
               authorPermission,
               permissionLookupFailed,
               ancestryLookupFailed
@@ -346,10 +349,10 @@ jobs:
                 state.titlePrefixedByBot &&
                 pr.title.startsWith(TITLE_PREFIX);
 
+              // Claim title ownership before adding a prefix. Do not clear
+              // ownership until strip succeeds — a failed update must retry.
               if (willPrefixTitle) {
                 state.titlePrefixedByBot = true;
-              } else if (shouldStripTitlePrefix) {
-                state.titlePrefixedByBot = false;
               }
 
               let draftConversionFailed = false;
@@ -380,12 +383,35 @@ jobs:
                   pull_number,
                   title: pr.title.slice(TITLE_PREFIX.length)
                 });
+                state.titlePrefixedByBot = false;
+                await upsertComment(
+                  [
+                    COMMENT_MARKER,
+                    stateMarker(state),
+                    "",
+                    ...failureSections,
+                    "",
+                    "Stale title prefix removed; continuing…"
+                  ].join("\n")
+                );
               }
 
               if (!pr.draft) {
+                // Claim draft ownership before the mutation so a successful
+                // convert followed by a failed comment still restores later.
+                state.autoDraftedByBot = true;
+                await upsertComment(
+                  [
+                    COMMENT_MARKER,
+                    stateMarker(state),
+                    "",
+                    ...failureSections,
+                    "",
+                    "Draft conversion pending…"
+                  ].join("\n")
+                );
                 try {
                   await convertToDraft();
-                  state.autoDraftedByBot = true;
                   await upsertComment(
                     [
                       COMMENT_MARKER,

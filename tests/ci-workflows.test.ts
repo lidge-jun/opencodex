@@ -805,7 +805,7 @@ describe("GitHub Actions hardening", () => {
 
     const HEAD_SHA = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
     const ANCESTRY_FAIL_COMPARES = {
-      [`main...${HEAD_SHA}`]: { ahead_by: 0, behind_by: 0 },
+      [`main...${HEAD_SHA}`]: { ahead_by: 1, behind_by: 0 },
       [`dev...${HEAD_SHA}`]: { ahead_by: 0, behind_by: 44 },
     } as const;
 
@@ -819,6 +819,7 @@ describe("GitHub Actions hardening", () => {
       expect(callsTo(result, "pulls.update")).toEqual([]);
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "issues.createComment",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -896,6 +897,7 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(result)).toEqual(readsWrongBase([
           "issues.createComment",
           "pulls.update",
+          "issues.updateComment",
           "graphql",
           "issues.updateComment",
           "issues.updateComment",
@@ -943,6 +945,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.updateComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -976,12 +979,13 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
       });
 
-      // Pending ownership comment first, then title/draft, then checkpoints so
-      // a mid-run crash still records ownership and autoDraftedByBot only after
-      // convertToDraft succeeds (#626 / Codex review on #631).
+      // Pending ownership first, then title prefix, then claim autoDraftedByBot and
+      // checkpoint before convertToDraft so a successful convert followed by a
+      // failed comment still restores later.
       expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -1109,6 +1113,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(wentWrong)).toEqual(readsWrongBase([
         "issues.createComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -1200,6 +1205,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.updateComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -1376,6 +1382,7 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(wrong)).toEqual(readsWrongBase([
           "issues.updateComment",
           "pulls.update",
+          "issues.updateComment",
           "graphql",
           "issues.updateComment",
           "issues.updateComment",
@@ -1424,18 +1431,20 @@ describe("GitHub Actions hardening", () => {
     });
 
     test("ownership comment is checkpointed before mutations and finalized after", async () => {
-      // Pending ownership is written before title/draft so a crash mid-mutation
-      // still records what the bot owns. autoDraftedByBot is only true in the
-      // final body after convertToDraft succeeds (#626 / #631).
+      // Ownership is written before title/draft. autoDraftedByBot is claimed and
+      // checkpointed before convertToDraft so a successful convert followed by a
+      // failed comment still restores later.
       const result = await run({ pr: { base: { ref: "main" }, draft: false } });
       const methods = methodsOf(result);
       const pending = methods.indexOf("issues.createComment");
       const title = methods.indexOf("pulls.update");
+      const draftClaim = methods.indexOf("issues.updateComment");
       const draft = methods.indexOf("graphql");
       const finalUpdate = methods.lastIndexOf("issues.updateComment");
       expect(pending).toBeGreaterThan(-1);
       expect(pending).toBeLessThan(title);
-      expect(title).toBeLessThan(draft);
+      expect(title).toBeLessThan(draftClaim);
+      expect(draftClaim).toBeLessThan(draft);
       expect(draft).toBeLessThan(finalUpdate);
       expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
     });
@@ -1454,6 +1463,7 @@ describe("GitHub Actions hardening", () => {
       expect(callsTo(result, "pulls.update")).toEqual([]);
       expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -1516,6 +1526,7 @@ describe("GitHub Actions hardening", () => {
 
       expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
+        "issues.updateComment",
         "graphql",
         "issues.updateComment",
         "issues.updateComment",
@@ -1718,6 +1729,7 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(result)).toEqual(readsWrongBase([
           "issues.createComment",
           "pulls.update",
+          "issues.updateComment",
           "graphql",
           "issues.updateComment",
         ]));
