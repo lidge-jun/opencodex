@@ -603,12 +603,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 fulfilled.push({ call, result: vResult, args: pArgs });
                 continue;
               }
-              paidVideoCalls += 1;
               const vArgs = parseVideoCallArgs(call.args);
               let vResult;
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
               } else {
+                paidVideoCalls += 1;
                 try {
                   const { requestId } = await submitVideoJob(
                     {
@@ -650,11 +650,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               fulfilled.push({ call, result: vResult, args: vParsedArgs });
             } else {
               yield { type: "heartbeat" };
+              if (!plan) {
+                fulfilled.push({ call, result: { ok: false, model: "", prompt: "", files: [], count: 0, error: "image bridge not configured" }, args: {} });
+                continue;
+              }
               let result: Awaited<ReturnType<typeof fulfillImageCall>>;
               if (paidImageCalls >= MAX_IMAGE_CALLS_PER_TURN) {
                 result = {
                   ok: false,
-                  model: plan!.model,
+                  model: plan.model,
                   prompt: "",
                   files: [],
                   count: 0,
@@ -664,7 +668,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 paidImageCalls += 1;
                 result = await fulfillImageCall(
                   { id: call.id, name: call.name, arguments: call.args },
-                  plan!, budget, signal,
+                  plan, budget, signal,
                 );
               }
               if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");

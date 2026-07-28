@@ -116,7 +116,7 @@ export async function pollVideoJob(
   const timeout = AbortSignal.timeout(POLL_TIMEOUT_MS);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-  const resp = await fetch(`${auth.baseUrl}/videos/${requestId}`, {
+  const resp = await fetch(`${auth.baseUrl}/videos/${encodeURIComponent(requestId)}`, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${auth.token}`,
