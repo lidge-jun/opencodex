@@ -460,6 +460,16 @@ export const ko: Record<TKey, string> = {
   "sub.moveUp": "{m} 위로 이동",
   "sub.moveDown": "{m} 아래로 이동",
   "sub.removeAria": "{m} 삭제",
+  "sub.workspace.allModels": "모든 모델",
+  "sub.workspace.selector": "공개 셀렉터",
+  "sub.workspace.priority": "우선순위",
+  "sub.workspace.notFeatured": "추천되지 않음",
+  "sub.workspace.addToFeatured": "{m}을(를) 추천에 추가",
+  "sub.workspace.removeFromFeatured": "{m}을(를) 추천에서 제거",
+  "sub.workspace.featuredFull": "추천 목록이 가득 찼습니다 (최대 5개)",
+  "sub.workspace.selectModel": "모델 선택",
+  "sub.workspace.selectModelDesc": "목록에서 모델을 선택하여 세부 정보를 확인하고 spawn_agent에 추천하세요.",
+  "sub.workspace.mainAria": "서브에이전트 모델 세부 정보",
 
   // logs
   "logs.title": "요청 로그",
@@ -600,6 +610,8 @@ export const ko: Record<TKey, string> = {
   "usage.section.models": "모델",
   "usage.section.providers": "프로바이더",
   "usage.section.coverage": "커버리지 상세",
+  "usage.workspace.sections": "사용량 섹션",
+  "usage.workspace.report": "사용량 보고서",
   "usage.coverage.measured": "측정됨",
   "usage.coverage.reported": "제공자 보고",
   "usage.coverage.estimated": "추정",
@@ -1306,6 +1318,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.addIdPlaceholder": "codex-work, codex-alt, team…",
   "codexAuth.resetCreditsAria": "리셋 크레딧 {count}개",
   "claude.pageTitle": "Claude Code",
+  "claude.workspace.settings": "설정",
 
   // Combos workspace
   "cws.loading": "콤보 불러오는 중…",

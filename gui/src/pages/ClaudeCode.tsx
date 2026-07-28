@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Notice } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { modelLabel } from "../model-display";
@@ -26,6 +26,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [selectedSection, setSelectedSection] = useState("settings");
 
   const load = useCallback(async () => {
     try {
@@ -69,7 +70,9 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   }, [load]);
 
   const modelOptions = useMemo(() => {
-    const options = (state?.available ?? []).map(m => ({ value: m, label: String(modelLabel(m)) }));
+    // modelLabel returns ReactNode (icons for the 5.6 trio) — pass through as Select labels.
+    // String(modelLabel(...)) produced "[object Object]" for those first entries.
+    const options = (state?.available ?? []).map(m => ({ value: m, label: modelLabel(m) }));
     return [{ value: "", label: t("claude.smallFastModelUnsetOption") }, ...options];
   }, [state?.available, t]);
 
@@ -124,21 +127,74 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   if (loading) return <div className="muted" style={{ padding: 8 }}>{t("claude.loading")}</div>;
   if (!state) return <Notice tone="err">{status || t("claude.loadFail")}</Notice>;
 
+  const sections: Array<{ id: string; label: string; body: ReactNode }> = [
+    {
+      id: "settings",
+      label: t("claude.workspace.settings"),
+      body: (
+        <ClaudeCodeSettingsCard
+          state={state}
+          autoCompactOptions={autoCompactOptions}
+          availableModels={state.available ?? []}
+          onStateChange={setState}
+        />
+      ),
+    },
+    {
+      id: "quickstart",
+      label: t("claude.quickstart"),
+      body: <ClaudeCodeQuickstartSection manualEnv={buildManualEnv(state)} />,
+    },
+    {
+      id: "smallFast",
+      label: t("claude.smallFastModel"),
+      body: (
+        <SmallFastModelSetting
+          value={state.smallFastModel}
+          tierHaikuModel={state.tierModels?.haiku}
+          options={modelOptions}
+          onChange={smallFastModel => setState({ ...state, smallFastModel })}
+        />
+      ),
+    },
+    {
+      id: "modelMap",
+      label: t("claude.modelMap"),
+      body: <ClaudeCodeModelMapSection rows={rows} onRowsChange={setRows} onSave={() => { void save(); }} />,
+    },
+    {
+      id: "aliases",
+      label: t("claude.aliases"),
+      body: <ClaudeCodeAliasesSection aliases={state.aliases} />,
+    },
+  ];
+  const selected = sections.find(s => s.id === selectedSection) ?? sections[0]!;
+
   return (
-    <>
+    <div className="claudecode-workspace-shell">
       <div className="page-head"><h2>{t("claude.pageTitle")}</h2></div>
       <p className="page-sub">{t("claude.subtitle")}</p>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
-      <ClaudeCodeSettingsCard state={state} autoCompactOptions={autoCompactOptions} onStateChange={setState} />
-      <ClaudeCodeQuickstartSection manualEnv={buildManualEnv(state)} />
-      <SmallFastModelSetting
-        value={state.smallFastModel}
-        tierHaikuModel={state.tierModels?.haiku}
-        options={modelOptions}
-        onChange={smallFastModel => setState({ ...state, smallFastModel })}
-      />
-      <ClaudeCodeModelMapSection rows={rows} onRowsChange={setRows} onSave={() => { void save(); }} />
-      <ClaudeCodeAliasesSection aliases={state.aliases} />
-    </>
+      <div className="claudecode-workspace-root">
+        <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
+          <div className="claudecode-workspace-rail-list">
+            {sections.map(s => (
+              <button
+                key={s.id}
+                type="button"
+                className={`claudecode-workspace-rail-row${selectedSection === s.id ? " claudecode-workspace-rail-row--selected" : ""}`}
+                onClick={() => setSelectedSection(s.id)}
+                aria-current={selectedSection === s.id ? "true" : undefined}
+              >
+                <span className="claudecode-workspace-rail-name">{s.label}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+        <section className="claudecode-workspace-main" aria-label={selected.label}>
+          <div className="ccw-body">{selected.body}</div>
+        </section>
+      </div>
+    </div>
   );
 }

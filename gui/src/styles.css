@@ -16,6 +16,9 @@
 @import "./styles-combos-workspace.css";
 @import "./styles-models-workspace.css";
 @import "./styles-dashboard-workspace.css";
+@import "./styles-subagents-workspace.css";
+@import "./styles-usage-workspace.css";
+@import "./styles-claudecode-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -1287,8 +1290,8 @@ button.prov-account-row.active { cursor: default; }
 .claude-profile-bar {
   position: sticky; top: 12px; z-index: 8; display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin: 18px 0 16px; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--glass-panel); backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur); box-shadow: var(--shadow-sm);
+  border-radius: var(--radius); background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .claude-dirty { color: var(--muted); font-size: 12.5px; font-weight: 550; }
 .claude-dirty.active { color: var(--amber); }
@@ -1315,8 +1318,16 @@ button.prov-account-row.active { cursor: default; }
 .ocx-group-name { font-size: 14px; font-weight: 600; }
 .ocx-group-count { flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
 .ocx-chevron { flex-shrink: 0; align-self: center; color: var(--muted); transition: transform var(--motion-fast); }
+.claude-model-names { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 1px; }
+.claude-model-names strong { display: block; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.claude-model-names code {
+  display: block; overflow: hidden; color: var(--text); font-family: var(--font-code);
+  font-weight: var(--weight-semibold); font-size: var(--text-control); letter-spacing: 0;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 .claude-lane-default {
-  min-width: 0; overflow: hidden; color: var(--faint); font-size: 11px;
+  min-width: 0; overflow: hidden; color: var(--faint);
+  font-family: var(--font-code); font-size: 11px; font-weight: var(--weight-semibold);
   text-overflow: ellipsis; white-space: nowrap;
 }
 .claude-default-radio { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; cursor: pointer; }
@@ -1325,7 +1336,7 @@ button.prov-account-row.active { cursor: default; }
 .claude-lane-models { display: flex; flex-direction: column; gap: 9px; min-height: 104px; padding: 10px; }
 /* Lane density controls: a filter that only appears once a lane is long enough to need one,
    and a pager for the tail. Same idiom as the Models page so the two dense surfaces match. */
-.claude-lane-search { width: calc(100% - 20px); margin: 0 10px; min-height: 32px; font-size: 12.5px; }
+.claude-lane-search { width: calc(100% - 20px); margin: 10px 10px 0; min-height: 32px; font-size: 12.5px; }
 .claude-lane-more { align-self: stretch; justify-content: center; }
 
 /* Grok page: read-only status for the managed fence in ~/.grok/config.toml. */
@@ -1359,9 +1370,6 @@ button.prov-account-row.active { cursor: default; }
   border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left;
 }
 .claude-model-summary:hover { background: var(--hover); }
-.claude-model-names { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 1px; }
-.claude-model-names strong { display: block; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.claude-model-names code { display: block; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .claude-model-context { flex-shrink: 0; color: var(--muted); font-size: 11px; }
 .claude-model-context-unknown { color: var(--faint); font-style: italic; }
 .claude-row-default { flex-shrink: 0; color: var(--green); font-size: 10.5px; font-weight: 600; }

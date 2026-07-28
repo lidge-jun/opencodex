@@ -1,0 +1,168 @@
+/* ============================================================================
+   claudecode-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: claudecode-workspace-  |  widgets: ccw-
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.claudecode-workspace-shell) {
+  max-width: 1200px;
+}
+
+.claudecode-workspace-shell {
+  width: 100%;
+  min-width: 0;
+}
+
+.claudecode-workspace-root {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+}
+
+.claude-effective-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 16px 12px;
+  margin-top: -4px;
+  font-size: var(--text-caption);
+  line-height: 1.45;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.claude-effective-auth.warn {
+  color: var(--amber);
+}
+
+.claude-effective-auth-label {
+  font-weight: var(--weight-semibold);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10.5px;
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.claudecode-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-3);
+  min-width: 0;
+}
+
+.claudecode-workspace-rail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.claudecode-workspace-rail-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.claudecode-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.claudecode-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  width: 100%;
+  min-height: 46px;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+}
+
+.claudecode-workspace-rail-row:hover {
+  background: var(--raised);
+}
+
+.claudecode-workspace-rail-row--selected {
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.claudecode-workspace-rail-name {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claudecode-workspace-rail-meta {
+  font-size: var(--text-caption);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.claudecode-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.ccw-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.ccw-detail-title {
+  font-size: var(--text-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  margin: 0;
+}
+
+.ccw-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .claudecode-workspace-root {
+    grid-template-columns: 1fr;
+  }
+
+  .claudecode-workspace-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+  }
+}

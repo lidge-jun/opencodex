@@ -99,16 +99,17 @@ async function mount() {
   });
 }
 
-function modelRow(id: string): HTMLButtonElement {
-  const row = Array.from(container.querySelectorAll("button")).find(
-    (b) => b.hasAttribute("aria-pressed") && (b.textContent ?? "").includes(id),
+function addToggle(id: string): HTMLButtonElement {
+  const row = Array.from(container.querySelectorAll("button")).find((b) =>
+    (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to featured`),
   );
-  if (!row) throw new Error(`model row not found: ${id}`);
+  if (!row) throw new Error(`add toggle not found: ${id}`);
   return row as unknown as HTMLButtonElement;
 }
 
+/** Featured-list remove only (rail also has "Remove … from featured"). */
 function removeButtons(): HTMLButtonElement[] {
-  return Array.from(container.querySelectorAll("button")).filter((b) =>
+  return Array.from(container.querySelectorAll(".swi-featured-actions button")).filter((b) =>
     /^Remove /.test(b.getAttribute("aria-label") ?? ""),
   ) as unknown as HTMLButtonElement[];
 }
@@ -131,7 +132,7 @@ test("blocks edits while save is busy and reconciles chosen from applied", async
   await mount();
 
   expect(removeButtons().length).toBe(2);
-  expect(modelRow("a-2").getAttribute("aria-pressed")).toBe("true");
+  expect(container.textContent).toContain("2/5");
 
   await act(async () => {
     saveButton().click();
@@ -140,20 +141,19 @@ test("blocks edits while save is busy and reconciles chosen from applied", async
   expect(putCount).toBe(1);
   expect(saveButton().disabled).toBe(true);
   expect(removeButtons().every((b) => b.disabled)).toBe(true);
-  expect(modelRow("a-3").disabled).toBe(true);
+  expect(addToggle("a-3").disabled).toBe(true);
   expect(moveUp("a-2").disabled).toBe(true);
 
   // Force clicks past disabled attributes — state guards must still no-op.
   await act(async () => {
-    modelRow("a-3").dispatchEvent(new (globalThis as { window: Window }).window.MouseEvent("click", { bubbles: true }));
+    addToggle("a-3").dispatchEvent(new (globalThis as { window: Window }).window.MouseEvent("click", { bubbles: true }));
     removeButtons()[1]!.dispatchEvent(new (globalThis as { window: Window }).window.MouseEvent("click", { bubbles: true }));
     moveUp("a-2").dispatchEvent(new (globalThis as { window: Window }).window.MouseEvent("click", { bubbles: true }));
   });
 
   // Featured list unchanged while the gated PUT is outstanding.
   expect(removeButtons().length).toBe(2);
-  expect(modelRow("a-2").getAttribute("aria-pressed")).toBe("true");
-  expect(modelRow("a-3").getAttribute("aria-pressed")).toBe("false");
+  expect(container.textContent).toContain("2/5");
   expect(putCount).toBe(1);
 
   await act(async () => {
@@ -169,7 +169,6 @@ test("blocks edits while save is busy and reconciles chosen from applied", async
   // Server applied only a-1 — local chosen must reconcile.
   expect(removeButtons().length).toBe(1);
   expect(removeButtons()[0]!.getAttribute("aria-label")).toBe("Remove a-1");
-  expect(modelRow("a-2").getAttribute("aria-pressed")).toBe("false");
   expect(saveButton().disabled).toBe(false);
   expect(container.textContent).toContain("1/5");
 });
