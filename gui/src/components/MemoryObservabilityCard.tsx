@@ -237,7 +237,14 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         : controller.signal;
       void fetch(`${apiBase}/healthz`, { cache: "no-store", signal })
         .then(async (res) => {
-          if (!res.ok || cancelled) return;
+          if (cancelled) return;
+          if (!res.ok) {
+            if (Date.now() - started >= RECONNECT_GIVE_UP_MS) {
+              setRestartPhase("error");
+              setRestartError(t("dash.mem.restartFailed"));
+            }
+            return;
+          }
           let replaced = restartFromPid == null;
           if (restartFromPid != null) {
             try {

@@ -1966,6 +1966,12 @@ describe("doctor-gui-if-changed", () => {
     expect(guiPathsChanged([])).toBe(false);
   });
 
+  test("looksLikeDoctorInfraFailure detects registry/network outages", async () => {
+    const { looksLikeDoctorInfraFailure } = await import("../scripts/doctor-gui-if-changed");
+    expect(looksLikeDoctorInfraFailure("npm ERR! network getaddrinfo ENOTFOUND registry.npmjs.org")).toBe(true);
+    expect(looksLikeDoctorInfraFailure("All 2 issues\nBugs > 1 errors")).toBe(false);
+  });
+
   test("DRY_RUN prints the run/skip decision without spawning the doctor", () => {
     const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
       env: { ...process.env, DOCTOR_DRY_RUN: "1", DOCTOR_FILES: "gui/src/App.tsx\nscripts/x.ts" },
@@ -1992,13 +1998,27 @@ describe("doctor-gui-if-changed", () => {
     expect(run.stderr.toString()).toContain("skipping scan");
   });
 
+  test("soft-skips when doctor exits nonzero due to a registry/network failure", () => {
+    // Simulate `bun run doctor` starting, then npx failing offline: numeric status
+    // plus registry noise in stderr — must not gate the push.
+    // cwd for DOCTOR_CMD is gui/, so reach fixtures via ../scripts/...
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-offline-exit.ts",
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stderr.toString()).toContain("skipping scan");
+  });
+
   test("propagates a non-zero doctor exit so findings gate the push", () => {
     const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
       env: {
         ...process.env,
         DOCTOR_FILES: "gui/src/App.tsx",
-        // `bun` exits 1 when asked to run a missing script name.
-        DOCTOR_CMD: "bun run definitely-not-a-doctor-script",
+        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-findings-exit.ts",
       },
     });
     expect(run.exitCode).not.toBe(0);

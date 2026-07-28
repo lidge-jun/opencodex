@@ -18,6 +18,12 @@ export function guiPathsChanged(files: string[]): boolean {
   return files.some(f => f === "gui" || f.startsWith("gui/"));
 }
 
+/** True when stderr/stdout looks like a registry/network failure rather than findings. */
+export function looksLikeDoctorInfraFailure(output: string): boolean {
+  return /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo|network|registry|npm ERR|fetch failed|ERR_INVALID_URL|certificate|SSL|TLS|offline|could not resolve|unable to resolve|socket hang up|connect ECONN|connect ENOTFOUND/i
+    .test(output);
+}
+
 if (import.meta.main) {
   const repoRoot = resolve(import.meta.dirname, "..");
   const guiDir = join(repoRoot, "gui");
@@ -73,21 +79,42 @@ if (import.meta.main) {
     ? process.env.DOCTOR_CMD.split(" ")
     : ["bun", "run", "doctor"];
   try {
-    execFileSync(cmd!, args, {
+    // Pipe stdout/stderr so we can distinguish findings from offline/registry
+    // failures, then replay them so the developer still sees the doctor output.
+    const out = execFileSync(cmd!, args, {
       cwd: guiDir,
-      stdio: "inherit",
+      encoding: "utf8",
+      stdio: ["inherit", "pipe", "pipe"],
       env: { ...process.env, npm_config_yes: "true" },
     });
+    if (out) process.stdout.write(out);
   } catch (err) {
     const status = typeof err === "object" && err !== null && "status" in err
       ? (err as { status?: unknown }).status
       : undefined;
-    // Doctor ran and returned a non-zero status (findings or engine error) — gate the push.
-    if (typeof status === "number") {
-      process.exit(status === 0 ? 1 : status);
+    const stdout = typeof err === "object" && err !== null && "stdout" in err
+      ? String((err as { stdout?: unknown }).stdout ?? "")
+      : "";
+    const stderr = typeof err === "object" && err !== null && "stderr" in err
+      ? String((err as { stderr?: unknown }).stderr ?? "")
+      : "";
+    const combined = `${stdout}\n${stderr}`;
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+
+    // Spawn failed (missing binary) — do not brick the push on infra.
+    if (typeof status !== "number") {
+      console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
+      process.exit(0);
     }
-    // Spawn failed (missing binary / offline npx) — do not brick the push on infra.
-    console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
-    process.exit(0);
+
+    // Doctor started but npx/registry failed — same soft-skip contract.
+    if (looksLikeDoctorInfraFailure(combined)) {
+      console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
+      process.exit(0);
+    }
+
+    // Real findings (or other doctor/engine errors) gate the push.
+    process.exit(status === 0 ? 1 : status);
   }
 }
