@@ -505,22 +505,26 @@ const HOSTED_IMAGE_GENERATION_TOOL = "image_generation";
 const IMAGE_GEN_DOTTED_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
 const IMAGE_GEN_WIRE_PREFIX = `${IMAGE_GEN_NAMESPACE}__`;
 
+/** Remove a supported client prefix before constructing the canonical image-gen wire alias. */
 function imageGenLocalName(name: string): string {
   if (name.startsWith(IMAGE_GEN_DOTTED_PREFIX)) return name.slice(IMAGE_GEN_DOTTED_PREFIX.length);
   if (name.startsWith(IMAGE_GEN_WIRE_PREFIX)) return name.slice(IMAGE_GEN_WIRE_PREFIX.length);
   return name;
 }
 
+/** Build the flat public-Responses name used only on the upstream wire. */
 function imageGenWireName(name: string): string {
   return namespacedToolName(IMAGE_GEN_NAMESPACE, imageGenLocalName(name));
 }
 
+/** Match client image-gen declarations across namespace, legacy dotted, and canonical wire forms. */
 function isImageGenClientName(name: string): boolean {
   return name === IMAGE_GEN_NAMESPACE
     || name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
     || name.startsWith(IMAGE_GEN_WIRE_PREFIX);
 }
 
+/** Identify declarations that should activate image-gen request normalization. */
 function declaresImageGenClientTool(tool: unknown): boolean {
   if (!isPlainObject(tool) || typeof tool.name !== "string") return false;
   if (tool.type === "namespace") return tool.name === IMAGE_GEN_NAMESPACE;
@@ -563,6 +567,7 @@ function flattenImageGenNamespace(tool: unknown): Record<string, unknown>[] | un
   });
 }
 
+/** Convert a legacy dotted function declaration while preserving all other function metadata. */
 function normalizeFlatImageGenFunction(tool: unknown): unknown {
   if (
     !isPlainObject(tool)
@@ -573,6 +578,7 @@ function normalizeFlatImageGenFunction(tool: unknown): unknown {
   return { ...tool, name: imageGenWireName(tool.name) };
 }
 
+/** Return the image-gen function name used for stable cross-container deduplication. */
 function imageGenFunctionName(tool: unknown): string | undefined {
   if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
     return undefined;
@@ -580,6 +586,7 @@ function imageGenFunctionName(tool: unknown): string | undefined {
   return isImageGenClientName(tool.name) ? tool.name : undefined;
 }
 
+/** True only when a declaration can yield a callable upstream-safe image-gen function alias. */
 function declaresUsableImageGenAlias(tool: unknown): boolean {
   if (flattenImageGenNamespace(tool)) return true;
   if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
@@ -592,6 +599,7 @@ function declaresUsableImageGenAlias(tool: unknown): boolean {
     && tool.name.length > IMAGE_GEN_WIRE_PREFIX.length;
 }
 
+/** Identify replayed image-gen calls that require upstream wire encoding. */
 function declaresImageGenFunctionCall(item: unknown): boolean {
   if (!isPlainObject(item) || item.type !== "function_call" || typeof item.name !== "string") {
     return false;
@@ -599,6 +607,7 @@ function declaresImageGenFunctionCall(item: unknown): boolean {
   return item.namespace === IMAGE_GEN_NAMESPACE || isImageGenClientName(item.name);
 }
 
+/** Encode native or legacy replay calls to the same flat name used by tool declarations. */
 function normalizeImageGenFunctionCall(item: unknown): unknown {
   if (!declaresImageGenFunctionCall(item) || !isPlainObject(item) || typeof item.name !== "string") {
     return item;

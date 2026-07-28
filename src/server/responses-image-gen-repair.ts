@@ -10,6 +10,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Collect top-level and Responses Lite tool containers without altering their order. */
 function declaredToolGroups(body: unknown): unknown[][] {
   if (!isPlainObject(body)) return [];
   const groups: unknown[][] = [];
@@ -58,6 +59,7 @@ export function imageGenToolCallAliases(
   return aliases;
 }
 
+/** Recursively restore only exact image-gen function-call aliases in a parsed Responses payload. */
 function restoreImageGenCalls(
   value: unknown,
   aliases: ReadonlyMap<string, NamespacedTool>,
@@ -107,6 +109,7 @@ export function restoreImageGenCallsInJson(
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 
+/** Split one complete SSE event block while retaining its original blank-line delimiter. */
 function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
   const match = buffer.match(/\r?\n\r?\n/);
   if (!match || match.index === undefined) return null;
@@ -117,6 +120,7 @@ function nextSseBlock(buffer: string): { block: string; delimiter: string; rest:
   };
 }
 
+/** Join all data lines from one SSE event according to the event-stream field rules. */
 function sseDataPayload(block: string): string | null {
   const data: string[] = [];
   for (const line of block.split(/\r?\n/)) {
@@ -127,6 +131,7 @@ function sseDataPayload(block: string): string | null {
   return data.length > 0 ? data.join("\n") : null;
 }
 
+/** Replace an SSE event's data field while preserving non-data fields and newline style. */
 function replaceSseDataPayload(block: string, payload: string): string {
   const newline = block.includes("\r\n") ? "\r\n" : "\n";
   const lines = block.split(/\r?\n/);
