@@ -31,6 +31,7 @@ describe("identity neutralization — central helper", () => {
   test("replaces the Codex CLI 0.145 'an agent' identity variant (#622)", () => {
     expect(neutralizeIdentity(CODEX_GPT5_IDENTITY_LINE_AGENT)).toBe(NEUTRAL_IDENTITY_LINE);
     expect(neutralizeIdentity("You are Codex, an agent based on GPT-5.4.")).toBe(NEUTRAL_IDENTITY_LINE);
+    expect(neutralizeIdentity("You are Codex, an agent based on GPT-5.4.1.")).toBe(NEUTRAL_IDENTITY_LINE);
   });
 
   test("never emits the opencodex proxy identity", () => {
