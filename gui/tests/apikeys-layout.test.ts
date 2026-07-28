@@ -71,7 +71,7 @@ test("ApiKeys stacked layout keeps endpoint, generate, keys table, and usage pan
 });
 
 test("retired apikeys workspace i18n keys stay removed from every locale", async () => {
-  const locales = ["en", "de", "ja", "ko", "ru", "zh"] as const;
+  const locales = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW"] as const;
   for (const locale of locales) {
     const dict = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
     expect(dict).not.toContain('"api.workspace.');

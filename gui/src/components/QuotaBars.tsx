@@ -102,6 +102,8 @@ function bcp47(locale: Locale): string {
       return "ko-KR";
     case "zh":
       return "zh-CN";
+    case "zh-TW":
+      return "zh-TW";
     case "ru":
       return "ru-RU";
     case "ja":
