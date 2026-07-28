@@ -197,6 +197,7 @@ describe("codex routing", () => {
     expect(classifyCodexUpstreamOutcome(401)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(403)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(429)).toBe("quota");
+    expect(classifyCodexUpstreamOutcome(402)).toBe("quota");
     expect(classifyCodexUpstreamOutcome(422)).toBe("caller");
     expect(classifyCodexUpstreamOutcome(503)).toBe("transient");
     expect(classifyCodexUpstreamOutcome("connect_error")).toBe("transient");

@@ -261,7 +261,11 @@ type CodexPoolAccountRetryResult =
     selectedForwardHeaders: Headers;
   }
   | { kind: "no-alternate" }
-  | { kind: "transport"; error: unknown };
+  | {
+    kind: "transport";
+    error: unknown;
+    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+  };
 
 /**
  * One bounded alternate-account retry for Codex pool auth. Used for allow-listed
@@ -353,7 +357,8 @@ async function retryCodexPoolOnAlternateAccount(
       selectedForwardHeaders: retryHeaders,
     };
   } catch (error) {
-    return { kind: "transport", error };
+    // Attribute the transport failure to the alternate account (already selected).
+    return { kind: "transport", error, authCtx: retryAuthCtx };
   }
 }
 
@@ -1432,6 +1437,7 @@ export async function handleResponses(
           stream: parsed.stream,
         });
         if (retry.kind === "transport") {
+          authCtx = retry.authCtx;
           return transportFailureResponse(retry.error);
         }
         if (retry.kind === "retried") {

@@ -158,7 +158,9 @@ export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): Cod
   if (!Number.isFinite(outcome)) return "unknown";
   if (outcome >= 200 && outcome < 300) return "success";
   if (outcome === 401 || outcome === 403) return "credential";
-  if (outcome === 429) return "quota";
+  // 402 Payment Required is treated as quota exhaustion for pool cooldown/failover
+  // (same-request alternate retry records this outcome for the depleted account).
+  if (outcome === 429 || outcome === 402) return "quota";
   if (outcome >= 400 && outcome < 500) return "caller";
   if (outcome >= 500 && outcome < 600) return "transient";
   return "unknown";
