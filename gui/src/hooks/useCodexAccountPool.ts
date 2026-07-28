@@ -282,7 +282,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         activeCodexAccountId?: string | null;
       };
       const pausedIds = new Set(result.pausedAccountIds ?? []);
-      setAccounts(current => current.map(account => pausedIds.has(account.id) ? { ...account, paused: true } : account));
+      setAccounts(current => current.map(account => (
+        pausedIds.has(account.id) || (pausedIds.has("__main__") && account.isMain)
+          ? { ...account, paused: true }
+          : account
+      )));
       const nextActiveId = result.activeCodexAccountId ?? null;
       pendingActiveIdRef.current = { id: nextActiveId };
       setActiveId(nextActiveId);

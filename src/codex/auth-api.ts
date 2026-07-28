@@ -752,15 +752,16 @@ export async function handleCodexAuthAPI(
     let body: { accountId: string | null };
     try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
     const runtimeConfig = getRuntimeConfig(config);
-    if (body.accountId != null && isCodexAccountPaused(runtimeConfig, body.accountId)) {
+    const targetAccountId = body.accountId ?? MAIN_CODEX_ACCOUNT_ID;
+    if (isCodexAccountPaused(runtimeConfig, targetAccountId)) {
       return jsonResponse({ error: "Account is paused" }, 409);
     }
-    if (body.accountId != null && body.accountId !== MAIN_CODEX_ACCOUNT_ID) {
-      const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === body.accountId);
+    if (targetAccountId !== MAIN_CODEX_ACCOUNT_ID) {
+      const exists = (runtimeConfig.codexAccounts ?? []).some(a => a.id === targetAccountId);
       if (!exists) return jsonResponse({ error: "Account not found" }, 400);
     }
     runtimeConfig.activeCodexAccountId = body.accountId ?? undefined;
-    resetCodexRoutingForManualSelection(body.accountId ?? MAIN_CODEX_ACCOUNT_ID);
+    resetCodexRoutingForManualSelection(targetAccountId);
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true, activeCodexAccountId: body.accountId, appliesImmediately: true });
   }

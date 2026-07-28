@@ -1340,6 +1340,20 @@ describe("codex-auth API", () => {
     expect(config.pausedCodexAccountIds).toEqual([MAIN_CODEX_ACCOUNT_ID]);
   });
 
+  test("PUT /api/codex-auth/active rejects null when the effective main account is paused", async () => {
+    const config = makeConfig({ pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID] });
+    const req = new Request("http://localhost/api/codex-auth/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId: null }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp!.status).toBe(409);
+    expect(await resp!.json()).toEqual({ error: "Account is paused" });
+    expect(config.activeCodexAccountId).toBeUndefined();
+  });
+
   test("resuming restores eligibility and manual activation rejects paused accounts", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "work", email: "work@example.test", isMain: false }],

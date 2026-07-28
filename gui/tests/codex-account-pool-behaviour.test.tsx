@@ -24,6 +24,8 @@ let accounts: unknown[] = [];
 let threshold = 80;
 let nextAccountsResponseGate: Promise<void> | null = null;
 let pauseResponseActiveId: string | null = null;
+let bulkPausedAccountIds: string[] = ["a2"];
+let bulkResponseActiveId: string | null = null;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -40,6 +42,8 @@ beforeEach(() => {
   calls = [];
   nextAccountsResponseGate = null;
   pauseResponseActiveId = null;
+  bulkPausedAccountIds = ["a2"];
+  bulkResponseActiveId = null;
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -57,14 +61,20 @@ beforeEach(() => {
         return { ok: true, json: async () => ({ activeCodexAccountId: pauseResponseActiveId }) } as unknown as Response;
       }
       if (path === "codex-auth/accounts/pause-exhausted") {
+        const pausedIds = new Set(bulkPausedAccountIds);
         accounts = accounts.map(account => (
-          typeof account === "object" && account !== null && "id" in account && account.id === "a2"
+          typeof account === "object" && account !== null && "id" in account
+            && (pausedIds.has(String(account.id)) || (pausedIds.has("__main__") && "isMain" in account && account.isMain === true))
             ? { ...account, paused: true }
             : account
         ));
         return {
           ok: true,
-          json: async () => ({ pausedAccountIds: ["a2"], pausedCount: 1, activeCodexAccountId: null }),
+          json: async () => ({
+            pausedAccountIds: bulkPausedAccountIds,
+            pausedCount: bulkPausedAccountIds.length,
+            activeCodexAccountId: bulkResponseActiveId,
+          }),
         } as unknown as Response;
       }
       if (path.startsWith("codex-auth/accounts")) {
@@ -206,6 +216,31 @@ test("bulk pausing writes one endpoint and updates every returned account", asyn
   expect(calls).toContain("PUT codex-auth/accounts/pause-exhausted");
   expect(seen.current!.accounts.find(account => account.id === "a2")?.paused).toBe(true);
   expect(seen.current!.pausingExhausted).toBe(false);
+});
+
+test("bulk pausing translates the main sentinel to its distinct account row", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: false, hasCredential: true, quota: null },
+    { id: "a2", email: "pool", isMain: false, paused: false, hasCredential: true, quota: null },
+  ];
+  bulkPausedAccountIds = ["__main__"];
+  bulkResponseActiveId = "a2";
+  const seen = await mountController();
+  let releaseReload!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseReload = resolve; });
+
+  await act(async () => {
+    expect(await seen.current!.pauseExhaustedAccounts()).toEqual({ ok: true, pausedCount: 1 });
+  });
+
+  expect(seen.current!.accounts.find(account => account.isMain)?.id).toBe("a1");
+  expect(seen.current!.accounts.find(account => account.isMain)?.paused).toBe(true);
+  expect(seen.current!.activeId).toBe("a2");
+
+  await act(async () => {
+    releaseReload();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
 });
 
 test("two pause holders both have to release before polling resumes", async () => {
