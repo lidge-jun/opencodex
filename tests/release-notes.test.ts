@@ -6,6 +6,7 @@ import {
   joinCarriedPreviewNotes,
   matchingPreviewTag,
   matchingPreviewTags,
+  previousReleaseNotesTag,
   selectNewestCarriedPreviewTag,
   stripCarriedReleaseNotes,
   stripGenerateNotesCompareLink,
@@ -49,6 +50,38 @@ describe("matchingPreviewTags", () => {
       "v2.7.39-preview.20260725.2",
       "v2.7.39-preview.20260725.10",
     ]);
+  });
+});
+
+describe("previousReleaseNotesTag", () => {
+  test("preview baselines the newest prior release of either channel", () => {
+    expect(previousReleaseNotesTag("2.7.43-preview.20260728", [
+      "v2.7.41-preview.20260726",
+      "v2.7.41",
+      "v2.7.42",
+      "v2.7.43-preview.20260728",
+    ])).toBe("v2.7.42");
+  });
+
+  test("preview after preview (no stable in between) keeps the previous preview", () => {
+    expect(previousReleaseNotesTag("2.7.43-preview.20260729", [
+      "v2.7.42",
+      "v2.7.43-preview.20260728",
+      "v2.7.43-preview.20260729",
+    ])).toBe("v2.7.43-preview.20260728");
+  });
+
+  test("stable baselines the newest prior stable only", () => {
+    expect(previousReleaseNotesTag("2.7.43", [
+      "v2.7.42",
+      "v2.7.43-preview.20260728",
+      "v2.7.43",
+    ])).toBe("v2.7.42");
+  });
+
+  test("returns null when no eligible prior tag exists", () => {
+    expect(previousReleaseNotesTag("2.7.43-preview.1", ["v2.7.43-preview.1"])).toBeNull();
+    expect(previousReleaseNotesTag("2.7.43", ["v2.7.43-preview.1"])).toBeNull();
   });
 });
 

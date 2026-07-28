@@ -266,8 +266,14 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun scripts/release-notes.ts strip-carried");
     expect(workflow).toContain("bun scripts/release-notes.ts assemble");
     expect(workflow).toContain("bun scripts/release-notes.ts matching-preview-tags");
+    expect(workflow).toContain("bun scripts/release-notes.ts previous-release-tag");
     expect(workflow).toContain("bun scripts/release-notes.ts has-meaningful");
     expect(workflow).toContain("bun scripts/release-notes.ts join-carried");
+    // Preview notes must baseline any prior release (stable or preview), not preview-only.
+    expect(workflow).toContain('bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"');
+    expect(workflow).not.toMatch(
+      /RELEASE_VERSION" == \*-preview\.\*[\s\S]{0,200}grep -- '-preview\\.'/,
+    );
     expect(workflow).toContain("releases/tags/");
     expect(workflow).toContain('gh api "repos/${GITHUB_REPOSITORY}" --jq \'.full_name\'');
     expect(workflow).toContain("git merge-base --is-ancestor");
