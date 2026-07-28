@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import ClaudeCode from "./ClaudeCode";
 import ClaudeDesktop from "./ClaudeDesktop";
-import { useT } from "../i18n";
+import { useT } from "../i18n/shared";
 
 type ClaudeTab = "code" | "desktop";
 

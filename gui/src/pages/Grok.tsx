@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState, Notice, Switch } from "../ui";
 import { IconChevron } from "../icons";
-import { useT, type TKey } from "../i18n";
+import { useT, type TKey } from "../i18n/shared";
+import { readJsonOrThrow } from "../fetch-json";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { grokGroupView, type GrokCandidate } from "./grok-groups";
 
@@ -67,8 +68,8 @@ export default function Grok({ apiBase }: { apiBase: string }) {
     setError("");
     try {
       const response = await fetch(`${apiBase}/api/grok`);
-      const payload = await response.json() as GrokStatus & { error?: string };
-      if (!response.ok) throw new Error(payload.error || t("grok.loadFail"));
+      const payload = await readJsonOrThrow<GrokStatus & { error?: string }>(response, t("grok.loadFail"));
+      if (!payload) throw new Error(t("grok.loadFail"));
       // Tolerate an older proxy that predates the selection routes: the page degrades
       // to the read-only fence view instead of crashing on a missing field.
       setStatus({ ...payload, candidates: payload.candidates ?? [], excluded: payload.excluded ?? [] });
@@ -124,18 +125,19 @@ export default function Grok({ apiBase }: { apiBase: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ excluded: [...excluded] }),
       });
-      const savePayload = await response.json().catch(() => ({})) as { error?: string };
-      if (!response.ok) throw new Error(savePayload.error ?? t("grok.saveFailed"));
+      await readJsonOrThrow<{ error?: string }>(response, t("grok.saveFailed"));
       setSavedExcluded(new Set(excluded));
 
       if (applyAfter) {
         setPending("apply");
         const applied = await fetch(`${apiBase}/api/grok/apply`, { method: "POST" });
-        const payload = await applied.json().catch(() => ({})) as { message?: string; skippedReason?: string };
-        if (!applied.ok) throw new Error(payload.message ?? t("grok.applyFailed"));
+        const payload = await readJsonOrThrow<{ message?: string; skippedReason?: string }>(
+          applied,
+          t("grok.applyFailed"),
+        );
         // A policy skip is not success theatre: the Grok config did NOT change
         // (non-loopback bind, or no ~/.grok), so say that instead of "applied".
-        if (payload.skippedReason) {
+        if (payload?.skippedReason) {
           setMessage({ tone: "err", text: payload.message ?? t("grok.applySkipped") });
           setAnnouncement(payload.message ?? t("grok.applySkipped"));
         } else {

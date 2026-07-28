@@ -295,8 +295,9 @@ function summarizeFilteredLogs(entries: LogEntry[]): {
       continue;
     }
     const cost = entry.displayMetrics?.cost;
-    if (cost?.kind === "value" && Number.isFinite(cost.estimate.cost.total) && cost.estimate.cost.total >= 0) {
-      estimatedCostUsd += cost.estimate.cost.total;
+    const total = cost?.kind === "value" ? cost.estimate.cost.total : undefined;
+    if (total !== undefined && Number.isFinite(total) && total >= 0) {
+      estimatedCostUsd += total;
       continue;
     }
     unpricedRequests += 1;

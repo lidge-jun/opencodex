@@ -27,7 +27,7 @@ export default function AnthropicAccountPoolSettings({
   useEffect(() => {
     let cancelled = false;
     const ac = new AbortController();
-    void (async () => {
+    const load = async () => {
       try {
         const res = await fetch(`${apiBase}/api/oauth/accounts/pool?provider=anthropic`, {
           signal: ac.signal,
@@ -44,10 +44,12 @@ export default function AnthropicAccountPoolSettings({
         if (cancelled || ac.signal.aborted) return;
         setLoadError(true);
       }
-    })();
+    };
+    const timer = window.setTimeout(() => { void load(); }, 0);
     return () => {
       cancelled = true;
       ac.abort();
+      window.clearTimeout(timer);
     };
   }, [apiBase]);
 

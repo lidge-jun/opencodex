@@ -1912,7 +1912,7 @@ describe("GitHub Actions hardening", () => {
     expect(helperSrc).not.toContain(".ocx-translation-state");
   });
 
-  test("React Doctor workflow is SHA-pinned, engine-pinned, advisory, and read-only", async () => {
+  test("React Doctor workflow is SHA-pinned, engine-pinned, gating, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
@@ -1920,17 +1920,17 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
-    expect(workflow).toContain('version: "0.9.1"');
+    expect(workflow).toContain('version: "0.9.2"');
 
-    // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.9.1).
+    // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.9.x).
     // v2.1.0's ensure-json-report only knew schemas 1–2 and failed every PR scan.
-    // Advisory + least privilege: read-only token, all write-scoped outputs off.
+    // Gating + least privilege: read-only token, all write-scoped outputs off.
     // pull-requests: read is required so the action can list PR files for
     // --changed-files-from; without it, fork PRs fail with ENOENT on that file.
     expect(workflow).toContain("contents: read");
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).not.toContain(": write");
-    expect(workflow).toContain("blocking: none");
+    expect(workflow).toContain("blocking: warning");
     expect(workflow).toContain("comment: false");
     expect(workflow).toContain("review-comments: false");
     expect(workflow).toContain("commit-status: false");
@@ -1940,13 +1940,15 @@ describe("GitHub Actions hardening", () => {
   test("React Doctor package scripts pin the exact engine version with no @latest anywhere", async () => {
     const guiPkg = await readText("gui/package.json");
     const rootPkg = await readText("package.json");
+    const doctorConfig = await readText("gui/doctor.config.json");
 
-    expect(guiPkg).toContain("react-doctor@0.9.1");
+    expect(guiPkg).toContain("react-doctor@0.9.2");
     expect(guiPkg).not.toContain("react-doctor@latest");
     expect(rootPkg).not.toContain("react-doctor@latest");
+    expect(doctorConfig).toContain('"blocking": "warning"');
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
-    // Gating steps (typecheck, eslint, tests, privacy) run before advisory React Doctor.
+    // Gating steps include React Doctor after privacy scan on gui/ pushes.
     expect(rootPkg).toContain("bun run typecheck && bun run lint:gui && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
@@ -1987,6 +1989,18 @@ describe("doctor-gui-if-changed", () => {
       },
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stderr.toString()).toContain("skipping advisory scan");
+    expect(run.stderr.toString()).toContain("skipping scan");
+  });
+
+  test("propagates a non-zero doctor exit so findings gate the push", () => {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        // `bun` exits 1 when asked to run a missing script name.
+        DOCTOR_CMD: "bun run definitely-not-a-doctor-script",
+      },
+    });
+    expect(run.exitCode).not.toBe(0);
   });
 });

@@ -15,6 +15,7 @@ export function intersectComboEfforts(
 ): ComboEffort[] {
   const complete = targets.filter((t) => t.provider.trim() && t.model.trim());
   if (complete.length === 0) return [...COMBO_EFFORTS];
+  const effortSet = new Set<string>(COMBO_EFFORTS);
   let common: string[] | null = null;
   for (const target of complete) {
     const key = `${target.provider.trim()}/${target.model.trim()}`;
@@ -23,12 +24,16 @@ export function intersectComboEfforts(
     // supportedLadderFor is undefined (#488 / Codex review).
     const member: string[] = listed === undefined
       ? []
-      : listed.filter((effort) => (COMBO_EFFORTS as readonly string[]).includes(effort));
-    common = common === null
-      ? member
-      : common.filter((effort) => member.includes(effort));
+      : listed.filter((effort) => effortSet.has(effort));
+    if (common === null) {
+      common = member;
+    } else {
+      const memberSet = new Set(member);
+      common = common.filter((effort) => memberSet.has(effort));
+    }
   }
-  return COMBO_EFFORTS.filter((effort) => common?.includes(effort) === true);
+  const commonSet = new Set(common ?? []);
+  return COMBO_EFFORTS.filter((effort) => commonSet.has(effort));
 }
 
 export interface ComboTarget {

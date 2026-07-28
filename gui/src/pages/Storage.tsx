@@ -274,8 +274,11 @@ function ArchivedCleanupPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ percent }),
       });
-      const json = await res.json() as CleanupPreview & { error?: string };
-      if (!res.ok) throw new Error(mapCleanupError(json.error, t("storage.cleanup.previewFailed")));
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(mapCleanupError(json.error, t("storage.cleanup.previewFailed")));
+      }
+      const json = await res.json() as CleanupPreview;
       setPreview(json);
       setConfirmOpen(true);
     } catch (e) {
@@ -299,10 +302,17 @@ function ArchivedCleanupPanel({
           digest: preview.digest,
         }),
       });
-      const json = await res.json() as CleanupResult;
-      if (!res.ok || !json.ok) {
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as CleanupResult;
         if (json.error === "stale_preview") {
           // Digest can never succeed again — send the user back to Preview.
+          closeConfirm(true);
+        }
+        throw new Error(mapCleanupError(json.error, json.message, json.trashDir));
+      }
+      const json = await res.json() as CleanupResult;
+      if (!json.ok) {
+        if (json.error === "stale_preview") {
           closeConfirm(true);
         }
         throw new Error(mapCleanupError(json.error, json.message, json.trashDir));
@@ -479,9 +489,13 @@ function QuarantineTrashPanel({
     setLoading(true);
     try {
       const res = await fetch(`${apiBase}/api/storage/trash`, { signal });
-      const json = await res.json() as TrashList & { error?: string };
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as { error?: string };
+        if (signal?.aborted || generation !== loadGenerationRef.current) return;
+        throw new Error(json.error ?? "list_failed");
+      }
+      const json = await res.json() as TrashList;
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      if (!res.ok) throw new Error(json.error ?? "list_failed");
       const next = Array.isArray(json.entries) ? json.entries : [];
       setEntries(next);
       onEntriesChange?.(next);
@@ -537,8 +551,12 @@ function QuarantineTrashPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: confirmEntry.id }),
       });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as RestoreResult;
+        throw new Error(mapRestoreError(json.error, json.message));
+      }
       const json = await res.json() as RestoreResult;
-      if (!res.ok || !json.ok) {
+      if (!json.ok) {
         throw new Error(mapRestoreError(json.error, json.message));
       }
       closeConfirm();
@@ -788,8 +806,12 @@ function AutoCleanupPolicyPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (!res.ok) {
+        setError(t("storage.policy.saveFailed"));
+        return;
+      }
       const json = await res.json() as { ok?: boolean; policy?: CleanupPolicy; error?: string };
-      if (!res.ok || !json.policy) {
+      if (!json.policy) {
         setError(t("storage.policy.saveFailed"));
         return;
       }
@@ -823,9 +845,14 @@ function AutoCleanupPolicyPanel({
         body: JSON.stringify(base),
         signal,
       });
+      if (signal.aborted) return;
+      if (!saveRes.ok) {
+        setError(t("storage.policy.saveFailed"));
+        return;
+      }
       const saved = await saveRes.json() as { policy?: CleanupPolicy; error?: string };
       if (signal.aborted) return;
-      if (!saveRes.ok || !saved.policy) {
+      if (!saved.policy) {
         setError(t("storage.policy.saveFailed"));
         return;
       }
@@ -835,6 +862,31 @@ function AutoCleanupPolicyPanel({
         method: "POST",
         signal,
       });
+      if (signal.aborted) return;
+      if (res.status === 409) {
+        const conflict = await res.json().catch(() => ({})) as {
+          error?: string;
+          policy?: CleanupPolicy;
+        };
+        if (signal.aborted) return;
+        if (conflict.policy) setPolicy(policyFieldsFromResponse(conflict.policy));
+        setError(t("storage.policy.alreadyRunning"));
+        return;
+      }
+      if (!res.ok) {
+        const failed = await res.json().catch(() => ({})) as {
+          error?: string;
+          policy?: CleanupPolicy;
+        };
+        if (signal.aborted) return;
+        if (failed.policy) setPolicy(policyFieldsFromResponse(failed.policy));
+        if (failed.error === "already_running") {
+          setError(t("storage.policy.alreadyRunning"));
+          return;
+        }
+        setError(t("storage.policy.runFailed"));
+        return;
+      }
       const startJson = await res.json() as {
         ok?: boolean;
         started?: boolean;
@@ -844,12 +896,8 @@ function AutoCleanupPolicyPanel({
       };
       if (signal.aborted) return;
       if (startJson.policy) setPolicy(policyFieldsFromResponse(startJson.policy));
-      if (startJson.error === "already_running" || res.status === 409) {
+      if (startJson.error === "already_running") {
         setError(t("storage.policy.alreadyRunning"));
-        return;
-      }
-      if (!res.ok) {
-        setError(t("storage.policy.runFailed"));
         return;
       }
       if (!startJson.started || !startJson.job?.startedAt) {
@@ -1000,7 +1048,13 @@ function AutoCleanupPolicyPanel({
               max={100}
               value={percent}
               disabled={saving || running}
-              onChange={e => setPercent(Number(e.target.value))}
+              aria-label={t("storage.policy.targetPercent")}
+              onChange={e => {
+                const raw = e.target.value;
+                if (raw.trim() === "") return;
+                const next = Number(raw);
+                if (Number.isFinite(next)) setPercent(next);
+              }}
               onBlur={() => void savePolicy()}
               style={{ display: "block", marginTop: 4, width: "100%" }}
             />
@@ -1022,6 +1076,7 @@ function AutoCleanupPolicyPanel({
               step={0.1}
               value={reduceGb}
               disabled={saving || running}
+              aria-label={t("storage.policy.targetReduce")}
               onChange={e => setReduceGb(e.target.value)}
               onBlur={() => void savePolicy()}
               style={{ display: "block", marginTop: 4, width: "100%" }}

@@ -169,52 +169,45 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       // payload land after a newer one.
       if (inFlight) return;
       inFlight = true;
-      // Bound each poll so a hung request cannot pin inFlight forever and
-      // starve the unavailable fallback. Prefer AbortSignal.timeout; fall back
-      // to a manual timer when the browser lacks AbortSignal.any/timeout.
+      // Bound each poll so a hung request cannot pin inFlight forever.
+      // Prefer AbortSignal.timeout (no setTimeout to clean up); fall back to
+      // unmount-only abort when the browser lacks timeout/any.
       const controller = new AbortController();
       activeController = controller;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const signal = typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal
         ? AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
-        : (() => {
-          timeoutId = setTimeout(() => controller.abort(), 10_000);
-          return controller.signal;
-        })();
+        : controller.signal;
       try {
         const res = await fetch(`${apiBase}/api/system/memory`, { signal });
         if (!res.ok) throw new Error("memory unavailable");
         const json = await res.json() as SystemMemory;
-        if (!cancelled) {
-          setData(json);
-          setUnavailable(false);
-          setSupportsRestart(typeof json.activeTurnCount === "number");
-          if (json.isDraining && restartPhase === "idle") setRestartPhase("draining");
-          // Fast recycle can finish between polls with no observed outage — detect pid change.
-          if (
-            (restartPhase === "draining" || restartPhase === "reconnecting")
-            && restartFromPid != null
-            && typeof json.pid === "number"
-            && json.pid !== restartFromPid
-            && !json.isDraining
-          ) {
-            setRestartPhase("idle");
-            setRestartFromPid(null);
-            setRestartError(null);
-          }
+        if (cancelled) return;
+        setData(json);
+        setUnavailable(false);
+        setSupportsRestart(typeof json.activeTurnCount === "number");
+        if (json.isDraining && restartPhase === "idle") setRestartPhase("draining");
+        // Fast recycle can finish between polls with no observed outage — detect pid change.
+        if (
+          (restartPhase === "draining" || restartPhase === "reconnecting")
+          && restartFromPid != null
+          && typeof json.pid === "number"
+          && json.pid !== restartFromPid
+          && !json.isDraining
+        ) {
+          setRestartPhase("idle");
+          setRestartFromPid(null);
+          setRestartError(null);
         }
       } catch {
         // Old servers (pre-#314) 404 this route; degrade to a quiet unavailable note.
         // During drain/restart the proxy goes away — switch to reconnect polling.
-        if (!cancelled) {
-          if (restartPhase === "draining" || restartPhase === "reconnecting") {
-            setRestartPhase("reconnecting");
-          } else {
-            setUnavailable(true);
-          }
+        if (cancelled) return;
+        if (restartPhase === "draining" || restartPhase === "reconnecting") {
+          setRestartPhase("reconnecting");
+        } else {
+          setUnavailable(true);
         }
       } finally {
-        if (timeoutId !== undefined) clearTimeout(timeoutId);
         if (activeController === controller) activeController = null;
         inFlight = false;
       }
@@ -232,15 +225,19 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     if (restartPhase !== "reconnecting") return;
     let cancelled = false;
     let inFlight = false;
+    let activeController: AbortController | null = null;
     const started = Date.now();
-    const tick = async () => {
-      if (inFlight) return;
+    const tick = () => {
+      if (inFlight || cancelled) return;
       inFlight = true;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5_000);
-      try {
-        const res = await fetch(`${apiBase}/healthz`, { cache: "no-store", signal: controller.signal });
-        if (res.ok && !cancelled) {
+      activeController = controller;
+      const signal = typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal
+        ? AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)])
+        : controller.signal;
+      void fetch(`${apiBase}/healthz`, { cache: "no-store", signal })
+        .then(async (res) => {
+          if (!res.ok || cancelled) return;
           let replaced = restartFromPid == null;
           if (restartFromPid != null) {
             try {
@@ -250,28 +247,35 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
               replaced = true;
             }
           }
+          if (cancelled) return;
           if (replaced) {
             setRestartPhase("idle");
             setRestartFromPid(null);
             setRestartError(null);
             return;
           }
-        }
-      } catch {
-        /* still down / aborted */
-      } finally {
-        clearTimeout(timeoutId);
-        inFlight = false;
-      }
-      if (!cancelled && Date.now() - started >= RECONNECT_GIVE_UP_MS) {
-        setRestartPhase("error");
-        setRestartError(t("dash.mem.restartFailed"));
-      }
+          if (Date.now() - started >= RECONNECT_GIVE_UP_MS) {
+            setRestartPhase("error");
+            setRestartError(t("dash.mem.restartFailed"));
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (Date.now() - started >= RECONNECT_GIVE_UP_MS) {
+            setRestartPhase("error");
+            setRestartError(t("dash.mem.restartFailed"));
+          }
+        })
+        .finally(() => {
+          if (activeController === controller) activeController = null;
+          inFlight = false;
+        });
     };
-    void tick();
-    const interval = setInterval(() => void tick(), RECONNECT_POLL_MS);
+    tick();
+    const interval = setInterval(tick, RECONNECT_POLL_MS);
     return () => {
       cancelled = true;
+      activeController?.abort();
       clearInterval(interval);
     };
   }, [apiBase, restartPhase, restartFromPid, t]);

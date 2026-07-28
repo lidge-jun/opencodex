@@ -2,9 +2,9 @@
  * Run React Doctor in gui/ when this push includes gui/ changes.
  * Used by `bun run prepush`. Skip with: git push --no-verify
  *
- * Advisory by contract (doctor.config.json blocking: "none"): findings never
- * gate the push, so an unavailable engine (offline npx fetch, registry outage)
- * degrades to a warning instead of blocking.
+ * Gating by contract (doctor.config.json blocking: "warning"): findings fail
+ * the push. An unavailable engine (offline npx fetch, missing binary) still
+ * degrades to a warning so infrastructure outages do not brick pushes.
  *
  * Test hooks: DOCTOR_DRY_RUN=1 prints the run/skip decision without spawning;
  * DOCTOR_FILES (newline-separated) overrides git-derived changed files;
@@ -78,10 +78,16 @@ if (import.meta.main) {
       stdio: "inherit",
       env: { ...process.env, npm_config_yes: "true" },
     });
-  } catch {
-    // Findings are non-gating (blocking: none), so any failure here is
-    // infrastructure noise, not a content signal. Never block the push on it.
-    console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping advisory scan");
+  } catch (err) {
+    const status = typeof err === "object" && err !== null && "status" in err
+      ? (err as { status?: unknown }).status
+      : undefined;
+    // Doctor ran and returned a non-zero status (findings or engine error) — gate the push.
+    if (typeof status === "number") {
+      process.exit(status === 0 ? 1 : status);
+    }
+    // Spawn failed (missing binary / offline npx) — do not brick the push on infra.
+    console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
     process.exit(0);
   }
 }
