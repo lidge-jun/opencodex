@@ -56,6 +56,15 @@ ChatGPT bearer 인증으로 직접 POST합니다. 주입된 `base_url`이 openco
   `codex features disable image_generation`(`config.toml`의 `[features] image_generation = false`)을
   사용하세요.
 
+도구 선언은 모델의 Responses 요청에도 계속 포함됩니다. API key 방식 Responses 프로바이더에서는
+opencodex가 Codex의 비공개 `image_gen` namespace를 업스트림에서 안전한
+`image_gen__<inner-name>` alias(예: `image_gen__imagegen`)로 변환합니다. 이 사용 가능한 alias가
+클라이언트 선언을 대체할 때만 중복된 hosted `image_generation` 선언을 제거합니다. 함수 호출은
+Codex에 도달하기 전에 명시적인 `image_gen` namespace로 복원되고, 이후 기록을 업스트림으로
+replay할 때 다시 인코딩됩니다. 따라서 namespace를 예약하거나 점이 포함된 함수 이름을 거부하는
+OpenAI 호환 업스트림에서도 클라이언트 측 이미지 생성을 호출할 수 있습니다. ChatGPT forward
+모드는 변경되지 않으며 네이티브 Responses Lite 형식을 유지합니다.
+
 `hostname`이 loopback 주소가 아니면 Codex가 자동 생성된 API 인증 헤더를 보내야 합니다. 이때는 전용
 프로바이더를 주입합니다.
 
