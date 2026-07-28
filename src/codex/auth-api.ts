@@ -651,20 +651,22 @@ export async function handleCodexAuthAPI(
       return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
     }
     const runtimeConfig = getRuntimeConfig(config);
+    let nextStrategy: ReturnType<typeof parseAccountPoolStrategy> | undefined;
+    let nextSticky: ReturnType<typeof parseAccountPoolStickyLimit> | undefined;
     if (body.strategy !== undefined) {
-      const strategy = parseAccountPoolStrategy(body.strategy);
-      if (strategy === null) {
+      nextStrategy = parseAccountPoolStrategy(body.strategy);
+      if (nextStrategy === null) {
         return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first' }, 400);
       }
-      runtimeConfig.accountPoolStrategy = strategy;
     }
     if (body.stickyLimit !== undefined) {
-      const stickyLimit = parseAccountPoolStickyLimit(body.stickyLimit);
-      if (stickyLimit === null) {
+      nextSticky = parseAccountPoolStickyLimit(body.stickyLimit);
+      if (nextSticky === null) {
         return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
       }
-      runtimeConfig.accountPoolStickyLimit = stickyLimit;
     }
+    if (nextStrategy !== undefined) runtimeConfig.accountPoolStrategy = nextStrategy;
+    if (nextSticky !== undefined) runtimeConfig.accountPoolStickyLimit = nextSticky;
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({
       ok: true,

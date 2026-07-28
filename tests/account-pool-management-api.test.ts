@@ -110,8 +110,20 @@ describe("Codex account pool strategy management API", () => {
     expect(config.accountPoolStrategy).toBe("round-robin");
     expect(config.accountPoolStickyLimit).toBe(2);
   });
-});
 
+  test("PUT rejects invalid stickyLimit without mutating a valid strategy in the same body", async () => {
+    const config = makeCodexConfig({ accountPoolStrategy: "quota", accountPoolStickyLimit: 1 });
+    const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strategy: "fill-first", stickyLimit: 0 }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp!.status).toBe(400);
+    expect(config.accountPoolStrategy).toBe("quota");
+    expect(config.accountPoolStickyLimit).toBe(1);
+  });
+});
 describe("Anthropic account pool strategy management API", () => {
   let testDir = "";
   let previousHome: string | undefined;
@@ -268,6 +280,42 @@ describe("Anthropic account pool strategy management API", () => {
         autoSwitchThreshold: 50,
         strategy: "fill-first",
         stickyLimit: 9,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PATCH with provider+strategy omits enabled and keeps current enabled", async () => {
+    const server = startServer(0);
+    try {
+      await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "anthropic",
+          enabled: true,
+          strategy: "quota",
+        }),
+      });
+      const patch = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "anthropic",
+          strategy: "round-robin",
+        }),
+      });
+      expect(patch.status).toBe(200);
+      expect(await patch.json()).toMatchObject({
+        ok: true,
+        enabled: true,
+        strategy: "round-robin",
+      });
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(await get.json()).toMatchObject({
+        enabled: true,
+        strategy: "round-robin",
       });
     } finally {
       await server.stop(true);

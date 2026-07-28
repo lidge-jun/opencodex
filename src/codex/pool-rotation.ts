@@ -165,6 +165,18 @@ export function notePoolRotationFailure(poolKey: string, accountId: string): voi
   }
 }
 
+/**
+ * Force the next sticky/RR pick onto `accountId` (manual dashboard selection).
+ * Clears sticky success counters and ring weights so the seeded account is held
+ * for the next new-session pick before ordinary rotation resumes.
+ */
+export function seedPoolRotationAccount(poolKey: string, accountId: string): void {
+  const state = getOrCreateState(poolKey);
+  state.activeKey = accountId;
+  state.successes = 0;
+  state.currentWeights.clear();
+}
+
 export function clearPoolRotationState(poolKey?: string): void {
   if (poolKey === undefined) {
     selectionState.clear();

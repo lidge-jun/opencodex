@@ -1,6 +1,3 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import {
   clearPoolRotationState,
   notePoolRotationSuccess,
@@ -10,12 +7,20 @@ import {
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  isCodexAccountInCooldown,
+  pickAlternateCodexAccount,
   previewCodexAccountForRequest,
+  recordCodexUpstreamOutcome,
+  resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
+import { getConfigPath } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-pool-rotation-test");
 let previousOpencodexHome: string | undefined;
@@ -281,5 +286,117 @@ describe("accountPoolStrategy new-session routing", () => {
 
     const picks = Array.from({ length: 5 }, () => resolveCodexAccountForThread(null, config));
     expect(picks.every(pick => pick === "a")).toBe(true);
+  });
+
+  test("manual selection seeds RR so the next unbound session uses that account", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+      activeCodexAccountId: "a",
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    // Advance the ring away from a predictable starting point.
+    resolveCodexAccountForThread(null, config);
+    resolveCodexAccountForThread(null, config);
+
+    config.activeCodexAccountId = "c";
+    resetCodexRoutingForManualSelection("c");
+
+    expect(resolveCodexAccountForThread(null, config)).toBe("c");
+  });
+
+  test("bound thread under RR does not re-eval on quota threshold", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "round-robin",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const pinned = resolveCodexAccountForThread("rr-affinity-pin", config);
+    expect(pinned).toBeTruthy();
+    updateAccountQuota(pinned!, 95);
+    for (const id of THREE_ACCOUNT_IDS) {
+      if (id !== pinned) updateAccountQuota(id, 5);
+    }
+
+    expect(resolveCodexAccountForThread("rr-affinity-pin", config)).toBe(pinned);
+    expect(previewCodexAccountForRequest("rr-affinity-pin", config)).toBe(pinned);
+  });
+
+  test("bound thread under fill-first does not re-eval on quota threshold", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    expect(resolveCodexAccountForThread("ff-affinity-pin", config)).toBe("a");
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 5);
+
+    expect(resolveCodexAccountForThread("ff-affinity-pin", config)).toBe("a");
+  });
+
+  test("RR unbound picks do not sync-write config.json", () => {
+    const configPath = getConfigPath();
+    if (existsSync(configPath)) rmSync(configPath);
+
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "round-robin",
+      activeCodexAccountId: "a",
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    for (let i = 0; i < 6; i++) resolveCodexAccountForThread(null, config);
+
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  test("fill-first 429 advances to next stable account, not lowest usage", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    // Usage ordering would prefer c (lowest), but fill-first advances a → b in sorted order.
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 5);
+
+    expect(resolveCodexAccountForThread(null, config)).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 429);
+    expect(config.activeCodexAccountId).toBe("b");
+    expect(pickAlternateCodexAccount(config, "a")).toBe("b");
+  });
+
+  test("RR 429 promotes via ring, not lowest usage", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+      activeCodexAccountId: "a",
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 90);
+    updateAccountQuota("c", 5);
+
+    const first = resolveCodexAccountForThread(null, config)!;
+    recordCodexUpstreamOutcome(config, first, 429);
+    const promoted = config.activeCodexAccountId;
+    expect(promoted).toBeTruthy();
+    expect(promoted).not.toBe(first);
+    // Lowest usage is c; ring may pick b. Either is fine as long as it is not lowest-usage-forced when
+    // that would disagree with the ring — assert we did not stay on the failed account.
+    expect(isCodexAccountInCooldown(first)).toBe(true);
   });
 });

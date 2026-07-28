@@ -184,6 +184,42 @@ function pickLowestUsage(excludeId: string | undefined, now: number): string | n
   return best;
 }
 
+/** Next eligible Anthropic account in stable order after `afterId` (wrapping). */
+function pickNextFillFirstAnthropicAccount(
+  afterId: string,
+  eligible: string[],
+): string | null {
+  if (eligible.length === 0) return null;
+  const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+  const set = getAccountSet(PROVIDER);
+  const stableAll = set
+    ? [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b))
+    : ordered;
+  const startIdx = stableAll.indexOf(afterId);
+  if (startIdx < 0) return ordered[0] ?? null;
+  for (let step = 1; step <= stableAll.length; step++) {
+    const candidate = stableAll[(startIdx + step) % stableAll.length]!;
+    if (eligible.includes(candidate)) return candidate;
+  }
+  return ordered[0] ?? null;
+}
+
+function pickAlternateAnthropicAccount(
+  config: OcxConfig,
+  excludeId: string,
+  now: number,
+): string | null {
+  const strategy = anthropicPoolStrategy(config);
+  const eligible = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
+  if (strategy === "round-robin") {
+    return pickRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
+  }
+  if (strategy === "fill-first") {
+    return pickNextFillFirstAnthropicAccount(excludeId, eligible);
+  }
+  return pickLowestUsage(excludeId, now);
+}
+
 function pruneExpiredAffinity(now: number): void {
   for (const [key, entry] of sessionAffinity) {
     if (now - entry.lastUsedAt > AFFINITY_IDLE_TTL_MS) sessionAffinity.delete(key);
@@ -411,7 +447,7 @@ export function rotateAnthropicAccountOn429(
   clearAnthropicSessionAffinityForAccount(failedAccountId);
   notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
 
-  const next = pickLowestUsage(failedAccountId, now);
+  const next = pickAlternateAnthropicAccount(config, failedAccountId, now);
   if (!next) {
     console.warn("[anthropic-pool] all eligible Anthropic OAuth accounts are in cooldown; returning 429");
     return null;

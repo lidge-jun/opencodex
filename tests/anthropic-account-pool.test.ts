@@ -303,4 +303,21 @@ describe("anthropic account pool", () => {
     expect(unboundAfter429).not.toBe(again);
     expect([bId, cId, aId].filter(id => id !== again)).toContain(unboundAfter429);
   });
+
+  test("fill-first 429 advances next in stable order, not lowest usage", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    // Sorted ids: force usage so lowest-usage would pick cId.
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 50 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 5 });
+    const config = cfg(true, 80, { strategy: "fill-first" });
+
+    const ordered = [aId, bId, cId].sort((a, b) => a.localeCompare(b));
+    // Ensure active is the first in stable order so fill-first holds it.
+    await setActiveAccount("anthropic", ordered[0]!);
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(ordered[0]);
+
+    const failover = rotateAnthropicAccountOn429(config, ordered[0]!, "30");
+    expect(failover).toBe(ordered[1]);
+  });
 });

@@ -247,7 +247,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
-    if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    let enabled = config.anthropicAccountPool?.enabled === true;
+    if (body.enabled !== undefined) {
+      if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+      enabled = body.enabled;
+    }
     let threshold = config.anthropicAccountPool?.autoSwitchThreshold ?? 80;
     if (body.autoSwitchThreshold !== undefined) {
       if (
@@ -277,7 +281,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       stickyLimit = parsed;
     }
     config.anthropicAccountPool = {
-      enabled: body.enabled,
+      enabled,
       autoSwitchThreshold: threshold,
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
@@ -286,7 +290,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({
       ok: true,
       provider,
-      enabled: body.enabled,
+      enabled,
       autoSwitchThreshold: threshold,
       strategy: normalizeAccountPoolStrategy(strategy),
       stickyLimit: normalizeAccountPoolStickyLimit(stickyLimit),
