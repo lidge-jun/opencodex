@@ -124,7 +124,7 @@ npm 警告給的縮寫指令少了套件名，會把目前目錄重裝進去，
 - **原生生成圖片。** Codex 的獨立 `image_gen` 工具透過 `POST /v1/images/generations` 生成圖片、透過 `POST /v1/images/edits` 編輯圖片；它獨立於 hosted Responses 的 `image_generation` 工具。
 - **看清正在發生什麼。** Web 儀表板展示 provider、OAuth 狀態、模型選擇和即時請求日誌；當上遊返回時，也會包含 cached/cache-write token 計數 —— 不用再猜請求為何失敗。
 - **背景執行。** 安裝為系統服務（launchd / systemd / Task Scheduler）後開機自啟，無需操心。
-- **乾淨退出，零殘留。** `ocx stop`（或儀表板的 Stop 按鈕）會關閉代理、停止已安裝的背景服務，並將 Codex 恢復為原始配置。之後 `codex` 就就像從沒安裝過 opencodex 一樣工作 —— 無殘留配置，無殭屍程序。
+- **乾淨退出，零殘留。** `ocx stop`（或儀表板的 Stop 按鈕）會關閉代理、停止已安裝的背景服務，並將 Codex 恢復為原始配置。之後 `codex` 就像從沒安裝過 opencodex 一樣工作 —— 無殘留配置，無殭屍程序。
 
 ## 新增供應商
 
@@ -245,7 +245,7 @@ ocx uninstall                  # 移除 service/shim/config 並恢復原生 Code
 ocx ensure                     # 按需啟動 + 重新整理 Codex config/cache
 ocx sync                       # 重新整理模型列表 + 重新注入 Codex
 ocx status                     # 檢視代理是否在執行
-ocx login <xai|anthropic|kimi> # OAuth 登入
+ocx login <provider>          # OAuth 登入（xai、anthropic、kimi、cursor 等）
 ocx logout <provider>          # 移除已儲存的登入
 ocx account <list|current|use> # 檢視/切換帳號與 API-key pool（脫敏；含 refresh/auto-switch/remove/add-key）
 ocx gui                        # 開啟 Web 儀表板

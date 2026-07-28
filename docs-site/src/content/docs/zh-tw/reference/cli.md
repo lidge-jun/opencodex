@@ -167,24 +167,64 @@ ocx v2 threads 16
 `codex features enable|disable` 切換 codex-rs feature flag；失敗時恢復原始 `config.toml`。變更從新的 Codex
 session 開始生效，正在執行的 session 保持已固定的 surface。
 
-### `ocx models [--provider <name>] [--json]`
+## 無頭儀表板對等
 
-列出已設定 provider 中靜態 seed 的模型。`--provider` 只篩選一個已設定 provider；`--json` 返回
-模型 metadata，並提醒 `liveModels` 可能加入僅在執行環境存在的條目。此命令不會獲取即時目錄；
-需要即時重新整理時請使用 `ocx sync` 或儀表板。
+營運用的儀表板功能也可在沒有瀏覽器的情況下使用。這些命令會定位已通過身分檢查、正在執行的
+代理（含後備 runtime 埠），並重用與 GUI 相同的管理路由、驗證、即時設定與目錄重新整理副作用。
+
+| 資源 | 命令 |
+| --- | --- |
+| 路由 | `ocx combo ...` 或 `ocx route combo ...` |
+| 代理政策 | `ocx agent injection|effort|subagents|fallback|sidecar ...` |
+| 可觀測性 | `ocx observe logs|usage|storage|memory|debug ...` |
+| API 准入 | `ocx access key|endpoints|models|test ...` |
+| Claude Code | `ocx claude config status|set ...` |
+| Grok Build | `ocx grok status|exclude|include|set|clear|apply ...` |
+| 執行期控制 | `ocx system status|settings|startup|diagnostics|sync|update ...` |
+| 離線設定 | `ocx config show|get|set|unset|validate|export|import ...` |
+
+在語意明確時，預設是 list/status。使用 `--json` 取得結構化快照，並以
+`ocx observe logs --follow --jsonl` 取得串流請求日誌。破壞性的移除／匯入與更新動作需要
+`--yes`。即時操作需要代理正在執行；已驗證的設定檢查與匯入／匯出可離線使用。
+
+```bash
+ocx provider test ark
+ocx models live --provider ark --json
+ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
+ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx observe usage --range 30d --json
+ocx access key create deployment
+ocx system settings --stream-mode eager-relay
+```
+
+主題、語言、導覽與其他純視覺的瀏覽器狀態刻意沒有 CLI 對等命令。Cloudflare Tunnel 設定不屬於
+此命令集。
+
+### `ocx models [subcommand]`
+
+列出已設定供應商中靜態 seed 的模型。`--provider` 篩選單一已設定供應商；`--json` 返回模型
+metadata。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄條目；
+`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商 allowlist；`context` 控制
+供應商 context 上限；`shadow` 管理背景 shadow-call 攔截。
 
 ### `ocx provider <subcommand>`
 
-非互動式 provider 管理。登入檔條目只需名稱即可 seed；自定義名稱必須同時提供 `--adapter` 和
+非互動式供應商管理。登錄檔條目只需名稱即可 seed；自訂名稱必須同時提供 `--adapter` 和
 `--base-url`。
 
 | Subcommand | 支援的引數 | 操作 |
 | --- | --- | --- |
-| `list` | `--json` | 列出已設定 provider 和尚未新增的登入檔條目。 |
-| `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` | 新增登入檔或自定義 provider。`--force` 會覆蓋；在普通輸出模式下，`--sync` 會重新整理正在執行的代理。 |
+| `list` | `--json` | 列出已設定供應商與尚未新增的登錄檔條目。 |
+| `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` | 新增登錄檔或自訂供應商。`--force` 會覆寫；在人類輸出模式下，`--sync` 會重新整理正在執行的代理。 |
+| `edit <name>` | provider 欄位旗標、`--json` | 編輯已驗證的即時供應商欄位，而不替換 key pool。 |
+| `test <name>` | `--json` | 探測真實的上游模型端點。 |
 | `show <name>` | `--json` | 顯示設定並遮蓋 API key。 |
-| `remove <name>` | `--json` | 刪除非預設 provider；不能刪除最後一個 provider。 |
-| `set-default <name>` | `--json` | 把已有 provider 設為預設值。 |
+| `remove <name>` | `--json` | 刪除非預設供應商；不能刪除最後一個供應商。 |
+| `set-default <name>` | `--json` | 把既有供應商設為預設值。 |
+| `selected <name>` | `--set <ids>`、`--clear`、`--json` | 讀取或更新供應商模型 allowlist。 |
+| `quota` | `--refresh`、`--json` | 讀取供應商額度報告。 |
+| `presets` | `--json` | 列出儀表板供應商預設組合。 |
+| `account-mode` | `pool`、`direct`、`--json` | 選擇 pooled 或 direct 的 Codex 帳號路由。 |
 
 ```bash
 ocx provider list --json
@@ -335,7 +375,7 @@ ocx login xai
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 開啟 [Web 儀表板](/zh-cn/guides/web-dashboard/)。如果代理
+在 `http://localhost:<port>` 開啟 [Web 儀表板](/zh-tw/guides/web-dashboard/)。如果代理
 尚未執行，會自動啟動。
 
 ## 後臺服務

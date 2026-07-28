@@ -61,7 +61,7 @@ Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以
 :::caution
 該選擇器是面向 v1 相容介面的委派指引。在 `multi_agent_v2` 中，目前代理不會附加 v1 注入訊息，
 而且所有生成的子代理都會繼承父 session 的模型。它不是代理側的跨模型路由器。v1/base/v2 的
-權威說明見 [子代理介面](/zh-cn/guides/sub-agent-surface/)。
+權威說明見 [子代理介面](/zh-tw/guides/sub-agent-surface/)。
 :::
 
 選擇器會列出已啟用的原生與路由模型，以及全域 Codex reasoning 階梯。API 會先驗證所選強度是否
@@ -109,6 +109,6 @@ GUI 是代理 JSON 管理 API 之上的輕量用戶端。常用 endpoint 包括�
 
 :::tip
 從儀表板新增 **Ollama Cloud** 或其他目錄型 provider 時，其文字/視覺模型分類會寫入儲存的
-provider 設定。因此無需手動分類，[vision sidecar](/zh-cn/guides/sidecars/) 也能在正確
+provider 設定。因此無需手動分類，[vision sidecar](/zh-tw/guides/sidecars/) 也能在正確
 條件下啟用。
 :::

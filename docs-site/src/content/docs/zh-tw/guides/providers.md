@@ -48,7 +48,7 @@ shipped v1 設定自動遷移到 marker 2 的單一選項行。原設定只保�
 }
 ```
 
-只有一組精選的請求頭會被轉發（`FORWARD_HEADERS`：authorization、ChatGPT account id、OpenAI beta/originator/session——參見 [Adapters](/zh-cn/reference/adapters/)）。這條路徑也為 [web-search 和 vision sidecar](/zh-cn/guides/sidecars/) 提供支援。
+只有一組精選的請求頭會被轉發（`FORWARD_HEADERS`：authorization、ChatGPT account id、OpenAI beta/originator/session——參見 [Adapters](/zh-tw/reference/adapters/)）。這條路徑也為 [web-search 和 vision sidecar](/zh-tw/guides/sidecars/) 提供支援。
 
 ChatGPT 透傳目錄也會加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-sol`、
 `gpt-5.6-terra`、`gpt-5.6-luna`）；帳號具備相應許可權時才能實際呼叫。
@@ -78,7 +78,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist 協議使用 Google OAuth。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、HTTP/2 傳輸和按帳號篩選的模型發現。 |
 
-你也可以從 [web 儀表板](/zh-cn/guides/web-dashboard/) 啟動 OAuth。
+你也可以從 [web 儀表板](/zh-tw/guides/web-dashboard/) 啟動 OAuth。
 
 ### 多個 OAuth 帳號
 
@@ -136,7 +136,7 @@ ChatGPT 轉發預設。儀表板的 **Add provider** 選擇器會開啟金鑰供
 
 無需開啟儀表板，即可使用 `ocx account list`、`ocx account current` 和 `ocx account use` 檢視或
 切換同一組 Codex、OAuth 和 API-key pool。完整命令、JSON 輸出和新 session 生效規則請參閱
-[CLI 參考](/zh-cn/reference/cli/#ocx-account-subcommand)。
+[CLI 參考](/zh-tw/reference/cli/#ocx-account-subcommand)。
 
 ### GPT-5.6 預覽路徑
 
@@ -173,7 +173,7 @@ Cursor access token 後，opencodex 會使用 Cursor live HTTP/2 transport。v2.
 native read/write/delete/ls/grep/shell/fetch 執行預設停用，因為它會繞過 Codex 的 approval 和
 sandbox 路徑；只有在可信本機實驗中，才應在 `~/.opencodex/config.json` 的 `providers.cursor`
 物件上設定 `unsafeAllowNativeLocalExec: true`，也可以在儀表板的 **Providers → Cursor → Edit JSON**
-中設定。完整示例參見 [設定參考](/zh-cn/reference/configuration/#cursor-provider-adapter-cursor)。MCP、螢幕錄製和 computer-use
+中設定。完整示例參見 [設定參考](/zh-tw/reference/configuration/#cursor-provider-adapter-cursor)。MCP、螢幕錄製和 computer-use
 透過 executor hook 暴露；沒有設定本機 executor 時，opencodex 會返回 typed no-executor 結果。
 Cursor OAuth 和 live model discovery 已在這個實驗性 adapter 中啟用；Cursor 仍不會出現在 key-login
 列表中。
@@ -181,7 +181,7 @@ Cursor OAuth 和 live model discovery 已在這個實驗性 adapter 中啟用；
 
 ### Ollama Cloud
 
-Ollama Cloud 是託管（而非本機）的 Ollama，在 `https://ollama.com/v1` 上相容 OpenAI，金鑰來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 按視覺能力對其雲端陣容進行分類，使 [vision sidecar](/zh-cn/guides/sidecars/) 僅對純文字模型生效。純文字模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支援視覺的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）則不在其中。匹配能容忍 Ollama 的 `:size` 標籤，因此 `gpt-oss` 涵蓋 `gpt-oss:120b` 和 `gpt-oss:20b`。
+Ollama Cloud 是託管（而非本機）的 Ollama，在 `https://ollama.com/v1` 上相容 OpenAI，金鑰來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 按視覺能力對其雲端陣容進行分類，使 [vision sidecar](/zh-tw/guides/sidecars/) 僅對純文字模型生效。純文字模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支援視覺的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）則不在其中。匹配能容忍 Ollama 的 `:size` 標籤，因此 `gpt-oss` 涵蓋 `gpt-oss:120b` 和 `gpt-oss:20b`。
 
 ## 4. 本機供應商
 
@@ -195,4 +195,4 @@ Ollama Cloud 是託管（而非本機）的 Ollama，在 `https://ollama.com/v1`
 
 ## 任意 OpenAI 相容端點
 
-如果某個供應商使用 Chat Completions，`openai-chat` adapter 即可處理它——在儀表板中選擇 **Custom**，或在 `ocx init` 中選擇 `custom` 並輸入基礎 URL。每個供應商欄位（`headers`、`noReasoningModels`、`noVisionModels`、`models`……）請參見 [設定參考](/zh-cn/reference/configuration/)。
+如果某個供應商使用 Chat Completions，`openai-chat` adapter 即可處理它——在儀表板中選擇 **Custom**，或在 `ocx init` 中選擇 `custom` 並輸入基礎 URL。每個供應商欄位（`headers`、`noReasoningModels`、`noVisionModels`、`models`……）請參見 [設定參考](/zh-tw/reference/configuration/)。

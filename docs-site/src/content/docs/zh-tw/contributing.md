@@ -44,7 +44,7 @@ cd docs-site && bun install && bun dev
 
 ## 文件釋出
 
-公開文件釋出到 GitHub Pages：<https://opencodex.me/zh-cn/>。
+公開文件釋出到 GitHub Pages：<https://opencodex.me/zh-tw/>。
 `.github/workflows/deploy-docs.yml` 會在 `main` push 中 `docs-site/**` 或 workflow 本身發生變化時
 執行，建置 `docs-site` 並部署生成的網站。推送文件變更前請執行：
 
@@ -111,7 +111,7 @@ bun run release:watch               # 觀察最新的 Release workflow run
 ## 新增 adapter
 
 在 `src/adapters/` 中實現 `ProviderAdapter`（參見
-[Adapters](/zh-cn/reference/adapters/)），在 `src/server/adapter-resolve.ts` 註冊其名稱，
+[Adapters](/zh-tw/reference/adapters/)），在 `src/server/adapter-resolve.ts` 註冊其名稱，
 並把輸出橋接成內部 `AdapterEvent`。圖像處理請複用 `image.ts`；普通 streaming/tool call 以
 `openai-chat.ts` 為參考。只有 adapter 自己負責 transport retry 時才使用 `fetchResponse`；Cursor
 這類真正的雙向 transport 應使用 `runTurn`。在 `tests/` 中新增聚焦測試；如果 factory 屬於 public

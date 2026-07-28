@@ -42,7 +42,7 @@ Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已�
 2. **路由** —— `router.ts` 按固定的優先順序將請求的模型 id 對映到一個已設定的 provider：
    顯式的 `provider/model` → provider 的 `defaultModel` → 內建字首模式
    (`claude-`、`gpt-`、`o1-`/`o3-`/`o4-`、`llama-`/`mixtral-`/`gemma-`) → provider 的 `models[]` →
-   `defaultProvider` 回退。參見 [模型路由](/zh-cn/guides/model-routing/)。
+   `defaultProvider` 回退。參見 [模型路由](/zh-tw/guides/model-routing/)。
 
 3. **認證** —— 對於 `oauth` 型別的 provider,opencodex 會換入一個全新、自動重新整理的 access
    token 作為 bearer key,從而讓現有的 adapter 無需改動即可完成認證。
@@ -50,7 +50,7 @@ Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已�
 4. **Vision sidecar(可選)** —— 如果已路由的模型被列在 `provider.noVisionModels` 中,且
    請求攜帶了圖像，opencodex 會透過你的 ChatGPT 登入憑證，使用已設定的 vision sidecar 描述
    每張圖像並將其替換為文字，讓純文字模型仍可對圖像進行推理。
-   參見 [Sidecar](/zh-cn/guides/sidecars/)。
+   參見 [Sidecar](/zh-tw/guides/sidecars/)。
 
 5. **直通快速路徑** —— 對於 Responses 直通 adapter（`openai-responses` 或 `azure-openai`），
    opencodex 會保留 Responses body，只執行必要的路由與相容性改寫，然後直接轉發 provider 回應，
@@ -82,4 +82,4 @@ Codex 把 Responses API 硬編碼在內部。透過在協議邊界處進行翻�
 Codex 的 **CLI、App 和 SDK** 無改動地協作,能在 Codex 更新後繼續工作,並讓你能夠按請求切換 provider
 而無需改動 Codex 本身。這種翻譯是雙向且忠於 streaming 的:
 推理摘要、MCP 工具名稱空間、freeform(`apply_patch`)工具,以及 `tool_search` 發現
-都能正確地往返。關於逐事件的對映,參見 [架構參考](/zh-cn/reference/architecture/)。
+都能正確地往返。關於逐事件的對映,參見 [架構參考](/zh-tw/reference/architecture/)。

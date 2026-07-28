@@ -67,7 +67,7 @@ const quickstartMini = [
 
 const quickstart = [
 	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝') },
-	{ cmd: 'ocx init', note: t('Inject a provider into Codex', 'Codex에 프로바이더 주입', '向 Codex 注入 provider', 'Внедрение провайдера в Codex', 'プロバイダーを Codex に注入', '向 Codex 注入 provider') },
+	{ cmd: 'ocx init', note: t('Inject a provider into Codex', 'Codex에 프로바이더 주입', '向 Codex 注入 provider', 'Внедрение провайдера в Codex', 'プロバイダーを Codex に注入', '向 Codex 注入供應商') },
 	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理') },
 	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', 'Codex가 ocx를 경유', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex は ocx 経由に', 'Codex 現在經由 ocx 路由') },
 ];
@@ -151,7 +151,7 @@ const docsMap = [
 				</span>{t(' on any LLM.', '를 어떤 LLM 위에서든.', ' 跑在任意 LLM 上。', ' на любой LLM.', ' を任意の LLM 上で。', ' 跑在任意 LLM 上。')}
 			</h1>
 			<p class="lp-sub">
-				{t('opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'opencodex는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'opencodex — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'opencodex は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機代理，用同一個連接埠同時服務 Codex 與 Claude Code —— 將各自的線路格式雙向翻譯為任意 provider，支援流式、工具呼叫、推理與圖像。無需修補用戶端。')}
+				{t('opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'opencodex는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'opencodex — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'opencodex は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機代理，用同一個連接埠同時服務 Codex 與 Claude Code —— 將各自的線路格式雙向翻譯為任意供應商，支援流式、工具呼叫、推理與圖像。無需修補用戶端。')}
 			</p>
 			<div class="lp-cta">
 				<a class="lp-btn-primary" href={`${prefix}getting-started/installation/`}>
@@ -160,7 +160,7 @@ const docsMap = [
 				</a>
 				<a class="lp-btn-ghost" href="https://github.com/lidge-jun/opencodex">GitHub</a>
 			</div>
-		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的 provider', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的 provider')}>
+		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的 provider', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的供應商')}>
 				{providers.map((p) => (
 					<li>
 						{p.path && (
@@ -171,11 +171,11 @@ const docsMap = [
 						{p.label}
 					</li>
 				))}
-				<li class="lp-chip-more"><a href={`${prefix}guides/providers/`}>{t('40+ providers', '프로바이더 40+', '40+ providers', '40+ провайдеров', '40+ プロバイダー', '40+ providers')}</a></li>
+				<li class="lp-chip-more"><a href={`${prefix}guides/providers/`}>{t('40+ providers', '프로바이더 40+', '40+ providers', '40+ провайдеров', '40+ プロバイダー', '40+ 供應商')}</a></li>
 			</ul>
 		</div>
 		<div class="lp-stage-in">
-			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的 provider 与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル', 'opencodex 儀表板 —— 即時代理狀態、路由的 provider 與可用模型')} loading="eager" />
+			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的 provider 与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル', 'opencodex 儀表板 —— 即時代理狀態、路由的供應商與可用模型')} loading="eager" />
 		</div>
 	</div>
 	</section>
@@ -216,9 +216,9 @@ const docsMap = [
 		<h2 class="lp-bento-title">{t('One proxy, the whole surface.', '프록시 하나로 전체 서피스를.', '一个代理，覆盖全部能力。', 'Один прокси — все возможности.', '1 つのプロキシでサーフェス全体を。', '一個代理，覆蓋全部能力。')}</h2>
 		<div class="lp-grid">
 			<article class="lp-cell lp-cell-providers">
-				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.plug} /></svg>{t('Any provider', '모든 프로바이더', '任意 provider', 'Любой провайдер', '任意のプロバイダー', '任意 provider')}</h3>
+				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.plug} /></svg>{t('Any provider', '모든 프로바이더', '任意 provider', 'Любой провайдер', '任意のプロバイダー', '任意供應商')}</h3>
 				<p>
-					{t('Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.', '어댑터 다섯 개가 Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 커버합니다 — 내장 프로바이더 40+.', '五个适配器覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 兼容的 Chat Completions 端点 —— 内置 40+ provider。', 'Пять адаптеров покрывают Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough и любую OpenAI-совместимую конечную точку Chat Completions — 40+ встроенных провайдеров.', '5 つのアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — 組み込みプロバイダー 40+。', '五個適配器覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 相容的 Chat Completions 端點 —— 內建 40+ provider。')}
+					{t('Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.', '어댑터 다섯 개가 Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 커버합니다 — 내장 프로바이더 40+.', '五个适配器覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 兼容的 Chat Completions 端点 —— 内置 40+ provider。', 'Пять адаптеров покрывают Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough и любую OpenAI-совместимую конечную точку Chat Completions — 40+ встроенных провайдеров.', '5 つのアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — 組み込みプロバイダー 40+。', '五個適配器覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 相容的 Chat Completions 端點 —— 內建 40+ 供應商。')}
 				</p>
 			</article>
 			<article class="lp-cell">
@@ -249,7 +249,7 @@ const docsMap = [
 			</article>
 			<article class="lp-cell lp-cell-terminal">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.code} /></svg>{t('Quickstart', '퀵스타트', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門')}</h3>
-				<p>{t('ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'ocx init이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ocx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'ocx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'ocx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'ocx init が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ocx stop でネイティブ Codex に綺麗に復元します。', 'ocx init 將 provider 寫入 Codex 設定，CLI、TUI、App 與 SDK 共享同一模型目錄。ocx stop 可乾淨地恢復原生 Codex。')}</p>
+				<p>{t('ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'ocx init이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ocx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'ocx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'ocx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'ocx init が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ocx stop でネイティブ Codex に綺麗に復元します。', 'ocx init 將供應商寫入 Codex 設定，CLI、TUI、App 與 SDK 共享同一模型目錄。ocx stop 可乾淨地恢復原生 Codex。')}</p>
 				<div class="lp-terminal">
 					<div class="lp-terminal-bar"><span>zsh</span></div>
 					<pre>{quickstart.map((line) => (<code><span class="lp-prompt">$ </span>{line.cmd}<span class="lp-note">  # {line.note}</span>{'\n'}</code>))}</pre>
@@ -282,7 +282,7 @@ const docsMap = [
 			'opencodex 是独立的社区项目，与 OpenAI、Anthropic 或任何其他 provider 均无关联或背书。部分 provider 可能限制经第三方代理路由流量的账号 —— 连接前请查阅各 provider 的服务条款。',
 			'opencodex — независимый проект сообщества, никак не связанный с OpenAI, Anthropic или любым другим провайдером и не одобренный ими. Некоторые провайдеры могут ограничивать аккаунты, направляющие трафик через сторонние прокси, — перед подключением ознакомьтесь с условиями обслуживания каждого провайдера.',
 			'opencodex は独立したコミュニティプロジェクトであり、OpenAI、Anthropic などいかなるプロバイダーとも提携・推奨されるものではありません。一部のプロバイダーはサードパーティプロキシ経由のトラフィックを使用するアカウントを制限する可能性があります — 接続前に各プロバイダーの利用規約を確認してください。',
-			'opencodex 是獨立的社群專案，與 OpenAI、Anthropic 或任何其他 provider 均無關聯或背書。部分 provider 可能限制經第三方代理路由流量的帳號 —— 連線前請查閱各 provider 的服務條款。',
+			'opencodex 是獨立的社群專案，與 OpenAI、Anthropic 或任何其他供應商均無關聯或背書。部分供應商可能限制經第三方代理路由流量的帳號 —— 連線前請查閱各供應商的服務條款。',
 		)}
 	</p>
 </div>

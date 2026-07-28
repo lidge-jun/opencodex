@@ -158,7 +158,7 @@ Codex 的 `spawn_agent` 會按優先順序排序，然後展示**前 5 個在選
 }
 ```
 
-優先順序排序：置頂（0–4）< 其他路由（5）< 原生（9）。你也可以從 [web 儀表板](/zh-cn/guides/web-dashboard/) 管理這一項。
+優先順序排序：置頂（0–4）< 其他路由（5）< 原生（9）。你也可以從 [web 儀表板](/zh-tw/guides/web-dashboard/) 管理這一項。
 
 ## Codex 帳號預熱
 
@@ -181,4 +181,4 @@ ocx restore    # 不停止 proxy 僅恢復  (別名: ocx eject)
 ocx restore back # 讓普通 Codex 重新指向仍在執行的 proxy
 ```
 
-當 opencodex 作為受管的 [後臺服務](/zh-cn/reference/cli/#ocx-service) 執行環境，它會設定 `OCX_SERVICE=1`，這樣由服務驅動的重啟**不會**反覆改寫 Codex 設定——只有顯式的 `ocx stop` / `ocx service stop` 才會恢復原生 Codex。
+當 opencodex 作為受管的 [後臺服務](/zh-tw/reference/cli/#ocx-service) 執行環境，它會設定 `OCX_SERVICE=1`，這樣由服務驅動的重啟**不會**反覆改寫 Codex 設定——只有顯式的 `ocx stop` / `ocx service stop` 才會恢復原生 Codex。

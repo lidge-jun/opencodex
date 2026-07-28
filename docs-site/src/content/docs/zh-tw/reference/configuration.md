@@ -141,7 +141,7 @@ x-opencodex-api-key: your-secret-token
 | `headers?` | `Record<string,string>` | 額外上游 header。Authorization、cookie、API-key header、包含換行的值和無效 header 名稱會被拒絕。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 預設 OpenRouter provider 路由設定。支援 `order`、`only` 和 `allowFallbacks`；僅適用於 canonical OpenRouter URL 和 `openai-chat` adapter。 |
 | `modelOpenRouterRouting?` | `Record<string,OpenRouterProviderRouting>` | 按精確模型 id 覆蓋 `openRouterRouting`。 |
-| `authMode?` | `"key" \| "forward" \| "oauth"` | 認證方式（預設 `key`）。參見 [Providers](/zh-cn/guides/providers/#認證模式)。 |
+| `authMode?` | `"key" \| "forward" \| "oauth"` | 認證方式（預設 `key`）。參見 [Providers](/zh-tw/guides/providers/#認證模式)。 |
 | `codexAccountMode?` | `"pool" \| "direct"` | 僅用於 canonical `openai`。省略時預設 Pool；Direct 會繞過池狀態。 |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | 覆蓋該 OAuth provider 的 Token Guardian 策略。 |
 | `reasoningEfforts?` | `string[]` | provider 級需要公佈和傳送的 Codex reasoning label（`low`、`medium`、`high`、`xhigh`、`max`、`ultra`）。 |
@@ -158,14 +158,15 @@ x-opencodex-api-key: your-secret-token
 | `preserveReasoningContentModels?` | `string[]` | 要求在 chat history 中保留先前 assistant `reasoning_content` 的模型。 |
 | `thinkingToggleModels?` | `string[]` | 使用 vendor `thinking.enabled` toggle，而不是 effort ladder 的 chat 模型。 |
 | `thinkingBudgetModels?` | `string[]` | 使用整數 `thinking_budget` 的 chat 模型；effort 會對映成 budget 比例。 |
-| `noVisionModels?` | `string[]` | 純文字模型；[視覺 sidecar](/zh-cn/guides/sidecars/) 會為它們描述圖像。匹配時容忍 Ollama `:size` 標籤。 |
+| `noVisionModels?` | `string[]` | 純文字模型；[視覺 sidecar](/zh-tw/guides/sidecars/) 會為它們描述圖像。匹配時容忍 Ollama `:size` 標籤。 |
 | `escapeBuiltinToolNames?` | `boolean` | Umans 等 Anthropic 相容 gateway 可能要求在 wire 上轉義工具名；opencodex 會在把 tool call 返回 Codex 前移除 prefix。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google transport/auth mode。預設 `ai-studio`。 |
 | `project?` | `string` | Vertex project id 或 Antigravity Cloud Code Assist project id。 |
 | `location?` | `string` | Vertex location；env fallback 為 `GOOGLE_CLOUD_LOCATION`。 |
 | `mcpServers?` | `Record<string,CursorMcpServerConfig>` | **僅 Cursor。** 透過 stdio 啟動或 Streamable HTTP 連線的 MCP server；欄位見下文。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | **僅 Cursor。** 外部 computer-use/record-screen 命令；欄位見下文。 |
-| `unsafeAllowNativeLocalExec?` | `boolean` | **僅 Cursor adapter。** 允許 Cursor server 驅動本機 `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` 的 opt-in escape hatch。預設 `false`，防止遠端 Cursor message 繞過 Codex 審批與 sandbox。見下文 [Cursor provider](#cursor-provideradapter-cursor)。 |
+| `unsafeAllowNativeLocalExec?` | `boolean` | **僅 Cursor adapter。** Cursor server 驅動本機 `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` 執行器的舊版相容布林值。當 `nativeLocalExec` 未設定時，等同 `nativeLocalExec: "on"`；若已顯式設定 `nativeLocalExec`，以後者為準。預設 `false`。新設定請優先使用 `nativeLocalExec`。見下文 [Cursor provider](#cursor-provideradapter-cursor)。 |
+| `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | **僅 Cursor adapter。** Cursor server 驅動執行器的原生本機執行政策。`"off"`（預設）拒絕執行；`"on"` 為可信本機 opt-in；`"codex-sandbox"` 為向後相容而接受，但目前與 `"off"` 一樣 fail-closed。見下文 [Cursor provider](#cursor-provideradapter-cursor)。 |
 
 ### 固定的 provider 端點
 
@@ -179,7 +180,7 @@ x-opencodex-api-key: your-secret-token
 
 之後 adapter 仍可能調整已解析的 URL。例如 `kiro` adapter 在 host 為標準
 `runtime.{region}.kiro.dev` 時，會改用匯入憑證所屬的 API region。逐個 adapter 的規則見
-[Adapters](/zh-cn/reference/adapters/)。
+[Adapters](/zh-tw/reference/adapters/)。
 
 當路由丟棄設定的 `baseUrl` 時，opencodex 會列印一條警告：registry 端點會完整列出，而你設定的那個
 只列出 origin —— 原本帶路徑時顯示為 `https://host/…`。設定的路徑本身可能就是憑證，因此一段都不會記錄。
@@ -193,10 +194,29 @@ Cursor bridge 仍屬實驗功能。執行 `ocx login cursor` 後，在
 `~/.opencodex/config.json`（Windows：`%USERPROFILE%\.opencodex\config.json`）的 `providers` 下
 新增或編輯 `cursor` 條目。
 
+Cursor Router 的完整優化階梯會以獨立的 Codex 模型 id 暴露，因為 Codex 的模型選擇器無法渲染
+Cursor 專屬的模型參數：
+
+| Codex 模型 | Cursor Router 模式 |
+| --- | --- |
+| `cursor/auto` | 團隊／帳號預設（向後相容） |
+| `cursor/auto-cost` | Cost |
+| `cursor/auto-balance` | Balance |
+| `cursor/auto-intelligence` | Intelligence |
+
+這些明確變體都會以 Cursor 的 `default` 模型搭配其 `optimization` 模型參數送出，因此每次請求都會
+保留該選擇。即使即時模型探索省略 `default`，它們仍會像原本的 `cursor/auto` 一樣可用。
+
 Cursor server 驅動的原生本機工具預設保持**停用**。Codex 繼續按自身審批和 sandbox policy 使用
-`apply_patch`、`exec_command` 等工具。只有在可信本機實驗中，且你接受 Cursor 繞過 Codex 審批
-讀取、寫入、刪除、列出、grep、shell 或 fetch 本機內容時，才設定
-`unsafeAllowNativeLocalExec`。
+`apply_patch`、`exec_command` 等工具。使用 `nativeLocalExec` 欄位選擇政策：
+
+- **`"off"`（預設，最安全）** — 拒絕所有 Cursor server 驅動的本機 `read`、`write`、`delete`、
+  `ls`、`grep`、`shell` 與 `fetch` 執行。除非你刻意選擇加入，否則請使用此值。
+- **`"on"`（可信本機 opt-in）** — 一律允許此供應商的 Cursor 原生本機執行。
+  僅在資料平面的每個呼叫端都可信的本機實驗主機上使用。
+- **`"codex-sandbox"`（接受，但 fail-closed）** — 為向後相容而辨識，但目前行為與 `"off"` 相同。
+  Responses 的 `instructions` / `system` / `developer` 文字是呼叫端可控的散文，opencodex 沒有
+  可信的逐請求證明能反映真實的 Codex sandbox 狀態，因此它永遠不會授權原生本機執行。
 
 ```json
 {
@@ -206,19 +226,23 @@ Cursor server 驅動的原生本機工具預設保持**停用**。Codex 繼續�
       "baseUrl": "https://api2.cursor.sh",
       "authMode": "oauth",
       "defaultModel": "auto",
-      "unsafeAllowNativeLocalExec": true
+      "nativeLocalExec": "off"
     }
   }
 }
 ```
 
-該 flag 應放在 **provider 物件**（`providers.cursor`）上，而不是 `config.json` 頂層。
+該欄位應放在 **provider 物件**（`providers.cursor`）上，而不是 `config.json` 頂層。
 
-也可在 [Web 儀表板](/zh-cn/guides/web-dashboard/) 中設定：進入 **Providers → Cursor →
-Edit JSON**，新增 `"unsafeAllowNativeLocalExec": true`，儲存後重啟代理
+也可在 [Web 儀表板](/zh-tw/guides/web-dashboard/) 中設定：進入 **Providers → Cursor →
+Edit JSON**，將 `"nativeLocalExec"` 設為 `"off"`、`"on"` 或 `"codex-sandbox"`，儲存後重啟代理
 （`ocx restart` 或 `ocx stop` + `ocx start`）。
 
-MCP、螢幕錄製和 computer-use 使用獨立的 `mcpServers` / `desktopExecutor` 設定，不受該 flag 控制。
+舊版布林值 `unsafeAllowNativeLocalExec: true` 仍被接受；當 `nativeLocalExec` 未設定時，等同
+`nativeLocalExec: "on"`。若已顯式設定 `nativeLocalExec`，以後者為準。新設定請優先使用
+`nativeLocalExec`。
+
+MCP、螢幕錄製和 computer-use 使用獨立的 `mcpServers` / `desktopExecutor` 設定，不受該欄位控制。
 
 ### Cursor 整合 record
 
@@ -232,8 +256,10 @@ MCP、螢幕錄製和 computer-use 使用獨立的 `mcpServers` / `desktopExecut
 讀取一個 JSON 請求，並必須向 stdout 寫出一個 JSON 結果。
 
 :::caution[安全]
-除非你明確需要繞過 Codex 審批與 sandbox 語義的 Cursor 原生本機執行，否則請省略
-`unsafeAllowNativeLocalExec` 或保持為 `false`。
+`"off"` 是最安全的預設。預設 loopback bind 會在**沒有驗證**的情況下接納**任何**本機程序
+（在多使用者機器上也包括其他本機使用者），且像 Codex sandbox 標記這類請求文字永遠不會授權
+原生本機執行。除非你明確需要繞過 Codex 審批與 sandbox 語義的 Cursor 原生本機執行，否則請
+省略 `nativeLocalExec` 或將其設為 `"off"`。
 :::
 
 ## OpenRouter provider 路由

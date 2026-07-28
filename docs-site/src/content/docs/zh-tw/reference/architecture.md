@@ -5,7 +5,7 @@ description: opencodex 內部機制 —— 模組圖、請求解析器、Adapter
 
 opencodex 執行在單個 Bun 程序中。請求以 OpenAI Responses 格式進入，規範化為內部模型後完成
 路由，再由 adapter 傳送到 provider，最後橋接回 Responses SSE。端到端流程參見
-[運作原理](/zh-cn/getting-started/how-it-works/)。
+[運作原理](/zh-tw/getting-started/how-it-works/)。
 
 ## 模組圖
 
@@ -143,7 +143,7 @@ Codex context compaction 同樣適用於路由模型。`server/responses/compact
   與 Codex 自身快取一致），獲取失敗時會回退到舊資料。
 - `codex/catalog.ts` facade 匯出的 `codex/catalog/sync.ts` 把路由模型作為帶名稱空間的條目
   合併進 Codex 目錄，優先排列精選的
-  [subagent 模型](/zh-cn/guides/codex-integration/#subagent-選擇器)，過濾
+  [subagent 模型](/zh-tw/guides/codex-integration/#subagent-選擇器)，過濾
   `disabledModels`，並可從一次性備份中完整恢復原始目錄。
 
 ## Reasoning effort

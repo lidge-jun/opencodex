@@ -3,7 +3,7 @@
 ## Public docs
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
-served at the site root, Korean under `/ko`, Simplified Chinese under `/zh-cn`, and Traditional Chinese under `/zh-tw`.
+served at the site root, Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, and Japanese under `/ja`.
 
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.

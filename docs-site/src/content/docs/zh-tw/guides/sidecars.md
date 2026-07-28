@@ -118,4 +118,4 @@ Anthropic OAuth provider。Sidecar 錯誤會轉換成長度受限的工具結果
 設定檔欄位現在即可使用。如需停用某個 sidecar，請在 `config.json` 中把對應的 `enabled` 設為
 `false`。Anthropic OAuth 搜尋和圖像描述沿用現有 Claude Code OAuth fingerprint 先例，但仍應使用
 目標帳號和實際負載充分 soak test。所有欄位見
-[設定參考](/zh-cn/reference/configuration/#sidecars)。
+[設定參考](/zh-tw/reference/configuration/#sidecars)。

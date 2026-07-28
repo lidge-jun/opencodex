@@ -92,5 +92,5 @@ opencodex 絕不會刪除你的 Codex 設定。每次注入都是可逆的 —�
 
 ## 下一步
 
-繼續閱讀 [快速入門](/zh-cn/getting-started/quickstart/) 以設定你的第一個 provider,
-或閱讀 [運作原理](/zh-cn/getting-started/how-it-works/) 瞭解其架構。
+繼續閱讀 [快速入門](/zh-tw/getting-started/quickstart/) 以設定你的第一個 provider,
+或閱讀 [運作原理](/zh-tw/getting-started/how-it-works/) 瞭解其架構。

@@ -20,7 +20,7 @@ interface ProviderAdapter {
 `buildRequest` 把 `OcxParsedRequest` 轉成上游 HTTP 請求；`parseStream` / `parseResponse` 把 provider
 回覆轉回內部 `AdapterEvent`。`fetchResponse` 允許 adapter 自己負責重試和 timeout；`runTurn` 支援
 無法表示成一次 HTTP fetch 加一條回應流的 transport。隨後
-[`bridge.ts`](/zh-cn/reference/architecture/#橋接器) 把 event 轉成 Responses SSE。
+[`bridge.ts`](/zh-tw/reference/architecture/#橋接器) 把 event 轉成 Responses SSE。
 
 ## `openai-chat`
 
@@ -47,7 +47,7 @@ interface ProviderAdapter {
 - `key` provider 可設定經過驗證的相對 `responsesPath`；adapter 會移除 `baseUrl` 末尾的一個 `/`，並向 `{trimmedBaseUrl}{responsesPath}` 傳送請求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
 - `forward` 模式只會轉發安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT
   account id 和 OpenAI beta/originator/session header。這條 ChatGPT 登入路徑也為
-  [sidecar](/zh-cn/guides/sidecars/) 提供支援。
+  [sidecar](/zh-tw/guides/sidecars/) 提供支援。
 
 ## `anthropic`
 

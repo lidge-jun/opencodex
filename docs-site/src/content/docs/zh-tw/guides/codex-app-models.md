@@ -46,7 +46,7 @@ env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 `websockets` 預設關閉。只有設定 `"websockets": true` 時，獨立 provider 和目錄條目才會宣告
 `supports_websockets = true`。在 loopback 模式下，Codex 的內建 provider 可能會先嚐試
 WebSocket；若代理未啟用該功能，則返回 `426`，讓 Codex 回退到 HTTP/SSE。完整的注入與恢復流程見
-[Codex 整合](/zh-cn/guides/codex-integration/)。
+[Codex 整合](/zh-tw/guides/codex-integration/)。
 
 ## 為什麼路由模型會顯示
 
@@ -110,7 +110,7 @@ opencodex 為每個目錄條目的 `multi_agent_version` 提供三態 override�
 :::caution
 在 v2（`multi_agent_v2`）介面中，生成的子代理會繼承父 session 的模型。儀表板中的委派模型/
 reasoning 選擇器只是 v1 prompt 指引，並不是由代理在每次生成時執行跨模型路由。權威說明見
-[子代理介面](/zh-cn/guides/sub-agent-surface/)。
+[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 :::
 
 ## 頂級 reasoning 檔位
