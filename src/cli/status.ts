@@ -1,7 +1,7 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics, readPid, readRuntimePort, type RuntimePortState } from "../config";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
-import { isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
+import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { diagnoseService } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
@@ -132,9 +132,28 @@ async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
 export async function collectStatus(): Promise<CliStatusView> {
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
-  const pid = readPid();
-  const listen = selectListenTarget(config, pid, pid ? readRuntimePort(pid) : null);
-  const health = await checkProxyHealth(listen);
+  // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
+  const live = await findLiveProxy();
+  const pidFile = readPid();
+  const pid = live?.pid ?? pidFile;
+  const listen = live
+    ? {
+      port: live.port,
+      hostname: live.hostname,
+      source: "runtime" as const,
+      healthUrl: `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
+      dashboardUrl: `http://localhost:${live.port}/`,
+    }
+    : selectListenTarget(config, pidFile, pidFile ? readRuntimePort(pidFile) : null);
+  // findLiveProxy already identity-probed /healthz; avoid a second fetch that can race.
+  const health = live
+    ? {
+      ok: true,
+      url: listen.healthUrl,
+      message: `ok (pid ${live.pid ?? "unknown"})`,
+      label: `${listen.healthUrl} ok (live)`,
+    }
+    : await checkProxyHealth(listen);
   const bunRuntime = durableBunRuntime();
   const service = diagnoseService();
   const serviceSummary = service.summary;
@@ -228,13 +247,15 @@ export async function collectStatus(): Promise<CliStatusView> {
       runtimeVersion: clampActive ? (lastClamp?.runtimeVersion ?? null) : null,
     },
   };
-  const proxyLabel = pid && health.ok
-    ? `running (PID ${pid})`
-    : pid
-      ? `PID file points to PID ${pid}, but health check failed`
-      : health.ok
-        ? "reachable, but PID file is missing or stale"
-        : "not running";
+  const proxyLabel = live
+    ? `running (PID ${live.pid ?? pid ?? "unknown"})`
+    : pid && health.ok
+      ? `running (PID ${pid})`
+      : pid
+        ? `PID file points to PID ${pid}, but health check failed`
+        : health.ok
+          ? "reachable, but PID file is missing or stale"
+          : "not running";
 
   return {
     proxyLabel,
@@ -242,8 +263,8 @@ export async function collectStatus(): Promise<CliStatusView> {
     json: {
       schemaVersion: 1,
       proxy: {
-        running: Boolean(pid && health.ok),
-        pid,
+        running: Boolean(live) || Boolean(pid && health.ok),
+        pid: live?.pid ?? pid,
         health: {
           ok: health.ok,
           url: health.url,
