@@ -21,8 +21,8 @@ export function guiPathsChanged(files: string[]): boolean {
 /** True when stderr/stdout looks like a registry/network failure rather than findings. */
 export function looksLikeDoctorInfraFailure(output: string): boolean {
   // Keep this narrow: bare words like "network"/"offline" also appear in findings text.
-  // `npm ERR!` deliberately has no trailing \b — `!` is non-word so `\b` after it never matches.
-  return /(?:^|\b)(?:npm ERR!|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo ENOTFOUND|fetch failed|ERR_INVALID_URL|UNABLE_TO_GET_ISSUER_CERT|certificate has expired|unable to resolve|could not resolve host|socket hang up|connect ECONNREFUSED|connect ENOTFOUND|connect ECONNRESET)(?:\b|$)/im
+  // `npm ERR!` is matched on its own — `!` is non-word, so a shared trailing `\b` never fires after it.
+  return /npm ERR!|(?:^|\b)(?:ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo ENOTFOUND|fetch failed|ERR_INVALID_URL|UNABLE_TO_GET_ISSUER_CERT|certificate has expired|unable to resolve|could not resolve host|socket hang up|connect ECONNREFUSED|connect ENOTFOUND|connect ECONNRESET)(?:\b|$)/im
     .test(output);
 }
 
