@@ -16,6 +16,7 @@ import {
   clearThreadAccountMapForAccount,
   computeCodexUsageScore,
   getCodexAccountCooldownUntil,
+  getCodexQuotaHealthSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
   isCodexAccountInCooldown,
@@ -314,6 +315,23 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("quota-next", config)).toBe("b");
   });
 
+  test("shared native reset cooldown clears affinity and rotates the active account", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.6-terra",
+    });
+
+    expect(config.activeCodexAccountId).toBe("b");
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now + 1)).toBe("b");
+  });
+
   test("2xx responses clear transient failures without clearing an unexpired cooldown", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -467,6 +485,28 @@ describe("codex routing", () => {
     // Clearing says "the quota window moved", not "this account is healthy":
     // failover must keep what it learned from the 429.
     expect(health?.lastFailureStatus).toBe(429);
+  });
+
+  test("clearCodexAccountCooldown lifts every live native-model cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.3-codex-spark",
+    });
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.6-terra",
+    });
+
+    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).not.toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).not.toBeNull();
+    expect(clearCodexAccountCooldown("a", now + 1)).toBe(true);
+    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).toBeNull();
   });
 
   test("clearing is a no-op without a live cooldown", () => {

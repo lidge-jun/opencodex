@@ -5,7 +5,12 @@
  * fatals on a compaction turn that came back as an ordinary message.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleResponses } from "../src/server/responses";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { clearCodexUpstreamHealth } from "../src/codex/routing";
 import { supportsNativeResponsesCompactEndpoint } from "../src/providers/openai-tiers";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
@@ -28,6 +33,27 @@ function keyProviderConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfi
       },
     },
   } as unknown as OcxConfig;
+}
+
+function nativePoolConfig(): OcxConfig {
+  return {
+    defaultProvider: "openai",
+    activeCodexAccountId: "pool-a",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
+    codexAccounts: [{
+      id: "pool-a",
+      email: "pool@example.test",
+      isMain: false,
+      chatgptAccountId: "pool_acc",
+    }],
+  } as OcxConfig;
 }
 
 function compactionRequest(body: Record<string, unknown>): Request {
@@ -109,6 +135,65 @@ describe("supportsNativeResponsesCompactEndpoint (#422)", () => {
       ...officialApi,
       baseUrl: "https://gateway.example/v1",
     })).toBe(false);
+  });
+});
+
+describe("native Codex pool compaction", () => {
+  test("keeps a Spark reset cooldown separate from a Terra compact request (#590)", async () => {
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-compact-scope-"));
+    const previousOpencodexHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const config = nativePoolConfig();
+    const resetAt = Math.floor((Date.now() + 4 * 24 * 60 * 60_000) / 1_000);
+    let sparkPhase = true;
+    process.env.OPENCODEX_HOME = testDir;
+    process.env.CODEX_HOME = testDir;
+    clearCodexUpstreamHealth();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "pool_acc",
+    });
+    globalThis.fetch = (async () => {
+      if (sparkPhase) {
+        return Response.json({ error: { message: "Spark quota exhausted" } }, {
+          status: 429,
+          headers: { "x-codex-primary-reset-at": String(resetAt) },
+        });
+      }
+      return jsonResponse(completedPayload("Terra compact response"));
+    }) as typeof fetch;
+    try {
+      const spark = await handleResponses(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(spark.status).toBe(429);
+
+      sparkPhase = false;
+      const cooledSpark = await handleResponses(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(cooledSpark.status).toBe(429);
+
+      const terra = await handleResponses(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" })),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(terra.status).toBe(200);
+    } finally {
+      clearCodexUpstreamHealth();
+      rmSync(testDir, { recursive: true, force: true });
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
   });
 });
 

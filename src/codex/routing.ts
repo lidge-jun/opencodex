@@ -108,22 +108,49 @@ export const CODEX_THREAD_AFFINITY_MAX_ENTRIES = 2048;
 export const CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS = 60_000;
 
 const upstreamHealth = new Map<string, CodexUpstreamHealth>();
+/**
+ * Reset-derived 429s can describe a quota owned by one native model family,
+ * rather than the whole ChatGPT account. Keep those advisory cooldowns apart
+ * from account-wide Retry-After/default throttles and transient health.
+ */
+const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
 
 export type CodexUpstreamOutcome = number | "connect_error" | "timeout";
 export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "unknown";
 export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
+/**
+ * Native Codex quota groups known to be independent upstream. Keep the mapping
+ * deliberately conservative: unlisted models share the normal native group.
+ * Add a new explicit group here only when its independent upstream quota is
+ * confirmed, so shared limits never receive cross-model bypasses.
+ */
+export type CodexQuotaScope = "shared" | "spark";
+
+const NATIVE_MODEL_QUOTA_SCOPES: Readonly<Record<string, CodexQuotaScope>> = {
+  "gpt-5.3-codex-spark": "spark",
+};
+
+export function codexQuotaScopeForModel(modelId: string | undefined): CodexQuotaScope | undefined {
+  if (!modelId?.trim()) return undefined;
+  return NATIVE_MODEL_QUOTA_SCOPES[modelId.trim().toLowerCase()] ?? "shared";
+}
+
 export type CodexUpstreamOutcomeMeta = {
   retryAfter?: string | null;
   resetAt?: unknown | unknown[];
   now?: number;
+  /** Native model selected for this request; used only for confirmed scoped quotas. */
+  modelId?: string;
   /** When set, clears affinity for this thread immediately on transient failure. */
   threadId?: string | null;
   /**
    * Probe lease held by this request, when it was admitted through an active
    * quota cooldown. Only the outcome carrying the current lease may clear the
    * cooldown (#433).
-   */
+  */
   probeLeaseId?: string;
+  /** Scope of `probeLeaseId` when it was granted against a model-scoped cooldown. */
+  probeQuotaScope?: CodexQuotaScope;
   /**
    * Already-chosen alternate for same-request 429 retry. When set, promotion
    * reuses this account instead of calling {@link pickAlternateCodexAccount}
@@ -149,17 +176,39 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 
 export function clearCodexUpstreamHealth(): void {
   upstreamHealth.clear();
+  quotaScopedHealth.clear();
   runtimeActiveCodexAccountId = undefined;
 }
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
+  quotaScopedHealth.delete(accountId);
 }
 
 export function getCodexUpstreamHealth(
   accountId: string,
 ): CodexUpstreamHealth | null {
   return upstreamHealth.get(accountId) ?? null;
+}
+
+function scopedHealthFor(accountId: string, scope: CodexQuotaScope): CodexUpstreamHealth | undefined {
+  return quotaScopedHealth.get(accountId)?.get(scope);
+}
+
+function setScopedHealth(accountId: string, scope: CodexQuotaScope, health: CodexUpstreamHealth): void {
+  let scopes = quotaScopedHealth.get(accountId);
+  if (!scopes) {
+    scopes = new Map();
+    quotaScopedHealth.set(accountId, scopes);
+  }
+  scopes.set(scope, health);
+}
+
+function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): void {
+  const scopes = quotaScopedHealth.get(accountId);
+  if (!scopes) return;
+  scopes.delete(scope);
+  if (scopes.size === 0) quotaScopedHealth.delete(accountId);
 }
 
 export function computeCodexUsageScore(quota: {
@@ -276,7 +325,10 @@ export function tryAcquireCodexQuotaProbeLease(accountId: string, now = Date.now
 
 /** Side-effect-free check mirroring {@link tryAcquireCodexQuotaProbeLease} eligibility. */
 export function canAcquireCodexQuotaProbeLease(accountId: string, now = Date.now()): boolean {
-  const health = upstreamHealth.get(accountId);
+  return canAcquireQuotaProbeLease(upstreamHealth.get(accountId), now);
+}
+
+function canAcquireQuotaProbeLease(health: CodexUpstreamHealth | undefined, now: number): boolean {
   if (!health) return false;
   const cooldownUntil = health.cooldownUntil;
   if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return false;
@@ -284,6 +336,24 @@ export function canAcquireCodexQuotaProbeLease(accountId: string, now = Date.now
   if (health.probeLeaseId !== undefined) return false;
   const origin = health.lastProbeAt ?? health.cooldownSince ?? cooldownUntil;
   return now - origin >= CODEX_QUOTA_PROBE_INTERVAL_MS;
+}
+
+/** Acquire the recovery probe for one confirmed model-specific quota group. */
+export function tryAcquireCodexQuotaScopeProbeLease(
+  accountId: string,
+  scope: CodexQuotaScope,
+  now = Date.now(),
+): string | null {
+  const health = scopedHealthFor(accountId, scope);
+  if (!canAcquireQuotaProbeLease(health, now)) return null;
+  const probeLeaseId = randomUUID();
+  setScopedHealth(accountId, scope, {
+    ...health!,
+    probeLeaseId,
+    probeLeaseGeneration: health!.cooldownGeneration ?? 0,
+    lastProbeAt: now,
+  });
+  return probeLeaseId;
 }
 
 /**
@@ -294,6 +364,18 @@ export function releaseCodexQuotaProbeLease(accountId: string, leaseId: string, 
   const health = upstreamHealth.get(accountId);
   if (!health || health.probeLeaseId !== leaseId) return;
   upstreamHealth.set(accountId, withProbeLeaseReleased(health, now));
+}
+
+/** Release a model-specific quota probe when the request never reaches upstream. */
+export function releaseCodexQuotaScopeProbeLease(
+  accountId: string,
+  scope: CodexQuotaScope,
+  leaseId: string,
+  now = Date.now(),
+): void {
+  const health = scopedHealthFor(accountId, scope);
+  if (!health || health.probeLeaseId !== leaseId) return;
+  setScopedHealth(accountId, scope, withProbeLeaseReleased(health, now));
 }
 
 /**
@@ -367,6 +449,33 @@ export function getCodexAccountHealthSnapshot(accountId: string, now = Date.now(
   };
 }
 
+/**
+ * Read the cooldown relevant to a routed native model. Account-wide cooldowns
+ * (Retry-After/default) always win; reset-derived scoped state applies only to
+ * its confirmed quota group.
+ */
+export function getCodexQuotaHealthSnapshot(
+  accountId: string,
+  quotaScope: CodexQuotaScope | undefined,
+  now = Date.now(),
+): {
+  cooldownUntil?: number;
+  cooldownSource?: CodexCooldownSource;
+  quotaScope?: CodexQuotaScope;
+} | null {
+  const account = getCodexAccountHealthSnapshot(accountId, now);
+  if (account) return account;
+  if (!quotaScope) return null;
+  const scoped = scopedHealthFor(accountId, quotaScope);
+  const cooldownUntil = scoped?.cooldownUntil;
+  if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return null;
+  return {
+    cooldownUntil,
+    ...(scoped?.cooldownSource ? { cooldownSource: scoped.cooldownSource } : {}),
+    quotaScope,
+  };
+}
+
 export function isCodexAccountInCooldown(accountId: string, now = Date.now()): boolean {
   return getCodexAccountCooldownUntil(accountId, now) !== null;
 }
@@ -390,24 +499,41 @@ export function isCodexAccountInCooldown(accountId: string, now = Date.now()): b
  * Returns false when the account carried no live cooldown (already expired or never set).
  */
 export function clearCodexAccountCooldown(accountId: string, now = Date.now()): boolean {
-  const health = upstreamHealth.get(accountId);
-  if (!health) return false;
-  const cooldownUntil = health.cooldownUntil;
-  if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return false;
-  const {
-    cooldownUntil: _until,
-    cooldownSince: _since,
-    cooldownSource: _source,
-    probeLeaseId: _leaseId,
-    probeLeaseGeneration: _leaseGeneration,
-    ...rest
-  } = health;
-  upstreamHealth.set(accountId, {
-    ...rest,
-    cooldownGeneration: (health.cooldownGeneration ?? 0) + 1,
-    lastProbeAt: now,
-  });
-  return true;
+  const clear = (health: CodexUpstreamHealth): CodexUpstreamHealth | null => {
+    const cooldownUntil = health.cooldownUntil;
+    if (typeof cooldownUntil !== "number" || !Number.isFinite(cooldownUntil) || cooldownUntil <= now) return null;
+    const {
+      cooldownUntil: _until,
+      cooldownSince: _since,
+      cooldownSource: _source,
+      probeLeaseId: _leaseId,
+      probeLeaseGeneration: _leaseGeneration,
+      ...rest
+    } = health;
+    return {
+      ...rest,
+      cooldownGeneration: (health.cooldownGeneration ?? 0) + 1,
+      lastProbeAt: now,
+    };
+  };
+
+  let cleared = false;
+  const accountHealth = upstreamHealth.get(accountId);
+  if (accountHealth) {
+    const next = clear(accountHealth);
+    if (next) {
+      upstreamHealth.set(accountId, next);
+      cleared = true;
+    }
+  }
+  for (const [scope, health] of quotaScopedHealth.get(accountId) ?? []) {
+    const next = clear(health);
+    if (next) {
+      setScopedHealth(accountId, scope, next);
+      cleared = true;
+    }
+  }
+  return cleared;
 }
 
 export function getCodexAccountSoftAvoidUntil(accountId: string, now = Date.now()): number | null {
@@ -472,10 +598,15 @@ function bindThreadAffinity(threadId: string, accountId: string, now: number): v
   pruneLruThreadAffinities();
 }
 
-function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Date.now()): string[] {
+function getEligiblePoolAccounts(
+  config: OcxConfig,
+  excludeId?: string,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+): string[] {
   const ids = (config.codexAccounts ?? [])
     .filter(account => !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id))
-    .filter(account => !isCodexAccountInCooldown(account.id, now))
+    .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id))
     .map(account => account.id);
@@ -484,7 +615,7 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
-    && !isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID, now)
+    && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID)
   ) {
@@ -493,8 +624,12 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   return ids;
 }
 
-function listEligibleCodexAccountIds(config: OcxConfig, now: number): string[] {
-  return getEligiblePoolAccounts(config, undefined, now);
+function listEligibleCodexAccountIds(
+  config: OcxConfig,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+): string[] {
+  return getEligiblePoolAccounts(config, undefined, now, quotaScope);
 }
 
 function stickyLimitForConfig(config: OcxConfig): number {
@@ -639,10 +774,15 @@ function pickLowerUsageAccount(config: OcxConfig, active: string, activeUsage: n
   return best;
 }
 
-export function pickLowestUsageCodexAccount(config: OcxConfig, excludeId?: string, now = Date.now()): string | null {
+export function pickLowestUsageCodexAccount(
+  config: OcxConfig,
+  excludeId?: string,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+): string | null {
   let best: string | null = null;
   let bestUsage = Number.POSITIVE_INFINITY;
-  for (const id of getEligiblePoolAccounts(config, excludeId, now)) {
+  for (const id of getEligiblePoolAccounts(config, excludeId, now, quotaScope)) {
     const usage = computeCodexUsageScore(getAccountQuota(id), getPoolAccountPlan(config, id));
     if (usage < bestUsage) {
       best = id;
@@ -661,17 +801,18 @@ export function pickAlternateCodexAccount(
   config: OcxConfig,
   excludeId: string,
   now = Date.now(),
+  quotaScope?: CodexQuotaScope,
 ): string | null {
   const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
   if (strategy === "round-robin") {
-    const eligible = listEligibleCodexAccountIds(config, now).filter(id => id !== excludeId);
+    const eligible = listEligibleCodexAccountIds(config, now, quotaScope).filter(id => id !== excludeId);
     return pickRoundRobinAccount(POOL_KEY_CODEX, eligible, stickyLimitForConfig(config));
   }
   if (strategy === "fill-first") {
-    const eligible = listEligibleCodexAccountIds(config, now).filter(id => id !== excludeId);
+    const eligible = listEligibleCodexAccountIds(config, now, quotaScope).filter(id => id !== excludeId);
     return pickNextFillFirstCodexAccount(config, excludeId, eligible, now);
   }
-  return pickLowestUsageCodexAccount(config, excludeId, now);
+  return pickLowestUsageCodexAccount(config, excludeId, now, quotaScope);
 }
 
 /** Effective active: automatic runtime cursor, else operator/persisted selection. */
@@ -925,7 +1066,18 @@ export function recordCodexUpstreamOutcome(
   if (!accountId) return;
   const now = meta.now ?? Date.now();
   const outcomeClass = classifyCodexUpstreamOutcome(outcome);
+  const quotaScope = codexQuotaScopeForModel(meta.modelId);
   if (outcomeClass === "success") {
+    const scopedProbe = meta.probeQuotaScope
+      ? scopedHealthFor(accountId, meta.probeQuotaScope)
+      : undefined;
+    if (scopedProbe && meta.probeQuotaScope) {
+      if (scopedProbe.cooldownUntil && probeMayClearCooldown(scopedProbe, meta)) {
+        deleteScopedHealth(accountId, meta.probeQuotaScope);
+      } else if (ownsProbeLease(scopedProbe, meta)) {
+        setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
+      }
+    }
     const current = upstreamHealth.get(accountId);
     const cooldownUntil = getCodexAccountCooldownUntil(accountId, now);
     // A leased probe that is still on its own cooldown generation proves the
@@ -961,6 +1113,12 @@ export function recordCodexUpstreamOutcome(
     // A 4xx does not change account health, but it does conclude an in-flight
     // probe — otherwise the lease would never be handed back.
     const current = upstreamHealth.get(accountId);
+    const scopedProbe = meta.probeQuotaScope
+      ? scopedHealthFor(accountId, meta.probeQuotaScope)
+      : undefined;
+    if (scopedProbe && meta.probeQuotaScope && ownsProbeLease(scopedProbe, meta)) {
+      setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
+    }
     if (ownsProbeLease(current, meta)) {
       upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
     }
@@ -976,14 +1134,65 @@ export function recordCodexUpstreamOutcome(
       lastFailureStatus,
       lastFailureAt: now,
     });
+    quotaScopedHealth.delete(accountId);
     markAccountNeedsReauth(accountId);
     clearThreadAccountMapForAccount(accountId);
     return;
   }
 
   if (outcomeClass === "quota") {
-    const prior = upstreamHealth.get(accountId);
     const { until, source } = computeQuotaCooldown(meta);
+    // A reset timestamp is an advisory quota-window announcement. When the
+    // selected native model belongs to a confirmed independent group, preserve
+    // it there so a different group (Spark versus the shared native quota) can
+    // still reach upstream. Explicit Retry-After/default 429s remain account-wide.
+    if (source === "reset-derived" && quotaScope) {
+      const prior = scopedHealthFor(accountId, quotaScope);
+      const cooldownGeneration = (prior?.cooldownGeneration ?? 0) + 1;
+      const ownsLease = meta.probeQuotaScope === quotaScope && ownsProbeLease(prior, meta);
+      setScopedHealth(accountId, quotaScope, {
+        consecutiveFailures: 0,
+        lastFailureStatus,
+        lastFailureAt: now,
+        cooldownUntil: until,
+        cooldownSince: now,
+        cooldownSource: source,
+        cooldownGeneration,
+        ...(ownsLease
+          ? { lastProbeAt: now }
+          : {
+            ...(prior?.probeLeaseId !== undefined ? { probeLeaseId: prior.probeLeaseId } : {}),
+            ...(prior?.probeLeaseGeneration !== undefined ? { probeLeaseGeneration: prior.probeLeaseGeneration } : {}),
+            ...(prior?.lastProbeAt !== undefined ? { lastProbeAt: prior.lastProbeAt } : {}),
+        }),
+      });
+      // The shared native scope is the existing account-wide native behavior:
+      // threads must leave it and new requests should prefer an eligible account.
+      // Spark remains isolated so a same-account Terra/Luna combo fallback can run.
+      if (quotaScope === "shared") {
+        clearThreadAccountMapForAccount(accountId);
+        notePoolRotationFailure(POOL_KEY_CODEX, accountId);
+        if (getEffectiveActiveCodexAccountId(config) === accountId) {
+          // Same-request 429 retry already picked via excludeAccountId — reuse it so
+          // round-robin does not advance the ring a second time.
+          const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
+            ? meta.promoteAccountId
+            : null;
+          const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now, quotaScope);
+          if (fallback) promoteActiveCodexAccount(config, fallback);
+        }
+      }
+      return;
+    }
+
+    // A scoped probe that received an account-wide throttle is no longer live.
+    const scopedProbe = meta.probeQuotaScope
+      ? scopedHealthFor(accountId, meta.probeQuotaScope)
+      : undefined;
+    if (scopedProbe && meta.probeQuotaScope && ownsProbeLease(scopedProbe, meta)) {
+      setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
+    }
+    const prior = upstreamHealth.get(accountId);
     // Every cooldown write bumps the generation so a probe issued against the
     // previous cooldown can no longer clear this one (#433).
     const cooldownGeneration = (prior?.cooldownGeneration ?? 0) + 1;
@@ -1022,6 +1231,12 @@ export function recordCodexUpstreamOutcome(
 
   // transient (connect_error / timeout / 5xx)
   const current = upstreamHealth.get(accountId);
+  const scopedProbe = meta.probeQuotaScope
+    ? scopedHealthFor(accountId, meta.probeQuotaScope)
+    : undefined;
+  if (scopedProbe && meta.probeQuotaScope && ownsProbeLease(scopedProbe, meta)) {
+    setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
+  }
   // A transient failure concludes an owning probe; an unrelated 5xx must not
   // consume someone else's live lease or drop hard-cooldown bookkeeping (#433).
   const transientBase = ownsProbeLease(current, meta) ? withProbeLeaseReleased(current!, now) : current;

@@ -395,6 +395,38 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(pickAlternateCodexAccount(config, "a")).toBe("b");
   });
 
+  test("scoped reset 429s retain strategy while excluding only the affected native quota", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 5);
+    const now = Date.now();
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000);
+
+    recordCodexUpstreamOutcome(config, "b", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.3-codex-spark",
+    });
+
+    // Fill-first would normally advance a → b, but b is unavailable only to Spark.
+    expect(pickAlternateCodexAccount(config, "a", now + 1, "spark")).toBe("c");
+    expect(pickAlternateCodexAccount(config, "a", now + 1, "shared")).toBe("b");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.6-terra",
+      promoteAccountId: "b",
+    });
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
+  });
+
   test("RR 429 promotes via ring, not lowest usage", () => {
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "round-robin",
