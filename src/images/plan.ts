@@ -2,7 +2,7 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveEnvValue } from "../config";
 import { getProviderRegistryEntry } from "../providers/registry";
-import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "./synthetic-tool";
+import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 
 const DEFAULT_MODEL = "grok-imagine-image-quality";
 /** Absolute ceiling for `images.timeoutMs` (matches /v1/images relay budget). */
@@ -91,7 +91,7 @@ const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
  */
 export async function planVideoBridge(
   config: OcxConfig,
-  _parsed: OcxParsedRequest,
+  parsed: OcxParsedRequest,
   routedProvider: OcxProviderConfig,
 ): Promise<VideoBridgePlan | undefined> {
   if (config.images?.videoBridgeEnabled !== true) return undefined;
@@ -107,6 +107,15 @@ export async function planVideoBridge(
   const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
   const toolNames = new Set<string>();
   toolNames.add(VIDEO_GEN_TOOL_NAME);
+  // Collect any existing function tools whose name matches a video_gen alias
+  // so the loop can intercept and replace them (image-bridge parity).
+  for (const t of parsed.context?.tools ?? []) {
+    const fnName = typeof t.name === "string" ? t.name
+      : (t as unknown as { function?: { name?: string } }).function?.name;
+    if (typeof fnName === "string" && isVideoGenName(fnName)) {
+      toolNames.add(fnName);
+    }
+  }
   const timeoutMs = clampImageTimeoutMs(config.images?.videoTimeoutMs);
   const keepRaw = config.images?.artifactsKeepCount;
   const artifactsKeepCount =

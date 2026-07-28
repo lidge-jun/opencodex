@@ -84,10 +84,11 @@ export async function* pollVideoWithHeartbeats(
 > {
   const start = Date.now();
   let interval = INITIAL_POLL_INTERVAL_MS;
+  const timeoutStr = `video generation timed out after ${Math.floor(timeoutMs / 1000)}s`;
 
   for (;;) {
     if (Date.now() - start >= timeoutMs) {
-      return { ok: false, error: `video generation timed out after ${Math.floor(timeoutMs / 1000)}s` };
+      return { ok: false, error: timeoutStr };
     }
 
     try {
@@ -106,11 +107,11 @@ export async function* pollVideoWithHeartbeats(
       }
       // still processing — continue with backoff
     } catch (e) {
-      if (signal.aborted) {
-        return { ok: false, error: Date.now() - start >= timeoutMs * 0.95
-          ? `video generation timed out after ${Math.floor(timeoutMs / 1000)}s`
-          : "client closed request during video generation" };
-      }
+      // Distinguish deadline-expiry from client-cancel.
+      // AbortSignal.timeout sets signal.reason to a TimeoutError.
+      const isDeadline = signal.aborted && e instanceof Error && e.name === "TimeoutError";
+      if (isDeadline) return { ok: false, error: timeoutStr };
+      if (signal.aborted) return { ok: false, error: "client closed request during video generation" };
       const status = (e as Error & { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 429) {
         return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
@@ -124,9 +125,8 @@ export async function* pollVideoWithHeartbeats(
     try {
       await sleep(interval, signal);
     } catch {
-      if (Date.now() - start >= timeoutMs * 0.95) {
-        return { ok: false, error: `video generation timed out after ${Math.floor(timeoutMs / 1000)}s` };
-      }
+      const isDeadline = signal.aborted && signal.reason instanceof Error && signal.reason.name === "TimeoutError";
+      if (isDeadline) return { ok: false, error: timeoutStr };
       return { ok: false, error: "client closed request during video generation" };
     }
 

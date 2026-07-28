@@ -548,7 +548,7 @@ export async function downloadVideoToArtifact(
   if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
     throw new Error(`video URL targets ${assessment.detail}`);
   }
-  const resolved = await resolvePublicAddresses(url);
+  const resolved = await resolvePublicAddresses(url, "video");
   const pinned = pickPinnedAddress(resolved.addresses);
   const resp = await pinnedHttpsGet(url, pinned, signal, { maxBytes: MAX_VIDEO_DOWNLOAD_BYTES });
   if (!resp.ok) {

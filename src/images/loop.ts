@@ -11,6 +11,7 @@
  * dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
  */
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
+import { existsSync } from "node:fs";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
@@ -609,11 +610,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
               } else {
                 paidVideoCalls += 1;
+                const videoTimeout = videoTimeoutMs ?? 300_000;
+                const deadlineSignal = AbortSignal.timeout(videoTimeout);
                 try {
-                  const videoTimeout = videoTimeoutMs ?? 300_000;
                   const videoDeadline = Date.now() + videoTimeout;
                   // Bind submit to the shared deadline so submit + poll fit one budget.
-                  const deadlineSignal = AbortSignal.timeout(videoTimeout);
                   const linkedDeadline = signal
                     ? AbortSignal.any([signal, deadlineSignal])
                     : deadlineSignal;
@@ -650,9 +651,14 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   }
                   }
                 } catch (e) {
-                  if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
-                  const error = e instanceof Error ? e.message : String(e);
-                  vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error };
+                  if (deadlineSignal.aborted && !signal.aborted) {
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
+                  } else if (signal.aborted) {
+                    throw new LoopError(499, "client closed request during video-bridge");
+                  } else {
+                    const error = e instanceof Error ? e.message : String(e);
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error };
+                  }
                 }
               }
               if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
@@ -696,6 +702,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Prune artifacts once after the entire batch so a tight keepCount
           // cannot delete a video from an earlier call in this same iteration.
           pruneArtifacts(videoPlan?.artifactsKeepCount ?? plan?.artifactsKeepCount);
+          // Drop results whose artifact files were pruned — never hand the model a dead path.
+          for (const f of fulfilled) {
+            if (f.result.ok && f.result.path && !existsSync(f.result.path)) {
+              f.result = { ...f.result, ok: false, path: undefined, files: [], count: 0, error: "artifact was pruned before delivery (increase artifactsKeepCount)" };
+            }
+          }
           const now = Date.now();
           messages.push({
             role: "assistant",

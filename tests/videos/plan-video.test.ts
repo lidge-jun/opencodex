@@ -7,7 +7,7 @@ function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   const xai: OcxProviderConfig = {
     name: "xai",
     baseUrl: "https://api.x.ai/v1",
-    authMode: "api_key",
+    authMode: "key",
     apiKey: "xai-test-key",
   };
   return {
@@ -21,7 +21,7 @@ function makeParsed(): OcxParsedRequest {
 }
 
 function makeProvider(host: string): OcxProviderConfig {
-  return { baseUrl: `https://${host}`, authMode: "api_key", apiKey: "other-key" } as unknown as OcxProviderConfig;
+  return { baseUrl: `https://${host}`, authMode: "key", apiKey: "other-key" } as unknown as OcxProviderConfig;
 }
 
 describe("planVideoBridge", () => {

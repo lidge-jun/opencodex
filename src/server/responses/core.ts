@@ -1625,8 +1625,8 @@ export async function handleResponses(
       if (t.videoGeneration) return false;
       if (imgPlan && imgPlan.toolNames.has(t.name)) return false;
       if (imgPlan && t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
-      if (vidPlan && vidPlan.toolNames.has(t.name)) return false;
-      if (vidPlan && t.namespace && vidPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+      // Only strip unnamespaced video_gen aliases — a namespaced MCP video_gen is left alone.
+      if (vidPlan && !t.namespace && vidPlan.toolNames.has(t.name)) return false;
       return true;
     })];
     const existingNames = new Set(bridgeTools.map(t => t.name));
