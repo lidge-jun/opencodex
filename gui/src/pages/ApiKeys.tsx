@@ -43,6 +43,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
   const [endpoints, setEndpoints] = useState<ApiEndpointInfo>(DEFAULT_ENDPOINTS);
   const [claudeCodeEnabled, setClaudeCodeEnabled] = useState(true);
+  const [keysLoading, setKeysLoading] = useState(true);
   const [keysLoadFailed, setKeysLoadFailed] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [models, setModels] = useState<ExternalModelRow[]>([]);
@@ -80,6 +81,8 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       setKeysLoadFailed(false);
     } catch {
       setKeysLoadFailed(true);
+    } finally {
+      setKeysLoading(false);
     }
   }, [apiBase]);
 
@@ -275,6 +278,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
       <ApiKeysAuthPanel claudeCodeEnabled={claudeCodeEnabled} />
       <ApiKeysManagePanel
         keys={keys}
+        keysLoading={keysLoading}
         keysLoadFailed={keysLoadFailed}
         newName={newName}
         creating={creating}

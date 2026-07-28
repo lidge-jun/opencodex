@@ -102,20 +102,27 @@ export function CodexAccountPoolPageHead({
   t,
   embedded,
   refreshingQuota,
+  refreshFeedback,
   onRefresh,
 }: {
   t: TFn;
   embedded: boolean;
   refreshingQuota: boolean;
+  refreshFeedback?: string | null;
   onRefresh: () => void;
 }) {
   if (embedded) return null;
   return (
-    <div className="page-head">
+    <div className="page-head codex-auth-page-head">
       <h2 className="page-title">{t("nav.codexAuth")}</h2>
-      <button type="button" className="btn btn-sm btn-ghost" onClick={onRefresh} disabled={refreshingQuota}>
-        <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
-      </button>
+      <div className="codex-auth-page-head__actions">
+        <span className="codex-auth-page-head__feedback" role="status" aria-live="polite">
+          {refreshFeedback ?? ""}
+        </span>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onRefresh} disabled={refreshingQuota}>
+          <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -131,17 +138,25 @@ export function CodexAccountPoolLoadStates({
   accountsCount: number;
   onRetry: () => void;
 }): ReactNode {
-  return (
-    <>
-      {loadState === "loading" && accountsCount === 0 && (
-        <div className="pwi-auth-state" role="status">{t("pws.accountsLoading")}</div>
-      )}
-      {loadState === "error" && (
-        <div className="pwi-auth-state pwi-auth-state--error" role="alert">
-          <span>{t("codexAuth.loadFailed")}</span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
-        </div>
-      )}
-    </>
-  );
+  // Initial load with no accounts yet: keep a reserved skeleton strip (no top-of-page
+  // banner that pushes the rest of the page down). Refresh-with-data stays silent here —
+  // the cards keep showing last-good rows while the header button shows busy state.
+  if (loadState === "loading" && accountsCount === 0) {
+    return (
+      <div className="codex-auth-load-skeleton" role="status" aria-live="polite">
+        <div className="codex-auth-load-skeleton__card" />
+        <div className="codex-auth-load-skeleton__card" />
+        <span className="sr-only">{t("pws.accountsLoading")}</span>
+      </div>
+    );
+  }
+  if (loadState === "error") {
+    return (
+      <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+        <span>{t("codexAuth.loadFailed")}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
+      </div>
+    );
+  }
+  return null;
 }

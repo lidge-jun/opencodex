@@ -189,7 +189,9 @@ export function StartupTraySection({
           }}>{t("startup.tray.uninstall")}</button>
         )}
       </div>
-      {(trayError || tray?.stale) && <div className="notice notice-warn" role="alert">{t("startup.tray.error")}</div>}
+      {(trayError || tray?.stale) && (
+        <div className="notice notice-warn startup-tray-error" role="alert">{t("startup.tray.error")}</div>
+      )}
     </section>
   );
 }

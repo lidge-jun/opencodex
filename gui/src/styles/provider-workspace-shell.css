@@ -669,7 +669,7 @@
   font-size: 0.85rem;
   color: inherit;
   cursor: pointer;
-  min-height: 48px;
+  min-height: 62px;
   transition: border-color 0.15s;
 }
 
@@ -687,7 +687,7 @@
   color: inherit;
   background: var(--bg);
   resize: vertical;
-  min-height: 48px;
+  min-height: 62px;
 }
 
 .pws-notes-textarea:focus {

@@ -101,9 +101,9 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
   const loading = !ready && !loadError;
 
   return (
-    <div className="card" style={{ marginTop: 16 }} aria-busy={loading || saving}>
+    <div className="card account-pool-strategy-card" aria-busy={loading || saving}>
       <strong>{t("accountPool.strategy")}</strong>
-      <div className="card-sub" style={{ marginTop: 4 }} role={loadError ? "alert" : undefined}>
+      <div className="card-sub" role={loadError ? "alert" : undefined}>
         {loadError
           ? t("accountPool.strategyLoadFailed")
           : loading
@@ -120,6 +120,7 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
           strategy={strategy}
           stickyDraft={stickyDraft}
           disabled={saving}
+          hideStrategyLabel
           strategySelectId="codex-pool-strategy"
           stickyInputId="codex-pool-sticky-limit"
           onStrategyChange={(next) => {

@@ -366,10 +366,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .page-head h2 { font-size: var(--text-title); }
 .page-sub { color: var(--muted); font-size: var(--text-body); margin: 4px 0 22px; max-width: 70ch; }
 
-/* Page-level underline tabs (Logs & Debug). Distinct from pill .segmented filters. */
-/* Shared by Logs and Dashboard. Tabs never wrap: the strip scrolls horizontally so a
-   narrow viewport cannot push them onto a second row or squash their labels (Q7). */
-.page-tabs { display: flex; flex-wrap: nowrap; gap: 2px; border-bottom: 1px solid var(--border); margin: 2px 0 14px; overflow-x: auto; scrollbar-width: thin; }
+/* Page-level underline tabs (Logs & Debug / Dashboard). Distinct from pill .segmented filters. */
+/* Let the row take the height it needs — no horizontal scrollbar on a short tab strip. */
+.page-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin: 2px 0 14px; overflow: visible; }
 .page-tab { flex: 0 0 auto; white-space: nowrap; appearance: none; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); cursor: pointer; font: inherit; font-size: var(--text-control); }
 .page-tab:hover { color: var(--text); }
 .page-tab--active { color: var(--text); border-bottom-color: var(--accent); font-weight: var(--weight-semibold); }
@@ -840,12 +839,88 @@ dialog.modal-overlay::backdrop {
 .codex-auto-switch-controls > .toggle { margin-left: auto; }
 .codex-auto-switch-threshold { display: flex; flex-direction: column; align-items: flex-start; margin: 0; }
 .codex-auto-switch-threshold .field-label { margin-bottom: 4px; white-space: nowrap; }
-.codex-auto-switch-input-wrap { display: flex; align-items: center; gap: 6px; }
+.codex-auto-switch-input-wrap { display: flex; align-items: center; gap: 10px; }
 .codex-auto-switch-input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
 .codex-auto-switch-input[readonly] { cursor: progress; opacity: 0.7; }
+/* Hide native number spinners — we use .ocx-stepper chevrons instead. */
+.codex-auto-switch-input::-webkit-outer-spin-button,
+.codex-auto-switch-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.codex-auto-switch-input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
 .codex-auto-switch-unit { color: var(--muted); font-size: var(--text-control); }
 .codex-auto-switch-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-auto-switch-feedback.is-error { color: var(--red); }
+
+.ocx-stepper {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.ocx-stepper__btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xs);
+  background: var(--raised);
+  color: var(--muted);
+  cursor: pointer;
+}
+.ocx-stepper__btn:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
+.ocx-stepper__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ocx-stepper__btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.ocx-stepper__btn svg { display: block; }
+
+.codex-auth-page-head { align-items: flex-start; }
+.codex-auth-page-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.codex-auth-page-head__feedback {
+  min-width: 8rem;
+  max-width: 18rem;
+  text-align: right;
+  font-size: var(--text-label);
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+.codex-auth-load-skeleton {
+  display: grid;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+.codex-auth-load-skeleton__card {
+  min-height: 88px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--raised) 0%, var(--surface) 50%, var(--raised) 100%);
+  background-size: 200% 100%;
+  animation: codex-auth-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes codex-auth-skeleton-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.account-pool-strategy-card { margin-top: 16px; }
+.account-pool-strategy-card > strong { display: block; }
+.account-pool-strategy-card .card-sub { margin-top: 4px; }
+.account-pool-strategy-controls { margin-top: 12px; display: grid; gap: 12px; }
+.account-pool-strategy-controls .field { display: grid; gap: 6px; margin: 0; }
+.api-active-keys-skeleton {
+  min-height: 96px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--raised) 0%, var(--surface) 50%, var(--raised) 100%);
+  background-size: 200% 100%;
+  animation: codex-auth-skeleton-shimmer 1.2s ease-in-out infinite;
+}
 .notice-warn { font-size: var(--text-label); line-height: var(--leading-body); padding: 8px 10px; border-radius: var(--radius-sm); background: var(--amber-soft); color: var(--amber); display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
@@ -868,6 +943,7 @@ dialog.modal-overlay::backdrop {
 .startup-detail-row span:not(.badge) { color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
 .startup-actions > .muted { margin: -4px 0 14px; font-size: var(--text-control); }
 .startup-tray-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.startup-tray-error { margin-top: 12px; }
 .startup-command-list { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); overflow: hidden; }
 .startup-command-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; }
 .startup-command-row + .startup-command-row { border-top: 1px solid var(--border-soft); }

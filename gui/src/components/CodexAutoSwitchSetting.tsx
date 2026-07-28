@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { useT } from "../i18n/shared";
+import { NumberStepper } from "./NumberStepper";
 
 export type AutoSwitchFeedback = { tone: "ok" | "err"; message: string } | null;
 
@@ -15,6 +16,12 @@ export interface CodexAutoSwitchSettingProps {
   onCancel(): void;
   onToggle(): Promise<boolean>;
   onRetry(): void;
+}
+
+function clampThresholdDraft(raw: string, delta: number): string {
+  const parsed = Number.parseInt(raw, 10);
+  const base = Number.isFinite(parsed) ? parsed : 1;
+  return String(Math.min(100, Math.max(1, base + delta)));
 }
 
 export function CodexAutoSwitchSetting({
@@ -102,6 +109,19 @@ export function CodexAutoSwitchSetting({
                   }}
                 />
                 <span className="codex-auto-switch-unit" aria-hidden="true">%</span>
+                <NumberStepper
+                  disabled={saving}
+                  incrementLabel={t("codexAuth.autoSwitchThresholdInc")}
+                  decrementLabel={t("codexAuth.autoSwitchThresholdDec")}
+                  onIncrement={() => {
+                    onEditingChange(true);
+                    onDraftChange(clampThresholdDraft(draft, 1));
+                  }}
+                  onDecrement={() => {
+                    onEditingChange(true);
+                    onDraftChange(clampThresholdDraft(draft, -1));
+                  }}
+                />
               </span>
             </label>
           )}

@@ -62,6 +62,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [toast, setToast] = useState("");
   const [toastError, setToastError] = useState(false);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
+  const [refreshFeedback, setRefreshFeedback] = useState<string | null>(null);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
@@ -169,10 +170,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const refreshQuotas = async () => {
     setRefreshingQuota(true);
+    setRefreshFeedback(null);
     try {
       const ok = await load(true);
-      setToast(t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed"));
-      setTimeout(() => setToast(""), 5000);
+      setRefreshFeedback(t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed"));
+      setTimeout(() => setRefreshFeedback(null), 4000);
     } finally {
       setRefreshingQuota(false);
     }
@@ -225,6 +227,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         t={t}
         embedded={embedded}
         refreshingQuota={refreshingQuota}
+        refreshFeedback={refreshFeedback}
         onRefresh={() => { void refreshQuotas(); }}
       />
 

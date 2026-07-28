@@ -3,6 +3,7 @@ import {
   ACCOUNT_POOL_STRATEGIES,
   type AccountPoolStrategy,
 } from "../account-pool-strategy";
+import { NumberStepper } from "./NumberStepper";
 
 const STRATEGY_LABEL_KEYS = {
   quota: "accountPool.strategyQuota",
@@ -16,9 +17,17 @@ export interface AccountPoolStrategyControlsProps {
   disabled?: boolean;
   strategySelectId?: string;
   stickyInputId?: string;
+  /** When true, omit the outer strategy label (parent card already titled). */
+  hideStrategyLabel?: boolean;
   onStrategyChange(strategy: AccountPoolStrategy): void;
   onStickyDraftChange(value: string): void;
   onStickyCommit(): void;
+}
+
+function clampStickyDraft(raw: string, delta: number): string {
+  const parsed = Number.parseInt(raw, 10);
+  const base = Number.isFinite(parsed) ? parsed : 1;
+  return String(Math.min(100, Math.max(1, base + delta)));
 }
 
 /**
@@ -30,15 +39,16 @@ export default function AccountPoolStrategyControls({
   disabled = false,
   strategySelectId = "account-pool-strategy",
   stickyInputId = "account-pool-sticky-limit",
+  hideStrategyLabel = false,
   onStrategyChange,
   onStickyDraftChange,
   onStickyCommit,
 }: AccountPoolStrategyControlsProps) {
   const t = useT();
   return (
-    <div style={{ marginTop: 12 }}>
-      <label className="field" style={{ display: "block" }} htmlFor={strategySelectId}>
-        <span className="field-label">{t("accountPool.strategy")}</span>
+    <div className="account-pool-strategy-controls">
+      <label className="field" htmlFor={strategySelectId}>
+        {!hideStrategyLabel && <span className="field-label">{t("accountPool.strategy")}</span>}
         <select
           id={strategySelectId}
           className="input"
@@ -56,34 +66,41 @@ export default function AccountPoolStrategyControls({
           ))}
         </select>
       </label>
-      <div className="card-sub" style={{ marginTop: 4 }}>
-        {t("accountPool.strategyHint")}
-      </div>
+      <div className="card-sub">{t("accountPool.strategyHint")}</div>
       {strategy === "round-robin" && (
-        <label className="field" style={{ display: "block", marginTop: 12 }} htmlFor={stickyInputId}>
+        <label className="field" htmlFor={stickyInputId}>
           <span className="field-label">{t("accountPool.stickyLimit")}</span>
-          <input
-            id={stickyInputId}
-            className="input mono"
-            type="number"
-            min={1}
-            max={100}
-            step={1}
-            inputMode="numeric"
-            value={stickyDraft}
-            disabled={disabled}
-            aria-label={t("accountPool.stickyLimitAria")}
-            onChange={(event) => onStickyDraftChange(event.target.value)}
-            onBlur={() => onStickyCommit()}
-            onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing || disabled) return;
-              if (event.key === "Enter") {
-                event.preventDefault();
-                onStickyCommit();
-              }
-            }}
-          />
-          <div className="card-sub" style={{ marginTop: 4 }}>{t("accountPool.stickyLimitHelp")}</div>
+          <span className="codex-auto-switch-input-wrap">
+            <input
+              id={stickyInputId}
+              className="input mono codex-auto-switch-input"
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              inputMode="numeric"
+              value={stickyDraft}
+              disabled={disabled}
+              aria-label={t("accountPool.stickyLimitAria")}
+              onChange={(event) => onStickyDraftChange(event.target.value)}
+              onBlur={() => onStickyCommit()}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || disabled) return;
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onStickyCommit();
+                }
+              }}
+            />
+            <NumberStepper
+              disabled={disabled}
+              incrementLabel={t("accountPool.stickyLimitInc")}
+              decrementLabel={t("accountPool.stickyLimitDec")}
+              onIncrement={() => onStickyDraftChange(clampStickyDraft(stickyDraft, 1))}
+              onDecrement={() => onStickyDraftChange(clampStickyDraft(stickyDraft, -1))}
+            />
+          </span>
+          <div className="card-sub">{t("accountPool.stickyLimitHelp")}</div>
         </label>
       )}
     </div>

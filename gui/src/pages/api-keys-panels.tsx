@@ -70,6 +70,7 @@ export function ApiKeysAuthPanel({ claudeCodeEnabled }: { claudeCodeEnabled: boo
 
 export function ApiKeysManagePanel({
   keys,
+  keysLoading = false,
   keysLoadFailed,
   newName,
   creating,
@@ -86,6 +87,7 @@ export function ApiKeysManagePanel({
   onDelete,
 }: {
   keys: ApiKeyEntry[];
+  keysLoading?: boolean;
   keysLoadFailed: boolean;
   newName: string;
   creating: boolean;
@@ -139,9 +141,13 @@ export function ApiKeysManagePanel({
         </div>
       </div>
 
-      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-        <h3 className="panel-title">{t("api.activeKeys", { count: keys.length })}</h3>
-        {keys.length > 0 ? (
+      <div className="panel api-panel" style={{ marginTop: "1rem" }} aria-busy={keysLoading}>
+        <h3 className="panel-title">
+          {keysLoading ? t("api.activeKeysLoading") : t("api.activeKeys", { count: keys.length })}
+        </h3>
+        {keysLoading ? (
+          <div className="api-active-keys-skeleton" role="status" aria-label={t("common.loading")} />
+        ) : keys.length > 0 ? (
           <div className="tbl-wrap">
             <table className="tbl">
               <thead>
