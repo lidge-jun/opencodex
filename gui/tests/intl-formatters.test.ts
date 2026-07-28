@@ -3,14 +3,19 @@ import { formatCreditDate, formatCreditDateTime } from "../src/intl-formatters";
 
 describe("credit date formatting", () => {
   test("keeps the compact date format for grant dates", () => {
-    expect(formatCreditDate("2026-07-31T12:34:56Z")).not.toContain("12:34");
+    const iso = "2026-07-31T12:34:56Z";
+    const time = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+
+    expect(formatCreditDate(iso, "de-DE")).not.toContain(time);
   });
 
   test("includes the local time for expiration dates", () => {
     const iso = "2026-07-31T12:34:56Z";
 
-    expect(formatCreditDateTime(iso)).not.toBe(formatCreditDate(iso));
-    expect(formatCreditDateTime(iso)).not.toBe("—");
+    const time = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+
+    expect(formatCreditDateTime(iso, "de-DE")).toContain(time);
+    expect(formatCreditDateTime(iso, "de-DE")).not.toBe("—");
   });
 
   test("handles invalid dates consistently", () => {
