@@ -63,26 +63,33 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null>(null);
   const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(null);
   const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(null);
+  /** True while settings (runtime notice) are still in flight — reserves notice slot height. */
+  const [runtimeNoticePending, setRuntimeNoticePending] = useState(true);
   const loadGenerationRef = useRef(0);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const generation = ++loadGenerationRef.current;
     setLoading(true);
     setTrayLoading(true);
+    setRuntimeNoticePending(true);
     try {
-      const res = await fetch(`${apiBase}/api/startup-health`, { signal });
-      if (!res.ok) throw new Error("fetch failed");
-      const next = await res.json() as StartupHealthData;
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-
-      // Load settings + tray in parallel, then commit once so the page never paints
-      // without the runtime notice / tray actions (avoids layout shift).
+      // Kick settings off immediately so it overlaps the health round-trip.
       const settingsPromise = fetch(`${apiBase}/api/settings`, { signal })
         .then(async (settingsRes) => {
           if (!settingsRes.ok) return null;
           return await settingsRes.json() as { codexRuntime?: CodexRuntimeSettings };
         })
         .catch(() => null);
+
+      const res = await fetch(`${apiBase}/api/startup-health`, { signal });
+      if (!res.ok) throw new Error("fetch failed");
+      const next = await res.json() as StartupHealthData;
+      if (signal?.aborted || generation !== loadGenerationRef.current) return;
+
+      // Paint hero/details/recovery as soon as health arrives.
+      setData(next);
+      setFailed(next.diagnosticStale);
+      setLoading(false);
 
       const trayPromise = next.platform === "win32"
         ? fetch(`${apiBase}/api/windows-tray`, { signal })
@@ -99,10 +106,9 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
 
       const notice = deriveCodexRuntimeNotice(settings?.codexRuntime, t);
-      setData(next);
-      setFailed(next.diagnosticStale);
       setCodexRuntimeWarning(notice.warning);
       setCodexRuntimeFix(notice.fix);
+      setRuntimeNoticePending(false);
       if (next.platform === "win32") {
         setTray(trayResult.tray);
         setTrayError(trayResult.error);
@@ -110,6 +116,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
         setTray(null);
         setTrayError(false);
       }
+      setTrayLoading(false);
     } catch {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       setFailed(true);
@@ -117,11 +124,9 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       setTrayError(true);
       setCodexRuntimeWarning(null);
       setCodexRuntimeFix(null);
-    } finally {
-      if (generation === loadGenerationRef.current) {
-        setTrayLoading(false);
-        setLoading(false);
-      }
+      setRuntimeNoticePending(false);
+      setTrayLoading(false);
+      setLoading(false);
     }
   }, [apiBase, t]);
 
@@ -219,15 +224,22 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       ) : data ? (
         <>
           {failed && <div className="notice notice-warn" role="alert">{t("startup.staleData")}</div>}
-          {codexRuntimeWarning && (
-            <div className="notice notice-warn startup-runtime-notice" role="status">
-              <p className="startup-runtime-notice__text">{codexRuntimeWarning}</p>
-              {codexRuntimeFix && (
-                <div className="startup-runtime-notice__fix">
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyCommand(codexRuntimeFix)}>
-                    {copied === codexRuntimeFix ? t("startup.copied") : t("startup.copy")}
-                  </button>
-                  <code>{codexRuntimeFix}</code>
+          {(runtimeNoticePending || codexRuntimeWarning) && (
+            <div
+              className={`startup-runtime-notice-slot${runtimeNoticePending && !codexRuntimeWarning ? " startup-runtime-notice-slot--pending" : ""}`}
+              aria-hidden={runtimeNoticePending && !codexRuntimeWarning ? true : undefined}
+            >
+              {codexRuntimeWarning && (
+                <div className="notice notice-warn startup-runtime-notice" role="status">
+                  <p className="startup-runtime-notice__text">{codexRuntimeWarning}</p>
+                  {codexRuntimeFix && (
+                    <div className="startup-runtime-notice__fix">
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyCommand(codexRuntimeFix)}>
+                        {copied === codexRuntimeFix ? t("startup.copied") : t("startup.copy")}
+                      </button>
+                      <code>{codexRuntimeFix}</code>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -927,6 +927,15 @@ dialog.modal-overlay::backdrop {
 
 .startup-page-sub { margin-bottom: 0; }
 .startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.startup-runtime-notice-slot {
+  margin-bottom: 12px;
+  min-height: 52px;
+}
+.startup-runtime-notice-slot--pending {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--amber-soft) 45%, transparent);
+}
+.startup-runtime-notice-slot .startup-runtime-notice { margin-bottom: 0; }
 .startup-runtime-notice {
   flex-direction: column;
   align-items: stretch;
