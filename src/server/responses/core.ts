@@ -1599,6 +1599,14 @@ export async function handleResponses(
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
+  if ((imgPlan || vidPlan) && canRunWebSearch) {
+    // Web search takes priority when both are active — the media bridge cannot run
+    // alongside runWithWebSearch. Surface a runtime signal so the user knows their
+    // configured video/image bridge was skipped for this turn, rather than silently
+    // dropping a paid capability.
+    if (vidPlan) console.warn("[videos] video bridge skipped: web search is active for this turn");
+    if (imgPlan) console.warn("[images] image bridge skipped: web search is active for this turn");
+  }
   if ((imgPlan || vidPlan) && (!wsPlan || adapter.runTurn)) {
     // The image bridge detects a hosted image_generation tool and requires streaming.
     // The video bridge activates from config and injects a tool — it also needs streaming

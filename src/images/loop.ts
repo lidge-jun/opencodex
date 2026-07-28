@@ -610,6 +610,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               } else {
                 paidVideoCalls += 1;
                 try {
+                  const videoDeadline = Date.now() + (videoTimeoutMs ?? 300_000);
                   const { requestId } = await submitVideoJob(
                     {
                       prompt: vArgs.prompt, model: videoPlan!.model,
@@ -619,7 +620,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                     },
                     videoPlan!.auth, signal,
                   );
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, signal, videoTimeoutMs);
+                  const remainingMs = Math.max(5_000, videoDeadline - Date.now());
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, signal, remainingMs);
                   let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
                   try {
                     for (;;) {

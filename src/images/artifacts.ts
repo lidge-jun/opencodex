@@ -477,13 +477,24 @@ export async function downloadImageToArtifact(
 }
 
 const MAX_VIDEO_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MiB
+/** Aggregate per-turn video download cap (600 MiB = 3 × max single download). */
+const MAX_VIDEO_BYTES_PER_TURN = MAX_VIDEO_DOWNLOAD_BYTES * 3;
 
 export interface VideoBudget {
   spent: number;
+  /** Ceiling on total bytes across all downloads this turn. */
+  cap: number;
 }
 
 export function createVideoBudget(): VideoBudget {
-  return { spent: 0 };
+  return { spent: 0, cap: MAX_VIDEO_BYTES_PER_TURN };
+}
+
+/** Charge bytes to the budget; returns false if the ceiling would be exceeded. */
+export function chargeVideoBudget(budget: VideoBudget, bytes: number): boolean {
+  if (budget.spent + bytes > budget.cap) return false;
+  budget.spent += bytes;
+  return true;
 }
 
 export function guessVideoExtFromMagic(bytes: Uint8Array): string {
@@ -514,7 +525,9 @@ export async function downloadVideoToArtifact(
     const isBase64 = meta.includes(";base64");
     if (!isBase64) throw new Error("non-base64 data URI for video is not supported");
     const buf = Buffer.from(data, "base64");
-    if (budget) budget.spent += buf.byteLength;
+    if (budget && !chargeVideoBudget(budget, buf.byteLength)) {
+      throw new Error("video data URI exceeds per-turn download budget");
+    }
     if (buf.byteLength > MAX_VIDEO_DOWNLOAD_BYTES) throw new Error("video data URI exceeds size cap");
     const ext = guessVideoExtFromMagic(buf);
     const dir = getArtifactsDir();
@@ -564,7 +577,9 @@ export async function downloadVideoToArtifact(
     fh = await open(dest, "w", 0o600);
     // Write first chunk and set up accounting
     let totalBytes = first.value.byteLength;
-    if (budget) budget.spent += totalBytes;
+    if (budget && !chargeVideoBudget(budget, totalBytes)) {
+      throw new Error("video download exceeds per-turn budget");
+    }
     if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
       throw new Error("video download exceeds size cap");
     }
@@ -573,7 +588,9 @@ export async function downloadVideoToArtifact(
       const { value, done } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
-      if (budget) budget.spent += value.byteLength;
+      if (budget && !chargeVideoBudget(budget, value.byteLength)) {
+        throw new Error("video download exceeds per-turn budget");
+      }
       if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
         throw new Error("video download exceeds size cap");
       }

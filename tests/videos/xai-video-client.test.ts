@@ -127,4 +127,18 @@ describe("pollVideoJob", () => {
     expect(capturedUrl).toContain("/videos/vid-789");
     expect(capturedMethod).toBe("GET");
   });
+
+  test("encodes requestId in poll URL", async () => {
+    let capturedUrl: string | undefined;
+    const fetchMock = mock((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve(mockFetchResponse({ status: "processing" }));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await pollVideoJob("req/with?special&chars", auth);
+    expect(capturedUrl).toContain(encodeURIComponent("req/with?special&chars"));
+    // Must NOT contain the raw special chars in the path
+    expect(capturedUrl).not.toMatch(/\/videos\/req\/with/);
+  });
 });
