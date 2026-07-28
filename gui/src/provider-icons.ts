@@ -36,6 +36,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   alibaba: "alibaba-color.svg",
   "alibaba-token-plan": "alibaba-color.svg",
   "alibaba-token-plan-intl": "alibaba-color.svg",
+  "volcengine-ark-agent-plan": "https://portal.volccdn.com/obj/volcfe/misc/favicon.png",
   "qwen-cloud": "qwen-portal-color.svg",
   "vercel-ai-gateway": "vercel-ai-gateway-color.svg",
   vllm: "vllm-color.svg",
@@ -77,6 +78,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   alibaba: "Alibaba Coding Plan",
   "alibaba-token-plan": "Alibaba Token Plan",
   "alibaba-token-plan-intl": "Alibaba Token Plan (Intl)",
+  "volcengine-ark-agent-plan": "Volcengine Ark Agent Plan",
   kimi: "Kimi",
   "kimi-code": "Kimi",
   moonshot: "Moonshot",
@@ -105,6 +107,7 @@ function providerIconAlias(provider: string): string | undefined {
 export function providerIconSrc(provider: string, _hints?: ProviderIconHints): string | undefined {
   void _hints;
   const icon = providerIconAlias(provider);
+  if (icon?.startsWith("http://") || icon?.startsWith("https://")) return icon;
   return icon ? `/provider-icons/${icon}` : undefined;
 }
 

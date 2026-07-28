@@ -5,6 +5,7 @@ export interface DerivedKeyLoginProvider {
   label: string;
   baseUrl: string;
   adapter: string;
+  responsesPath?: string;
   dashboardUrl: string;
   models?: string[];
   liveModels?: boolean;
@@ -52,6 +53,7 @@ export interface DerivedProviderPreset {
   label: string;
   adapter: string;
   baseUrl: string;
+  responsesPath?: string;
   defaultModel?: string;
   auth: "oauth" | "forward" | "key" | "local";
   codexAccountMode?: CodexAccountMode;
@@ -103,6 +105,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
   return {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
+    ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
     authMode: entry.authKind === "local" ? undefined : entry.authKind,
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
@@ -150,6 +153,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       label: entry.label,
       baseUrl: entry.baseUrl,
       adapter: entry.adapter,
+      ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
       dashboardUrl: entry.dashboardUrl,
       ...(entry.models ? { models: [...entry.models] } : {}),
       ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
@@ -251,6 +255,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.keyOptional === undefined && seed.keyOptional !== undefined) prov.keyOptional = seed.keyOptional;
   if (prov.freeTier === undefined && seed.freeTier !== undefined) prov.freeTier = seed.freeTier;
   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
+  if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
 }
 
@@ -281,6 +286,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     label: entry.label,
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
+    ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
     auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : entry.authKind === "local" ? "local" : "key",
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.codexAccountMode ? { provider: providerConfigSeed(entry) } : {}),

@@ -366,9 +366,12 @@ describe("combo catalog capability intersection", () => {
       [memberA, memberB],
     )!;
     const provider = { provider: "vendor", id: "deepseek-v4-flash" };
-    const config = (disabledModels: string[]) => ({
+    const config = (disabledModels: string[]): Pick<OcxConfig, "disabledModels" | "providers"> => ({
       disabledModels,
-      providers: { vendor: {}, combo: {} },
+      providers: {
+        vendor: { adapter: "openai-chat", baseUrl: "https://vendor.example.test/v1" },
+        combo: { adapter: "openai-chat", baseUrl: "https://combo.example.test/v1" },
+      },
     });
 
     expect(filterCatalogVisibleModels([combo, provider], config(["deepseek-v4-flash"])))
@@ -1341,6 +1344,32 @@ describe("Codex catalog routed normalization", () => {
           disabled: true,
         },
       },
+    });
+
+    expect(models.map(m => `${m.provider}/${m.id}`)).toEqual(["active/active-model"]);
+  });
+
+  test("custom models on disabled providers are excluded from routed model gathering", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "active",
+      providers: {
+        active: {
+          adapter: "openai-chat",
+          baseUrl: "https://active.example.test/v1",
+          liveModels: false,
+          models: ["active-model"],
+        },
+        disabled: {
+          adapter: "openai-chat",
+          baseUrl: "https://disabled.example.test/v1",
+          liveModels: false,
+          disabled: true,
+        },
+      },
+      customModels: [
+        { id: "cm-disabled", provider: "disabled", modelId: "custom-disabled", displayName: "Custom Disabled", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
     });
 
     expect(models.map(m => `${m.provider}/${m.id}`)).toEqual(["active/active-model"]);

@@ -32,7 +32,7 @@ function nativeTemplate(): Record<string, unknown> {
 const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
+  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan", "volcengine-ark-agent-plan",
   "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
@@ -279,6 +279,108 @@ describe("provider registry parity", () => {
     });
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .toContain("qwen3.8-max-preview");
+  });
+
+  test("Volcengine Ark Agent Plan uses the official Responses endpoint", () => {
+    const entry = PROVIDER_REGISTRY.find(provider => provider.id === "volcengine-ark-agent-plan");
+    expect(entry).toMatchObject({
+      label: "Volcengine Ark Agent Plan",
+      adapter: "openai-responses",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+      responsesPath: "/responses",
+      defaultModel: "auto",
+      liveModels: false,
+    });
+    expect(entry?.models).toEqual([
+      "auto",
+      "doubao-seed-2.0-mini", "doubao-seed-2.0-lite",
+      "deepseek-v4-flash",
+      "doubao-seed-2.1-turbo", "doubao-seed-evolving",
+      "doubao-seed-2.0-code", "doubao-seed-2.0-pro",
+      "minimax-m2.7", "minimax-m3",
+      "glm-5.2",
+      "kimi-k2.6", "kimi-k2.7-code",
+      "deepseek-v4-pro",
+      "kimi-k3",
+    ]);
+    expect(entry?.modelContextWindows).toMatchObject({
+      "doubao-seed-2.0-mini": 262_144,
+      "doubao-seed-2.0-lite": 262_144,
+      "deepseek-v4-flash": 1_048_576,
+      "doubao-seed-2.1-turbo": 262_144,
+      "doubao-seed-evolving": 1_048_576,
+      "doubao-seed-2.0-code": 262_144,
+      "doubao-seed-2.0-pro": 262_144,
+      "minimax-m2.7": 204_800,
+      "minimax-m3": 524_288,
+      "glm-5.2": 1_048_576,
+      "kimi-k2.6": 262_144,
+      "kimi-k2.7-code": 262_144,
+      "deepseek-v4-pro": 1_048_576,
+      "kimi-k3": 1_048_576,
+    });
+    expect(entry?.modelMaxOutputTokens).toMatchObject({
+      "doubao-seed-2.0-mini": 131_072,
+      "doubao-seed-2.0-lite": 131_072,
+      "deepseek-v4-flash": 393_216,
+      "doubao-seed-2.1-turbo": 262_144,
+      "doubao-seed-evolving": 262_144,
+      "doubao-seed-2.0-code": 131_072,
+      "doubao-seed-2.0-pro": 131_072,
+      "minimax-m2.7": 131_072,
+      "minimax-m3": 131_072,
+      "glm-5.2": 131_072,
+      "kimi-k2.6": 32_768,
+      "kimi-k2.7-code": 32_768,
+      "deepseek-v4-pro": 393_216,
+      "kimi-k3": 131_072,
+    });
+    expect(entry?.modelInputModalities?.["deepseek-v4-flash"]).toEqual(["text"]);
+    expect(entry?.modelInputModalities?.["kimi-k3"]).toEqual(["text"]);
+
+    expect(KEY_LOGIN_PROVIDERS["volcengine-ark-agent-plan"]).toMatchObject({
+      adapter: "openai-responses",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+      responsesPath: "/responses",
+      defaultModel: "auto",
+      liveModels: false,
+      modelContextWindows: {
+        "deepseek-v4-flash": 1_048_576,
+        "doubao-seed-2.1-turbo": 262_144,
+        "kimi-k3": 1_048_576,
+      },
+      modelMaxOutputTokens: {
+        "deepseek-v4-flash": 393_216,
+        "doubao-seed-2.1-turbo": 262_144,
+        "kimi-k3": 131_072,
+      },
+    });
+
+    expect(providerConfigSeed(entry!)).toMatchObject({
+      adapter: "openai-responses",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+      responsesPath: "/responses",
+      authMode: "key",
+      defaultModel: "auto",
+      modelContextWindows: {
+        "deepseek-v4-flash": 1_048_576,
+        "doubao-seed-2.1-turbo": 262_144,
+        "kimi-k3": 1_048_576,
+      },
+      modelMaxOutputTokens: {
+        "deepseek-v4-flash": 393_216,
+        "doubao-seed-2.1-turbo": 262_144,
+        "kimi-k3": 131_072,
+      },
+    });
+
+    expect(deriveProviderPresets().find(provider => provider.id === "volcengine-ark-agent-plan"))
+      .toMatchObject({
+        adapter: "openai-responses",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+        responsesPath: "/responses",
+        defaultModel: "auto",
+      });
   });
 
   test("aggregator defaults and Neuralwatt seeds match the audited live catalogs", () => {

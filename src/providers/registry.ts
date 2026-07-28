@@ -42,6 +42,8 @@ export interface ProviderRegistryEntry {
   baseUrlChoices?: readonly ProviderBaseUrlChoice[];
   /** Static headers merged into every upstream request for this provider. */
   staticHeaders?: Record<string, string>;
+  /** Relative path for key-auth openai-responses providers whose versioned base URL is not /v1. */
+  responsesPath?: string;
   modelSuffixBracketStrip?: boolean;
   featured?: boolean;
   dashboardPreset?: boolean;
@@ -103,6 +105,54 @@ export type ProviderConfigSeed = Pick<
 // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
 const ANTHROPIC_MODELS = ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
 const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-haiku-4-5": 200_000 };
+
+const VOLCENGINE_ARK_AGENT_PLAN_MODELS = [
+  "auto",
+  "doubao-seed-2.0-mini", "doubao-seed-2.0-lite",
+  "deepseek-v4-flash",
+  "doubao-seed-2.1-turbo", "doubao-seed-evolving",
+  "doubao-seed-2.0-code", "doubao-seed-2.0-pro",
+  "minimax-m2.7", "minimax-m3",
+  "glm-5.2",
+  "kimi-k2.6", "kimi-k2.7-code",
+  "deepseek-v4-pro",
+  "kimi-k3",
+];
+const VOLCENGINE_ARK_AGENT_PLAN_CONTEXT_WINDOWS: Record<string, number> = {
+  "doubao-seed-2.0-mini": 262_144,
+  "doubao-seed-2.0-lite": 262_144,
+  "deepseek-v4-flash": 1_048_576,
+  "doubao-seed-2.1-turbo": 262_144,
+  "doubao-seed-evolving": 1_048_576,
+  "doubao-seed-2.0-code": 262_144,
+  "doubao-seed-2.0-pro": 262_144,
+  "minimax-m2.7": 204_800,
+  "minimax-m3": 524_288,
+  "glm-5.2": 1_048_576,
+  "kimi-k2.6": 262_144,
+  "kimi-k2.7-code": 262_144,
+  "deepseek-v4-pro": 1_048_576,
+  "kimi-k3": 1_048_576,
+};
+const VOLCENGINE_ARK_AGENT_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "doubao-seed-2.0-mini": 131_072,
+  "doubao-seed-2.0-lite": 131_072,
+  "deepseek-v4-flash": 393_216,
+  "doubao-seed-2.1-turbo": 262_144,
+  "doubao-seed-evolving": 262_144,
+  "doubao-seed-2.0-code": 131_072,
+  "doubao-seed-2.0-pro": 131_072,
+  "minimax-m2.7": 131_072,
+  "minimax-m3": 131_072,
+  "glm-5.2": 131_072,
+  "kimi-k2.6": 32_768,
+  "kimi-k2.7-code": 32_768,
+  "deepseek-v4-pro": 393_216,
+  "kimi-k3": 131_072,
+};
+const VOLCENGINE_ARK_AGENT_PLAN_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  VOLCENGINE_ARK_AGENT_PLAN_MODELS.filter(id => id !== "auto").map(id => [id, ["text"]]),
+);
 
 const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -879,6 +929,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: Object.fromEntries(TENCENT_CODING_PLAN_MODELS.map(id => [id, ["text"]])),
     noVisionModels: TENCENT_CODING_PLAN_MODELS,
     note: "Coding tools only. Tencent forbids general API automation, custom backends, and non-interactive batch use.",
+  },
+  // Volcengine Ark Agent Plan official Codex configuration uses the Responses wire on
+  // https://ark.cn-beijing.volces.com/api/plan/v3 with a direct /responses path.
+  // Evidence: https://www.volcengine.com/docs/82379/2556054?lang=zh
+  {
+    id: "volcengine-ark-agent-plan",
+    label: "Volcengine Ark Agent Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+    adapter: "openai-responses",
+    authKind: "key",
+    responsesPath: "/responses",
+    dashboardUrl: "https://console.volcengine.com/ark/region:cn-beijing/experience/coding-plan",
+    defaultModel: "auto",
+    models: VOLCENGINE_ARK_AGENT_PLAN_MODELS,
+    modelContextWindows: VOLCENGINE_ARK_AGENT_PLAN_CONTEXT_WINDOWS,
+    modelInputModalities: VOLCENGINE_ARK_AGENT_PLAN_INPUT_MODALITIES,
+    modelMaxOutputTokens: VOLCENGINE_ARK_AGENT_PLAN_MAX_OUTPUT_TOKENS,
+    liveModels: false,
+    note: "Official Ark Agent Plan Responses endpoint. Use auto for console-managed model switching, or a documented Model Name directly.",
   },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },

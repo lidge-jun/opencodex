@@ -90,7 +90,9 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
   if (!prov) return undefined;
   const explicit = modelRecordValue(prov.modelSupportsReasoningSummaries, id);
   if (explicit !== undefined) return explicit;
-  return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
+  const providerRecord: Record<string, unknown> = prov as unknown as Record<string, unknown>;
+  const delivery = providerRecord["modelReasoningSummaryDelivery"] as Record<string, unknown> | undefined;
+  return modelRecordValue(delivery, id) !== undefined ? true : undefined;
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
@@ -559,8 +561,9 @@ export async function gatherRoutedModels(
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
   // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
   const enrichedByName = new Map(activeProviders);
-  const customModels = (config.customModels ?? []).map(cm => {
+  const customModels = (config.customModels ?? []).flatMap(cm => {
     const rawProvider = config.providers[cm.provider];
+    if (!rawProvider || rawProvider.disabled === true) return [];
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
     const base: CatalogModel = {
       id: cm.modelId,
@@ -580,10 +583,10 @@ export async function gatherRoutedModels(
     if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, base.id)) {
       const current = base.inputModalities ?? ["text"];
       if (!current.includes("image")) {
-        return { ...base, inputModalities: [...current, "image"] };
+        return [{ ...base, inputModalities: [...current, "image"] }];
       }
     }
-    return base;
+    return [base];
   });
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
