@@ -7,6 +7,17 @@ opencodex serves `POST /v1/messages` (plus `count_tokens`) alongside `/v1/respon
 Code can use every routed provider — OAuth logins, account pools, key failover and sidecars
 included — with zero extra auth work.
 
+## Claude OAuth account pool (experimental)
+
+You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
+add-account). By default every request uses the **active** account only.
+
+An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
+session affinity and 429 cooldown failover across those OAuth accounts, with optional
+new-session lowest-usage pick from the 5-hour quota bars. It is **off by default**, shows a
+GUI warning, and is not battle-tested — Anthropic may restrict accounts that look like
+automated rotation. See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
+
 ## Quickstart
 
 ```bash

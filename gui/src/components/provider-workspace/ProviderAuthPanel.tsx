@@ -19,6 +19,7 @@ import {
   oauthHealthShowsReauth,
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
+import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginUrlBlock } from "../login-url-block";
 import QuotaBars from "../QuotaBars";
 import { useCopyFeedback } from "../use-copy-feedback";
@@ -105,6 +106,9 @@ export default function ProviderAuthPanel({
       <div className="pwi-auth-body">
         {isOauth && (
           <>
+            {item.name === "anthropic" && (
+              <AnthropicAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
+            )}
             <div className="pwi-auth-status-row">
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
               <span className="pwi-auth-status-text">

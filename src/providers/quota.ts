@@ -301,6 +301,29 @@ function accountCacheKey(provider: string, accountId: string): string {
   return `${provider}\u0000${accountId}`;
 }
 
+/**
+ * Synchronous last-good per-account quota read for routing. Never probes the network.
+ * Returns null when nothing is cached (or the cached row has no bars).
+ */
+export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  return entry?.quota ?? null;
+}
+
+/** Test-only: seed or clear the per-account quota cache without probing upstream. */
+export function setCachedProviderAccountQuotaForTests(
+  provider: string,
+  accountId: string,
+  quota: ProviderQuota | null,
+): void {
+  const key = accountCacheKey(provider, accountId);
+  if (quota === null) {
+    accountQuotaCache.delete(key);
+    return;
+  }
+  accountQuotaCache.set(key, { ts: Date.now(), quota });
+}
+
 /** Drop cached per-account rows (all, or just one provider's). */
 export function clearAccountQuotaCache(provider?: string): void {
   if (!provider) {

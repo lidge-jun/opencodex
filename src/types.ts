@@ -684,6 +684,16 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
+  /**
+   * Opt-in Anthropic OAuth account pool (#294). Default OFF.
+   * Failover on 429 + sticky affinity; new sessions may pick lowest known 5h usage.
+   * Experimental — see docs and GUI warning before enabling.
+   */
+  anthropicAccountPool?: {
+    enabled?: boolean;
+    /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
+    autoSwitchThreshold?: number;
+  };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */

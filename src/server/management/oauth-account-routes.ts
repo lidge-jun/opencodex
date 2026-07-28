@@ -216,6 +216,64 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
+
+  // Opt-in Anthropic OAuth account pool (#294): enable/threshold + clear cooldown.
+  if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
+    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
+    const pool = config.anthropicAccountPool ?? {};
+    return jsonResponse({
+      provider,
+      enabled: pool.enabled === true,
+      autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
+      experimental: true,
+    });
+  }
+  if (url.pathname === "/api/oauth/accounts/pool" && req.method === "PUT") {
+    const body = await req.json().catch(() => ({})) as {
+      provider?: unknown;
+      enabled?: unknown;
+      autoSwitchThreshold?: unknown;
+    };
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
+    if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    let threshold = config.anthropicAccountPool?.autoSwitchThreshold ?? 80;
+    if (body.autoSwitchThreshold !== undefined) {
+      if (
+        typeof body.autoSwitchThreshold !== "number"
+        || !Number.isInteger(body.autoSwitchThreshold)
+        || body.autoSwitchThreshold < 0
+        || body.autoSwitchThreshold > 100
+      ) {
+        return jsonResponse({ error: "autoSwitchThreshold must be an integer 0-100" }, 400);
+      }
+      threshold = body.autoSwitchThreshold;
+    }
+    config.anthropicAccountPool = {
+      enabled: body.enabled,
+      autoSwitchThreshold: threshold,
+    };
+    saveConfigPreservingClaudeCode(config);
+    return jsonResponse({
+      ok: true,
+      provider,
+      enabled: body.enabled,
+      autoSwitchThreshold: threshold,
+      experimental: true,
+    });
+  }
+  if (url.pathname === "/api/oauth/accounts/clear-cooldown" && req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as { provider?: unknown; accountId?: unknown };
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
+    if (provider !== "anthropic") return jsonResponse({ error: "clear-cooldown is only supported for anthropic" }, 400);
+    if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
+    const { clearAnthropicAccountCooldown } = await import("../../oauth/anthropic-routing");
+    const cleared = clearAnthropicAccountCooldown(accountId);
+    return jsonResponse({ ok: true, cleared });
+  }
+
   if (url.pathname === "/api/oauth/accounts/alias" && req.method === "PUT") {
     const body = await req.json().catch(() => ({})) as { provider?: unknown; accountId?: unknown; alias?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";

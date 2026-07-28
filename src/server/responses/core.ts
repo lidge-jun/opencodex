@@ -34,10 +34,19 @@ import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
   getOAuthCredentialProjectId,
+  getValidAccessTokenForAccount,
   getValidAccessTokenSnapshot,
   type OAuthAccessSnapshot,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
+import {
+  anthropicSessionKeyFromParts,
+  bindAnthropicSessionAffinity,
+  formatAnthropicProviderForLog,
+  isAnthropicAccountPoolEnabled,
+  resolveAnthropicAccountForSession,
+  rotateAnthropicAccountOn429,
+} from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, planImageBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -1024,21 +1033,42 @@ export async function handleResponses(
   const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro")
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
+  let anthropicPoolAccountId: string | null = null;
+  const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
+    ? anthropicSessionKeyFromParts({
+      sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+      threadIdHeader: req.headers.get("thread-id"),
+      promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
+      clientThreadId: typeof parsed._clientThreadId === "string" ? parsed._clientThreadId : null,
+    })
+    : null;
   if (route.provider.authMode === "oauth") {
     try {
-      const resolved = await getValidAccessTokenSnapshot(route.providerName);
-      if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
-      route.provider = { ...route.provider, apiKey: resolved.accessToken };
-      if (route.providerName === "kiro") {
-        // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
-        // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
-        parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
-      }
-      // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-      // CCA envelope; the server injects only the bare token, so pull project from the credential.
-      if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-        const projectId = getOAuthCredentialProjectId(route.providerName);
-        if (projectId) route.provider = { ...route.provider, project: projectId };
+      if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
+        const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config);
+        if (!selection.accountId) {
+          return formatErrorResponse(401, "authentication_error", "No eligible Anthropic OAuth account available");
+        }
+        const accessToken = await getValidAccessTokenForAccount("anthropic", selection.accountId);
+        anthropicPoolAccountId = selection.accountId;
+        bindAnthropicSessionAffinity(anthropicSessionKey, selection.accountId);
+        route.provider = { ...route.provider, apiKey: accessToken };
+        logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
+      } else {
+        const resolved = await getValidAccessTokenSnapshot(route.providerName);
+        if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
+        route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        if (route.providerName === "kiro") {
+          // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
+          // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
+          parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
+        }
+        // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
+        // CCA envelope; the server injects only the bare token, so pull project from the credential.
+        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
+          const projectId = getOAuthCredentialProjectId(route.providerName);
+          if (projectId) route.provider = { ...route.provider, project: projectId };
+        }
       }
     } catch (err) {
       if (err instanceof UnsupportedOAuthProviderError) {
@@ -1958,6 +1988,39 @@ export async function handleResponses(
         const result = await rebuildAndRefetch("key-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
+      }
+
+      // Opt-in Anthropic OAuth account pool (#294): cool the failed account and retry once
+      // with another eligible OAuth account. Disabled by default.
+      while (
+        upstreamResponse.status === 429
+        && anthropicPoolAccountId
+        && isAnthropicAccountPoolEnabled(config)
+      ) {
+        const nextAccountId = rotateAnthropicAccountOn429(
+          config,
+          anthropicPoolAccountId,
+          upstreamResponse.headers.get("retry-after"),
+          anthropicSessionKey,
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getValidAccessTokenForAccount("anthropic", nextAccountId);
+          anthropicPoolAccountId = nextAccountId;
+          route.provider = { ...route.provider, apiKey: accessToken };
+          logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+            config.cacheRetention,
+          );
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
+          const result = await rebuildAndRefetch("anthropic-oauth-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
       }
       // Anthropic 413 request_too_large: rebuild once with every image one tier lower
       // (spiral guard: single attempt). The biased response re-enters the 429 check above.

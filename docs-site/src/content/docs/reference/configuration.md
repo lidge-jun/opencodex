@@ -103,6 +103,25 @@ credential store. Existing thread ids keep account affinity, while new sessions 
 on quota, cooldown, and health.
 :::
 
+### anthropicAccountPool (experimental)
+
+Opt-in routing across **multiple Anthropic OAuth accounts** already stored in `auth.json`
+(issue [#294](https://github.com/lidge-jun/opencodex/issues/294)). **Default off.** This is
+experimental and not battle-tested — enable only if you accept the risk that Anthropic may
+restrict accounts that look like automated multi-account rotation. Accounts under the same
+organization can share quota; pooling those will not help.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | When true, sticky session affinity + 429 cooldown failover across eligible Anthropic OAuth accounts. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. `0` disables quota-based picking (affinity + active only). |
+
+Toggle and warning also appear on **Providers → anthropic → Accounts** in the GUI.
+:::caution[Experimental]
+Leave this disabled unless you understand Anthropic account policy risk. Prefer manual
+`ocx account use anthropic <id>` switching when unsure.
+:::
+
 ### claudeCode (OcxClaudeCodeConfig)
 
 Claude Code inbound settings consumed by the `/v1/messages` surface, the `ocx claude`
