@@ -135,6 +135,19 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(body.models).toBe(3);
   });
 
+  test("Together-style top-level /models array is accepted (#617)", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify([{ id: "meta/llama" }, { id: "Qwen/Qwen" }]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      together: { adapter: "openai-chat", baseUrl: "https://api.together.xyz/v1", apiKey: "tg-key" },
+    });
+    const { body } = await probe(config, "together");
+    expect(body.ok).toBe(true);
+    expect(body.models).toBe(2);
+  });
+
   test("malformed 2xx data is an explicit failure, not a silent pass", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ nope: true }), {
       status: 200,
