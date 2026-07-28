@@ -11,7 +11,11 @@ export type BoundedFetch = {
 
 export function createBoundedFetch(ms: number): BoundedFetch {
   const controller = new AbortController();
-  if (typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal) {
+  if (
+    typeof AbortSignal !== "undefined"
+    && typeof AbortSignal.any === "function"
+    && typeof AbortSignal.timeout === "function"
+  ) {
     return {
       controller,
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(ms)]),

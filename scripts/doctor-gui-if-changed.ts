@@ -8,7 +8,8 @@
  *
  * Test hooks: DOCTOR_DRY_RUN=1 prints the run/skip decision without spawning;
  * DOCTOR_FILES (newline-separated) overrides git-derived changed files;
- * DOCTOR_CMD overrides the spawned command (offline-degradation testing).
+ * DOCTOR_CMD overrides the spawned command (offline-degradation testing);
+ * OCX_DOCTOR_MAX_BUFFER overrides spawnSync maxBuffer (overflow hard-fail testing).
  */
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -29,8 +30,16 @@ export function looksLikeDoctorInfraFailure(output: string): boolean {
 /** Large enough for verbose doctor scans; overflows must not soft-skip the gate. */
 export const DOCTOR_MAX_BUFFER = 20 * 1024 * 1024;
 
-function isBufferOverflow(code: string | undefined): boolean {
+/** True when spawnSync failed because child stdout/stderr exceeded maxBuffer. */
+export function isDoctorBufferOverflow(code: string | undefined): boolean {
   return code === "ENOBUFS" || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+}
+
+function resolveMaxBuffer(): number {
+  const raw = process.env.OCX_DOCTOR_MAX_BUFFER;
+  if (raw === undefined || raw === "") return DOCTOR_MAX_BUFFER;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DOCTOR_MAX_BUFFER;
 }
 
 if (import.meta.main) {
@@ -101,7 +110,7 @@ if (import.meta.main) {
   const result = spawnSync(cmd!, args, {
     cwd: guiDir,
     encoding: "utf8",
-    maxBuffer: DOCTOR_MAX_BUFFER,
+    maxBuffer: resolveMaxBuffer(),
     env: { ...process.env, npm_config_yes: "true" },
   });
 
@@ -113,7 +122,7 @@ if (import.meta.main) {
   const overflowCode = result.error && "code" in result.error
     ? String((result.error as NodeJS.ErrnoException).code ?? "")
     : "";
-  if (isBufferOverflow(overflowCode)) {
+  if (isDoctorBufferOverflow(overflowCode)) {
     console.error("doctor:gui: react-doctor output exceeded buffer — failing push");
     process.exit(1);
   }

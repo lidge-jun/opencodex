@@ -2029,4 +2029,26 @@ describe("doctor-gui-if-changed", () => {
     });
     expect(run.exitCode).not.toBe(0);
   });
+
+  test("isDoctorBufferOverflow recognizes ENOBUFS / maxBuffer errors", async () => {
+    const { isDoctorBufferOverflow } = await import("../scripts/doctor-gui-if-changed");
+    expect(isDoctorBufferOverflow("ENOBUFS")).toBe(true);
+    expect(isDoctorBufferOverflow("ERR_CHILD_PROCESS_STDIO_MAXBUFFER")).toBe(true);
+    expect(isDoctorBufferOverflow("ENOENT")).toBe(false);
+    expect(isDoctorBufferOverflow(undefined)).toBe(false);
+  });
+
+  test("hard-fails when doctor output exceeds maxBuffer (does not soft-skip)", () => {
+    const run = Bun.spawnSync(["bun", doctorGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        DOCTOR_FILES: "gui/src/App.tsx",
+        DOCTOR_CMD: "bun ../scripts/fixtures/doctor-huge-output.ts",
+        // Tiny buffer so the fixture's stdout trips the overflow branch.
+        OCX_DOCTOR_MAX_BUFFER: "256",
+      },
+    });
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr.toString()).toContain("exceeded buffer");
+  });
 });
