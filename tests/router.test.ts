@@ -142,9 +142,9 @@ describe("routeModel registry effort defaults", () => {
     expect(routeModel({ ...base, providers: { ...base.providers, openai: { ...forward, codexAccountMode: "direct" } } }, "gpt-5.5"))
       .toMatchObject({ providerName: "openai", codexAccountMode: "direct" });
     expect(() => routeModel({ ...base, providers: { ...base.providers, openai: { ...forward, disabled: true } } }, "gpt-5.5"))
-      .toThrow(NoEnabledOpenAiProviderError);
+      .toThrow(/requires the canonical openai provider/);
     const unavailable = { ...base, providers: { "openai-proxy": base.providers["openai-proxy"] } };
-    expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(NoEnabledOpenAiProviderError);
+    expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(/ocx provider add openai/);
   });
 
   test("rejects legacy chatgpt namespaces even when configured", () => {
