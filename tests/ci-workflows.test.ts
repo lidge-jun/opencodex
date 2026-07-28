@@ -466,10 +466,15 @@ describe("GitHub Actions hardening", () => {
     // single assertion.
     expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
 
-    // Exactly one permission scope. Asserting that `pull-requests: write` is
-    // present says nothing about what was added beside it, and a `write-all`
-    // scalar is not an object at all.
-    expect(workflow.permissions).toEqual({ "pull-requests": "write" });
+    // Exactly the scopes this gate needs. `pull-requests: write` covers title
+    // and comment updates. `contents: write` is required for the draft GraphQL
+    // mutations with GITHUB_TOKEN (#626: "Resource not accessible by integration"
+    // when contents was unset). Asserting the whole object pins both presence
+    // and the absence of anything broader (write-all, contents alone, …).
+    expect(workflow.permissions).toEqual({
+      contents: "write",
+      "pull-requests": "write",
+    });
 
     // One run per PR, so two rapid events cannot race on the title/draft state,
     // and no `cancel-in-progress` — cancelling the in-flight run mid-mutation is
@@ -735,12 +740,13 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(result)).toEqual([
           "pulls.get",
           "issues.listComments",
-          "issues.createComment",
           "pulls.update",
           "graphql",
+          "issues.createComment",
         ]);
         const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
         expect(comment.body).toContain(`\`${ref}\``);
+        expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
     });
 
@@ -784,9 +790,9 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.updateComment",
         "pulls.update",
         "graphql",
+        "issues.updateComment",
       ]);
       expect(callsTo(result, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Port the runtime entry" },
@@ -795,6 +801,7 @@ describe("GitHub Actions hardening", () => {
       expect(comment.body).toContain('"active":true');
       expect(comment.body).toContain('"autoDraftedByBot":true');
       expect(comment.body).toContain('"titlePrefixedByBot":true');
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 
     test("the wrong-target explanation lists every allowed base and names the default", async () => {
@@ -817,14 +824,15 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
       });
 
-      // The comment lands before the mutations, so a rerun after a failed
-      // mutation can still find the restoration state.
+      // Title and draft run first so the state comment can record what actually
+      // succeeded (#626: claiming autoDraftedByBot before a failed GraphQL call
+      // left restoration state lying about reality).
       expect(methodsOf(result)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.createComment",
         "pulls.update",
         "graphql",
+        "issues.createComment",
       ]);
 
       // The title update carries the title and nothing else. `base`, `state`
@@ -839,12 +847,16 @@ describe("GitHub Actions hardening", () => {
       expect(comment.issue_number).toBe(42);
       expect(comment.body).toContain(MARKER);
       expect(comment.body).toContain("@contributor");
+      expect(comment.body).toContain('"autoDraftedByBot":true');
 
       // The only GraphQL mutation is the draft conversion — not a retarget.
       const [draft] = callsTo(result, "graphql") as [{ query: string; variables: unknown }];
       expect(draft.query).toContain("convertPullRequestToDraft");
       expect(draft.query).not.toContain("updatePullRequest");
       expect(draft.variables).toEqual({ pullRequestId: "PR_kwDOnode42" });
+
+      // Wrong-base runs must fail the required check even when mutations succeed.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 
     test("a PR that was already a draft is not un-drafted afterwards", async () => {
@@ -857,11 +869,12 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(wrong)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.createComment",
         "pulls.update",
+        "issues.createComment",
       ]);
       const [comment] = callsTo(wrong, "issues.createComment") as [{ body: string }];
       expect(comment.body).toContain('"autoDraftedByBot":false');
+      expect(wrong.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
 
       // Now retarget it correctly, feeding that state back in.
       const restored = await run({
@@ -945,9 +958,9 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(wentWrong)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.createComment",
         "pulls.update",
         "graphql",
+        "issues.createComment",
       ]);
       expect(callsTo(wentWrong, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Add a thing" },
@@ -1040,9 +1053,9 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.updateComment",
         "pulls.update",
         "graphql",
+        "issues.updateComment",
       ]);
       expect(result.warnings.join(" ")).toContain("Could not parse stored workflow state");
     });
@@ -1227,13 +1240,14 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(wrong)).toEqual([
           "pulls.get",
           "issues.listComments",
-          "issues.updateComment",
           "pulls.update",
           "graphql",
+          "issues.updateComment",
         ]);
         const [refreshed] = callsTo(wrong, "issues.updateComment") as [{ body: string }];
         expect(refreshed.body).toContain(`"version":${version}`);
         expect(refreshed.body).toContain('"active":true');
+        expect(wrong.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
     });
 
@@ -1280,19 +1294,16 @@ describe("GitHub Actions hardening", () => {
       expect(cleared.body).toContain('"active":false');
     });
 
-    test("the state comment is written before the PR is touched", async () => {
-      // Order is the recovery story. The comment records what the workflow is
-      // about to change; if a mutation fails afterwards, a rerun reads that
-      // record and finishes the job. Write the PR first and a failure in
-      // between leaves a renamed, drafted PR with no record that the bot did
-      // it — permanently stuck. The scenario above asserts the full call list,
-      // but this states the invariant on its own so a reordering says why.
+    test("mutations run before the state comment so recorded flags match reality", async () => {
+      // #626 / redesign of the #527 ordering: write title + draft first, then
+      // record only what succeeded. Claiming autoDraftedByBot before a failed
+      // GraphQL call left restoration state lying about a ready PR.
       const result = await run({ pr: { base: { ref: "main" }, draft: false } });
       const methods = methodsOf(result);
       const comment = methods.indexOf("issues.createComment");
       expect(comment).toBeGreaterThan(-1);
-      expect(comment).toBeLessThan(methods.indexOf("pulls.update"));
-      expect(comment).toBeLessThan(methods.indexOf("graphql"));
+      expect(methods.indexOf("pulls.update")).toBeLessThan(comment);
+      expect(methods.indexOf("graphql")).toBeLessThan(comment);
     });
 
     test("a title that is exactly the prefix is still enforced", async () => {
@@ -1311,8 +1322,8 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.createComment",
         "graphql",
+        "issues.createComment",
       ]);
       const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
       expect(comment.body).toContain('"titlePrefixedByBot":false');
@@ -1333,8 +1344,8 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.createComment",
         "pulls.update",
+        "issues.createComment",
       ]);
     });
 
@@ -1377,8 +1388,8 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual([
         "pulls.get",
         "issues.listComments",
-        "issues.createComment",
         "graphql",
+        "issues.createComment",
       ]);
       // Already prefixed by the `startsWith` test, so no third prefix is added.
       expect(callsTo(result, "pulls.update")).toEqual([]);
@@ -1564,27 +1575,36 @@ describe("GitHub Actions hardening", () => {
       expect(probe.bun).toBe("undefined");
     });
 
-    test("an API failure is never swallowed, whatever status it carries", async () => {
-      // Octokit rejects with a `RequestError` that has a `.status`, and an
-      // audit round swallowed exactly one code:
-      //
-      //     catch (error) { if (error.status === 404) return; throw error; }
-      //
-      // A green workflow, an un-drafted PR. Drive the failure at several
-      // statuses so a code-specific catch cannot hide in the gap.
+    test("a draft GraphQL failure is soft-failed with accurate state and a hard check failure", async () => {
+      // Observed on PR #626: convertPullRequestToDraft failed with
+      // "Resource not accessible by integration", the job crashed before
+      // setFailed, and the PR stayed ready. Soft-catch the draft mutation,
+      // record autoDraftedByBot:false, explain the fallback, and still fail
+      // the required check so merge stays blocked.
       const { script } = await readEnforcePrTarget();
 
       for (const status of [403, 404, 422, 500]) {
-        await expect(
-          runEnforcePrTarget(script, {
-            pr: { base: { ref: "main" }, draft: false },
-            failOn: ["graphql"],
-            failStatus: status,
-          }),
-        ).rejects.toThrow(/simulated failure: graphql/);
+        const result = await runEnforcePrTarget(script, {
+          pr: { base: { ref: "main" }, draft: false },
+          failOn: ["graphql"],
+          failStatus: status,
+        });
+        expect(methodsOf(result)).toEqual([
+          "pulls.get",
+          "issues.listComments",
+          "pulls.update",
+          "graphql",
+          "issues.createComment",
+        ]);
+        const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
+        expect(comment.body).toContain('"autoDraftedByBot":false');
+        expect(comment.body).toContain("Automatic draft conversion failed");
+        expect(result.warnings.some((w) => w.includes("Could not convert pull request to draft"))).toBe(true);
+        expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
 
-      // Same for the title update, which fails before the draft conversion.
+      // Title update failures still propagate — without the prefix the gate
+      // has no durable signal on the PR itself.
       for (const status of [403, 404, 422]) {
         await expect(
           runEnforcePrTarget(script, {
@@ -1596,40 +1616,16 @@ describe("GitHub Actions hardening", () => {
       }
     });
 
-    test("a failed draft conversion propagates, and the state is already stored", async () => {
-      // Observed on PR #527 (devlog .../050_live_evidence.md): the GraphQL
-      // mutation failed, the workflow ended in failure, and the PR stayed
-      // ready — but the comment already claimed `autoDraftedByBot: true`.
-      //
-      // The ordering is deliberate: writing the state first is what makes a
-      // rerun recoverable. This pins both halves of it, including the part
-      // that is wrong — the recorded state disagrees with reality until the
-      // rerun. The redesign in 040 owns fixing that; this test documents it so
-      // the fix is visible when it lands.
+    test("a failed draft conversion does not claim autoDraftedByBot", async () => {
       const { script } = await readEnforcePrTarget();
-      const observed: string[] = [];
-
-      await expect(
-        runEnforcePrTarget(script, {
-          pr: { base: { ref: "main" }, draft: false },
-          failOn: ["graphql"],
-        }).catch((error: unknown) => {
-          observed.push(String(error));
-          throw error;
-        }),
-      ).rejects.toThrow(/simulated failure: graphql/);
-
-      // The failure is not swallowed. An audit round wrapped the whole script
-      // in `try { … } catch {}`, which turns every API failure into a silent
-      // no-op and a green check; this assertion is what makes that visible.
-      expect(observed).toHaveLength(1);
-
-      // …and the state comment went out before the mutation that failed.
-      const upTo = await runEnforcePrTarget(script, {
+      const result = await runEnforcePrTarget(script, {
         pr: { base: { ref: "main" }, draft: false },
-        failOn: ["pulls.update"],
-      }).catch(() => null);
-      expect(upTo).toBeNull();
+        failOn: ["graphql"],
+      });
+      const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
+      expect(comment.body).toContain('"autoDraftedByBot":false');
+      expect(comment.body).toContain('"titlePrefixedByBot":true');
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
   });
 
@@ -1646,6 +1642,7 @@ describe("GitHub Actions hardening", () => {
     expect(script).toMatch(/storedState\.titlePrefixedByBot/);
     expect(script).toMatch(/await\s+convertToDraft\(\)/);
     expect(script).toMatch(/await\s+markReadyForReview\(\)/);
+    expect(script).toMatch(/core\.setFailed\(/);
 
     // Tie each helper to its GraphQL body. Asserting that the call and the
     // mutation name both appear somewhere leaves a gap: declaring an empty
@@ -1673,24 +1670,17 @@ describe("GitHub Actions hardening", () => {
     expect(script).toMatch(/\n\s*if \(!storedState\?\.active\) \{\n/);
     expect(script).toMatch(/\n\s*if \(wrongBase\) \{\n/);
 
-    // Observed on PR #527 (devlog .../050_live_evidence.md): the state is written
-    // BEFORE the mutation and is not reconciled when the mutation fails, so a
-    // failed convertToDraft still records autoDraftedByBot: true. This documents
-    // that ordering rather than endorsing it — the redesign in 040 owns fixing
-    // it, and this assertion should change with it.
-    //
-    // Scope the comparison to the wrong-base branch: upsertComment is called from
-    // both branches, so comparing across the whole script would measure whichever
-    // call happens to come first in the text.
+    // Mutations run before the state comment so autoDraftedByBot matches reality
+    // (#626). Scope the comparison to the wrong-base branch.
     const branchStart = script.indexOf("if (wrongBase) {");
     expect(branchStart).toBeGreaterThan(-1);
     const branch = script.slice(branchStart);
     const stateWriteIndex = branch.indexOf("await upsertComment(");
     const draftCallIndex = branch.indexOf("await convertToDraft()");
     expect(stateWriteIndex).toBeGreaterThan(-1);
-    expect(draftCallIndex).toBeGreaterThan(stateWriteIndex);
+    expect(draftCallIndex).toBeGreaterThan(-1);
+    expect(draftCallIndex).toBeLessThan(stateWriteIndex);
   });
-
 
   test("docs deployment is pinned, bounded, and scoped to Pages", async () => {
     const workflow = await readText(".github/workflows/deploy-docs.yml");
