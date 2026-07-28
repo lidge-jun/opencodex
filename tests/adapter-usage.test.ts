@@ -515,13 +515,13 @@ describe("anthropic tool result history repair", () => {
       stream: true,
       options: {},
     });
-    const body = JSON.parse(request.body) as { messages: Array<{ role: string; content: any }> };
-    const assistant = body.messages.find(m => m.role === "assistant" && Array.isArray(m.content) && m.content.some((c: { type?: string }) => c.type === "tool_use"));
+    const wire = JSON.parse(request.body) as { messages: Array<{ role: string; content: any }> };
+    const assistant = wire.messages.find(m => m.role === "assistant" && Array.isArray(m.content) && m.content.some((c: { type?: string }) => c.type === "tool_use"));
     expect(assistant).toBeDefined();
     const types = (assistant!.content as { type: string }[]).map(c => c.type);
     expect(types).toEqual(["text", "text", "tool_use", "tool_use"]);
-    expect(body.messages[2].role).toBe("user");
-    expect(body.messages[2].content.map((c: { tool_use_id?: string }) => c.tool_use_id)).toEqual(["call_a", "call_b"]);
+    expect(wire.messages[2].role).toBe("user");
+    expect(wire.messages[2].content.map((c: { tool_use_id?: string }) => c.tool_use_id)).toEqual(["call_a", "call_b"]);
   });
 
   test("preserves orphan tool results as text instead of invalid Anthropic tool_result blocks", async () => {
