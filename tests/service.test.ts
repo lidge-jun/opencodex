@@ -237,6 +237,21 @@ describe("Windows service task", () => {
     expect(xml).not.toContain("<Command>C:\\Users\\a&amp;b\\.opencodex\\opencodex-service.cmd</Command>");
   });
 
+  test("accepts Task Scheduler Arguments with unescaped quotes (#608)", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`)
+      // Windows exports element text unescaped — literal " not &quot;
+      .replace(
+        `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
+        `<Arguments>/b /nologo "${launcher}"</Arguments>`,
+      );
+    expect(xml).toContain(`<Arguments>/b /nologo "${launcher}"</Arguments>`);
+    expect(xml).not.toContain("&quot;");
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher)).toBe(true);
+  });
+
   test("validates the registered scheduler action, trigger, principal, and settings", () => {
     const wscript = "C:\\Windows\\System32\\wscript.exe";
     const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";

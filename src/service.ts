@@ -1050,6 +1050,29 @@ function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string):
   return value?.trim().toLowerCase() === expected.toLowerCase();
 }
 
+function taskXmlDecodeEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Exact element-text match after one-pass decoding of XML's five predefined entities.
+ * Task Scheduler exports element text unescaped (`"`), while we emit `&quot;` (#608).
+ * Rejects zero/multiple occurrences and nested markup (no `<` inside the value).
+ */
+function taskXmlElementTextEquals(xml: string, tag: string, expectedDecoded: string): boolean {
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  const count = taskXmlElementCount(xml, tag);
+  if (count !== 1) return false;
+  const raw = new RegExp(`<${tag}(?:\\s[^>]*?)?>\\s*([^<]*?)\\s*<\\/${tag}>`, "i").exec(xml)?.[1];
+  if (raw === undefined || raw.includes("<")) return false;
+  return taskXmlDecodeEntities(raw) === expectedDecoded;
+}
+
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
 export function windowsTaskRegistrationHealthy(
   xml: string,
@@ -1076,8 +1099,8 @@ export function windowsTaskRegistrationHealthy(
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
-    && action.includes(`<Command>${taskXmlString(wscript)}</Command>`)
-    && action.includes(`<Arguments>${taskXmlString(`/b /nologo "${launcher}"`)}</Arguments>`);
+    && taskXmlElementTextEquals(action, "Command", wscript)
+    && taskXmlElementTextEquals(action, "Arguments", `/b /nologo "${launcher}"`);
 }
 
 export interface WindowsSchedulerXmlState {
