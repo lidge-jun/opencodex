@@ -112,7 +112,7 @@ if (import.meta.main) {
     if (stderr) process.stderr.write(stderr);
 
     // Buffer overflow means doctor ran and produced a large report — gate, do not soft-skip.
-    if (code === "ENOBUFS") {
+    if (code === "ENOBUFS" || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       console.error("doctor:gui: react-doctor output exceeded buffer — failing push");
       process.exit(1);
     }
