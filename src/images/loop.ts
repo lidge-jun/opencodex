@@ -633,7 +633,6 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
                   if (pollResult.ok) {
                     const dlPath = await downloadVideoToArtifact(pollResult.videoUrl, vBudget, signal);
-                    pruneArtifacts(videoPlan?.artifactsKeepCount);
                     vResult = buildVideoResult(dlPath, vArgs.prompt, videoPlan!.model);
                   } else {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: pollResult.error };
@@ -682,6 +681,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               fulfilled.push({ call, result, args: parsedArgs });
             }
           }
+          // Prune artifacts once after the entire batch so a tight keepCount
+          // cannot delete a video from an earlier call in this same iteration.
+          pruneArtifacts(videoPlan?.artifactsKeepCount ?? plan?.artifactsKeepCount);
           const now = Date.now();
           messages.push({
             role: "assistant",

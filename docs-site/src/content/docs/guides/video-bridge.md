@@ -12,9 +12,24 @@ job to xAI, polls until completion, and downloads the result.
 
 ## Prerequisites
 
-- An xAI account with an API key (set `XAI_API_KEY` or configure the key in your provider config — `ocx login xai` alone is not sufficient for the video bridge, which requires API key auth)
+- An `xai` provider entry with an **API key** (`ocx login xai` alone is not sufficient — the video bridge requires key auth, not OAuth)
 - A non-OpenAI model as your routed provider (e.g. Anthropic Claude, Google Gemini)
 - opencodex configured to route through the non-OpenAI provider
+
+> **⚠ Provider key required:** The video bridge only activates when the `xai` provider uses
+> API key auth. Add this to your config:
+>
+> ```json
+> {
+>   "providers": {
+>     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>   }
+> }
+> ```
+>
+> If you onboarded via `ocx login xai` (OAuth), the provider stays in `authMode: "oauth"`
+> and the bridge silently won't activate. Set `XAI_API_KEY` in the environment **or**
+> hard-code the key as shown above.
 
 ## Configuration
 
