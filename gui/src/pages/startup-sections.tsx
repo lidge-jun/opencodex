@@ -84,10 +84,12 @@ export function StartupDetailsSection({
   data: StartupHealthData;
   failed: boolean;
   installBusy: StartupInstallAction | null;
-  installResult: { kind: "success" | "error"; action: StartupInstallAction; detail?: string } | null;
-  onInstall: (action: StartupInstallAction) => void;
+  installResult: { kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null;
+  onInstall: (action: StartupInstallAction, opts?: { repair?: boolean }) => void;
 }) {
   const { t } = useI18n();
+  const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && !data.serviceViable;
+  const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
 
   return (
     <section className="panel startup-details">
@@ -108,6 +110,11 @@ export function StartupDetailsSection({
               {t(installBusy === "install-service" ? "startup.installing" : "startup.install")}
             </button>
           )}
+          {serviceNeedsRepair && (
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.repair")}`} disabled={installBusy !== null || failed} onClick={() => onInstall("install-service", { repair: true })}>
+              {t(installBusy === "install-service" ? "startup.repairing" : "startup.repair")}
+            </button>
+          )}
         </div>
       </div>
       <div className="startup-detail-row">
@@ -125,12 +132,19 @@ export function StartupDetailsSection({
               {t(installBusy === "install-shim" ? "startup.installing" : "startup.install")}
             </button>
           )}
+          {shimNeedsRepair && (
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.repair")}`} disabled={installBusy !== null || failed} onClick={() => onInstall("install-shim", { repair: true })}>
+              {t(installBusy === "install-shim" ? "startup.repairing" : "startup.repair")}
+            </button>
+          )}
         </div>
       </div>
       {installResult && (
         <div className={`notice ${installResult.kind === "success" ? "notice-ok" : "notice-warn"} startup-action-notice`} role="status" aria-live="polite">
           {installResult.kind === "success"
-            ? t(installResult.action === "install-service" ? "startup.serviceInstalled" : "startup.shimInstalled")
+            ? installResult.action === "install-service"
+              ? t(installResult.repair ? "startup.serviceRepaired" : "startup.serviceInstalled")
+              : t(installResult.repair ? "startup.shimRepaired" : "startup.shimInstalled")
             : `${t("startup.installFailed")} ${installResult.detail ?? ""}`}
         </div>
       )}

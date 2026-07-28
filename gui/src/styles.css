@@ -399,6 +399,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   font: inherit; font-size: var(--text-control); font-weight: var(--weight-medium); line-height: var(--leading-ui); cursor: pointer;
   border: 1px solid transparent; transition: background var(--motion-fast), border-color var(--motion-fast), opacity var(--motion-fast); white-space: nowrap;
 }
+a.btn, a.btn:hover { text-decoration: none; }
 .btn svg { width: 15px; height: 15px; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 .btn-primary { background: var(--accent); color: var(--accent-ink); }

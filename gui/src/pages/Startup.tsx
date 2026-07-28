@@ -60,7 +60,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const [trayBusy, setTrayBusy] = useState(false);
   const [trayError, setTrayError] = useState(false);
   const [installBusy, setInstallBusy] = useState<StartupInstallAction | null>(null);
-  const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; detail?: string } | null>(null);
+  const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null>(null);
   const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(null);
   const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(null);
   const loadGenerationRef = useRef(0);
@@ -175,7 +175,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const runInstallAction = async (action: StartupInstallAction) => {
+  const runInstallAction = async (action: StartupInstallAction, opts?: { repair?: boolean }) => {
     setInstallBusy(action);
     setInstallResult(null);
     try {
@@ -188,10 +188,10 @@ export default function Startup({ apiBase }: { apiBase: string }) {
         const body = await res.json().catch(() => null) as { error?: unknown } | null;
         throw new Error(typeof body?.error === "string" ? body.error : "installation failed");
       }
-      setInstallResult({ kind: "success", action });
+      setInstallResult({ kind: "success", action, repair: opts?.repair === true });
       await refresh();
     } catch (error) {
-      setInstallResult({ kind: "error", action, detail: error instanceof Error ? error.message : String(error) });
+      setInstallResult({ kind: "error", action, repair: opts?.repair === true, detail: error instanceof Error ? error.message : String(error) });
     } finally {
       setInstallBusy(null);
     }
@@ -238,7 +238,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
             failed={failed}
             installBusy={installBusy}
             installResult={installResult}
-            onInstall={(action) => { void runInstallAction(action); }}
+            onInstall={(action, opts) => { void runInstallAction(action, opts); }}
           />
           {data.platform === "win32" && (
             <StartupTraySection
