@@ -7,6 +7,7 @@ import {
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  getEffectiveActiveCodexAccountId,
   isCodexAccountInCooldown,
   pickAlternateCodexAccount,
   previewCodexAccountForRequest,
@@ -257,6 +258,19 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(THREE_ACCOUNT_IDS).toContain(pick);
   });
 
+  test("fill-first skips drained successors when advancing past threshold", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 90);
+    updateAccountQuota("b", 95);
+    updateAccountQuota("c", 10);
+
+    expect(resolveCodexAccountForThread(null, config)).toBe("c");
+  });
+
   test("RR preview(null) matches next resolve(null) without advancing until resolve", () => {
     const config = makeThreeAccountConfig({ accountPoolStrategy: "round-robin" });
     updateAccountQuota("a", 10);
@@ -376,7 +390,8 @@ describe("accountPoolStrategy new-session routing", () => {
 
     expect(resolveCodexAccountForThread(null, config)).toBe("a");
     recordCodexUpstreamOutcome(config, "a", 429);
-    expect(config.activeCodexAccountId).toBe("b");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a"); // automatic — not persisted as operator selection
     expect(pickAlternateCodexAccount(config, "a")).toBe("b");
   });
 
@@ -392,9 +407,10 @@ describe("accountPoolStrategy new-session routing", () => {
 
     const first = resolveCodexAccountForThread(null, config)!;
     recordCodexUpstreamOutcome(config, first, 429);
-    const promoted = config.activeCodexAccountId;
+    const promoted = getEffectiveActiveCodexAccountId(config);
     expect(promoted).toBeTruthy();
     expect(promoted).not.toBe(first);
+    expect(config.activeCodexAccountId).toBe("a");
     // Lowest usage is c; ring may pick b. Either is fine as long as it is not lowest-usage-forced when
     // that would disagree with the ring — assert we did not stay on the failed account.
     expect(isCodexAccountInCooldown(first)).toBe(true);
@@ -416,7 +432,8 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(retry).toBeTruthy();
     expect(retry).not.toBe("a");
     recordCodexUpstreamOutcome(withReuse, "a", 429, { promoteAccountId: retry! });
-    expect(withReuse.activeCodexAccountId).toBe(retry);
+    expect(getEffectiveActiveCodexAccountId(withReuse)).toBe(retry);
+    expect(withReuse.activeCodexAccountId).toBe("a");
 
     clearPoolRotationState();
     clearCodexUpstreamHealth();
@@ -427,8 +444,9 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(firstPick).toBeTruthy();
     recordCodexUpstreamOutcome(withoutReuse, "a", 429);
     // A second ring advance during record would promote past firstPick.
-    expect(withoutReuse.activeCodexAccountId).not.toBe(firstPick);
-    expect(withoutReuse.activeCodexAccountId).not.toBe("a");
+    expect(getEffectiveActiveCodexAccountId(withoutReuse)).not.toBe(firstPick);
+    expect(getEffectiveActiveCodexAccountId(withoutReuse)).not.toBe("a");
+    expect(withoutReuse.activeCodexAccountId).toBe("a");
   });
 
   test("fill-first transient failover advances stable order, not lowest usage", () => {
@@ -447,6 +465,7 @@ describe("accountPoolStrategy new-session routing", () => {
     recordCodexUpstreamOutcome(config, "a", 503);
     recordCodexUpstreamOutcome(config, "a", 503);
     recordCodexUpstreamOutcome(config, "a", 503);
-    expect(config.activeCodexAccountId).toBe("b");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
   });
 });

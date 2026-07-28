@@ -187,6 +187,7 @@ function pickLowestUsage(excludeId: string | undefined, now: number): string | n
 
 /** Next eligible Anthropic account in stable order after `afterId` (wrapping). */
 function pickNextFillFirstAnthropicAccount(
+  config: OcxConfig,
   afterId: string,
   eligible: string[],
 ): string | null {
@@ -197,12 +198,21 @@ function pickNextFillFirstAnthropicAccount(
     ? [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b))
     : ordered;
   const startIdx = stableAll.indexOf(afterId);
-  if (startIdx < 0) return ordered[0] ?? null;
+  if (startIdx < 0) {
+    for (const id of ordered) {
+      if (isActiveUnderFillFirstThreshold(config, id)) return id;
+    }
+    return ordered[0] ?? null;
+  }
+  // Skip successors that are also at/above threshold (known drained usage).
+  let fallback: string | null = null;
   for (let step = 1; step <= stableAll.length; step++) {
     const candidate = stableAll[(startIdx + step) % stableAll.length]!;
-    if (eligible.includes(candidate)) return candidate;
+    if (!eligible.includes(candidate)) continue;
+    if (!fallback) fallback = candidate;
+    if (isActiveUnderFillFirstThreshold(config, candidate)) return candidate;
   }
-  return ordered[0] ?? null;
+  return fallback ?? ordered[0] ?? null;
 }
 
 function pickAlternateAnthropicAccount(
@@ -216,7 +226,7 @@ function pickAlternateAnthropicAccount(
     return pickRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
   }
   if (strategy === "fill-first") {
-    return pickNextFillFirstAnthropicAccount(excludeId, eligible);
+    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
   }
   return pickLowestUsage(excludeId, now);
 }
@@ -277,18 +287,15 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
     return active;
   }
 
-  const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
-  if (!active || !set) return ordered[0] ?? null;
-
-  const stableAll = [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b));
-  const startIdx = stableAll.indexOf(active);
-  if (startIdx < 0) return ordered[0] ?? null;
-
-  for (let step = 1; step <= stableAll.length; step++) {
-    const candidate = stableAll[(startIdx + step) % stableAll.length]!;
-    if (eligible.includes(candidate)) return candidate;
+  if (!active || !set) {
+    const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+    for (const id of ordered) {
+      if (isActiveUnderFillFirstThreshold(config, id)) return id;
+    }
+    return ordered[0] ?? null;
   }
-  return ordered[0] ?? null;
+
+  return pickNextFillFirstAnthropicAccount(config, active, eligible);
 }
 
 /**
@@ -347,6 +354,19 @@ export function resolveAnthropicAccountForSession(
         return { accountId: affined.accountId, reason: "affinity" };
       }
       sessionAffinity.delete(key);
+    }
+  }
+
+  const strategy = anthropicPoolStrategy(config);
+  // No session identity (Desktop turns without a sticky key): hold the current
+  // active under RR/fill-first instead of treating every turn as a new session.
+  // Round-robin only when there is a real new-session key (or active is unusable).
+  if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
+    const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
+      && !isCooled(set.activeAccountId, now)
+      && isPoolCredentialUsable(set.activeAccountId, now);
+    if (activeOk) {
+      return { accountId: set.activeAccountId, reason: "active" };
     }
   }
 

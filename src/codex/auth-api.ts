@@ -16,7 +16,7 @@ import {
   parseAccountPoolStickyLimit,
   parseAccountPoolStrategy,
 } from "./pool-rotation";
-import { clearCodexAccountCooldown, resetCodexRoutingForManualSelection } from "./routing";
+import { clearCodexAccountCooldown, getEffectiveActiveCodexAccountId, resetCodexRoutingForManualSelection } from "./routing";
 import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
 export { checkAccountIdCollision, getMainChatgptAccountId } from "./auth-collision";
 export { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -621,7 +621,7 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/active" && req.method === "GET") {
     const runtimeConfig = getRuntimeConfig(config);
     return jsonResponse({
-      activeCodexAccountId: runtimeConfig.activeCodexAccountId ?? null,
+      activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
       autoSwitchThreshold: runtimeConfig.autoSwitchThreshold ?? 80,
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
