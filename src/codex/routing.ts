@@ -4,6 +4,13 @@ import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-
 import { codexAccountLogLabel } from "./account-label";
 import { isCodexAccountUsable } from "./account-usability";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
+import {
+  POOL_KEY_CODEX,
+  normalizeAccountPoolStickyLimit,
+  notePoolRotationFailure,
+  notePoolRotationSuccess,
+  pickRoundRobinAccount,
+} from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
 import type { OcxConfig } from "../types";
@@ -462,6 +469,104 @@ function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Da
   return ids;
 }
 
+function listEligibleCodexAccountIds(config: OcxConfig, now: number): string[] {
+  return getEligiblePoolAccounts(config, undefined, now);
+}
+
+function stickyLimitForConfig(config: OcxConfig): number {
+  return normalizeAccountPoolStickyLimit(config.accountPoolStickyLimit);
+}
+
+function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
+  const threshold = config.autoSwitchThreshold ?? 80;
+  if (threshold <= 0) return true;
+  const usage = computeCodexUsageScore(getAccountQuota(accountId), getPoolAccountPlan(config, accountId));
+  // Unknown usage must not force fill-first to abandon the active account.
+  if (isUnknownUsage(usage)) return true;
+  return usage < threshold;
+}
+
+/**
+ * Fill-first: keep selectable active under threshold; otherwise advance to the next
+ * eligible id in stable sorted order after the current active (wrapping).
+ */
+function pickFillFirstCodexAccount(config: OcxConfig, now: number): string | null {
+  const eligible = listEligibleCodexAccountIds(config, now);
+  if (eligible.length === 0) return null;
+
+  const active = config.activeCodexAccountId;
+  if (active && eligible.includes(active) && isActiveUnderFillFirstThreshold(config, active)) {
+    return active;
+  }
+
+  const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+  if (!active) return ordered[0] ?? null;
+
+  const allConfigured = [
+    ...(isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID) || active === MAIN_CODEX_ACCOUNT_ID
+      ? [MAIN_CODEX_ACCOUNT_ID]
+      : []),
+    ...(config.codexAccounts ?? []).filter(account => !account.isMain).map(account => account.id),
+  ];
+  const stableAll = [...new Set(allConfigured)].sort((a, b) => a.localeCompare(b));
+  const startIdx = stableAll.indexOf(active);
+  if (startIdx < 0) return ordered[0] ?? null;
+
+  for (let step = 1; step <= stableAll.length; step++) {
+    const candidate = stableAll[(startIdx + step) % stableAll.length]!;
+    if (eligible.includes(candidate)) return candidate;
+  }
+  return ordered[0] ?? null;
+}
+
+/**
+ * Unbound new-session pick for round-robin / fill-first. Returns null to fall through
+ * to the legacy quota path (or when the strategy is quota).
+ *
+ * When `commit` is true (resolve path), promotes active, binds thread affinity, and
+ * notes RR success. Preview keeps commit=false so it does not mutate config/affinity
+ * or advance sticky success counters; RR preview still consults the ring via pick.
+ */
+function pickUnboundStrategyAccount(
+  config: OcxConfig,
+  threadId: string | null,
+  now: number,
+  commit: boolean,
+): string | null {
+  const strategy = config.accountPoolStrategy ?? "quota";
+  if (strategy === "quota") return null;
+
+  let picked: string | null = null;
+  if (strategy === "round-robin") {
+    const eligible = listEligibleCodexAccountIds(config, now);
+    // Preview must not advance the ring — resolve commits the pick for the request.
+    if (!commit) {
+      const active = config.activeCodexAccountId;
+      if (active && eligible.includes(active)) return active;
+      return eligible[0] ?? null;
+    }
+    const limit = stickyLimitForConfig(config);
+    picked = pickRoundRobinAccount(POOL_KEY_CODEX, eligible, limit);
+    if (!picked) return null;
+    setActiveCodexAccount(config, picked);
+    if (threadId) bindThreadAffinity(threadId, picked, now);
+    notePoolRotationSuccess(POOL_KEY_CODEX, picked, limit);
+    return picked;
+  }
+
+  if (strategy === "fill-first") {
+    picked = pickFillFirstCodexAccount(config, now);
+    if (!picked) return null;
+    if (commit) {
+      setActiveCodexAccount(config, picked);
+      if (threadId) bindThreadAffinity(threadId, picked, now);
+    }
+    return picked;
+  }
+
+  return null;
+}
+
 export function getPoolAccountPlan(config: OcxConfig, accountId: string): string | undefined {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return getMainAccountPlan();
   return (config.codexAccounts ?? []).find(account => !account.isMain && account.id === accountId)?.plan;
@@ -585,6 +690,9 @@ export function previewCodexAccountForRequest(
     // Stale/unusable affinity is ignored for preview (no map mutation).
   }
 
+  const strategyPick = pickUnboundStrategyAccount(config, threadId, now, false);
+  if (strategyPick) return strategyPick;
+
   let active = config.activeCodexAccountId ?? null;
   if (!active) {
     return pickLowestUsageCodexAccount(config, undefined, now);
@@ -664,6 +772,10 @@ export function resolveCodexAccountForThreadDetailed(
     }
     threadAccountMap.delete(threadId);
   }
+
+  const strategyPick = pickUnboundStrategyAccount(config, threadId, now, true);
+  if (strategyPick) return { status: "selected", accountId: strategyPick };
+
   let active = config.activeCodexAccountId;
   if (!active) {
     const selected = pickLowestUsageCodexAccount(config, undefined, now);
@@ -784,6 +896,7 @@ export function recordCodexUpstreamOutcome(
         }),
     });
     clearThreadAccountMapForAccount(accountId);
+    notePoolRotationFailure(POOL_KEY_CODEX, accountId);
     if (config.activeCodexAccountId === accountId) {
       const fallback = pickLowestUsageCodexAccount(config, accountId, now);
       if (fallback) setActiveCodexAccount(config, fallback);
