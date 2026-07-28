@@ -1,3 +1,5 @@
+import { collectResponsesToolGroups } from "../responses/tool-groups";
+
 interface NamespacedTool {
   namespace: string;
   name: string;
@@ -8,21 +10,6 @@ const IMAGE_GEN_DOTTED_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-/** Collect top-level and Responses Lite tool containers without altering their order. */
-function declaredToolGroups(body: unknown): unknown[][] {
-  if (!isPlainObject(body)) return [];
-  const groups: unknown[][] = [];
-  if (Array.isArray(body.tools)) groups.push(body.tools);
-  if (Array.isArray(body.input)) {
-    for (const item of body.input) {
-      if (isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
-        groups.push(item.tools);
-      }
-    }
-  }
-  return groups;
 }
 
 /**
@@ -41,7 +28,7 @@ export function imageGenToolCallAliases(
     aliases.set(wireName, tool);
     aliases.set(`${tool.namespace}.${tool.name}`, tool);
   }
-  for (const group of declaredToolGroups(requestBody)) {
+  for (const group of collectResponsesToolGroups(requestBody)) {
     for (const tool of group) {
       if (
         !isPlainObject(tool)

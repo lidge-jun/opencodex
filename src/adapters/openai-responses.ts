@@ -3,6 +3,7 @@ import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
+import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
@@ -700,17 +701,7 @@ function normalizeImageGenFunctionCall(item: unknown): unknown {
 function normalizeImageGenClientTools(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
 
-  // Collect every tool container in the request. Traditional HTTP/SSE requests use top-level
-  // `tools`, while Responses Lite may carry the same declarations in `additional_tools` entries.
-  const toolGroups: unknown[][] = [];
-  if (Array.isArray(body.tools)) toolGroups.push(body.tools);
-  if (Array.isArray(body.input)) {
-    for (const item of body.input) {
-      if (isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
-        toolGroups.push(item.tools);
-      }
-    }
-  }
+  const toolGroups = collectResponsesToolGroups(body);
   const hasImageGenClientTool = toolGroups.some(group => group.some(declaresImageGenClientTool))
     || (Array.isArray(body.input) && body.input.some(declaresImageGenFunctionCall));
   if (!hasImageGenClientTool) return body;
