@@ -1,7 +1,13 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { describe, expect, test, mock, afterEach } from "bun:test";
 import { submitVideoJob, pollVideoJob } from "../../src/images/xai-video-client";
 
 const auth = { baseUrl: "https://api.x.ai/v1", token: "test-key" };
+
+const originalFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  mock.restore();
+});
 
 function mockFetchResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -11,10 +17,6 @@ function mockFetchResponse(body: unknown, status = 200): Response {
 }
 
 describe("submitVideoJob", () => {
-  beforeEach(() => {
-    mock.restore();
-  });
-
   test("returns request_id from response", async () => {
     const fetchMock = mock(() => Promise.resolve(mockFetchResponse({ request_id: "vid-123" })));
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
@@ -68,10 +70,6 @@ describe("submitVideoJob", () => {
 });
 
 describe("pollVideoJob", () => {
-  beforeEach(() => {
-    mock.restore();
-  });
-
   test("returns done status with video URL", async () => {
     const fetchMock = mock(() => Promise.resolve(mockFetchResponse({
       status: "done",

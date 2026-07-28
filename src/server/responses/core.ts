@@ -1600,11 +1600,16 @@ export async function handleResponses(
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
   if ((imgPlan || vidPlan) && (!wsPlan || adapter.runTurn)) {
-    // The bridge forces stream:true internally and returns SSE. Non-streaming requests can't be
-    // served — reject explicitly rather than returning SSE to a client expecting JSON.
+    // The image bridge detects a hosted image_generation tool and requires streaming.
+    // The video bridge activates from config and injects a tool — it also needs streaming
+    // (the loop returns SSE). For video-only (no imgPlan) on a non-streaming request, skip
+    // the bridge entirely so enabling the feature doesn't break ordinary non-streaming traffic.
     if (!parsed.stream) {
-      return formatErrorResponse(400, "invalid_request_error", "media bridge requires stream=true");
-    }
+      if (imgPlan) {
+        return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
+      }
+      // Video-only: skip bridge for non-streaming requests
+    } else {
     // Replace any pre-existing image_gen/video_gen aliases instead of appending duplicate wire names.
     const priorTools = parsed.context.tools ?? [];
     const bridgeTools = [...priorTools.filter(t => {
@@ -1613,6 +1618,7 @@ export async function handleResponses(
       if (imgPlan && imgPlan.toolNames.has(t.name)) return false;
       if (imgPlan && t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
       if (vidPlan && vidPlan.toolNames.has(t.name)) return false;
+      if (vidPlan && t.namespace && vidPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
       return true;
     })];
     const existingNames = new Set(bridgeTools.map(t => t.name));
@@ -1639,12 +1645,16 @@ export async function handleResponses(
       forwardHeaders: selectedForwardHeaders,
       onAttemptSend: () => noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens),
       abortSignal: options.abortSignal,
-      maxRounds: imgPlan ? clampImageMaxRounds(config.images?.maxRounds) : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
+      maxRounds: imgPlan && vidPlan
+        ? clampImageMaxRounds(Math.min(config.images?.maxRounds ?? 3, config.images?.videoMaxRounds ?? 2))
+        : imgPlan
+          ? clampImageMaxRounds(config.images?.maxRounds)
+          : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       stallTimeoutSec: config.stallTimeoutSec,
       fetchImpl: providerFetch(route.provider),
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
-      ...(config.images?.videoTimeoutMs ? { videoTimeoutMs: config.images.videoTimeoutMs } : {}),
+      ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
       onUsage: usage => {
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
         // backfill so Logs can filter/total that opening request (parity with the normal
@@ -1690,6 +1700,7 @@ export async function handleResponses(
       });
     }
     return imgResponse;
+    } // end else (streaming bridge)
   }
 
   // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't

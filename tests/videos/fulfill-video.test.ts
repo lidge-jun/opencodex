@@ -112,7 +112,7 @@ describe("pollVideoWithHeartbeats", () => {
     }
     expect(heartbeats.length).toBeGreaterThanOrEqual(1);
     expect(result.ok).toBe(true);
-  });
+  }, 15_000); // 5s initial poll interval means ~10s for 2 polls
 
   test("returns failed status", async () => {
     mock.module("../../src/images/xai-video-client", () => ({
@@ -157,5 +157,10 @@ describe("buildVideoResult", () => {
     expect(result.files).toEqual(["/tmp/vid-123.mp4"]);
     expect(result.count).toBe(1);
     expect(result.markdown).toContain("vid-123.mp4");
+  });
+
+  test("uses file:// URL in markdown", () => {
+    const result = buildVideoResult("/tmp/vid-123.mp4", "dance", "grok-imagine-video");
+    expect(result.markdown).toContain("file://");
   });
 });

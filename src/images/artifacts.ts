@@ -487,12 +487,13 @@ export function createVideoBudget(): VideoBudget {
 }
 
 export function guessVideoExtFromMagic(bytes: Uint8Array): string {
+  if (bytes.byteLength < 12) throw new Error("video data too short for magic byte sniffing");
   const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
   // MP4/QuickTime/MOV: bytes 4-7 == "ftyp" (ISO BMFF)
   if (sig.slice(4, 8) === "ftyp") return "mp4";
   // WebM/Matroska: \x1a\x45\xdf\xa3
   if (sig.startsWith("\x1a\x45\xdf\xa3")) return "webm";
-  return "mp4";
+  throw new Error("unrecognized video format — magic bytes do not match MP4 or WebM");
 }
 
 /**
@@ -549,39 +550,46 @@ export async function downloadVideoToArtifact(
   if (!reader) throw new Error("video download returned no body");
 
   // Peek the first chunk for magic-byte sniffing before opening the file.
-  const first = await reader.read();
-  if (first.done || !first.value) {
-    throw new Error("video download returned empty body");
-  }
-  const ext = guessVideoExtFromMagic(first.value);
-  const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
-  const dest = join(dir, name);
-  const fh = await open(dest, "w", 0o600);
-  let totalBytes = first.value.byteLength;
-  if (budget) budget.spent += totalBytes;
-  if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
-    reader.releaseLock();
-    await fh.close();
-    await unlink(dest).catch(() => {});
-    throw new Error("video download exceeds size cap");
-  }
-  let success = false;
+  // If anything fails between acquiring the reader and opening the file, cancel + release the reader.
+  let dest: string | undefined;
+  let fh: { close(): Promise<void>; writeFile(data: Uint8Array): Promise<void> } | undefined;
   try {
+    const first = await reader.read();
+    if (first.done || !first.value) {
+      throw new Error("video download returned empty body");
+    }
+    const ext = guessVideoExtFromMagic(first.value);
+    const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
+    dest = join(dir, name);
+    fh = await open(dest, "w", 0o600);
+    // Write first chunk and set up accounting
+    let totalBytes = first.value.byteLength;
+    if (budget) budget.spent += totalBytes;
+    if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
+      throw new Error("video download exceeds size cap");
+    }
     await fh.writeFile(first.value);
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
+      if (budget) budget.spent += value.byteLength;
       if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
         throw new Error("video download exceeds size cap");
       }
       await fh.writeFile(value);
     }
-    success = true;
-  } finally {
-    reader.releaseLock();
     await fh.close();
-    if (!success) await unlink(dest).catch(() => {});
+    try { await reader.cancel(); } catch { /* ignore */ }
+    reader.releaseLock();
+    return dest;
+  } catch (err) {
+    try { await reader.cancel(); } catch { /* ignore */ }
+    reader.releaseLock();
+    if (fh) {
+      try { await fh.close(); } catch { /* ignore */ }
+    }
+    if (dest) await unlink(dest).catch(() => {});
+    throw err;
   }
-  return dest;
 }

@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import type { VideoBridgePlan, VideoCallResult } from "./types";
 import { submitVideoJob, pollVideoJob } from "./xai-video-client";
 import { downloadVideoToArtifact, createVideoBudget, type VideoBudget } from "./artifacts";
@@ -11,7 +12,7 @@ export interface ParsedVideoArgs {
   aspectRatio?: string;
 }
 
-const INITIAL_POLL_INTERVAL_MS = 200;
+const INITIAL_POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_INTERVAL_MS = 15_000;
 const POLL_BACKOFF = 1.5;
 const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
@@ -91,8 +92,11 @@ export async function* pollVideoWithHeartbeats(
 
     try {
       const poll = await pollVideoJob(requestId, auth, signal);
-      if (poll.status === "done" && poll.videoUrl) {
-        return { ok: true, videoUrl: poll.videoUrl };
+      if (poll.status === "done") {
+        if (poll.videoUrl) {
+          return { ok: true, videoUrl: poll.videoUrl };
+        }
+        return { ok: false, error: "video generation completed but no video URL was returned" };
       }
       if (poll.status === "failed") {
         return { ok: false, error: "video generation failed" };
@@ -102,10 +106,12 @@ export async function* pollVideoWithHeartbeats(
       }
       // still processing — continue with backoff
     } catch (e) {
-      // Transient poll errors (timeout, network) are tolerable — keep polling.
-      const msg = e instanceof Error ? e.message : String(e);
       if (signal.aborted) return { ok: false, error: "client closed request during video generation" };
-      console.warn(`[videos] poll error (will retry): ${msg}`);
+      const status = (e as Error & { status?: number }).status;
+      if (status && status >= 400 && status < 500 && status !== 429) {
+        return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
+      }
+      console.warn(`[videos] poll error (will retry): ${e instanceof Error ? e.message : String(e)}`);
     }
 
     const elapsed = Math.floor((Date.now() - start) / 1000);
@@ -132,7 +138,7 @@ export function buildVideoResult(path: string, prompt: string, model: string): V
     path,
     files: [path],
     count: 1,
-    markdown: `[video](${path})`,
+    markdown: `[video](${pathToFileURL(path).href})`,
   };
 }
 

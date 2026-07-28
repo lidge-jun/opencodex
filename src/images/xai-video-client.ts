@@ -53,6 +53,7 @@ async function readBoundedText(resp: Response): Promise<string> {
     }
     text += decoder.decode();
   } finally {
+    try { await reader.cancel(); } catch { /* ignore */ }
     reader.releaseLock();
   }
   return text;
@@ -89,7 +90,9 @@ export async function submitVideoJob(
 
   if (!resp.ok) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }
-    throw new Error("xAI videos API returned " + resp.status);
+    const err = new Error("xAI videos API returned " + resp.status) as Error & { status: number };
+    err.status = resp.status;
+    throw err;
   }
 
   const text = await readBoundedText(resp);
@@ -123,7 +126,9 @@ export async function pollVideoJob(
 
   if (!resp.ok) {
     try { await resp.body?.cancel(); } catch { /* ignore */ }
-    throw new Error("xAI videos poll API returned " + resp.status);
+    const err = new Error("xAI videos poll API returned " + resp.status) as Error & { status: number };
+    err.status = resp.status;
+    throw err;
   }
 
   const text = await readBoundedText(resp);

@@ -149,7 +149,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     const res = await post(false, [{ type: "image_generation" }]);
     expect(res.status).toBe(400);
     expect(imageBridgeRun).toBe(false);
-    expect((await res.text())).toContain("media bridge requires stream=true");
+    expect((await res.text())).toContain("image bridge requires stream=true");
   });
 
   test("dual-tool (image_generation + web_search), both eligible → web-search wins, image bridge deferred", async () => {

@@ -12,7 +12,7 @@ job to xAI, polls until completion, and downloads the result.
 
 ## Prerequisites
 
-- An xAI account with an API key (`ocx login xai` or set the key in your provider config)
+- An xAI account with an API key (set `XAI_API_KEY` or configure the key in your provider config — `ocx login xai` alone is not sufficient for the video bridge, which requires API key auth)
 - A non-OpenAI model as your routed provider (e.g. Anthropic Claude, Google Gemini)
 - opencodex configured to route through the non-OpenAI provider
 
@@ -28,6 +28,7 @@ Add `videoBridgeEnabled: true` to your `images` config:
     "videoBridgeModel": "grok-imagine-video",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
+  }
 }
 ```
 
