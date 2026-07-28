@@ -6,6 +6,8 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
       - ".github/scripts/issue-quality.test.cjs"
+      - ".github/scripts/pr-quality.cjs"
+      - ".github/scripts/pr-quality.test.cjs"
       - ".github/scripts/pr-labeler.cjs"
       - ".github/scripts/pr-labeler.test.cjs"
       - ".github/scripts/enforce-pr-target.test.cjs"
@@ -25,6 +27,8 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
       - ".github/scripts/issue-quality.test.cjs"
+      - ".github/scripts/pr-quality.cjs"
+      - ".github/scripts/pr-quality.test.cjs"
       - ".github/scripts/pr-labeler.cjs"
       - ".github/scripts/pr-labeler.test.cjs"
       - ".github/scripts/enforce-pr-target.test.cjs"
@@ -56,6 +60,7 @@ jobs:
       - name: Run validator tests
         run: |
           node --test .github/scripts/issue-quality.test.cjs
+          node --test .github/scripts/pr-quality.test.cjs
           node --test .github/scripts/pr-labeler.test.cjs
           node --test .github/scripts/enforce-pr-target.test.cjs
           node --test .github/scripts/issue-translation.test.cjs
