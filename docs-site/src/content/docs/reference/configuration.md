@@ -58,7 +58,9 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
-| `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. |
+| `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy for the Codex pool. Applies to **new sessions only**; existing thread ids keep affinity. `quota` — today's default: pick the lowest known usage when the active account crosses `autoSwitchThreshold`. `round-robin` — even spread across eligible accounts via smooth weighted selection. `fill-first` — keep the active account until it cools down, becomes unusable, or crosses `autoSwitchThreshold` when set (unknown usage does not force a switch), then advance to the next eligible account in stable sorted order. |
+| `accountPoolStickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only applies when `accountPoolStrategy` is `round-robin`. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache (5 min). |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
@@ -99,11 +101,22 @@ also force the same native-provider recovery with `ocx recover-history --legacy-
 :::note[Codex account pool]
 Use the dashboard's **Codex Auth** page to add pool accounts and refresh quotas. The config stores
 non-secret account metadata only; access and refresh tokens are kept in the hardened Codex account
-credential store. Existing thread ids keep account affinity, while new sessions can auto-route based
-on quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool account is retried
-once on an eligible alternate account in the same request (so Codex CLI does not stall on a depleted
-primary while another account still has quota).
+credential store. Existing thread ids keep account affinity, while new sessions auto-route based on
+`accountPoolStrategy`, quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool
+account is retried once on an eligible alternate account in the same request (so Codex CLI does not
+stall on a depleted primary while another account still has quota).
 :::
+
+**Rotation strategies** (new sessions only; bound threads are unchanged):
+
+| Strategy | Behaviour |
+| --- | --- |
+| `quota` (default) | When the active account's known usage crosses `autoSwitchThreshold`, pick the lowest-usage eligible account across 5h, weekly, and 30d windows. `autoSwitchThreshold: 0` disables quota-based picking. |
+| `round-robin` | Even spread across eligible accounts. `accountPoolStickyLimit` (default `1`, range 1–100) keeps that many successful new-session binds on one pick before advancing. |
+| `fill-first` | Drain the active account until cooldown, reauthentication, or (when set) `autoSwitchThreshold`; unknown usage does not force a switch. Then advance to the next eligible account in stable sorted order. |
+
+Rotation strategies do not protect against provider enforcement — multi-account use may violate
+provider terms of service.
 
 ### anthropicAccountPool (experimental)
 
@@ -116,7 +129,9 @@ organization can share quota; pooling those will not help.
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | When true, sticky session affinity + 429 cooldown failover across eligible Anthropic OAuth accounts. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's **known** cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. Unknown usage does not force a switch. `0` disables quota-based picking (affinity + active only). |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's **known** cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. Unknown usage does not force a switch. `0` disables quota-based picking (affinity + active only). Also used as the drain threshold for `fill-first`. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy when the pool is enabled. Same semantics as `accountPoolStrategy`; applies to **new** sessions only. |
+| `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only when `strategy` is `round-robin`. |
 
 Reliability contract when enabled:
 

@@ -51,7 +51,9 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容模式。opencodex 会备份原始 Codex thread metadata，把旧 OpenAI interactive row 重映射到 `opencodex`，并暂时把 opencodex 创建的 `exec` row 提升成 App 可见 source。`ocx stop` / `ocx restore` 会恢复已备份的 OpenAI row，并把剩余 opencodex user thread 转回 OpenAI，使原生 Codex 在从 `config.toml` 移除代理后仍能继续这些 thread。设为 `false` 可退出该模式。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 仪表盘管理的 ChatGPT/Codex pool account metadata。secret 单独存放在 `codex-accounts.json`。 |
 | `activeCodexAccountId?` | `string` | — | 手动选择的 pool account。选择时清除已有 thread affinity，并从下一次请求开始生效；进行中的请求保留原账号。 |
-| `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。 |
+| `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。`quota` 策略和 `fill-first` 的耗尽 threshold 都会用到。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool 的新 session 轮换策略。仅适用于**新 session**；已有 thread id 保留 affinity。`quota`（默认）：活跃账号超过 `autoSwitchThreshold` 时选已知 usage 最低者。`round-robin`：在合格账号间平滑加权均分。`fill-first`：持续使用活跃账号，直到 cooldown、不可用或（如已设置）超过 `autoSwitchThreshold`（未知 usage 不会强制切换），再按稳定排序进入下一个合格账号。 |
+| `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的成功新 session 绑定数。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次临时上游失败后，让后续新 session failover 到其他合格 pool account。设为 `0` 可禁用失败切换。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存新鲜度窗口（5 分钟）。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 策略：禁用、5 分钟 ephemeral 或 1 小时 extended。 |
@@ -70,7 +72,13 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 :::note[Codex 账号池]
 请在仪表盘 **Codex Auth** 页面添加 pool account 并刷新 quota。配置只保存非 secret account
 metadata；access/refresh token 存放在加固的 Codex account credential store 中。已有 thread id 会
-保留 account affinity，新 session 可按 quota、cooldown 和 health 自动路由。
+保留 account affinity；新 session 按 `accountPoolStrategy`、quota、cooldown 和 health 自动路由。
+
+**轮换策略**（仅新 session；已绑定 thread 不变）：`quota`（默认）— 活跃账号 usage 超过
+`autoSwitchThreshold` 时选最低者；`round-robin` — 均分，`accountPoolStickyLimit`（默认 `1`，
+1–100）控制一次选择保留多少成功绑定；`fill-first` — 耗尽活跃账号（cooldown、需重新认证或
+threshold；未知 usage 不强制切换）后按稳定排序进入下一个。轮换不能规避 provider enforcement —
+多账号使用可能违反服务条款。
 :::
 
 ### 受管 record 形状

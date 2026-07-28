@@ -53,7 +53,9 @@ namespaced selected id를 bare id로 바꿉니다.
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App 기록 호환 모드. opencodex가 원래 Codex thread metadata를 백업하고, 예전 OpenAI interactive row를 `opencodex`로 재매핑하며, opencodex가 만든 `exec` row를 App에 보이는 source로 잠시 승격합니다. `ocx stop` / `ocx restore`는 백업한 OpenAI row를 복원하고 남은 opencodex user thread를 OpenAI로 돌려 네이티브 Codex가 `config.toml`에서 프록시를 제거한 뒤에도 이어서 열 수 있게 합니다. 끄려면 `false`로 설정합니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 대시보드에서 관리하는 ChatGPT/Codex pool 계정 metadata. secret은 `codex-accounts.json`에 따로 둡니다. |
 | `activeCodexAccountId?` | `string` | — | 수동으로 선택한 pool 계정. 선택 시 기존 thread affinity를 지우고 다음 요청부터 적용하며, 진행 중인 요청은 기존 계정을 유지합니다. |
-| `autoSwitchThreshold?` | `number` | `80` | 새 세션 자동 전환용 사용량 백분율 threshold. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`이면 quota 자동 전환을 끕니다. |
+| `autoSwitchThreshold?` | `number` | `80` | 새 세션 자동 전환용 사용량 백분율 threshold. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`이면 quota 자동 전환을 끕니다. `quota` 전략과 `fill-first` drain threshold에도 사용됩니다. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool의 새 세션 rotation 전략. **새 세션에만** 적용되며 기존 thread id는 affinity를 유지합니다. `quota`(기본) — 활성 계정이 `autoSwitchThreshold`를 넘으면 알려진 usage가 가장 낮은 계정 선택. `round-robin` — 적격 계정 간 smooth weighted 균등 분배. `fill-first` — cooldown, 사용 불가 또는(설정 시) `autoSwitchThreshold`까지 활성 계정을 소진(알 수 없는 usage는 강제 전환하지 않음)한 뒤 안정 정렬 순으로 다음 계정. |
+| `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 성공적 새 세션 bind 수. 범위 1–100. `accountPoolStrategy`가 `round-robin`일 때만 적용. |
 | `upstreamFailoverThreshold?` | `number` | `3` | 일시적인 업스트림 실패가 연속으로 발생한 뒤, 이후 새 세션을 다른 적합한 pool 계정으로 failover할 횟수. `0`이면 실패 기반 failover를 끕니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 프로바이더별 `/models` 캐시의 유효 기간(5분). |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt cache 정책. 끔, 5분 ephemeral, 1시간 extended 중 하나입니다. |
@@ -73,8 +75,14 @@ namespaced selected id를 bare id로 바꿉니다.
 :::note[Codex 계정 풀]
 pool 계정 추가와 quota 갱신은 대시보드의 **Codex Auth** 페이지에서 처리하세요. 설정에는 secret이
 아닌 계정 metadata만 저장하고, access/refresh token은 강화된 Codex 계정 credential store에 따로
-보관합니다. 기존 thread id는 계정 affinity를 유지하며, 새 세션은 quota, cooldown, health에 따라
-자동 라우팅될 수 있습니다.
+보관합니다. 기존 thread id는 계정 affinity를 유지하며, 새 세션은 `accountPoolStrategy`, quota,
+cooldown, health에 따라 자동 라우팅됩니다.
+
+**rotation 전략**(새 세션만; bound thread는 변경 없음): `quota`(기본) — `autoSwitchThreshold` 초과 시
+최저 usage 선택; `round-robin` — 균등 분배, `accountPoolStickyLimit`(기본 `1`, 1–100)로 한 선택당
+성공 bind 수; `fill-first` — 활성 계정을 cooldown, 재인증 또는 threshold까지 소진(알 수 없는 usage는
+강제 전환하지 않음)한 뒤 안정 정렬 순으로 다음 계정. rotation은 provider enforcement를 우회하지
+않습니다 — 다계정 사용은 ToS 위반일 수 있습니다.
 :::
 
 ### 관리형 레코드 형태
