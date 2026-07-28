@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import {
   clearKeyCooldowns,
   getKeyCooldownUntil,
@@ -10,7 +11,8 @@ import {
   rotateProviderTransportOn429,
 } from "../src/providers/key-failover";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { routeModel } from "../src/router";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 let home: string;
 
@@ -130,6 +132,42 @@ describe("rotateKeyOn429", () => {
 });
 
 describe("rotateProviderTransportOn429", () => {
+  test("keeps Kimi prompt-cache forwarding after rotating a stale pre-upgrade config", () => {
+    const promptCacheKey = "stable-kimi-conversation-429";
+    const config = makeConfig({
+      authMode: "key",
+      apiKey: "key-alpha-000111222333",
+      apiKeyPool: pool3(),
+    });
+    config.defaultProvider = "kimi-code";
+    config.providers["kimi-code"] = {
+      ...config.providers.p,
+      baseUrl: "https://api.kimi.com/coding/v1",
+    };
+    delete config.providers.p;
+    expect(config.providers["kimi-code"].promptCacheKey).toBeUndefined();
+
+    const parsed: OcxParsedRequest = {
+      modelId: "k3",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      stream: false,
+      options: { promptCacheKey },
+    };
+    const initial = routeModel(config, "kimi-code/k3").provider;
+    const initialBody = JSON.parse(createOpenAIChatAdapter(initial).buildRequest(parsed).body);
+    expect(initialBody.prompt_cache_key).toBe(promptCacheKey);
+
+    const rotated = rotateProviderTransportOn429(config, "kimi-code", {
+      now: 1_000_000,
+      attemptedKey: "key-alpha-000111222333",
+      promptCacheKey,
+    });
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(rotated?.promptCacheKey).toBe(true);
+    const retryBody = JSON.parse(createOpenAIChatAdapter(rotated!).buildRequest(parsed).body);
+    expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
+  });
+
   test("re-applies xAI cache affinity without OAuth CLI headers after key rotation", () => {
     const promptCacheKey = "stable-conversation-429";
     const config = makeConfig({

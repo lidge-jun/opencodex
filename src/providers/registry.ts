@@ -480,7 +480,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.kimi.com/coding/v1",
     authKind: "oauth",
     modelSuffixBracketStrip: true,
-    // Kimi Code Plan requires a stable session/task prompt_cache_key for reliable cache affinity.
+    // Kimi Code Plan documents a stable session/task prompt_cache_key as required to improve
+    // cache hit rates.
     // The chat adapter only forwards a key already on the internal request (Codex's session key,
     // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
     // Evidence: https://platform.kimi.com/docs/api/chat

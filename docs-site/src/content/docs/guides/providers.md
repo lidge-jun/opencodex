@@ -91,9 +91,11 @@ ocx logout <provider>
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
-opencodex forwards the request's stable `prompt_cache_key` to the Chat Completions request. Kimi
-documents a stable session/task key as required for Kimi Code Plan cache hits; providers that may
-reject the field are left unchanged.
+opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
+it never generates one. Kimi documents a stable session/task key as required to improve Code Plan
+cache hit rates, while requests without a key remain keyless. If an opted-in upstream rejects the
+field, opencodex does not strip it and retry or mutate saved configuration. Other providers remain
+deny-by-default.
 
 You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
 

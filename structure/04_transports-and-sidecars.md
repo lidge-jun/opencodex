@@ -275,14 +275,15 @@ the request body is byte-for-byte unchanged in this area and OpenRouter retains 
 
 The canonical `kimi` OAuth and `kimi-code` API-key presets opt into forwarding the internal
 request's `prompt_cache_key` to Kimi's Chat Completions body. Kimi Code Plan documents a stable
-session/task key as required for reliable prompt-cache affinity. The chat adapter never invents a
-key of its own: it forwards what the request already carries — Codex's session key on
+session/task key as required to improve cache hit rates. The chat adapter never invents a key of
+its own: it forwards what the request already carries — Codex's session key on
 `/v1/responses`, or the session-scoped key the Claude `/v1/messages` inbound derives
 (metadata.user_id hash, else the system+tools cohort hash) — and a request with no key stays
 keyless. An explicit provider-level `promptCacheKey: false` continues to opt out, and the flag is
 persisted through `providerConfigSeed`/`enrichProviderFromRegistry` so key-pool 429 rotation keeps
-it. Other OpenAI-compatible providers remain deny-by-default because strict backends may reject
-the OpenAI-specific field.
+it. If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
+backends may reject the OpenAI-specific field.
 
 ## xAI Grok hardening (official Grok Build contract parity)
 

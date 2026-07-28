@@ -10,6 +10,7 @@
  */
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { getProviderRegistryEntry } from "./registry";
 import { resolveProviderTransport } from "./xai-transport";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
@@ -146,9 +147,15 @@ export function rotateProviderTransportOn429(
     options.now,
     options.attemptedKey,
   );
-  return rotated
-    ? resolveProviderTransport(providerName, rotated, options.promptCacheKey)
-    : null;
+  if (!rotated) return null;
+
+  // Rotation starts from the persisted provider rather than routeModel's enriched copy. Backfill
+  // this transport capability for pre-upgrade configs while preserving an explicit false opt-out.
+  const registryPromptCacheKey = getProviderRegistryEntry(providerName)?.promptCacheKey;
+  const effective = rotated.promptCacheKey === undefined && registryPromptCacheKey !== undefined
+    ? { ...rotated, promptCacheKey: registryPromptCacheKey }
+    : rotated;
+  return resolveProviderTransport(providerName, effective, options.promptCacheKey);
 }
 
 /** Clear cooldown state for a provider (e.g. after manual key management). */
