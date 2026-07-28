@@ -25,19 +25,29 @@ function unwrapSingleEnclosingFence(text) {
   return match[2];
 }
 
-function isPlaceholderOnlyValue(raw) {
-  if (typeof raw !== "string") return false;
+/**
+ * Shared strip/trim/unwrap used by placeholder and unusable-stand-in matchers.
+ * Returns null when the value is absent after normalisation.
+ */
+function normalizeRawSectionValue(raw) {
+  if (typeof raw !== "string") return null;
   let value = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
-  if (!value) return false;
+  if (!value) return null;
 
-  // A lone fenced block whose entire body is a placeholder is still placeholder
-  // text (e.g. ```text\nN/A\n```), not a real example.
+  // A lone fenced block whose entire body is a stand-in is still a stand-in
+  // (e.g. ```text\nN/A\n```), not a real example.
   const unwrapped = unwrapSingleEnclosingFence(value);
   if (unwrapped !== null) {
     value = unwrapped.trim();
-    if (!value) return false;
+    if (!value) return null;
   }
 
+  return value;
+}
+
+function isPlaceholderOnlyValue(raw) {
+  const value = normalizeRawSectionValue(raw);
+  if (value === null) return false;
   return PLACEHOLDER_ONLY_RE.test(value);
 }
 
@@ -407,14 +417,8 @@ const UNUSABLE_VERSION_RE =
   /^[\s_*~`]*(?:unknown|unkown|uknown|don'?t\s+know|do\s+not\s+know|idk|dunno|not\s+sure|unsure|\?+|모름|잘\s*모름|모르겠(?:습니다|음)?|不明|わからない|分からない|不知道|不清楚|keine\s+ahnung|wei[sß]{1,2}\s+nicht)[\s_*~`]*[.!?]*$/i;
 
 function isUnusableVersion(raw) {
-  if (typeof raw !== "string") return false;
-  let value = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
-  if (!value) return false;
-  const unwrapped = unwrapSingleEnclosingFence(value);
-  if (unwrapped !== null) {
-    value = unwrapped.trim();
-    if (!value) return false;
-  }
+  const value = normalizeRawSectionValue(raw);
+  if (value === null) return false;
   return UNUSABLE_VERSION_RE.test(value);
 }
 
@@ -709,7 +713,10 @@ function validateIssue(issue) {
       guidance.push("Add your OpenCodex version so we can reproduce the environment.");
     }
 
-    if (
+    if (!softPass && isNewBugForm && os !== null && isUnusableVersion(os)) {
+      reasons.push("Operating system is missing or unknown.");
+      guidance.push("Add your OS name and version (for example Windows 11 24H2).");
+    } else if (
       !softPass &&
       isNewBugForm &&
       os !== null &&

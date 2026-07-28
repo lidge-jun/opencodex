@@ -64,6 +64,7 @@ jobs:
                 comment.user?.login === "github-actions[bot]" &&
                 comment.body?.includes(COMMENT_MARKER)
             );
+            let botCommentId = botComment?.id ?? null;
 
             function parseState(body) {
               const match = body?.match(STATE_PATTERN);
@@ -96,23 +97,24 @@ jobs:
             }
 
             async function upsertComment(body) {
-              if (botComment) {
+              if (botCommentId) {
                 await github.rest.issues.updateComment({
                   owner,
                   repo,
-                  comment_id: botComment.id,
+                  comment_id: botCommentId,
                   body
                 });
 
                 return;
               }
 
-              await github.rest.issues.createComment({
+              const created = await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: pull_number,
                 body
               });
+              botCommentId = created.data.id;
             }
 
             async function convertToDraft() {
@@ -169,6 +171,7 @@ jobs:
             // - fail the required check so merge stays blocked even if draft fails
             // - remember which changes were made by this workflow
             if (wrongBase) {
+              const willPrefixTitle = !pr.title.startsWith(TITLE_PREFIX);
               const state = storedState?.active
                 ? { ...storedState }
                 : {
@@ -178,10 +181,29 @@ jobs:
                     titlePrefixedByBot: false
                   };
 
+              // Claim title ownership before mutating so a crash after the
+              // title write still records what the bot owns. Do not claim a
+              // new draft here — only after convertToDraft succeeds.
+              if (willPrefixTitle) {
+                state.titlePrefixedByBot = true;
+              }
+
               let draftConversionFailed = false;
 
-              if (!pr.title.startsWith(TITLE_PREFIX)) {
-                state.titlePrefixedByBot = true;
+              await upsertComment(
+                [
+                  COMMENT_MARKER,
+                  stateMarker(state),
+                  "",
+                  "⚠️ **Wrong target branch**",
+                  "",
+                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${ALLOWED_BASES.map(inlineCode).join(" or ")}.`,
+                  "",
+                  "Recording ownership state before applying title/draft changes…"
+                ].join("\n")
+              );
+
+              if (willPrefixTitle) {
                 await github.rest.pulls.update({
                   owner,
                   repo,
@@ -194,6 +216,20 @@ jobs:
                 try {
                   await convertToDraft();
                   state.autoDraftedByBot = true;
+                  // Checkpoint after a successful draft so ownership survives
+                  // if the final explanation write fails.
+                  await upsertComment(
+                    [
+                      COMMENT_MARKER,
+                      stateMarker(state),
+                      "",
+                      "⚠️ **Wrong target branch**",
+                      "",
+                      `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${ALLOWED_BASES.map(inlineCode).join(" or ")}.`,
+                      "",
+                      "Draft conversion succeeded; finalising explanation…"
+                    ].join("\n")
+                  );
                 } catch (error) {
                   draftConversionFailed = true;
                   state.autoDraftedByBot = false;
@@ -272,12 +308,21 @@ jobs:
               }
             }
 
-            const completedState = {
-              version: 1,
-              active: false,
-              autoDraftedByBot: false,
-              titlePrefixedByBot: false
-            };
+            const completedState = readyConversionFailed
+              ? {
+                  // Keep ownership active so a later edited/reopened/
+                  // ready_for_review event retries markReadyForReview.
+                  version: 1,
+                  active: true,
+                  autoDraftedByBot: true,
+                  titlePrefixedByBot: false
+                }
+              : {
+                  version: 1,
+                  active: false,
+                  autoDraftedByBot: false,
+                  titlePrefixedByBot: false
+                };
 
             const titleResult = storedState.titlePrefixedByBot
               ? `The ${inlineCode(TITLE_PREFIX.trim())} title prefix has been removed.`

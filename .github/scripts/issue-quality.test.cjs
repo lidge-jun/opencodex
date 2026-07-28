@@ -823,6 +823,33 @@ describe("validateIssue - bug", () => {
     assert.equal(result.valid, false);
     assert.ok(result.reasons.some((r) => /Reproduction/i.test(r) && /vague/i.test(r)));
   });
+
+  it("rejects unknown Operating system stand-ins on the new bug form", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "The OpenCodex proxy keeps dropping the Codex CLI connection mid-request.",
+      "### Reproduction",
+      "1. ocx start --port 10100",
+      "2. Send any Codex CLI request through the proxy",
+      "3. Observe the connection drop",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "Unknown",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Unexpected interruption continues to occur",
+      body,
+      labels: ["bug"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Operating system/i.test(r)));
+  });
 });
 
 // ---------------------------------------------------------------------------

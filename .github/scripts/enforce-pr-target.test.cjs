@@ -21,9 +21,16 @@ describe("enforce-pr-target workflow", () => {
   it("grants contents:write so draft GraphQL mutations work with GITHUB_TOKEN", () => {
     // convertPullRequestToDraft / markPullRequestReadyForReview fail with
     // "Resource not accessible by integration" when contents stays unset/read
-    // (seen on #626). Title + comment still use pull-requests:write.
-    assert.match(workflow, /contents:\s*write/);
-    assert.match(workflow, /pull-requests:\s*write/);
+    // (seen on #626). Assert the real permissions block, not comment text
+    // that also mentions these scopes.
+    const permissionsBlock = workflow.match(/^permissions:\n((?:[ \t]+.+\n)+)/m);
+    assert.ok(permissionsBlock, "workflow must declare a top-level permissions block");
+    const lines = permissionsBlock[1]
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .sort();
+    assert.deepEqual(lines, ["contents: write", "pull-requests: write"]);
   });
 
   it("fails the required check on a wrong base even if draft conversion fails", () => {
