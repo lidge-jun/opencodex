@@ -106,10 +106,14 @@ export function resetStartupInstallStateForTests(): void {
   installState = { status: "idle" };
 }
 
-export function startupInstallArgv(action: StartupInstallAction): string[] {
-  return action === "install-service"
-    ? ["service", "install"]
-    : ["codex-shim", "install"];
+export function startupInstallArgv(
+  action: StartupInstallAction,
+  options?: { repair?: boolean },
+): string[] {
+  if (action === "install-service") {
+    return options?.repair ? ["service", "repair"] : ["service", "install"];
+  }
+  return ["codex-shim", "install"];
 }
 
 export interface CliInstallFailure {
@@ -152,10 +156,13 @@ export function installFailureDetail(stdout: string, stderr: string, error: Erro
   return classifyCliInstallFailure(stdout, stderr, error).detail;
 }
 
-function runCliInstall(action: StartupInstallAction): Promise<{ stdout: string; stderr: string }> {
+function runCliInstall(
+  action: StartupInstallAction,
+  options?: { repair?: boolean },
+): Promise<{ stdout: string; stderr: string }> {
   const bun = durableBunPath();
   const cli = join(import.meta.dir, "..", "cli", "index.ts");
-  const argv = [cli, ...startupInstallArgv(action)];
+  const argv = [cli, ...startupInstallArgv(action, options)];
   return new Promise((resolve, reject) => {
     execFile(bun, argv, {
       encoding: "utf8",
@@ -219,29 +226,37 @@ function applyReconciliationOutcome(
 /**
  * Execute the existing fixed CLI installer outside the proxy event loop.
  *
+ * Repair mode (`options.repair`) runs `ocx service repair` — asset rewrite + restart
+ * without Task Scheduler re-registration, so it must not enter the UAC elevation path.
+ *
  * After an elevation request timeout the lock becomes `indeterminate` until the
  * original elevated transaction completes and is reconciled. A process restart
  * clears this in-memory lock — callers must then inspect Task Scheduler reality
  * (see evaluateSchedulerInstallRestartReconciliation) before installing again.
  */
-export function runStartupInstallAction(action: StartupInstallAction): Promise<{ message: string }> {
+export function runStartupInstallAction(
+  action: StartupInstallAction,
+  options?: { repair?: boolean },
+): Promise<{ message: string }> {
   const busy = rejectIfBusy(action);
   if (busy) return Promise.reject(busy);
 
+  const repair = options?.repair === true;
   const attemptId = randomUUID();
   const startedAt = Date.now();
   installState = { status: "running", action, attemptId, startedAt };
 
   const operation = (async () => {
     try {
-      await runCliInstall(action);
+      await runCliInstall(action, { repair });
     } catch (error) {
       const code = installFailureCode(error);
       const detail = error instanceof Error ? error.message : String(error);
-      // Elevate only for a structured Task Scheduler /create access denial — never for
-      // WinSW removal, asset writes, or generic permission errors.
+      // Elevate only for fresh install + structured Task Scheduler /create access denial —
+      // never for repair, WinSW removal, asset writes, or generic permission errors.
       if (
-        action === "install-service"
+        !repair
+        && action === "install-service"
         && process.platform === "win32"
         && (code === WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER
           || isWindowsSchtasksCreateAccessDenied(detail))
@@ -276,10 +291,11 @@ export function runStartupInstallAction(action: StartupInstallAction): Promise<{
         throw error;
       }
     }
+    if (action === "install-service") {
+      return { message: repair ? "Background service repaired." : "Background service installed." };
+    }
     return {
-      message: action === "install-service"
-        ? "Background service installed."
-        : "Codex launcher shim installed.",
+      message: repair ? "Codex launcher shim repaired." : "Codex launcher shim installed.",
     };
   })();
 

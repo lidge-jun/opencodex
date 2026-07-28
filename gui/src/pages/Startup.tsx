@@ -216,7 +216,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/startup-action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, repair: opts?.repair === true }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: unknown } | null;

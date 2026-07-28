@@ -1147,9 +1147,22 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
   }
 }
 
-function installWindows(): void {
+/**
+ * Rewrite on-disk scheduler assets (script/VBS/XML) without re-registering the task.
+ * Used by fresh install (before schtasks /create) and by repair (no elevation).
+ */
+function writeWindowsSchedulerAssets(): void {
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
+  const script = windowsServiceScriptPath();
+  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
+  // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
+  // paths on some WSH/codepage combinations — same contract as the task XML below.
+  writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
+  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
+}
+
+function installWindows(): void {
   // Transactional backend switch: installing the scheduler backend removes a native
   // service first — two live managers would both respawn the proxy (conflict).
   if (statusWinswRaw() !== "nonexistent") {
@@ -1166,15 +1179,71 @@ function installWindows(): void {
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
   try { stopWindows(); } catch { /* not running */ }
-  const script = windowsServiceScriptPath();
-  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
-  // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
-  // paths on some WSH/codepage combinations — same contract as the task XML below.
-  writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
-  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
-  schtasks(buildWindowsSchtasksCreateArgs(script));
+  writeWindowsSchedulerAssets();
+  schtasks(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
   schtasks(["/run", "/tn", TASK]);
   writeServiceInstallState("scheduler");
+}
+
+export interface RepairServiceDeps {
+  diagnose?: () => ServiceDiagnostic;
+  assertEnv?: () => void;
+  assertAuth?: () => void;
+  writeSchedulerAssets?: () => void;
+  stopScheduler?: () => void;
+  startScheduler?: () => void;
+  writeSchedulerState?: () => void;
+  repairNative?: () => void | Promise<void>;
+  repairLaunchd?: () => void;
+  repairSystemd?: () => void;
+}
+
+/**
+ * Repair an already-installed background service without Task Scheduler re-registration.
+ *
+ * Windows scheduler: rewrite assets + stop/start — no `schtasks /create`, no UAC.
+ * Windows native: WinSW asset rewrite + restart (skips `install /p` when present).
+ * macOS/Linux: re-run the user-level install/reload path.
+ */
+export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const diagnose = deps.diagnose ?? diagnoseService;
+  const diag = diagnose();
+  if (!diag.supported) {
+    throw new Error(`Background service is unsupported (${diag.summary}).`);
+  }
+  if (diag.conflict) {
+    throw new Error(
+      "Cannot repair while Task Scheduler and native WinSW are both present. "
+        + "Run 'ocx service uninstall' then reinstall one backend with 'ocx service install'.",
+    );
+  }
+  if (!diag.installed) {
+    throw new Error("Background service is not installed. Run 'ocx service install' first.");
+  }
+
+  (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
+  (deps.assertAuth ?? assertServiceAuthEnvironment)();
+
+  if (process.platform === "win32") {
+    if (diag.backend === "native") {
+      await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(import.meta.dir))))();
+      return;
+    }
+    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    (deps.startScheduler ?? startWindows)();
+    (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
+    return;
+  }
+  if (process.platform === "darwin") {
+    (deps.repairLaunchd ?? installLaunchd)();
+    return;
+  }
+  if (process.platform === "linux") {
+    (deps.repairSystemd ?? installSystemd)();
+    return;
+  }
+  throw new Error(`Background service repair is unsupported on ${process.platform}.`);
 }
 
 /**
@@ -1664,6 +1733,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     console.error("--native (WinSW) is Windows-only.");
     process.exit(1);
   }
+  if (command === "repair") {
+    assertServiceEnvironmentMatchesInstall();
+    assertServiceAuthEnvironment();
+    await repairService();
+    console.log("✅ opencodex background service repaired (assets refreshed, no Task Scheduler re-registration).");
+    return;
+  }
   // Non-install subcommands follow the backend recorded at install time (state v2).
   const backend: ServiceBackend = parsed.backend ?? (process.platform === "win32" ? readServiceBackend() : "scheduler");
   const ops = platformOps(backend);
@@ -1736,8 +1812,9 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("Usage: ocx service [install|repair|start|stop|status|uninstall|remove] [--native|--scheduler]");
       console.error("       With no subcommand, installs/updates and starts the background service.");
+      console.error("       repair: refresh assets and restart an already-installed service (no admin re-prompt).");
       console.error("       --native (Windows only): register a real SCM service via WinSW instead of Task Scheduler.");
       process.exit(1);
   }
