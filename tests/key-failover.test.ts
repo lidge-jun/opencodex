@@ -157,7 +157,7 @@ describe("rotateProviderTransportOn429", () => {
     const initialBody = JSON.parse(createOpenAIChatAdapter(initial).buildRequest(parsed).body);
     expect(initialBody.prompt_cache_key).toBe(promptCacheKey);
 
-    const rotated = rotateProviderTransportOn429(config, "kimi-code", {
+    const rotated = rotateProviderTransportOn429(config, "kimi-code", initial, {
       now: 1_000_000,
       attemptedKey: "key-alpha-000111222333",
       promptCacheKey,
@@ -166,6 +166,36 @@ describe("rotateProviderTransportOn429", () => {
     expect(rotated?.promptCacheKey).toBe(true);
     const retryBody = JSON.parse(createOpenAIChatAdapter(rotated!).buildRequest(parsed).body);
     expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
+  });
+
+  test("inherits the routed provider's registry backfills; only the key changes", () => {
+    // The persisted config predates the registry scalar flags and merged metadata —
+    // routedProviderConfig backfilled them at request time. Rotation must not fall back
+    // to the bare persisted snapshot and silently drop them for the retried request.
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const routedProvider = {
+      ...config.providers.p,
+      baseUrl: "https://registry-pinned.example/v1",
+      promptCacheKey: true,
+      parallelToolCalls: false,
+      modelContextWindows: { "some-model": 262_144 },
+      noTemperatureModels: ["some-model"],
+    } as OcxProviderConfig;
+
+    const rotated = rotateProviderTransportOn429(config, "p", routedProvider, {
+      now: 1_000_000,
+      attemptedKey: "key-alpha-000111222333",
+    });
+
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(rotated?.baseUrl).toBe("https://registry-pinned.example/v1");
+    expect(rotated?.promptCacheKey).toBe(true);
+    expect(rotated?.parallelToolCalls).toBe(false);
+    expect(rotated?.modelContextWindows).toEqual({ "some-model": 262_144 });
+    expect(rotated?.noTemperatureModels).toEqual(["some-model"]);
+    // The pool swap still lands in the persisted config.
+    expect(config.providers.p.apiKey).toBe("key-beta-444555666777");
+    expect(config.providers.p.promptCacheKey).toBeUndefined();
   });
 
   test("re-applies xAI cache affinity without OAuth CLI headers after key rotation", () => {
@@ -178,7 +208,7 @@ describe("rotateProviderTransportOn429", () => {
     config.providers.xai = config.providers.p;
     delete config.providers.p;
 
-    const rotated = rotateProviderTransportOn429(config, "xai", {
+    const rotated = rotateProviderTransportOn429(config, "xai", { ...config.providers.xai }, {
       now: 1_000_000,
       attemptedKey: "key-alpha-000111222333",
       promptCacheKey,

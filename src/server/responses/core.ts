@@ -1756,7 +1756,7 @@ export async function handleResponses(
         }
       },
       on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter,
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -1822,7 +1822,7 @@ export async function handleResponses(
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       on429: retryAfter => {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter,
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -2094,7 +2094,7 @@ export async function handleResponses(
       // SAME request once per remaining key. OAuth/forward providers and single-key pools
       // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
       while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: upstreamResponse.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,
@@ -2257,7 +2257,7 @@ export async function handleResponses(
       }
 
       if (response.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
           attemptedKey: route.provider.apiKey,

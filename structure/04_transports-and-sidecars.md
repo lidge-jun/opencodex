@@ -280,8 +280,10 @@ its own: it forwards what the request already carries — Codex's session key on
 `/v1/responses`, or the session-scoped key the Claude `/v1/messages` inbound derives
 (metadata.user_id hash, else the system+tools cohort hash) — and a request with no key stays
 keyless. An explicit provider-level `promptCacheKey: false` continues to opt out, and the flag is
-persisted through `providerConfigSeed`/`enrichProviderFromRegistry` so key-pool 429 rotation keeps
-it. If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+persisted through `providerConfigSeed`/`enrichProviderFromRegistry` for new configs; key-pool 429
+rotation keeps it — along with every other registry backfill — because the retry inherits the
+request's routed provider and swaps only the API key (`rotateProviderTransportOn429` in
+src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
 saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
 backends may reject the OpenAI-specific field.
 
