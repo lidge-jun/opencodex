@@ -1972,6 +1972,8 @@ describe("doctor-gui-if-changed", () => {
     const { looksLikeDoctorInfraFailure } = await import("../scripts/doctor-gui-if-changed");
     expect(looksLikeDoctorInfraFailure("npm ERR! network getaddrinfo ENOTFOUND registry.npmjs.org")).toBe(true);
     expect(looksLikeDoctorInfraFailure("All 2 issues\nBugs > 1 errors")).toBe(false);
+    // Findings copy can mention "network" without being an infra outage.
+    expect(looksLikeDoctorInfraFailure("Network requests > 1 errors")).toBe(false);
   });
 
   test("DRY_RUN prints the run/skip decision without spawning the doctor", () => {

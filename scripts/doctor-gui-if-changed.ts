@@ -20,7 +20,8 @@ export function guiPathsChanged(files: string[]): boolean {
 
 /** True when stderr/stdout looks like a registry/network failure rather than findings. */
 export function looksLikeDoctorInfraFailure(output: string): boolean {
-  return /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo|network|registry|npm ERR|fetch failed|ERR_INVALID_URL|certificate|SSL|TLS|offline|could not resolve|unable to resolve|socket hang up|connect ECONN|connect ENOTFOUND/i
+  // Keep this narrow: bare words like "network"/"offline" also appear in findings text.
+  return /(?:^|\b)(?:npm ERR!|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo ENOTFOUND|fetch failed|ERR_INVALID_URL|UNABLE_TO_GET_ISSUER_CERT|certificate has expired|unable to resolve|could not resolve host|socket hang up|connect ECONNREFUSED|connect ENOTFOUND)(?:\b|$)/im
     .test(output);
 }
 

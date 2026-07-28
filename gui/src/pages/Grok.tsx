@@ -131,13 +131,19 @@ export default function Grok({ apiBase }: { apiBase: string }) {
       if (applyAfter) {
         setPending("apply");
         const applied = await fetch(`${apiBase}/api/grok/apply`, { method: "POST" });
-        const payload = await readJsonOrThrow<{ message?: string; skippedReason?: string }>(
-          applied,
-          t("grok.applyFailed"),
-        );
+        // Apply errors use `{ message, skippedReason }` (not always `error`); preserve that
+        // actionable copy for orphan-marker repair and policy skips.
+        if (!applied.ok) {
+          const failed = await applied.json().catch(() => ({})) as { message?: string; error?: string };
+          throw new Error(failed.message ?? failed.error ?? t("grok.applyFailed"));
+        }
+        const payload = await applied.json().catch(() => ({})) as {
+          message?: string;
+          skippedReason?: string;
+        };
         // A policy skip is not success theatre: the Grok config did NOT change
         // (non-loopback bind, or no ~/.grok), so say that instead of "applied".
-        if (payload?.skippedReason) {
+        if (payload.skippedReason) {
           setMessage({ tone: "err", text: payload.message ?? t("grok.applySkipped") });
           setAnnouncement(payload.message ?? t("grok.applySkipped"));
         } else {

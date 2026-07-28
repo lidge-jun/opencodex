@@ -31,6 +31,9 @@ test("readJsonOrThrow prefers error, then message, then fallback", async () => {
   await expect(
     readJsonOrThrow(Response.json({ error: "err", message: "msg" }, { status: 500 }), "fallback"),
   ).rejects.toThrow("err");
+  await expect(
+    readJsonOrThrow(Response.json({ detail: "other" }, { status: 500 }), "fallback"),
+  ).rejects.toThrow("fallback");
 });
 
 test("readJsonOrThrow accepts Response-like mocks that only implement json()", async () => {
