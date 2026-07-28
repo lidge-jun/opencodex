@@ -31,9 +31,16 @@ type StartupPageCache = {
 
 const STARTUP_PAGE_CACHE_PREFIX = "ocx.startup.page.v1:";
 
+function shellChain(commands: string[], platform: string | undefined): string {
+  // Windows PowerShell 5.x rejects bash `&&`; `;` works in PowerShell and cmd.
+  const sep = platform === "win32" ? "; " : " && ";
+  return commands.join(sep);
+}
+
 function deriveCodexRuntimeNotice(
   runtime: CodexRuntimeSettings | undefined,
   t: TFn,
+  platform?: string,
 ): { warning: string | null; fix: string | null } {
   if (!runtime) return { warning: null, fix: null };
   const clampActive = Boolean(runtime.catalogClamp?.active);
@@ -42,18 +49,19 @@ function deriveCodexRuntimeNotice(
     ? runtime.catalogClamp?.runtimeVersion
     : runtime.version) ?? runtime.version ?? "unknown";
   const efforts = (runtime.catalogClamp?.removedEfforts ?? []).join(", ");
+  const doctorSync = shellChain(["ocx doctor --fix-codex-runtime", "ocx sync"], platform);
   if (clampActive) {
     return {
       warning: efforts
         ? t("startup.codexRuntime.clampHiddenWithEfforts", { version, efforts })
         : t("startup.codexRuntime.clampHidden", { version }),
-      fix: newer ? "ocx doctor --fix-codex-runtime && ocx sync" : "ocx sync",
+      fix: newer ? doctorSync : "ocx sync",
     };
   }
   if (newer) {
     return {
       warning: t("startup.codexRuntime.olderBinary", { version }),
-      fix: "ocx doctor --fix-codex-runtime && ocx sync",
+      fix: doctorSync,
     };
   }
   return { warning: null, fix: null };
@@ -124,7 +132,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       const [settings, trayResult] = await Promise.all([settingsPromise, trayPromise]);
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
 
-      const notice = deriveCodexRuntimeNotice(settings?.codexRuntime, t);
+      const notice = deriveCodexRuntimeNotice(settings?.codexRuntime, t, next.platform);
       setCodexRuntimeWarning(notice.warning);
       setCodexRuntimeFix(notice.fix);
       setRuntimeNoticePending(false);
