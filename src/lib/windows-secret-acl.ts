@@ -3,9 +3,14 @@
  *
  * On Windows, `chmod` only controls POSIX-style bits in the ACE list and does NOT remove
  * inherited permissions from other users. Real per-user isolation requires icacls to:
- *   1. Disable inheritance   (icacls path /inheritance:r)
- *   2. Strip broad explicit grants by SID (Everyone, Users, Authenticated Users)
- *   3. Grant the current user full control (icacls path /grant:r "CURRENTUSER:(F)")
+ *   1. Grant the current user full control (icacls path /grant:r "CURRENTUSER:(F)")
+ *   2. Disable inheritance               (icacls path /inheritance:r)
+ *   3. Strip broad explicit grants by SID (Everyone, Users, Authenticated Users)
+ *
+ * Owner grant MUST precede `/inheritance:r`. That flag is destructive: it drops inherited
+ * ACEs immediately. If a later step times out after inheritance is removed but before an
+ * explicit owner ACE exists, the temp is left with a protected empty DACL — owned by the
+ * current user yet unreadable/ununlinkable until Full Control is restored (issue #596).
  *
  * On non-Windows platforms the helpers fall through to the caller's existing chmod-based
  * behaviour: they return ok:true without invoking any external process.
@@ -141,8 +146,8 @@ function currentWindowsUser(): string | undefined {
 
 /**
  * Run icacls to harden a single file system entry.
- * - Disables inheritance (keeps nothing: /inheritance:r)
- * - Grants the current user Full Control
+ * Order is intentional (issue #596): grant the owner ACE first so a later
+ * `/inheritance:r` or `/remove:g` timeout cannot strand a protected zero-ACE DACL.
  *
  * We do NOT use a shell string; all arguments are passed as an array so no
  * shell injection is possible even for paths with unusual characters.
@@ -170,13 +175,20 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
     if (!result.success) throw icaclsError(step, result);
   };
 
-  // Step 1: disable inheritance and remove inherited ACEs
+  // Step 1: grant current user full control BEFORE any destructive ACL change.
+  // If this fails, inheritance is untouched and the writer keeps inherited access.
+  const grant = directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
+  runOrThrow("/grant:r", [targetPath, "/grant:r", grant]);
+
+  // Step 2: disable inheritance and remove inherited ACEs. The explicit owner ACE
+  // from step 1 survives this transition, so a later failure still leaves cleanup access.
   runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
 
-  // Step 2: remove broad explicit grants using stable SIDs (not localized names).
+  // Step 3: remove broad explicit grants using stable SIDs (not localized names).
   // Missing ACEs can yield a non-zero exit; verify with locale-independent /findsid
   // before accepting the failure as harmless — a swallowed real failure would leave
   // Everyone/Users/Authenticated Users grants while reporting hardened.
+  // `/remove:g` cannot remove the explicit current-user ACE installed in step 1.
   const removal = run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
   if (!removal.success) {
     if (removal.timedOut) throw icaclsError("/remove:g", removal);
@@ -191,10 +203,6 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
       }
     }
   }
-
-  // Step 3: grant current user full control.
-  const grant = directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
-  runOrThrow("/grant:r", [targetPath, "/grant:r", grant]);
 }
 
 /**
