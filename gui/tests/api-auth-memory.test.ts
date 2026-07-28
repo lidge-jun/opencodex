@@ -113,6 +113,70 @@ test("cross-origin /api/* requests do not receive the API key or token prompt", 
   expect(promptCalls).toBe(beforeCrossPrompts);
 });
 
+test("concurrent 401s share one token prompt and all retry with the stored token", async () => {
+  // Repro for #647: many /api/* requests start without a token (dashboard fan-out).
+  // Delivering 401s one-by-one after each auth cycle finishes matches the browser case where
+  // window.prompt blocks the main thread: each continuation still holds a captured null token
+  // and must reuse the in-memory token from an earlier request instead of prompting again.
+  let promptCalls = 0;
+  const release401: Array<() => void> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (headers.get("X-OpenCodex-API-Key") === "shared-token") {
+      return new Response("{}", { status: 200 });
+    }
+    await new Promise<void>((resolve) => {
+      release401.push(resolve);
+    });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "shared-token";
+  };
+  await installMockAuthFetch(mockFetch);
+
+  const endpoints = [
+    "/api/config",
+    "/api/providers",
+    "/api/models",
+    "/api/selected-models",
+    "/api/disabled-models",
+    "/api/effort-caps",
+    "/api/sidecar-settings",
+    "/api/injection-model",
+    "/api/v2",
+    "/api/keys",
+    "/api/provider-presets",
+    "/api/key-providers",
+    "/api/oauth/providers",
+    "/api/codex-auth/accounts",
+  ];
+  const pending = endpoints.map((path) => fetch(path).then((r) => r.status));
+  // Let every request reach the 401 gate before any response is delivered.
+  for (let i = 0; i < 20 && release401.length < endpoints.length; i += 1) {
+    await Promise.resolve();
+  }
+  expect(release401.length).toBe(endpoints.length);
+
+  for (let i = 0; i < endpoints.length; i += 1) {
+    const done = pending[i]!;
+    let settled = false;
+    void done.then(() => {
+      settled = true;
+    });
+    release401.shift()!();
+    for (let spin = 0; spin < 50 && !settled; spin += 1) {
+      await Promise.resolve();
+    }
+    expect(settled).toBe(true);
+  }
+
+  const statuses = await Promise.all(pending);
+  expect(promptCalls).toBe(1);
+  expect([...new Set(statuses)]).toEqual([200]);
+});
+
 test("cross-origin /v1/* requests do not receive the API key or token prompt", async () => {
   let promptCalls = 0;
   let phase: "seed" | "cross" = "seed";

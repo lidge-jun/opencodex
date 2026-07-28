@@ -1,4 +1,5 @@
 let installed = false;
+/** Shared 401 refresh gate — concurrent waiters join one prompt / token resolution. */
 let promptInFlight: Promise<string | null> | null = null;
 
 function needsApiAuth(input: RequestInfo | URL): boolean {
@@ -46,11 +47,25 @@ function withToken(input: RequestInfo | URL, init: RequestInit | undefined, toke
   return [input, { ...init, headers }];
 }
 
-async function promptForToken(): Promise<string | null> {
+/**
+ * Resolve a token after a 401. Concurrent callers share one in-flight resolution so a dashboard
+ * fan-out does not open one window.prompt per /api request (#647). Re-reads memoryToken before
+ * prompting so waiters that wake after another request already stored a token do not re-prompt.
+ */
+async function resolveTokenAfter401(failedToken: string | null): Promise<string | null> {
   if (promptInFlight) return promptInFlight;
-  promptInFlight = Promise.resolve()
-    .then(() => window.prompt("OpenCodex API token")?.trim() || null)
-    .finally(() => { promptInFlight = null; });
+
+  promptInFlight = (async () => {
+    const current = readToken();
+    if (current && current !== failedToken) return current;
+
+    const prompted = window.prompt("OpenCodex API token")?.trim() || null;
+    if (prompted) storeToken(prompted);
+    return prompted;
+  })().finally(() => {
+    promptInFlight = null;
+  });
+
   return promptInFlight;
 }
 
@@ -69,10 +84,19 @@ export function installApiAuthFetch(): void {
     if (response.status !== 401) return response;
 
     if (token) clearToken();
-    const nextToken = await promptForToken();
+
+    // Another request may have stored a token while this one was in flight (or while prompt blocked).
+    const refreshed = readToken();
+    if (refreshed && refreshed !== token) {
+      const [retryInput, retryInit] = withToken(input, init, refreshed);
+      const retry = await originalFetch(retryInput, retryInit);
+      if (retry.status !== 401) return retry;
+      clearToken();
+    }
+
+    const nextToken = await resolveTokenAfter401(token);
     if (!nextToken) return response;
 
-    storeToken(nextToken);
     const [retryInput, retryInit] = withToken(input, init, nextToken);
     const retry = await originalFetch(retryInput, retryInit);
     if (retry.status === 401) clearToken();
