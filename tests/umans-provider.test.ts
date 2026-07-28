@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
-import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey } from "../src/oauth/key-providers";
+import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey, type KeyLoginProvider } from "../src/oauth/key-providers";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig["apiKeyTransport"]): OcxProviderConfig {
@@ -80,6 +80,16 @@ describe("Umans provider", () => {
     expect(provider.modelContextWindows?.["umans-glm-5.1"]).toBe(202_752);
     expect(provider.modelInputModalities?.["umans-glm-5.1"]).toEqual(["text"]);
     expect(provider.modelInputModalities?.["umans-kimi-k2.7"]).toEqual(["text", "image"]);
+  });
+
+  test("CLI key-login save payload preserves apiKeyTransport when configured", () => {
+    const bearerGateway = {
+      ...KEY_LOGIN_PROVIDERS.umans,
+      apiKeyTransport: "bearer",
+    } satisfies KeyLoginProvider;
+    const provider = providerConfigFromKeyLoginProvider(bearerGateway, "sk-umans");
+
+    expect(provider.apiKeyTransport).toBe("bearer");
   });
 
   test("OpenAI API key-login clones max-input metadata and never persists virtual maps", () => {
@@ -216,5 +226,24 @@ describe("Umans provider", () => {
     expect(headers.get("anthropic-version")).toBe("2023-06-01");
     expect(body.model).toBe("umans-coder");
     expect(body.max_tokens).toBe(1);
+  });
+
+  test("Anthropic API-key validation honors apiKeyTransport=bearer", async () => {
+    let seenInit: RequestInit | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      seenInit = init;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    const valid = await validateApiKey({
+      ...KEY_LOGIN_PROVIDERS.umans,
+      apiKeyTransport: "bearer",
+    }, "sk-umans-valid");
+    const headers = new Headers(seenInit?.headers);
+
+    expect(valid).toBe(true);
+    expect(headers.get("authorization")).toBe("Bearer sk-umans-valid");
+    expect(headers.get("x-api-key")).toBeNull();
+    expect(headers.get("anthropic-version")).toBe("2023-06-01");
   });
 });

@@ -80,6 +80,7 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     adapter: def.adapter,
     baseUrl: baseUrlOverride ?? def.baseUrl,
     apiKey: key,
+    ...(def.apiKeyTransport !== undefined ? { apiKeyTransport: def.apiKeyTransport } : {}),
     ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),
     ...(def.models ? { models: [...def.models] } : {}),
     ...(def.contextWindow !== undefined ? { contextWindow: def.contextWindow } : {}),
