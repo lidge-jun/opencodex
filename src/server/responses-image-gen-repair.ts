@@ -3,23 +3,57 @@ interface NamespacedTool {
   name: string;
 }
 
+const IMAGE_GEN_NAMESPACE = "image_gen";
+const IMAGE_GEN_DOTTED_PREFIX = `${IMAGE_GEN_NAMESPACE}.`;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function declaredToolGroups(body: unknown): unknown[][] {
+  if (!isPlainObject(body)) return [];
+  const groups: unknown[][] = [];
+  if (Array.isArray(body.tools)) groups.push(body.tools);
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
+        groups.push(item.tools);
+      }
+    }
+  }
+  return groups;
+}
+
 /**
  * Restrict the generic bridge map to Codex's standalone image namespace and accept the dotted
- * alias emitted by earlier compatibility attempts. Exact map lookups avoid splitting arbitrary
- * double-underscore function names that belong to unrelated client tools.
+ * alias emitted by earlier compatibility attempts. Legacy flat dotted declarations are recovered
+ * from the raw request because the generic parser does not assign them a namespace. Exact declared
+ * names avoid splitting arbitrary double-underscore function names that belong to unrelated tools.
  */
 export function imageGenToolCallAliases(
   toolNsMap: ReadonlyMap<string, NamespacedTool>,
+  requestBody?: unknown,
 ): Map<string, NamespacedTool> {
   const aliases = new Map<string, NamespacedTool>();
   for (const [wireName, tool] of toolNsMap) {
-    if (tool.namespace !== "image_gen") continue;
+    if (tool.namespace !== IMAGE_GEN_NAMESPACE) continue;
     aliases.set(wireName, tool);
     aliases.set(`${tool.namespace}.${tool.name}`, tool);
+  }
+  for (const group of declaredToolGroups(requestBody)) {
+    for (const tool of group) {
+      if (
+        !isPlainObject(tool)
+        || tool.type !== "function"
+        || typeof tool.name !== "string"
+        || !tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
+        || tool.name.length === IMAGE_GEN_DOTTED_PREFIX.length
+      ) continue;
+      const localName = tool.name.slice(IMAGE_GEN_DOTTED_PREFIX.length);
+      const target = { namespace: IMAGE_GEN_NAMESPACE, name: localName };
+      aliases.set(`${IMAGE_GEN_NAMESPACE}__${localName}`, target);
+      aliases.set(tool.name, target);
+    }
   }
   return aliases;
 }

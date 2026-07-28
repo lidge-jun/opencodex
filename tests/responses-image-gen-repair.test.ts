@@ -34,6 +34,20 @@ describe("Responses image-gen call restoration", () => {
     ]);
   });
 
+  test("recovers declared dotted aliases without guessing double-underscore function names", () => {
+    const recovered = imageGenToolCallAliases(new Map(), {
+      tools: [
+        { type: "function", name: "image_gen.imagegen", parameters: {} },
+        { type: "function", name: "image_gen__unrelated", parameters: {} },
+      ],
+    });
+
+    expect([...recovered.entries()]).toEqual([
+      ["image_gen__imagegen", { namespace: "image_gen", name: "imagegen" }],
+      ["image_gen.imagegen", { namespace: "image_gen", name: "imagegen" }],
+    ]);
+  });
+
   test("restores non-streaming function calls without changing unrelated tools", () => {
     const upstream = JSON.stringify({
       id: "resp_1",
@@ -182,6 +196,62 @@ describe("Responses image-gen call restoration", () => {
         namespace: "image_gen",
         name: "imagegen",
         call_id: "call_1",
+      });
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("handleResponses round-trips a legacy dotted declaration", async () => {
+    const savedFetch = globalThis.fetch;
+    let outboundBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_legacy",
+          call_id: "call_legacy",
+          name: "image_gen__imagegen",
+          arguments: "{}",
+        }],
+      });
+    }) as typeof fetch;
+    const config = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://fixture.test/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/gpt-5.6-sol",
+          stream: false,
+          input: [{ role: "user", content: [{ type: "input_text", text: "generate an image" }] }],
+          tools: [{ type: "function", name: "image_gen.imagegen", parameters: {} }],
+        }),
+      }), config, { model: "", provider: "" });
+      const clientBody = await response.json() as {
+        output: Array<{ namespace?: string; name?: string; call_id?: string }>;
+      };
+      const outboundTools = outboundBody?.tools as Array<{ name?: string }> | undefined;
+
+      expect(outboundTools?.[0]?.name).toBe("image_gen__imagegen");
+      expect(clientBody.output[0]).toMatchObject({
+        namespace: "image_gen",
+        name: "imagegen",
+        call_id: "call_legacy",
       });
     } finally {
       globalThis.fetch = savedFetch;

@@ -1344,7 +1344,7 @@ export async function handleResponses(
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
-      : imageGenToolCallAliases(buildToolBridgeMaps(parsed).toolNsMap);
+      : imageGenToolCallAliases(buildToolBridgeMaps(parsed).toolNsMap, parsed._rawBody);
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
