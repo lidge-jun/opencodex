@@ -102,3 +102,56 @@ bun run lint:gui
 
 WP3가 먼저다. usage-debug 타임아웃이 남아 있으면 리베이스 후 windows CI가 다시
 빨갛게 나오고, 그게 리베이스 탓인지 기존 결함 탓인지 구분할 수 없다.
+
+## 실행 결과 (2026-07-28)
+
+`935a0e977` → `98142f5c8`. `#576`은 `CONFLICTING/DIRTY` → `MERGEABLE/UNSTABLE`.
+
+### 충돌은 예측대로 3파일이었다
+
+i18n 6개와 docs 2개는 자동 병합됐다. A 게이트의 정정이 맞았다.
+
+| 파일 | 해소 |
+| --- | --- |
+| `src/cli/index.ts` | `dev`의 `!synced.ok` 오류 경로 + 우리 `catalogWritten \|\| cacheSynced` 게이트 병존. `else`가 아니다 — `refreshCodexModelCatalog`가 `injectCodexConfig`보다 먼저 돌아서 `ok:false` + `catalogWritten:true`가 실재한다 (`src/codex/sync.ts:83-120`) |
+| `src/server/management/config-routes.ts` | `{ ...attachStaleAppServerHint(result), ...(result.ok ? {} : { error: result.message }) }`. 키 집합이 서로 소(`staleAppServerHint` vs `error`) |
+| `gui/src/pages/dashboard-overview-sections.tsx` | `dev`의 `nativeSubagentDefaultsWarning` + 우리 `<Trans>` 인접 배치 |
+
+### A 게이트가 잡은 Critical — 리베이스가 실어온 회귀
+
+`git diff origin/dev..HEAD -- src/cli/index.ts`의 **삭제 라인**을 보니 `dev`의
+`grokSyncFailureMessage()`와 세 개 에러 핸들러가 사라지고 있었다. `5451cd191`의
+작업이다.
+
+원인은 우리 해소가 아니었다. 원래 `935a0e977` 커밋에 이미 들어 있던 삭제가
+리베이스로 충실히 실려온 것이다. #527 계보의 편집 사고로 보인다.
+
+무서운 점은 **아무 테스트도 이걸 잡지 못한다는 것**이다. `rg "may still point at a
+previous proxy port"`는 저장소 전체에서 0건이다. 전체 스위트가 초록이어도 통과한다.
+`git checkout origin/dev -- src/cli/index.ts`로 복원한 뒤 `case "sync"`/`"sync-cache"`
+훅만 재적용했고, 최종 삭제 라인은 1줄(우리가 `if`로 감싼 자리)뿐이다.
+
+교훈: 030 §해소 규칙의 "`dev`의 라인이 사라졌으면 잘못 해소한 것"은 **충돌 파일만이
+아니라 커밋 전체**에 적용해야 한다.
+
+### 소스-텍스트 테스트 충돌
+
+전체 스위트에서 `tests/cli-restore-back.test.ts`가 실패했다. 이 테스트는
+`src/cli/index.ts`를 문자열로 읽어 `if (!synced.ok)`를 요구하는데, 우리 PR의
+`tests/codex-app-server-processes.test.ts:260`은 `syncResult.catalogWritten`을 요구한다.
+한 변수를 두 이름으로 요구하는 셈이다.
+
+`dev`가 먼저 있던 계약이므로 `synced`로 통일하고 우리 테스트를 맞췄다.
+
+두 테스트 모두 소스 텍스트 매칭이라 순수 리네임에 실패하고 의미가 깨져도 통과할 수
+있다. 별건 후속으로 주입 가능한 seam을 통한 동작 검증이 필요하다.
+
+### 검증
+
+```
+bun run typecheck        clean
+bun run build:gui        exit 0
+bun run test             5722 pass, 1 skip, 0 fail (417 files, 180.82s)
+```
+
+PR 코멘트: `#576 issuecomment-5103955966`.
