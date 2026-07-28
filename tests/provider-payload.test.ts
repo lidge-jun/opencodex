@@ -165,6 +165,25 @@ describe("provider dashboard payload", () => {
     });
   });
 
+  test("persists bearer transport only for Anthropic API-key providers", () => {
+    const bearerGateway = {
+      name: "gateway",
+      adapter: "anthropic",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "key" as const,
+      apiKey: " gateway-key ",
+      apiKeyTransport: "bearer" as const,
+      defaultModel: "claude-gateway",
+    };
+    expect(buildProviderPayload(bearerGateway)).toMatchObject({
+      adapter: "anthropic",
+      authMode: "key",
+      apiKey: "gateway-key",
+      apiKeyTransport: "bearer",
+    });
+    expect(buildProviderPayload({ ...bearerGateway, adapter: "openai-chat" })).not.toHaveProperty("apiKeyTransport");
+  });
+
   test("does not persist secrets for forward or local modes", () => {
     const base = {
       name: "local",

@@ -143,6 +143,18 @@ export function AddProviderFormPane({
           <AddProviderField label={t("modal.apiKey")}>
             <input className="input" type="password" value={form.apiKey} onChange={e => onFormChange({ ...form, apiKey: e.target.value })} placeholder={t("modal.apiKeyPlaceholder")} />
           </AddProviderField>
+          {form.adapter === "anthropic" && form.authMode === "key" && (
+            <AddProviderField label={t("modal.apiKeyTransport")}>
+              <select
+                className="input"
+                value={form.apiKeyTransport ?? "x-api-key"}
+                onChange={e => onFormChange({ ...form, apiKeyTransport: e.target.value === "bearer" ? "bearer" : undefined })}
+              >
+                <option value="x-api-key">{t("modal.apiKeyTransportNative")}</option>
+                <option value="bearer">{t("modal.apiKeyTransportBearer")}</option>
+              </select>
+            </AddProviderField>
+          )}
         </>
       )}
       {!isReservedForward && <AddProviderField label={t("modal.defaultModel")}>

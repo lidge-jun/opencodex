@@ -144,6 +144,7 @@ export default function AddProviderModal({
           : p.baseUrl,
         authMode: p.auth,
         apiKey: "",
+        apiKeyTransport: undefined,
         defaultModel: p.defaultModel ?? "",
         allowPrivateNetwork: false,
       },

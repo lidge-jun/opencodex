@@ -94,13 +94,13 @@ describe("headless GUI parity CLI", () => {
   test("provider edit reuses the management provider patch", async () => {
     const runtime = fakeRuntime();
     const code = await handleProviderRuntimeCommand("edit", [
-      "ark", "--base-url", "https://example.test/v1", "--enabled", "off", "--live-models", "on", "--json",
+      "ark", "--base-url", "https://example.test/v1", "--api-key-transport", "bearer", "--enabled", "off", "--live-models", "on", "--json",
     ], runtime.deps);
     expect(code).toBe(0);
     expect(runtime.requests).toEqual([{
       path: "/api/providers?name=ark",
       method: "PATCH",
-      body: { baseUrl: "https://example.test/v1", disabled: true, liveModels: true },
+      body: { baseUrl: "https://example.test/v1", apiKeyTransport: "bearer", disabled: true, liveModels: true },
     }]);
   });
 

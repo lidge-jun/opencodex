@@ -33,6 +33,7 @@ export interface WorkspaceProvider {
   hasApiKey?: boolean;
   hasHeaders?: boolean;
   defaultModel?: string;
+  apiKeyTransport?: "x-api-key" | "bearer";
   /** Static/configured model ids from provider config (offline fallback). */
   models?: string[];
   /** Whether the proxy fetches the provider's live model catalog (default true). */

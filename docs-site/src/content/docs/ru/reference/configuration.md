@@ -158,6 +158,7 @@ x-opencodex-api-key: your-secret-token
 | `responsesPath?` | `string` | Необязательный относительный путь ресурса для запросов `openai-responses` с аутентификацией `key`. Должен начинаться с `/` и не содержать схему URL, query или fragment. Если поле опущено, сохраняется прежнее построение URL `/v1/responses`. |
 | `disabled?` | `boolean` | Провайдер остаётся на диске, но исключается из маршрутизации и списков моделей/каталога. |
 | `apiKey?` | `string` | API-ключ или ссылка `${ENV_VAR}` / `$ENV_VAR`, разрешаемая в момент запроса. |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Способ передачи API-ключа Anthropic. По умолчанию используется нативный `x-api-key`; для совместимых gateway, требующих `Authorization: Bearer <key>`, задайте `"bearer"`. Допустимо только для `anthropic` provider с key-аутентификацией. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Пул из нескольких ключей. `apiKey` отражает активную запись; каждый элемент содержит `id`, `key`, необязательный `label` и необязательное числовое `addedAt`. |
 | `defaultModel?` | `string` | Модель, используемая при выборе этого провайдера без явной модели. |
 | `models?` | `string[]` | Список seed/fallback-моделей. Когда `liveModels` равен `false`, обнаруживаются только эти модели. |

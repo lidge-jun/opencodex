@@ -131,6 +131,7 @@ x-opencodex-api-key: your-secret-token
 | `responsesPath?` | `string` | `key` 认证的 `openai-responses` 请求可选相对 resource path。必须以 `/` 开头，且不得包含 URL scheme、query 或 fragment。省略时保留原有的 `/v1/responses` URL 构造。 |
 | `disabled?` | `boolean` | 配置保留在磁盘上，但从路由和模型/目录列表排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic API key 的请求头方式。默认使用原生 `x-api-key`；兼容 gateway 要求 `Authorization: Bearer <key>` 时设为 `"bearer"`。仅适用于使用 key 认证的 `anthropic` provider。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key pool。`apiKey` 映射当前活动条目；每项包含 `id`、`key`、可选 `label` 和可选数字 `addedAt`。 |
 | `defaultModel?` | `string` | 选中该 provider 但未指定明确模型时使用的模型。 |
 | `models?` | `string[]` | seed/fallback 模型列表。`liveModels` 为 `false` 时，只会发现这些模型。 |

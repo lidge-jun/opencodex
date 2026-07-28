@@ -8,7 +8,7 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
+import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
@@ -124,7 +124,7 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
 
 async function handleAdd(args: string[]): Promise<void> {
   const name = args[0];
@@ -138,13 +138,14 @@ async function handleAdd(args: string[]): Promise<void> {
     process.exit(1);
   }
 
- const restArgs = args.slice(1);
- const force = consumeFlag(restArgs, "--force");
- const setDefault = consumeFlag(restArgs, "--set-default");
- const wantsJson = consumeFlag(restArgs, "--json");
- const wantsSync = consumeFlag(restArgs, "--sync");
+  const restArgs = args.slice(1);
+  const force = consumeFlag(restArgs, "--force");
+  const setDefault = consumeFlag(restArgs, "--set-default");
+  const wantsJson = consumeFlag(restArgs, "--json");
+  const wantsSync = consumeFlag(restArgs, "--sync");
   const allowPrivateNetwork = consumeFlag(restArgs, "--allow-private-network");
- const apiKey = consumeFlagValue(restArgs, "--api-key");
+  const apiKey = consumeFlagValue(restArgs, "--api-key");
+  const apiKeyTransport = consumeFlagValue(restArgs, "--api-key-transport");
   const adapter = consumeFlagValue(restArgs, "--adapter");
   const baseUrl = consumeFlagValue(restArgs, "--base-url");
   const defaultModel = consumeFlagValue(restArgs, "--default-model");
@@ -188,9 +189,22 @@ async function handleAdd(args: string[]): Promise<void> {
     };
   }
 
- config.providers[name] = provConfig;
+  if (apiKeyTransport !== undefined) {
+    if (apiKeyTransport !== "x-api-key" && apiKeyTransport !== "bearer") {
+      console.error('Error: --api-key-transport must be "x-api-key" or "bearer".');
+      process.exit(1);
+    }
+    const transportError = apiKeyTransportConfigError({ ...provConfig, apiKeyTransport });
+    if (transportError) {
+      console.error(`Error: ${transportError}.`);
+      process.exit(1);
+    }
+    provConfig.apiKeyTransport = apiKeyTransport;
+  }
+
+  config.providers[name] = provConfig;
   if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
- if (setDefault) config.defaultProvider = name;
+  if (setDefault) config.defaultProvider = name;
 
   validateAndSave(config);
 

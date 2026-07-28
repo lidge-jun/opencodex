@@ -136,6 +136,7 @@ token の代わりに使えます。すべての候補は timing side channel �
 | `responsesPath?` | `string` | `key` 認証の `openai-responses` リクエストに使う任意の相対 resource path。`/` で始め、URL scheme、query、fragment を含めてはいけません。省略時は従来の `/v1/responses` URL 構築を維持します。 |
 | `disabled?` | `boolean` | 設定はディスクに残すがルーティングとモデル/カタログ一覧から除外します。 |
 | `apiKey?` | `string` | API キーまたはリクエスト時に解釈する `${ENV_VAR}` / `$ENV_VAR` 参照。 |
+| `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic API キーのヘッダー方式。デフォルトはネイティブの `x-api-key` です。`Authorization: Bearer <key>` が必要な互換 gateway では `"bearer"` を設定します。key 認証の `anthropic` プロバイダーでのみ有効です。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 複数キーを納める pool。`apiKey` はアクティブ項目を反映します。各項目には `id`、`key`、選択 `label`、選択数値 `addedAt` があります。 |
 | `defaultModel?` | `string` | 明示的なモデルなしでこのプロバイダーを選んだときに使うモデル。 |
 | `models?` | `string[]` | seed/fallback モデル一覧。`liveModels` が `false` ならここにあるモデルだけが発見されます。 |

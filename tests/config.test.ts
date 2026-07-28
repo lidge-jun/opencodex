@@ -616,6 +616,26 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("accepts bearer transport only for Anthropic API-key providers", () => {
+    const base = { port: 10100, defaultProvider: "gateway" };
+    writeConfig({
+      ...base,
+      providers: {
+        gateway: { adapter: "anthropic", baseUrl: "https://gateway.example/v1", authMode: "key", apiKeyTransport: "bearer" },
+      },
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    for (const provider of [
+      { adapter: "openai-chat", baseUrl: "https://gateway.example/v1", authMode: "key", apiKeyTransport: "bearer" },
+      { adapter: "anthropic", baseUrl: "https://gateway.example/v1", authMode: "oauth", apiKeyTransport: "bearer" },
+    ]) {
+      writeConfig({ ...base, providers: { gateway: provider } });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("apiKeyTransport");
+    }
+  });
+
   test("validates provider context cap maps explicitly", () => {
     writeConfig({
       port: 10100,

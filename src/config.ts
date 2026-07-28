@@ -339,6 +339,7 @@ const warnedConfigFallbacks = new Set<string>();
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   allowPrivateNetwork: z.boolean().optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
@@ -406,6 +407,23 @@ export function providerHeadersConfigError(headers: unknown): string | null {
     if (SENSITIVE_PROVIDER_HEADERS.has(normalized)) return `headers must not include sensitive header "${name}"; use apiKey/authMode instead`;
     if (typeof value !== "string") return `header "${name}" value must be a string`;
     if (/[\r\n]/.test(value)) return `header "${name}" value must not include line breaks`;
+  }
+  return null;
+}
+
+/** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
+export function apiKeyTransportConfigError(
+  provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "apiKeyTransport">,
+): string | null {
+  if (provider.apiKeyTransport === undefined) return null;
+  if (provider.apiKeyTransport !== "x-api-key" && provider.apiKeyTransport !== "bearer") {
+    return 'apiKeyTransport must be "x-api-key" or "bearer"';
+  }
+  if (provider.adapter !== "anthropic") {
+    return "apiKeyTransport is supported only by the anthropic adapter";
+  }
+  if (provider.authMode === "oauth" || provider.authMode === "forward" || provider.authMode === "local") {
+    return "apiKeyTransport requires Anthropic API-key authentication";
   }
   return null;
 }
@@ -605,6 +623,14 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "headers"],
         message: headersError,
+      });
+    }
+    const apiKeyTransportError = apiKeyTransportConfigError(provider as OcxProviderConfig);
+    if (apiKeyTransportError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "apiKeyTransport"],
+        message: apiKeyTransportError,
       });
     }
     const modelAdaptersError = modelAdapterRecordConfigError(
