@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconRefresh } from "../icons";
 import { type TFn, useI18n } from "../i18n/shared";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState } from "../ui";
 import {
   StartupDetailsSection,
@@ -20,6 +21,15 @@ type CodexRuntimeSettings = {
   newerAvailable?: { path?: string; version?: string | null } | null;
   catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
 };
+
+type StartupPageCache = {
+  data: StartupHealthData;
+  warning: string | null;
+  fix: string | null;
+  tray: TrayStatusData | null;
+};
+
+const STARTUP_PAGE_CACHE_PREFIX = "ocx.startup.page.v1:";
 
 function deriveCodexRuntimeNotice(
   runtime: CodexRuntimeSettings | undefined,
@@ -51,27 +61,35 @@ function deriveCodexRuntimeNotice(
 
 export default function Startup({ apiBase }: { apiBase: string }) {
   const { t } = useI18n();
-  const [data, setData] = useState<StartupHealthData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  const cacheKey = `${STARTUP_PAGE_CACHE_PREFIX}${apiBase}`;
+  const cached = useMemo(() => readSessionListCache<StartupPageCache>(cacheKey), [cacheKey]);
+
+  const [data, setData] = useState<StartupHealthData | null>(() => cached?.data ?? null);
+  const [loading, setLoading] = useState(() => !cached?.data);
+  const [failed, setFailed] = useState(() => Boolean(cached?.data?.diagnosticStale));
   const [copied, setCopied] = useState<string | null>(null);
-  const [tray, setTray] = useState<TrayStatusData | null>(null);
-  const [trayLoading, setTrayLoading] = useState(true);
+  const [tray, setTray] = useState<TrayStatusData | null>(() => cached?.tray ?? null);
+  const [trayLoading, setTrayLoading] = useState(() => !cached?.data);
   const [trayBusy, setTrayBusy] = useState(false);
   const [trayError, setTrayError] = useState(false);
   const [installBusy, setInstallBusy] = useState<StartupInstallAction | null>(null);
   const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null>(null);
-  const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(null);
-  const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(null);
+  const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(() => cached?.warning ?? null);
+  const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(() => cached?.fix ?? null);
   /** True while settings (runtime notice) are still in flight — reserves notice slot height. */
-  const [runtimeNoticePending, setRuntimeNoticePending] = useState(true);
+  const [runtimeNoticePending, setRuntimeNoticePending] = useState(() => !cached?.data);
   const loadGenerationRef = useRef(0);
+  const paintedRef = useRef(Boolean(cached?.data));
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const generation = ++loadGenerationRef.current;
+    const keepSecondary = paintedRef.current;
     setLoading(true);
-    setTrayLoading(true);
-    setRuntimeNoticePending(true);
+    // Keep prior notice/tray visible on revalidation; only reserve empty slots on first paint.
+    if (!keepSecondary) {
+      setTrayLoading(true);
+      setRuntimeNoticePending(true);
+    }
     try {
       // Kick settings off immediately so it overlaps the health round-trip.
       const settingsPromise = fetch(`${apiBase}/api/settings`, { signal })
@@ -88,6 +106,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
 
       // Paint hero/details/recovery as soon as health arrives.
       setData(next);
+      paintedRef.current = true;
       setFailed(next.diagnosticStale);
       setLoading(false);
 
@@ -109,26 +128,36 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       setCodexRuntimeWarning(notice.warning);
       setCodexRuntimeFix(notice.fix);
       setRuntimeNoticePending(false);
+      const nextTray = next.platform === "win32" ? trayResult.tray : null;
       if (next.platform === "win32") {
-        setTray(trayResult.tray);
+        setTray(nextTray);
         setTrayError(trayResult.error);
       } else {
         setTray(null);
         setTrayError(false);
       }
       setTrayLoading(false);
+
+      writeSessionListCache(cacheKey, {
+        data: next,
+        warning: notice.warning,
+        fix: notice.fix,
+        tray: nextTray,
+      } satisfies StartupPageCache);
     } catch {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       setFailed(true);
-      setTray(null);
-      setTrayError(true);
-      setCodexRuntimeWarning(null);
-      setCodexRuntimeFix(null);
+      if (!keepSecondary) {
+        setTray(null);
+        setTrayError(true);
+        setCodexRuntimeWarning(null);
+        setCodexRuntimeFix(null);
+      }
       setRuntimeNoticePending(false);
       setTrayLoading(false);
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   useEffect(() => {
     const controller = new AbortController();
