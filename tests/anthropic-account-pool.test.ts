@@ -11,9 +11,10 @@ import {
   getEligibleAnthropicAccounts,
   isAnthropicAccountPoolEnabled,
   resolveAnthropicAccountForSession,
+  resetAnthropicRoutingForManualSelection,
   rotateAnthropicAccountOn429,
 } from "../src/oauth/anthropic-routing";
-import { saveCredential, setActiveAccount } from "../src/oauth/store";
+import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
 import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
 
@@ -319,5 +320,34 @@ describe("anthropic account pool", () => {
 
     const failover = rotateAnthropicAccountOn429(config, ordered[0]!, "30");
     expect(failover).toBe(ordered[1]);
+  });
+
+  test("unbound strategy pick does not promote active before token validation", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    await setActiveAccount("anthropic", aId);
+    const config = cfg(true, 80, { strategy: "round-robin", stickyLimit: 1 });
+
+    const before = getAccountSet("anthropic")!.activeAccountId;
+    const picks = Array.from({ length: 3 }, () => resolveAnthropicAccountForSession(null, config));
+    expect(new Set(picks.map(p => p.accountId)).size).toBe(3);
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(before);
+  });
+
+  test("manual selection seeds RR so the next unbound session uses that account", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true, 80, { strategy: "round-robin", stickyLimit: 1 });
+
+    resolveAnthropicAccountForSession(null, config);
+    resolveAnthropicAccountForSession(null, config);
+
+    await setActiveAccount("anthropic", cId);
+    resetAnthropicRoutingForManualSelection(cId);
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(cId);
   });
 });

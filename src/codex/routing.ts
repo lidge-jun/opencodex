@@ -116,6 +116,12 @@ export type CodexUpstreamOutcomeMeta = {
    * cooldown (#433).
    */
   probeLeaseId?: string;
+  /**
+   * Already-chosen alternate for same-request 429 retry. When set, promotion
+   * reuses this account instead of calling {@link pickAlternateCodexAccount}
+   * again (which would advance a round-robin ring twice).
+   */
+  promoteAccountId?: string;
 };
 
 function hasConfiguredPoolAccount(config: OcxConfig, accountId: string): boolean {
@@ -682,7 +688,7 @@ function shouldFailover(config: OcxConfig, accountId: string, now: number): bool
 
 function applyFailureFailover(config: OcxConfig, active: string, now: number): string {
   if (!shouldFailover(config, active, now)) return active;
-  const best = pickLowestUsageCodexAccount(config, active, now);
+  const best = pickAlternateCodexAccount(config, active, now);
   if (best) {
     setActiveCodexAccount(config, best);
     return best;
@@ -954,7 +960,12 @@ export function recordCodexUpstreamOutcome(
     clearThreadAccountMapForAccount(accountId);
     notePoolRotationFailure(POOL_KEY_CODEX, accountId);
     if (config.activeCodexAccountId === accountId) {
-      const fallback = pickAlternateCodexAccount(config, accountId, now);
+      // Same-request 429 retry already picked via excludeAccountId — reuse it so
+      // round-robin does not advance the ring a second time.
+      const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
+        ? meta.promoteAccountId
+        : null;
+      const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now);
       if (fallback) rememberActiveCodexAccount(config, fallback);
     }
     return;

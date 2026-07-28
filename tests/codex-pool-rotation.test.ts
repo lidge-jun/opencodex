@@ -399,4 +399,54 @@ describe("accountPoolStrategy new-session routing", () => {
     // that would disagree with the ring — assert we did not stay on the failed account.
     expect(isCodexAccountInCooldown(first)).toBe(true);
   });
+
+  test("429 retry reuse promoteAccountId avoids a second RR ring advance", () => {
+    const makeRr = () => makeThreeAccountConfig({
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+      activeCodexAccountId: "a",
+    });
+    for (const id of ["a", "b", "c"]) {
+      updateAccountQuota(id, 10);
+    }
+
+    clearPoolRotationState();
+    const withReuse = makeRr();
+    const retry = pickAlternateCodexAccount(withReuse, "a");
+    expect(retry).toBeTruthy();
+    expect(retry).not.toBe("a");
+    recordCodexUpstreamOutcome(withReuse, "a", 429, { promoteAccountId: retry! });
+    expect(withReuse.activeCodexAccountId).toBe(retry);
+
+    clearPoolRotationState();
+    clearCodexUpstreamHealth();
+    clearThreadAccountMap();
+    const withoutReuse = makeRr();
+    for (const id of ["a", "b", "c"]) updateAccountQuota(id, 10);
+    const firstPick = pickAlternateCodexAccount(withoutReuse, "a");
+    expect(firstPick).toBeTruthy();
+    recordCodexUpstreamOutcome(withoutReuse, "a", 429);
+    // A second ring advance during record would promote past firstPick.
+    expect(withoutReuse.activeCodexAccountId).not.toBe(firstPick);
+    expect(withoutReuse.activeCodexAccountId).not.toBe("a");
+  });
+
+  test("fill-first transient failover advances stable order, not lowest usage", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      upstreamFailoverThreshold: 3,
+      autoSwitchThreshold: 80,
+    });
+    // Lowest usage is c; fill-first must advance a → b in sorted id order.
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 5);
+
+    expect(resolveCodexAccountForThread(null, config)).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 503);
+    recordCodexUpstreamOutcome(config, "a", 503);
+    recordCodexUpstreamOutcome(config, "a", 503);
+    expect(config.activeCodexAccountId).toBe("b");
+  });
 });

@@ -25,6 +25,7 @@ import {
   notePoolRotationSuccess,
   pickRoundRobinAccount,
   POOL_KEY_ANTHROPIC,
+  seedPoolRotationAccount,
 } from "../codex/pool-rotation";
 import type { OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
 
@@ -351,9 +352,8 @@ export function resolveAnthropicAccountForSession(
 
   const strategyPick = pickUnboundStrategyAccount(config, now);
   if (strategyPick) {
-    if (strategyPick.accountId !== set.activeAccountId) {
-      promoteAnthropicActiveAccount(strategyPick.accountId);
-    }
+    // Do not promote active here — token validation may still fail. Callers
+    // (responses/core) promote after getAnthropicPoolAccessToken succeeds.
     if (key) {
       sessionAffinity.set(key, { accountId: strategyPick.accountId, lastUsedAt: now });
       pruneExpiredAffinity(now);
@@ -466,6 +466,15 @@ export function rotateAnthropicAccountOn429(
 /** Promote dashboard active account after a validated failover target is usable. */
 export function promoteAnthropicActiveAccount(accountId: string): void {
   void setActiveAccount(PROVIDER, accountId).catch(() => { /* best-effort */ });
+}
+
+/**
+ * Manual selection resets session affinity and seeds the RR ring so the next
+ * unbound new session honors the operator-chosen account (Codex parity).
+ */
+export function resetAnthropicRoutingForManualSelection(accountId: string): void {
+  sessionAffinity.clear();
+  seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
 }
 
 /**

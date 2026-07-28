@@ -311,6 +311,8 @@ async function retryCodexPoolOnAlternateAccount(
     ].filter(Boolean),
     threadId: req.headers.get("x-codex-parent-thread-id"),
     probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+    // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
+    ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
   });
 
   const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);

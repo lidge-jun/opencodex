@@ -218,6 +218,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
     const { setActiveAccount } = await import("../../oauth/store");
     if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
+    if (provider === "anthropic") {
+      const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
+      resetAnthropicRoutingForManualSelection(body.accountId);
+    }
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
