@@ -333,6 +333,7 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("cd /d");
     expect(note).toContain("<<EOF");
     expect(note).toContain("if ($?)");
+    expect(note).toContain("`&&`/`||` are unsupported parser errors");
     expect(note).toContain("do not treat `;` as a substitute for `&&`");
     expect(note).toContain("at most one corrected bridge attempt");
     expect(note).toContain("Get-Content");

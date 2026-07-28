@@ -145,6 +145,7 @@ describe("Cursor native exec sandbox policy", () => {
     expect(deniedShellText).not.toContain("with the same command");
     expect(deniedShellText).toContain("at most one corrected bridge attempt");
     expect(deniedShellText).toContain("if ($?)");
+    expect(deniedShellText).toContain("`&&`/`||` are unsupported parser errors");
     expect(deniedShellText).toContain("do not treat `;` as a substitute for `&&`");
     expect(deniedShellText).toContain("Windows PowerShell 5.1");
     expect(deniedShellText).not.toContain("disabled by OpenCodex policy");

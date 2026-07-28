@@ -420,7 +420,7 @@ export function buildCursorToolGuidanceSystemNote(
   // Host-shell-neutral: the Codex client executes bridge commands, and may differ from
   // the OpenCodex proxy OS (LAN/SSH remote-proxy). Always cover PowerShell 5.1 pitfalls.
   const hostShellNote = hasBareExec
-    ? "Match shell syntax to the Codex client host that runs the bridge (not only the proxy OS). Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs (`<<EOF`); prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` when a later step must run only after success — do not treat `;` as a substitute for `&&`. POSIX: use portable commands. After a shell failure, make at most one corrected bridge attempt, then report the error and stop — do not repeat equivalent failing commands."
+    ? "Match shell syntax to the Codex client host that runs the bridge (not only the proxy OS). Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs (`<<EOF`); `&&`/`||` are unsupported parser errors — prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` for success-gated follow-up steps; do not treat `;` as a substitute for `&&`. POSIX: use portable commands. After a shell failure, make at most one corrected bridge attempt, then report the error and stop — do not repeat equivalent failing commands."
     : undefined;
   const notes = [
     `Cursor tool calls: available tool names are exactly ${listedNames}.`,

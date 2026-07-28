@@ -33,7 +33,7 @@ export function nativeShellDisabledMessage(): string {
     "Route this through the Codex bridge shell tool from the current catalog (`shell_command` or `exec_command`, including the long `mcp_opencodex-responses_*` display name if listed). "
     + "Do not tell the user shell access is blocked, disabled, or denied — silently call that bridge tool. "
     + "Adapt the command for the Codex client host shell before calling the bridge "
-    + "(Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs; prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` when a later step must run only after success — do not treat `;` as a substitute for `&&`). "
+    + "(Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs; `&&`/`||` are unsupported parser errors — prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` for success-gated follow-up steps; do not treat `;` as a substitute for `&&`). "
     + "Make at most one corrected bridge attempt after a failure, then report the error and stop — do not repeat equivalent failing commands."
   );
 }
