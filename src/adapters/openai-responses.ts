@@ -599,6 +599,67 @@ function declaresUsableImageGenAlias(tool: unknown): boolean {
     && tool.name.length > IMAGE_GEN_WIRE_PREFIX.length;
 }
 
+/** Collect client tool-choice names and the exact upstream aliases declared for them. */
+function imageGenToolChoiceAliases(toolGroups: unknown[][]): Map<string, string> {
+  const aliases = new Map<string, string>();
+
+  for (const group of toolGroups) {
+    for (const tool of group) {
+      const flattened = flattenImageGenNamespace(tool);
+      if (flattened) {
+        for (const candidate of flattened) {
+          const wireName = candidate.name as string;
+          aliases.set(`${IMAGE_GEN_DOTTED_PREFIX}${imageGenLocalName(wireName)}`, wireName);
+          aliases.set(wireName, wireName);
+        }
+        continue;
+      }
+      if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
+        continue;
+      }
+      if (
+        tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)
+        && tool.name.length > IMAGE_GEN_DOTTED_PREFIX.length
+      ) {
+        aliases.set(tool.name, imageGenWireName(tool.name));
+      } else if (
+        tool.name.startsWith(IMAGE_GEN_WIRE_PREFIX)
+        && tool.name.length > IMAGE_GEN_WIRE_PREFIX.length
+      ) {
+        aliases.set(tool.name, tool.name);
+      }
+    }
+  }
+
+  return aliases;
+}
+
+/** Rewrite function selectors only when their corresponding declaration receives a wire alias. */
+function normalizeImageGenToolChoice(
+  toolChoice: unknown,
+  aliases: ReadonlyMap<string, string>,
+): unknown {
+  if (!isPlainObject(toolChoice)) return toolChoice;
+
+  if (toolChoice.type === "function" && typeof toolChoice.name === "string") {
+    const alias = aliases.get(toolChoice.name);
+    return alias && alias !== toolChoice.name ? { ...toolChoice, name: alias } : toolChoice;
+  }
+
+  if (toolChoice.type !== "allowed_tools" || !Array.isArray(toolChoice.tools)) return toolChoice;
+  let changed = false;
+  const tools = toolChoice.tools.map(tool => {
+    if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
+      return tool;
+    }
+    const alias = aliases.get(tool.name);
+    if (!alias || alias === tool.name) return tool;
+    changed = true;
+    return { ...tool, name: alias };
+  });
+  return changed ? { ...toolChoice, tools } : toolChoice;
+}
+
 /** Identify replayed image-gen calls that require upstream wire encoding. */
 function declaresImageGenFunctionCall(item: unknown): boolean {
   if (!isPlainObject(item) || item.type !== "function_call" || typeof item.name !== "string") {
@@ -654,6 +715,7 @@ function normalizeImageGenClientTools(body: unknown): unknown {
     || (Array.isArray(body.input) && body.input.some(declaresImageGenFunctionCall));
   if (!hasImageGenClientTool) return body;
   const hasUsableImageGenAlias = toolGroups.some(group => group.some(declaresUsableImageGenAlias));
+  const toolChoiceAliases = imageGenToolChoiceAliases(toolGroups);
 
   const seenFunctionNames = new Set<string>();
   const normalizeGroup = (tools: unknown[]): unknown[] => {
@@ -717,11 +779,15 @@ function normalizeImageGenClientTools(body: unknown): unknown {
     }
   }
 
+  const toolChoice = normalizeImageGenToolChoice(body.tool_choice, toolChoiceAliases);
+  changed ||= toolChoice !== body.tool_choice;
+
   if (!changed) return body;
   return {
     ...body,
     ...(Array.isArray(body.tools) ? { tools } : {}),
     ...(Array.isArray(body.input) ? { input } : {}),
+    ...(Object.prototype.hasOwnProperty.call(body, "tool_choice") ? { tool_choice: toolChoice } : {}),
   };
 }
 

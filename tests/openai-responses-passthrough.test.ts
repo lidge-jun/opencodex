@@ -693,6 +693,68 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     });
   });
 
+  test("keyed platform rewrites a forced image-gen tool choice with its declared alias", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [],
+        tools: [{
+          type: "namespace",
+          name: "image_gen",
+          tools: [{ type: "function", name: "imagegen", parameters: {} }],
+        }],
+        tool_choice: { type: "function", name: "image_gen.imagegen" },
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as {
+      tool_choice: { type: string; name: string };
+    };
+
+    expect(body.tool_choice).toEqual({ type: "function", name: "image_gen__imagegen" });
+  });
+
+  test("keyed platform rewrites image-gen entries in an allowed-tools choice", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [{
+          type: "additional_tools",
+          tools: [{ type: "function", name: "image_gen.imagegen", parameters: {} }],
+        }],
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [
+            { type: "function", name: "image_gen.imagegen" },
+            { type: "function", name: "exec_command" },
+          ],
+        },
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as {
+      tool_choice: { type: string; mode: string; tools: Array<{ type: string; name: string }> };
+    };
+
+    expect(body.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [
+        { type: "function", name: "image_gen__imagegen" },
+        { type: "function", name: "exec_command" },
+      ],
+    });
+  });
+
   test("keyed responses-lite flattens a nested namespace without requiring a hosted tool", () => {
     const adapter = createResponsesPassthroughAdapter(keyedProvider);
     const request = adapter.buildRequest({
@@ -874,9 +936,13 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
           },
           { type: "image_generation" },
         ],
+        tool_choice: { type: "function", name: "image_gen.imagegen" },
       },
     }, meta);
-    const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
+    const body = JSON.parse(request.body) as {
+      tools: Array<Record<string, unknown>>;
+      tool_choice: { type: string; name: string };
+    };
 
     expect(body.tools).toEqual([
       { type: "namespace", name: "image_gen", tools: [] },
@@ -887,6 +953,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       },
       { type: "image_generation" },
     ]);
+    expect(body.tool_choice).toEqual({ type: "function", name: "image_gen.imagegen" });
   });
 
   test("keyed platform preserves hosted image_generation for replay-only image-gen calls", () => {
@@ -987,10 +1054,12 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
           },
           { type: "image_generation" },
         ],
+        tool_choice: { type: "function", name: "image_gen.imagegen" },
       },
     }, meta);
     const body = JSON.parse(request.body) as {
       tools: Array<{ type: string; name?: string; tools?: Array<{ name?: string }> }>;
+      tool_choice: { type: string; name: string };
     };
 
     expect(body.tools).toHaveLength(2);
@@ -1000,6 +1069,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
       && t.name === "image_gen"
       && t.tools?.some(inner => inner.name === "imagegen")
     )).toBe(true);
+    expect(body.tool_choice).toEqual({ type: "function", name: "image_gen.imagegen" });
   });
 });
 
