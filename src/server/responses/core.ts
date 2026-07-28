@@ -133,6 +133,11 @@ import { relaySseEagerBounded } from "../relay-eager";
 import { decideEagerRelay } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
+import {
+  imageGenToolCallAliases,
+  relaySseWithImageGenCallRestore,
+  restoreImageGenCallsInJson,
+} from "../responses-image-gen-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
@@ -1337,6 +1342,9 @@ export async function handleResponses(
   }
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
+    const imageGenCallAliases = route.provider.authMode === "forward"
+      ? new Map<string, { namespace: string; name: string }>()
+      : imageGenToolCallAliases(buildToolBridgeMaps(parsed).toolNsMap);
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -1541,8 +1549,9 @@ export async function handleResponses(
     // known-bad runtime remains the tee path below.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
-      const winNoRepair = process.platform === "win32" && !hasResponsesItemIdRepair(repairConfig);
-      const eagerDecision = winNoRepair ? decideEagerRelay(config.streamMode ?? "auto") : null;
+      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      const winNoClientRewrite = process.platform === "win32" && !needsClientRewrite;
+      const eagerDecision = winNoClientRewrite ? decideEagerRelay(config.streamMode ?? "auto") : null;
       if (eagerDecision?.useEagerRelay) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
@@ -1593,8 +1602,9 @@ export async function handleResponses(
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
         });
+        const clientBody = relaySseWithImageGenCallRestore(eagerBody, imageGenCallAliases);
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
-        return markNativePassthroughSseResponse(new Response(eagerBody, {
+        return markNativePassthroughSseResponse(new Response(clientBody, {
           status: upstreamResponse.status,
           headers,
         }));
@@ -1652,10 +1662,11 @@ export async function handleResponses(
       // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
       // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
       // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
+      const restoredBody = relaySseWithImageGenCallRestore(nativeBody, imageGenCallAliases);
       const repairedBody = hasResponsesItemIdRepair(repairConfig)
-        ? relaySseWithResponsesItemIdRepair(nativeBody, repairConfig!)
-        : nativeBody;
-      const clientBody = process.platform === "win32" && !hasResponsesItemIdRepair(repairConfig)
+        ? relaySseWithResponsesItemIdRepair(restoredBody, repairConfig!)
+        : restoredBody;
+      const clientBody = process.platform === "win32" && !needsClientRewrite
         ? nativeBody
         : relaySseWithFailedTail(repairedBody, upstream);
       return markNativePassthroughSseResponse(new Response(clientBody, {
@@ -1671,7 +1682,7 @@ export async function handleResponses(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(text, {
+      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,

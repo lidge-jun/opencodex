@@ -33,6 +33,30 @@ describe("Azure OpenAI adapter hardening", () => {
     expect(request.headers.Authorization).toBeUndefined();
   });
 
+  test("lowers the private image_gen namespace on the inherited API-key path", async () => {
+    const request = await createAzureAdapter(provider()).buildRequest({
+      ...parsed,
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [{
+          type: "additional_tools",
+          tools: [{
+            type: "namespace",
+            name: "image_gen",
+            tools: [{ type: "function", name: "imagegen", parameters: {} }],
+          }],
+        }],
+      },
+    });
+    const body = JSON.parse(request.body) as {
+      input: Array<{ tools?: Array<{ type: string; name?: string }> }>;
+    };
+
+    expect(body.input[0]?.tools).toEqual([
+      { type: "function", name: "image_gen__imagegen", parameters: {} },
+    ]);
+  });
+
   test("rejects missing and blank API keys", async () => {
     for (const apiKey of [undefined, "", "   "]) {
       await expect(createAzureAdapter(provider({ apiKey })).buildRequest(parsed))

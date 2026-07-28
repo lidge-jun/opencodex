@@ -60,13 +60,21 @@ explicit keyed Images provider accepts the proxy admission secret as either an O
 or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
 ChatGPT forward path still requires the dedicated header so its upstream bearer remains distinct.
 
-The API-key `openai-responses` path also prevents the standalone client tool from colliding with the
-hosted Responses tool. When a request declares `image_gen.imagegen` (as a flat function or an
-`image_gen` namespace), the adapter drops hosted `image_generation` while preserving unrelated
-tools. Conflict discovery spans both top-level `body.tools` and Codex Desktop Responses Lite
-`input[].type = "additional_tools"` containers because the platform validates their merged tool
-namespace. ChatGPT forward mode preserves the pair because that backend accepts it and owns native
-image generation.
+The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
+Responses tool surface. A complete `image_gen` namespace is lowered to safe
+`image_gen__<inner-name>` function aliases even when no hosted image tool is present, because public
+Responses runtimes may reserve the namespace itself and reject dotted function names. Native and
+legacy dotted calls replayed in `body.input` are encoded to the same aliases. When any client
+image-gen tool is declared, the adapter also drops hosted `image_generation` and deduplicates aliases
+in stable container order. Discovery and normalization span both top-level `body.tools` and Codex
+Desktop Responses Lite `input[].type = "additional_tools"` containers.
+
+Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
+items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
+extension. Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
+replays to return upstream without leaking a client-only namespace shape. Malformed, empty, and
+unrelated namespaces remain untouched. ChatGPT forward mode preserves the private namespace and
+hosted tool because that backend understands their native semantics.
 
 Per-model `modelReasoningSummaryDelivery` is a narrow compatibility layer for
 `openai-responses` gateways whose summary capability is real but whose accepted delivery enum
