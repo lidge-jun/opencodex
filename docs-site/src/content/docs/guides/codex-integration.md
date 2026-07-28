@@ -65,11 +65,12 @@ Standalone `/images/generations` calls never enter that bridge.
 
 The tool declaration still travels with the model's Responses request. For API-key Responses
 providers, opencodex lowers Codex's private `image_gen` namespace to an upstream-safe
-`image_gen__imagegen` alias and removes a duplicate hosted `image_generation` declaration. It maps
-the returned function call back to the explicit `image_gen` namespace before Codex sees it, and
-encodes the native call again when later history is replayed upstream. This keeps client-side image
-generation callable on public-compatible upstreams that reserve the namespace or reject dotted
-function names. ChatGPT forward mode remains untouched and keeps its native Responses Lite shape.
+`image_gen__<inner-name>` alias (for example `image_gen__imagegen`). When that usable alias replaces
+the client declaration, opencodex removes a duplicate hosted `image_generation` declaration. It maps
+the function call to the explicit `image_gen` namespace before Codex sees it, and encodes the native
+call again when later history is replayed upstream. This keeps client-side image generation callable
+on public-compatible upstreams that reserve the namespace or reject dotted function names. ChatGPT
+forward mode remains untouched and keeps its native Responses Lite shape.
 
 For an OpenAI-compatible custom gateway, configure a dedicated provider and select it only for
 standalone Images requests:
