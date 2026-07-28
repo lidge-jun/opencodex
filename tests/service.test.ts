@@ -245,7 +245,7 @@ describe("Windows service task", () => {
     for (const mutated of [
       xml.replace("<LogonTrigger>", "<BootTrigger>"),
       xml.replace("InteractiveToken", "Password"),
-      xml.replace("LeastPrivilege", "HighestAvailable"),
+      xml.replace("LeastPrivilege", "InvalidLevel"),
       xml.replace("IgnoreNew", "Parallel"),
       xml.replace(wscript, "C:\\Windows\\System32\\cmd.exe"),
       xml.replace(launcher, "C:\\Temp\\foreign.vbs"),
@@ -274,6 +274,19 @@ describe("Windows service task", () => {
       enabled: true,
       registrationHealthy: true,
     });
+  });
+
+  test("accepts elevated-create rewrites (HighestAvailable, path casing, raw quotes)", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>C:\\WINDOWS\\System32\\wscript.exe</Command>`)
+      .replace("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel>HighestAvailable</RunLevel>")
+      .replace(
+        `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
+        `<Arguments>/b /nologo "${launcher}"</Arguments>`,
+      );
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher)).toBe(true);
   });
 
   test("rejects explicit unsafe values even though defaults may be omitted", () => {
