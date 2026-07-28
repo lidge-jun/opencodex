@@ -177,6 +177,64 @@ test("concurrent 401s share one token prompt and all retry with the stored token
   expect([...new Set(statuses)]).toEqual([200]);
 });
 
+test("stale concurrent 401 does not clear a token refreshed by another request", async () => {
+  // Codex/CodeRabbit race: request A prompts and stores T2; request B still holding stale T1
+  // must not wipe T2 (clearTokenIfCurrent) before its re-read / shared gate join.
+  let promptCalls = 0;
+  let acceptV1 = true;
+  const release401: Array<() => void> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    const key = headers.get("X-OpenCodex-API-Key");
+    if (key === "token-v2") return new Response("{}", { status: 200 });
+    if (acceptV1 && key === "token-v1") return new Response("{}", { status: 200 });
+    if (key === "token-v1") {
+      await new Promise<void>((resolve) => {
+        release401.push(resolve);
+      });
+      return new Response("unauthorized", { status: 401 });
+    }
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "token-v1";
+  };
+  await installMockAuthFetch(mockFetch);
+  expect((await fetch("/api/config")).status).toBe(200);
+  expect(promptCalls).toBe(1);
+
+  acceptV1 = false;
+  promptCalls = 0;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "token-v2";
+  };
+
+  const pending = [fetch("/api/config"), fetch("/api/providers")].map((p) => p.then((r) => r.status));
+  for (let i = 0; i < 20 && release401.length < 2; i += 1) {
+    await Promise.resolve();
+  }
+  expect(release401.length).toBe(2);
+
+  for (let i = 0; i < 2; i += 1) {
+    const done = pending[i]!;
+    let settled = false;
+    void done.then(() => {
+      settled = true;
+    });
+    release401.shift()!();
+    for (let spin = 0; spin < 50 && !settled; spin += 1) {
+      await Promise.resolve();
+    }
+    expect(settled).toBe(true);
+  }
+
+  const statuses = await Promise.all(pending);
+  expect(promptCalls).toBe(1);
+  expect([...new Set(statuses)]).toEqual([200]);
+});
+
 test("canceling the token prompt once does not reopen it for the rest of the 401 fan-out", async () => {
   let promptCalls = 0;
   const release401: Array<() => void> = [];
