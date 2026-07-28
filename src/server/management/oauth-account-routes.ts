@@ -242,7 +242,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     });
   }
   if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
-    const body = await req.json().catch(() => ({})) as {
+    const parsedBody = await req.json().catch(() => ({}));
+    if (!isPlainRecord(parsedBody)) {
+      return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const body = parsedBody as {
       provider?: unknown;
       enabled?: unknown;
       autoSwitchThreshold?: unknown;

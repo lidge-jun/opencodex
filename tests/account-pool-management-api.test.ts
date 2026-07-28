@@ -123,6 +123,19 @@ describe("Codex account pool strategy management API", () => {
     expect(config.accountPoolStrategy).toBe("quota");
     expect(config.accountPoolStickyLimit).toBe(1);
   });
+
+  test("PUT /api/codex-auth/pool-strategy rejects non-object JSON bodies with 400", async () => {
+    for (const raw of ["null", "[]", "\"round-robin\"", "1"]) {
+      const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: raw,
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
+      expect(resp!.status).toBe(400);
+      expect(await resp!.json()).toMatchObject({ error: "body must be an object" });
+    }
+  });
 });
 describe("Anthropic account pool strategy management API", () => {
   let testDir = "";
@@ -191,6 +204,23 @@ describe("Anthropic account pool strategy management API", () => {
         }),
       });
       expect(res.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT /api/oauth/accounts/pool rejects non-object JSON bodies with 400", async () => {
+    const server = startServer(0);
+    try {
+      for (const raw of ["null", "[]", "\"round-robin\""]) {
+        const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: raw,
+        });
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({ error: "body must be an object" });
+      }
     } finally {
       await server.stop(true);
     }

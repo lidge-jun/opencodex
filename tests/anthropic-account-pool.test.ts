@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearPoolRotationState, notePoolRotationFailure } from "../src/codex/pool-rotation";
+import { clearPoolRotationState, notePoolRotationFailure, POOL_KEY_ANTHROPIC } from "../src/codex/pool-rotation";
 import {
   anthropicSessionKeyFromParts,
   bindAnthropicSessionAffinity,
@@ -303,7 +303,7 @@ describe("anthropic account pool", () => {
     const sticky = resolveAnthropicAccountForSession("sticky-1", config).accountId!;
     expect(resolveAnthropicAccountForSession("sticky-2", config).accountId).toBe(sticky);
 
-    notePoolRotationFailure("anthropic", sticky);
+    notePoolRotationFailure(POOL_KEY_ANTHROPIC, sticky);
     const afterClear = resolveAnthropicAccountForSession("sticky-3", config).accountId;
     expect(afterClear).toBeTruthy();
     expect(afterClear).not.toBe(sticky);

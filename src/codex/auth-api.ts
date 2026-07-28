@@ -645,8 +645,12 @@ export async function handleCodexAuthAPI(
     url.pathname === "/api/codex-auth/pool-strategy"
     && (req.method === "PUT" || req.method === "PATCH")
   ) {
-    let body: { strategy?: unknown; stickyLimit?: unknown };
-    try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    let parsedBody: unknown;
+    try { parsedBody = await req.json(); } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
+      return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const body = parsedBody as { strategy?: unknown; stickyLimit?: unknown };
     if (body.strategy === undefined && body.stickyLimit === undefined) {
       return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
     }
