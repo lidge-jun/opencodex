@@ -46,6 +46,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     // wrapper on the default path (Bun#32111 segfault).
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
+    expect(sseBranch).toContain("new Response(eagerBody");
     expect(sseBranch).toContain("const repairedBody = hasResponsesItemIdRepair(repairConfig)");
     expect(sseBranch).toContain('process.platform === "win32"');
     expect(sseBranch).toContain("&& !needsClientRewrite");

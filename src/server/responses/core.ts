@@ -1602,9 +1602,10 @@ export async function handleResponses(
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
         });
-        const clientBody = relaySseWithImageGenCallRestore(eagerBody, imageGenCallAliases);
+        // The eager branch is reachable only through winNoClientRewrite, so it must stay a pure
+        // native relay without an image-gen or item-id JS pull wrapper on win32 (Bun#32111).
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
-        return markNativePassthroughSseResponse(new Response(clientBody, {
+        return markNativePassthroughSseResponse(new Response(eagerBody, {
           status: upstreamResponse.status,
           headers,
         }));

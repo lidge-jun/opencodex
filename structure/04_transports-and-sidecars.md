@@ -23,19 +23,21 @@ Native passthrough SSE has TWO shapes, selected per request in
 `src/server/responses/core.ts`:
 
 - **Default: tee + background inspection.** `upstreamResponse.body.tee()` sends
-  branch[0] to the client (pure native relay on win32 without item-id repair —
-  the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
+  branch[0] to the client (pure native relay on win32 without any client-facing
+  rewrite — the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
   drained eagerly by `consumeForInspection`/`consumeForResponseLogMetadata`
   for terminal-outcome recording, quota, the passthrough continuation cache,
   and request logs. This is the only shape on the bundled Bun 1.3.14.
-- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32-no-repair
-  only, armed by `decideEagerRelay(config.streamMode)` from
+- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32 with no
+  client-facing rewrite only (neither image-gen aliases nor item-id repair), armed by
+  `decideEagerRelay(config.streamMode)` from
   `src/lib/bun-stream-caps.ts` — default-on only for runtimes proven to carry
   the Bun#32111 fix (`MIN_FIXED_BUN_VERSION`, null until a bundle bump), or by
   explicit `streamMode: "eager-relay"` opt-in. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee, preserving
-  the full inspection side-effect set (shared `createSseInspector` factory in
-  `relay.ts`) including the #44 late-terminal semantics.
+  client queue + post-cancel bounded discard-drain replaces the tee and goes
+  directly to the response without a JS rewrite wrapper, preserving the full
+  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
+  including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts` and
 source-invariant-tested by `tests/passthrough-abort.test.ts`; keep both in

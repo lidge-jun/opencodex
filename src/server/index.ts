@@ -230,6 +230,7 @@ function attachLiveSidebandUpstream(ws: ServerWebSocket<WsData>): void {
 // #314 gated shape (win32-no-client-rewrite only; default OFF on the bundled known-bad runtime):
 // decideEagerRelay(config.streamMode ?? "auto")
 // relaySseEagerBounded(upstreamResponse.body, turnAc,
+// new Response(eagerBody,
 // Default shape (tee + background inspection):
 // upstreamResponse.body.tee()
 // const repairedBody = hasResponsesItemIdRepair(repairConfig)
