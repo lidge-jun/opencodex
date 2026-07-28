@@ -320,7 +320,10 @@ describe("Codex auth context", () => {
       isMain: false,
       chatgptAccountId: "pool_b_acc",
     });
-    const headers = new Headers({ authorization: "Bearer main_token" });
+    const headers = new Headers({
+      authorization: "Bearer main_token",
+      "x-codex-parent-thread-id": "independent-scope-thread",
+    });
     for (const accountId of ["pool-a", "pool-b"]) {
       saveCodexAccountCredential(accountId, {
         accessToken: `${accountId}-token`,
@@ -331,6 +334,11 @@ describe("Codex auth context", () => {
     }
     try {
       Date.now = () => now;
+      // Establish the shared-scope binding first. The Spark fallback below must
+      // create a second binding rather than replacing this one.
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+
       recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
         now,
         resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
@@ -342,6 +350,10 @@ describe("Codex auth context", () => {
       expect(cfg.activeCodexAccountId).toBe("pool-a");
       await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
         .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      // This second Spark request proves routing retained the peer choice for
+      // the Spark affinity instead of relying on an auth-layer substitution.
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
     } finally {
       Date.now = originalNow;
     }
@@ -574,7 +586,10 @@ describe("cooldown error surface", () => {
       "spark",
     );
 
-    expect(cooldownErrorMessage(err)).toContain("Spark quota is cooling down");
+    const message = cooldownErrorMessage(err);
+
+    expect(message).toContain("Spark quota is cooling down");
+    expect(message).not.toContain("Selected Codex account (account-…3c21) is cooling down");
   });
 
   test("the main login renders as the alias users actually type", () => {

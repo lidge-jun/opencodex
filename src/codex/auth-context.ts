@@ -16,7 +16,6 @@ import {
   tryAcquireCodexQuotaProbeLease,
   tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
-  pickLowestUsageCodexAccount,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
@@ -210,7 +209,7 @@ export async function resolveCodexAuthContext(
           ? { status: "selected" as const, accountId }
           : { status: "none" as const };
       })()
-    : resolveCodexAccountForThreadDetailed(threadId, config);
+    : resolveCodexAccountForThreadDetailed(threadId, config, Date.now(), quotaScope);
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
   let accountId = resolution.status === "selected" ? resolution.accountId : null;
   if (!accountId) throw new CodexPoolAuthenticationError();
@@ -226,17 +225,7 @@ export async function resolveCodexAuthContext(
   }
   // Snapshot (not just the deadline) so a refused request can report WHY it is cooled:
   // a literal Retry-After reads very differently to a user than a reset-derived guess.
-  let cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
-  // Keep session affinity and the active account intact for independent quota
-  // groups, but use an eligible peer for this model when one exists. This lets
-  // Spark fail over to another account without moving Terra/Luna off accountId.
-  if (cooldown?.quotaScope) {
-    const alternate = pickLowestUsageCodexAccount(config, accountId, Date.now(), quotaScope);
-    if (alternate) {
-      accountId = alternate;
-      cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
-    }
-  }
+  const cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
   const cooldownUntil = cooldown?.cooldownUntil;
   // A cooled-down account never sends traffic, so upstream recovery can never be
   // observed and the cooldown outlives the real limit. Admit one probe per

@@ -8,9 +8,17 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleResponses } from "../src/server/responses";
+import { handleResponses, handleResponsesCompact } from "../src/server/responses";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
-import { clearCodexUpstreamHealth } from "../src/codex/routing";
+import {
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
+  clearCodexUpstreamHealth,
+  recordCodexUpstreamOutcome,
+} from "../src/codex/routing";
+import {
+  releaseCodexAuthContextProbeLease,
+  resolveCodexAuthContext,
+} from "../src/codex/auth-context";
 import { supportsNativeResponsesCompactEndpoint } from "../src/providers/openai-tiers";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
@@ -56,11 +64,12 @@ function nativePoolConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-function compactionRequest(body: Record<string, unknown>): Request {
+function compactionRequest(body: Record<string, unknown>, signal?: AbortSignal): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
 }
 
@@ -165,7 +174,7 @@ describe("native Codex pool compaction", () => {
       return jsonResponse(completedPayload("Terra compact response"));
     }) as typeof fetch;
     try {
-      const spark = await handleResponses(
+      const spark = await handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
         config,
         { model: "", provider: "" },
@@ -173,20 +182,153 @@ describe("native Codex pool compaction", () => {
       expect(spark.status).toBe(429);
 
       sparkPhase = false;
-      const cooledSpark = await handleResponses(
+      const cooledSpark = await handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
         config,
         { model: "", provider: "" },
       );
       expect(cooledSpark.status).toBe(429);
 
-      const terra = await handleResponses(
+      const terra = await handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" })),
         config,
         { model: "", provider: "" },
       );
       expect(terra.status).toBe(200);
     } finally {
+      clearCodexUpstreamHealth();
+      rmSync(testDir, { recursive: true, force: true });
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  });
+
+  test("a cancelled Spark recovery probe releases its compact lease (#590)", async () => {
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-compact-probe-"));
+    const previousOpencodexHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const config = nativePoolConfig();
+    const abort = new AbortController();
+    let markReadStarted!: () => void;
+    let releaseBody!: () => void;
+    const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
+    const bodyReleased = new Promise<void>(resolve => { releaseBody = resolve; });
+    process.env.OPENCODEX_HOME = testDir;
+    process.env.CODEX_HOME = testDir;
+    Date.now = () => now;
+    clearCodexUpstreamHealth();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: now + 30 * 60_000,
+      chatgptAccountId: "pool_acc",
+    });
+    recordCodexUpstreamOutcome(config, "pool-a", 429, {
+      now,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.3-codex-spark",
+    });
+    Date.now = () => probeAt;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        markReadStarted();
+        await bodyReleased;
+        controller.enqueue(new TextEncoder().encode("{\"partial\":"));
+        controller.close();
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const pending = handleResponsesCompact(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" }), abort.signal),
+        config,
+        { model: "", provider: "" },
+      );
+      await readStarted;
+      abort.abort();
+      releaseBody();
+      const cancelled = await pending;
+      expect(cancelled.status).toBe(499);
+
+      Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      const nextProbe = await resolveCodexAuthContext(
+        new Headers({ authorization: "Bearer main-token" }),
+        config,
+        "pool",
+        { modelId: "gpt-5.3-codex-spark" },
+      );
+      expect(nextProbe).toMatchObject({ probeQuotaScope: "spark" });
+      releaseCodexAuthContextProbeLease(nextProbe);
+    } finally {
+      Date.now = originalNow;
+      clearCodexUpstreamHealth();
+      rmSync(testDir, { recursive: true, force: true });
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  });
+
+  test("a Spark recovery probe releases its compact lease when connect is cancelled (#590)", async () => {
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-compact-connect-probe-"));
+    const previousOpencodexHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const config = nativePoolConfig();
+    const abort = new AbortController();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+    process.env.OPENCODEX_HOME = testDir;
+    process.env.CODEX_HOME = testDir;
+    Date.now = () => now;
+    clearCodexUpstreamHealth();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: now + 30 * 60_000,
+      chatgptAccountId: "pool_acc",
+    });
+    recordCodexUpstreamOutcome(config, "pool-a", 429, {
+      now,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.3-codex-spark",
+    });
+    Date.now = () => probeAt;
+    globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error("expected compact request abort signal");
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      markFetchStarted();
+    })) as typeof fetch;
+    try {
+      const pending = handleResponsesCompact(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" }), abort.signal),
+        config,
+        { model: "", provider: "" },
+      );
+      await fetchStarted;
+      abort.abort();
+      const cancelled = await pending;
+      expect(cancelled.status).toBe(499);
+
+      Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      const nextProbe = await resolveCodexAuthContext(
+        new Headers({ authorization: "Bearer main-token" }),
+        config,
+        "pool",
+        { modelId: "gpt-5.3-codex-spark" },
+      );
+      expect(nextProbe).toMatchObject({ probeQuotaScope: "spark" });
+      releaseCodexAuthContextProbeLease(nextProbe);
+    } finally {
+      Date.now = originalNow;
       clearCodexUpstreamHealth();
       rmSync(testDir, { recursive: true, force: true });
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;

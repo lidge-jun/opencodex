@@ -289,7 +289,10 @@ export async function handleResponsesCompact(
         { abortSignal: req.signal, label: safeHostLabel(compactUrl) },
       );
     } catch (err) {
-      if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      if (req.signal.aborted) {
+        recordCompactPoolOutcome(499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
       recordCompactPoolOutcome(outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
@@ -304,6 +307,7 @@ export async function handleResponsesCompact(
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
+      recordCompactPoolOutcome(499);
       return buffered;
     }
     // Always record the real upstream status: a local buffering failure after a

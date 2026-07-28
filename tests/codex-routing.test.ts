@@ -332,6 +332,29 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("shared-quota-existing", config, now + 1)).toBe("b");
   });
 
+  test("independent native quota scopes keep separate thread affinities", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+
+    // A known shared-model request binds A for this thread.
+    expect(resolveCodexAccountForThread("scoped-thread", config, now, "shared")).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now: now + 1,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.3-codex-spark",
+    });
+
+    // Spark sees its scoped cooldown and binds B without moving the global
+    // active account or the same thread's shared-scope affinity.
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 2, "spark")).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 3, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "spark")).toBe("b");
+  });
+
   test("2xx responses clear transient failures without clearing an unexpired cooldown", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
