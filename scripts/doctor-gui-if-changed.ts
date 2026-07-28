@@ -10,7 +10,7 @@
  * DOCTOR_FILES (newline-separated) overrides git-derived changed files;
  * DOCTOR_CMD overrides the spawned command (offline-degradation testing).
  */
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
 /** True when any changed path is the gui directory or inside it (slash-guarded). */
@@ -27,7 +27,11 @@ export function looksLikeDoctorInfraFailure(output: string): boolean {
 }
 
 /** Large enough for verbose doctor scans; overflows must not soft-skip the gate. */
-const DOCTOR_MAX_BUFFER = 20 * 1024 * 1024;
+export const DOCTOR_MAX_BUFFER = 20 * 1024 * 1024;
+
+function isBufferOverflow(code: string | undefined): boolean {
+  return code === "ENOBUFS" || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+}
 
 if (import.meta.main) {
   const repoRoot = resolve(import.meta.dirname, "..");
@@ -35,8 +39,11 @@ if (import.meta.main) {
 
   const hasRef = (ref: string): boolean => {
     try {
-      execFileSync("git", ["rev-parse", "--verify", ref], { cwd: repoRoot, stdio: "ignore" });
-      return true;
+      const probe = spawnSync("git", ["rev-parse", "--verify", ref], {
+        cwd: repoRoot,
+        stdio: "ignore",
+      });
+      return probe.status === 0;
     } catch {
       return false;
     }
@@ -44,7 +51,12 @@ if (import.meta.main) {
 
   const diffNames = (range: string): string[] => {
     try {
-      return execFileSync("git", ["diff", "--name-only", range], { cwd: repoRoot, encoding: "utf8" })
+      const diff = spawnSync("git", ["diff", "--name-only", range], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      });
+      if (diff.status !== 0) return [];
+      return (diff.stdout ?? "")
         .split(/\r?\n/)
         .map(line => line.trim())
         .filter(Boolean);
@@ -83,53 +95,44 @@ if (import.meta.main) {
   const [cmd, ...args] = process.env.DOCTOR_CMD
     ? process.env.DOCTOR_CMD.split(" ")
     : ["bun", "run", "doctor"];
-  try {
-    // Pipe stdout/stderr so we can distinguish findings from offline/registry
-    // failures, then replay them so the developer still sees the doctor output.
-    const out = execFileSync(cmd!, args, {
-      cwd: guiDir,
-      encoding: "utf8",
-      stdio: ["inherit", "pipe", "pipe"],
-      maxBuffer: DOCTOR_MAX_BUFFER,
-      env: { ...process.env, npm_config_yes: "true" },
-    });
-    if (out) process.stdout.write(out);
-  } catch (err) {
-    const status = typeof err === "object" && err !== null && "status" in err
-      ? (err as { status?: unknown }).status
-      : undefined;
-    const code = typeof err === "object" && err !== null && "code" in err
-      ? String((err as { code?: unknown }).code ?? "")
-      : "";
-    const stdout = typeof err === "object" && err !== null && "stdout" in err
-      ? String((err as { stdout?: unknown }).stdout ?? "")
-      : "";
-    const stderr = typeof err === "object" && err !== null && "stderr" in err
-      ? String((err as { stderr?: unknown }).stderr ?? "")
-      : "";
-    const combined = `${stdout}\n${stderr}`;
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
 
-    // Buffer overflow means doctor ran and produced a large report — gate, do not soft-skip.
-    if (code === "ENOBUFS" || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      console.error("doctor:gui: react-doctor output exceeded buffer — failing push");
-      process.exit(1);
-    }
+  // spawnSync (not execFileSync): explicit maxBuffer + status/error channels so
+  // oversized doctor output cannot be mistaken for an offline soft-skip.
+  const result = spawnSync(cmd!, args, {
+    cwd: guiDir,
+    encoding: "utf8",
+    maxBuffer: DOCTOR_MAX_BUFFER,
+    env: { ...process.env, npm_config_yes: "true" },
+  });
 
-    // Spawn failed (missing binary) — do not brick the push on infra.
-    if (typeof status !== "number") {
-      console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
-      process.exit(0);
-    }
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
 
-    // Doctor started but npx/registry failed — same soft-skip contract.
-    if (looksLikeDoctorInfraFailure(combined)) {
-      console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
-      process.exit(0);
-    }
-
-    // Real findings (or other doctor/engine errors) gate the push.
-    process.exit(status === 0 ? 1 : status);
+  const overflowCode = result.error && "code" in result.error
+    ? String((result.error as NodeJS.ErrnoException).code ?? "")
+    : "";
+  if (isBufferOverflow(overflowCode)) {
+    console.error("doctor:gui: react-doctor output exceeded buffer — failing push");
+    process.exit(1);
   }
+
+  // Spawn failed (missing binary) — do not brick the push on infra.
+  if (result.error && typeof result.status !== "number") {
+    console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
+    process.exit(0);
+  }
+
+  if (result.status === 0) process.exit(0);
+
+  const combined = `${stdout}\n${stderr}`;
+  // Doctor started but npx/registry failed — same soft-skip contract.
+  if (looksLikeDoctorInfraFailure(combined)) {
+    console.warn("doctor:gui: react-doctor unavailable (offline?) — skipping scan");
+    process.exit(0);
+  }
+
+  // Real findings (or other doctor/engine errors) gate the push.
+  process.exit(result.status === null || result.status === 0 ? 1 : result.status);
 }
