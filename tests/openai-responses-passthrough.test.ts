@@ -885,6 +885,64 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
         name: "web",
         tools: [{ type: "function", name: "run", parameters: {} }],
       },
+      { type: "image_generation" },
+    ]);
+  });
+
+  test("keyed platform preserves hosted image_generation for replay-only image-gen calls", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        tools: [{ type: "image_generation" }],
+        input: [{
+          type: "function_call",
+          namespace: "image_gen",
+          name: "imagegen",
+          call_id: "call_replay",
+          arguments: "{}",
+        }],
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as {
+      tools: Array<{ type: string }>;
+      input: Array<{ name?: string; namespace?: string }>;
+    };
+
+    expect(body.tools).toEqual([{ type: "image_generation" }]);
+    expect(body.input[0]).toMatchObject({
+      type: "function_call",
+      name: "image_gen__imagegen",
+      call_id: "call_replay",
+    });
+    expect(body.input[0]).not.toHaveProperty("namespace");
+  });
+
+  test("keyed platform preserves hosted image_generation for a bare image_gen function", () => {
+    const adapter = createResponsesPassthroughAdapter(keyedProvider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-sol",
+        input: [],
+        tools: [
+          { type: "function", name: "image_gen", parameters: {} },
+          { type: "image_generation" },
+        ],
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
+
+    expect(body.tools).toEqual([
+      { type: "function", name: "image_gen", parameters: {} },
+      { type: "image_generation" },
     ]);
   });
 

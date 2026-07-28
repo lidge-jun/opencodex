@@ -65,9 +65,10 @@ Responses tool surface. A complete `image_gen` namespace is lowered to safe
 `image_gen__<inner-name>` function aliases even when no hosted image tool is present, because public
 Responses runtimes may reserve the namespace itself and reject dotted function names. Native and
 legacy dotted calls replayed in `body.input` are encoded to the same aliases. When any client
-image-gen tool is declared, the adapter also drops hosted `image_generation` and deduplicates aliases
-in stable container order. Discovery and normalization span both top-level `body.tools` and Codex
-Desktop Responses Lite `input[].type = "additional_tools"` containers.
+image-gen declaration is replaced by a usable `image_gen__<inner-name>` alias, the adapter also drops
+hosted `image_generation` and deduplicates aliases in stable container order. Empty or malformed
+namespaces do not remove the hosted fallback. Discovery and normalization span both top-level
+`body.tools` and Codex Desktop Responses Lite `input[].type = "additional_tools"` containers.
 
 Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
 items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local

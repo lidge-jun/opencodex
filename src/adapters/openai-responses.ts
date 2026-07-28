@@ -580,6 +580,18 @@ function imageGenFunctionName(tool: unknown): string | undefined {
   return isImageGenClientName(tool.name) ? tool.name : undefined;
 }
 
+function declaresUsableImageGenAlias(tool: unknown): boolean {
+  if (flattenImageGenNamespace(tool)) return true;
+  if (!isPlainObject(tool) || tool.type !== "function" || typeof tool.name !== "string") {
+    return false;
+  }
+  if (tool.name.startsWith(IMAGE_GEN_DOTTED_PREFIX)) {
+    return tool.name.length > IMAGE_GEN_DOTTED_PREFIX.length;
+  }
+  return tool.name.startsWith(IMAGE_GEN_WIRE_PREFIX)
+    && tool.name.length > IMAGE_GEN_WIRE_PREFIX.length;
+}
+
 function declaresImageGenFunctionCall(item: unknown): boolean {
   if (!isPlainObject(item) || item.type !== "function_call" || typeof item.name !== "string") {
     return false;
@@ -606,9 +618,10 @@ function normalizeImageGenFunctionCall(item: unknown): unknown {
  *
  * A complete `image_gen` namespace is flattened to safe `image_gen__<tool>` aliases even when it is
  * the only image tool in the request. Replayed client calls are encoded to the same alias, including
- * legacy dotted calls from older compatibility attempts. When any client image-gen tool is present,
- * the duplicate hosted `image_generation` entry is removed. Duplicate aliases are resolved in stable
- * container order: top-level tools first, then Responses Lite `additional_tools` entries.
+ * legacy dotted calls from older compatibility attempts. When a usable alias replaces a client
+ * image-gen declaration, the duplicate hosted `image_generation` entry is removed. Duplicate aliases
+ * are resolved in stable container order: top-level tools first, then Responses Lite
+ * `additional_tools` entries.
  *
  * This function is called only on the API-key path. ChatGPT forward mode understands the private
  * namespace and must keep it. Copy-on-write preserves the original request reference when no
@@ -631,6 +644,7 @@ function normalizeImageGenClientTools(body: unknown): unknown {
   const hasImageGenClientTool = toolGroups.some(group => group.some(declaresImageGenClientTool))
     || (Array.isArray(body.input) && body.input.some(declaresImageGenFunctionCall));
   if (!hasImageGenClientTool) return body;
+  const hasUsableImageGenAlias = toolGroups.some(group => group.some(declaresUsableImageGenAlias));
 
   const seenFunctionNames = new Set<string>();
   const normalizeGroup = (tools: unknown[]): unknown[] => {
@@ -638,7 +652,11 @@ function normalizeImageGenClientTools(body: unknown): unknown {
     let groupChanged = false;
 
     for (const tool of tools) {
-      if (isPlainObject(tool) && tool.type === HOSTED_IMAGE_GENERATION_TOOL) {
+      if (
+        hasUsableImageGenAlias
+        && isPlainObject(tool)
+        && tool.type === HOSTED_IMAGE_GENERATION_TOOL
+      ) {
         groupChanged = true;
         continue;
       }
