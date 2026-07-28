@@ -16,6 +16,7 @@
 @import "./styles-combos-workspace.css";
 @import "./styles-models-workspace.css";
 @import "./styles-dashboard-workspace.css";
+@import "./styles-storage-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -843,9 +844,38 @@ dialog.modal-overlay::backdrop {
 .codex-auto-switch-input-wrap { display: flex; align-items: center; gap: 6px; }
 .codex-auto-switch-input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
 .codex-auto-switch-input[readonly] { cursor: progress; opacity: 0.7; }
+/* Hide native number spinners — we use .ocx-stepper chevrons instead. */
+.codex-auto-switch-input::-webkit-outer-spin-button,
+.codex-auto-switch-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.codex-auto-switch-input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
 .codex-auto-switch-unit { color: var(--muted); font-size: var(--text-control); }
 .codex-auto-switch-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-auto-switch-feedback.is-error { color: var(--red); }
+
+.ocx-stepper {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.ocx-stepper__btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xs);
+  background: var(--raised);
+  color: var(--muted);
+  cursor: pointer;
+}
+.ocx-stepper__btn:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
+.ocx-stepper__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ocx-stepper__btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.ocx-stepper__btn svg { display: block; }
 .notice-warn { font-size: var(--text-label); line-height: var(--leading-body); padding: 8px 10px; border-radius: var(--radius-sm); background: var(--amber-soft); color: var(--amber); display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; }
 

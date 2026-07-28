@@ -1,32 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useI18n, type TFn, type TKey, type Locale } from "../i18n/shared";
+import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { EmptyState } from "../ui";
 import { IconRefresh } from "../icons";
 import { formatBytes } from "../format-bytes";
+import { NumberStepper } from "../components/NumberStepper";
+import StorageWorkspace, {
+  type StorageReport,
+} from "../components/storage-workspace/StorageWorkspace";
 
-interface StorageLargestEntry {
-  path: string;
-  bytes: number;
-}
-
-interface StorageBucket {
-  key: string;
-  label: string;
-  bytes: number;
-  fileCount: number;
-  oldest?: number;
-  newest?: number;
-  largest?: StorageLargestEntry[];
-  rows?: number | null;
-}
-
-interface StorageReport {
-  codexHome: string;
-  generatedAt: number;
-  total: { bytes: number; fileCount: number };
-  buckets: StorageBucket[];
-  error?: string;
-}
 
 interface CleanupPreview {
   percent: number;
@@ -96,17 +77,15 @@ interface CleanupPolicy {
   };
 }
 
-const BUCKET_TKEYS: Record<string, TKey> = {
-  sessions: "storage.bucket.sessions",
-  archived_sessions: "storage.bucket.archived_sessions",
-  logs_db: "storage.bucket.logs_db",
-  state_db: "storage.bucket.state_db",
-  attachments: "storage.bucket.attachments",
-  deletion_manifests: "storage.bucket.deletion_manifests",
-  other: "storage.bucket.other",
-};
-
 const PRESETS = [10, 25, 50] as const;
+
+function clampDraft(raw: string, delta: number, min: number, max: number, step = 1): string {
+  const parsed = Number(raw);
+  const base = Number.isFinite(parsed) ? parsed : min;
+  const next = Math.min(max, Math.max(min, base + delta));
+  // Keep one decimal for GiB-style steps; integers for percent.
+  return step < 1 ? String(Math.round(next * 10) / 10) : String(Math.round(next));
+}
 
 const localizedCatch = (e: unknown, fallback: string): string => {
   if (!(e instanceof Error)) return fallback;
@@ -122,78 +101,6 @@ const localizedCatch = (e: unknown, fallback: string): string => {
   }
   return msg || fallback;
 };
-
-function bucketLabel(bucket: StorageBucket, t: TFn): string {
-  const tkey = BUCKET_TKEYS[bucket.key];
-  return tkey ? t(tkey) : bucket.label;
-}
-
-function formatDate(ms: number | undefined, locale: Locale): string {
-  return ms === undefined ? "—" : new Date(ms).toLocaleDateString(locale);
-}
-
-function BucketsTable({ buckets, locale, t }: { buckets: StorageBucket[]; locale: Locale; t: TFn }) {
-  return (
-    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="storage-buckets-title">
-      <h3 id="storage-buckets-title" className="panel-title">{t("storage.section.buckets")}</h3>
-      <div className="tbl-wrap">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>{t("storage.col.bucket")}</th>
-              <th className="num">{t("storage.col.size")}</th>
-              <th className="num">{t("storage.col.files")}</th>
-              <th>{t("storage.col.oldest")}</th>
-              <th>{t("storage.col.newest")}</th>
-              <th className="num">{t("storage.col.rows")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {buckets.map(bucket => (
-              <tr key={bucket.key}>
-                <td>{bucketLabel(bucket, t)}</td>
-                <td className="num mono">{formatBytes(bucket.bytes, locale)}</td>
-                <td className="num">{bucket.fileCount}</td>
-                <td className="muted">{formatDate(bucket.oldest, locale)}</td>
-                <td className="muted">{formatDate(bucket.newest, locale)}</td>
-                <td className="num mono">
-                  {bucket.rows === undefined ? "—" : bucket.rows === null ? t("storage.rows.unknown") : bucket.rows.toLocaleString(locale)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function LargestFilesPanel({ buckets, locale, t }: { buckets: StorageBucket[]; locale: Locale; t: TFn }) {
-  const withLargest = buckets.filter(bucket => (bucket.largest?.length ?? 0) > 0);
-  if (withLargest.length === 0) return null;
-  return (
-    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="storage-largest-title">
-      <h3 id="storage-largest-title" className="panel-title">{t("storage.section.largest")}</h3>
-      {withLargest.map(bucket => (
-        <details key={bucket.key} style={{ marginTop: 8 }}>
-          <summary>{bucketLabel(bucket, t)}</summary>
-          <div className="tbl-wrap" style={{ marginTop: 8 }}>
-            <table className="tbl">
-              <tbody>
-                {bucket.largest!.map(entry => (
-                  <tr key={entry.path}>
-                    <td className="mono">{entry.path}</td>
-                    <td className="num mono">{formatBytes(entry.bytes, locale)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      ))}
-    </section>
-  );
-}
 
 function ArchivedCleanupPanel({
   apiBase,
@@ -339,7 +246,9 @@ function ArchivedCleanupPanel({
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 12 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 220px" }}>
-          <span className="muted">{t("storage.cleanup.percent", { percent: String(percent) })}</span>
+          <span className="muted mono" style={{ minWidth: "3.5rem", fontVariantNumeric: "tabular-nums" }}>
+            {t("storage.cleanup.percent", { percent: String(percent) })}
+          </span>
           <input
             type="range"
             min={1}
@@ -839,10 +748,13 @@ function AutoCleanupPolicyPanel({
         setError(t("storage.policy.invalid"));
         return;
       }
+      // Run now is a manual action: if auto-cleanup is still off, turn it on so the
+      // job is not immediately skipped as "disabled".
+      const saveBody = base.enabled ? base : { ...base, enabled: true };
       const saveRes = await fetch(`${apiBase}/api/storage/cleanup-policy`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(base),
+        body: JSON.stringify(saveBody),
         signal,
       });
       if (signal.aborted) return;
@@ -1000,38 +912,51 @@ function AutoCleanupPolicyPanel({
       <h3 id="storage-policy-title" className="panel-title">{t("storage.policy.title")}</h3>
       <p className="muted" style={{ marginTop: 4 }}>{t("storage.policy.help")}</p>
 
-      <label className="row" style={{ marginTop: 12, gap: 8, alignItems: "center" }}>
-        <input
-          type="checkbox"
-          checked={policy.enabled}
+      <label className="row" style={{ marginTop: 12, gap: 10, alignItems: "center" }}>
+        <button
+          type="button"
+          className={`toggle${policy.enabled ? " on" : ""}`}
           disabled={saving || running}
-          onChange={e => {
-            const enabled = e.target.checked;
-            void savePolicy({ enabled });
-          }}
-        />
+          aria-pressed={policy.enabled}
+          aria-label={t("storage.policy.enabled")}
+          onClick={() => void savePolicy({ enabled: !policy.enabled })}
+        >
+          <span className="toggle-knob" />
+        </button>
         <span>{t("storage.policy.enabled")}</span>
       </label>
       <p className="muted" style={{ marginTop: 4, fontSize: "var(--text-sm)" }}>{t("storage.policy.enabledHint")}</p>
 
-      <div style={{ display: "grid", gap: 12, marginTop: 16, maxWidth: 420 }}>
-        <label>
-          <span className="muted">{t("storage.policy.threshold")}</span>
-          <input
-            type="number"
-            min={0}
-            step={0.1}
-            value={thresholdGb}
-            disabled={saving || running}
-            onChange={e => setThresholdGb(e.target.value)}
-            onBlur={() => void savePolicy()}
-            style={{ display: "block", marginTop: 4, width: "100%" }}
-          />
+      <div className="storage-policy-fields">
+        <label className="field" htmlFor="storage-policy-threshold">
+          <span className="field-label">{t("storage.policy.threshold")}</span>
+          <span className="codex-auto-switch-input-wrap">
+            <input
+              id="storage-policy-threshold"
+              className="input mono codex-auto-switch-input"
+              type="number"
+              min={0}
+              step={0.1}
+              inputMode="decimal"
+              value={thresholdGb}
+              disabled={saving || running}
+              aria-label={t("storage.policy.threshold")}
+              onChange={e => setThresholdGb(e.target.value)}
+              onBlur={() => void savePolicy()}
+            />
+            <NumberStepper
+              disabled={saving || running}
+              incrementLabel={t("storage.policy.thresholdInc")}
+              decrementLabel={t("storage.policy.thresholdDec")}
+              onIncrement={() => setThresholdGb(clampDraft(thresholdGb, 0.1, 0, 10_000, 0.1))}
+              onDecrement={() => setThresholdGb(clampDraft(thresholdGb, -0.1, 0, 10_000, 0.1))}
+            />
+          </span>
         </label>
 
-        <fieldset style={{ border: "none", padding: 0, margin: 0 }}>
-          <legend className="muted">{t("storage.policy.target")}</legend>
-          <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 4 }}>
+        <fieldset className="field">
+          <legend className="field-label">{t("storage.policy.target")}</legend>
+          <label className="row" style={{ gap: 8, alignItems: "center" }}>
             <input
               type="radio"
               name="storage-policy-target"
@@ -1042,17 +967,30 @@ function AutoCleanupPolicyPanel({
             <span>{t("storage.policy.targetPercent")}</span>
           </label>
           {targetMode === "percent" && (
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={percent}
-              disabled={saving || running}
-              aria-label={t("storage.policy.targetPercent")}
-              onChange={e => setPercent(e.target.value)}
-              onBlur={() => void savePolicy()}
-              style={{ display: "block", marginTop: 4, width: "100%" }}
-            />
+            <span className="codex-auto-switch-input-wrap">
+              <input
+                id="storage-policy-percent"
+                className="input mono codex-auto-switch-input"
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                inputMode="numeric"
+                value={percent}
+                disabled={saving || running}
+                aria-label={t("storage.policy.targetPercent")}
+                onChange={e => setPercent(e.target.value)}
+                onBlur={() => void savePolicy()}
+              />
+              <span className="codex-auto-switch-unit" aria-hidden="true">%</span>
+              <NumberStepper
+                disabled={saving || running}
+                incrementLabel={t("storage.policy.percentInc")}
+                decrementLabel={t("storage.policy.percentDec")}
+                onIncrement={() => setPercent(clampDraft(percent, 1, 1, 100))}
+                onDecrement={() => setPercent(clampDraft(percent, -1, 1, 100))}
+              />
+            </span>
           )}
           <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
             <input
@@ -1065,30 +1003,42 @@ function AutoCleanupPolicyPanel({
             <span>{t("storage.policy.targetReduce")}</span>
           </label>
           {targetMode === "reduce" && (
-            <input
-              type="number"
-              min={0}
-              step={0.1}
-              value={reduceGb}
-              disabled={saving || running}
-              aria-label={t("storage.policy.targetReduce")}
-              onChange={e => setReduceGb(e.target.value)}
-              onBlur={() => void savePolicy()}
-              style={{ display: "block", marginTop: 4, width: "100%" }}
-            />
+            <span className="codex-auto-switch-input-wrap">
+              <input
+                id="storage-policy-reduce"
+                className="input mono codex-auto-switch-input"
+                type="number"
+                min={0}
+                step={0.1}
+                inputMode="decimal"
+                value={reduceGb}
+                disabled={saving || running}
+                aria-label={t("storage.policy.targetReduce")}
+                onChange={e => setReduceGb(e.target.value)}
+                onBlur={() => void savePolicy()}
+              />
+              <NumberStepper
+                disabled={saving || running}
+                incrementLabel={t("storage.policy.reduceInc")}
+                decrementLabel={t("storage.policy.reduceDec")}
+                onIncrement={() => setReduceGb(clampDraft(reduceGb, 0.1, 0, 10_000, 0.1))}
+                onDecrement={() => setReduceGb(clampDraft(reduceGb, -0.1, 0, 10_000, 0.1))}
+              />
+            </span>
           )}
         </fieldset>
 
-        <label>
-          <span className="muted">{t("storage.policy.schedule")}</span>
+        <label className="field" htmlFor="storage-policy-schedule">
+          <span className="field-label">{t("storage.policy.schedule")}</span>
           <select
+            id="storage-policy-schedule"
+            className="input"
             value={policy.schedule}
             disabled={saving || running}
             onChange={e => {
               const schedule = e.target.value as CleanupPolicy["schedule"];
               void savePolicy({ schedule });
             }}
-            style={{ display: "block", marginTop: 4, width: "100%" }}
           >
             <option value="manual">{t("storage.policy.schedule.manual")}</option>
             <option value="startup">{t("storage.policy.schedule.startup")}</option>
@@ -1097,16 +1047,17 @@ function AutoCleanupPolicyPanel({
           </select>
         </label>
 
-        <label>
-          <span className="muted">{t("storage.policy.mode")}</span>
+        <label className="field" htmlFor="storage-policy-mode">
+          <span className="field-label">{t("storage.policy.mode")}</span>
           <select
+            id="storage-policy-mode"
+            className="input"
             value={policy.mode}
             disabled={saving || running}
             onChange={e => {
               const mode = e.target.value as CleanupPolicy["mode"];
               void savePolicy({ mode });
             }}
-            style={{ display: "block", marginTop: 4, width: "100%" }}
           >
             <option value="quarantine">{t("storage.policy.mode.quarantine")}</option>
             <option value="permanent">{t("storage.policy.mode.permanent")}</option>
@@ -1136,16 +1087,21 @@ function AutoCleanupPolicyPanel({
         </div>
       </div>
 
-      <div className="row" style={{ marginTop: 16, gap: 8, flexWrap: "wrap" }}>
+      <div className="storage-policy-actions">
         <button type="button" className="btn btn-ghost btn-sm" disabled={saving || running} onClick={() => void savePolicy()}>
           {t("storage.policy.save")}
         </button>
-        <button type="button" className="btn btn-sm" disabled={saving || running || !policy.enabled} onClick={() => void runNow()}>
+        <button type="button" className="btn btn-sm" disabled={saving || running} onClick={() => void runNow()}>
           {running ? t("storage.policy.running") : t("storage.policy.runNow")}
         </button>
+        <span
+          className={`storage-policy-actions__status${error ? " is-error" : ""}`}
+          role={error ? "alert" : "status"}
+          aria-live="polite"
+        >
+          {error ?? status ?? ""}
+        </span>
       </div>
-      {status && <p className="muted" style={{ marginTop: 8 }} role="status">{status}</p>}
-      {error && <p className="err" style={{ marginTop: 8 }} role="alert">{error}</p>}
     </section>
   );
 }
@@ -1154,6 +1110,7 @@ export default function Storage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [data, setData] = useState<StorageReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [trashReloadToken, setTrashReloadToken] = useState(0);
   // Stamp trash awareness with apiBase so a base change invalidates without an effect.
   const [trashInfo, setTrashInfo] = useState({ apiBase, settled: false, hasEntries: false });
@@ -1168,9 +1125,11 @@ export default function Storage({ apiBase }: { apiBase: string }) {
       const json = await res.json() as StorageReport;
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       setData(json);
+      return json;
     } catch {
       if (signal?.aborted || generation !== loadGenerationRef.current) return;
       setData(null);
+      return null;
     } finally {
       if (generation === loadGenerationRef.current) setLoading(false);
     }
@@ -1188,10 +1147,14 @@ export default function Storage({ apiBase }: { apiBase: string }) {
     };
   }, [fetchStorage]);
 
-  const refreshAll = useCallback(() => {
-    void fetchStorage();
+  const refreshAll = useCallback(async () => {
+    setScanStatus(null);
+    const report = await fetchStorage();
     setTrashReloadToken(n => n + 1);
-  }, [fetchStorage]);
+    if (report && report.error === undefined) {
+      setScanStatus(t("storage.rescanned"));
+    }
+  }, [fetchStorage, t]);
 
   const onTrashEntriesChange = useCallback((entries: TrashEntry[]) => {
     setTrashInfo({ apiBase, settled: true, hasEntries: entries.length > 0 });
@@ -1211,9 +1174,14 @@ export default function Storage({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head">
         <h2 id="storage-page-title">{t("storage.title")}</h2>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={loading} onClick={() => refreshAll()}>
-          <IconRefresh /> {t("storage.refresh")}
-        </button>
+        <div className="storage-page-head-actions">
+          <span className="storage-page-head-feedback" role="status" aria-live="polite">
+            {scanStatus ?? ""}
+          </span>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={loading} onClick={() => void refreshAll()}>
+            <IconRefresh /> {t("storage.refresh")}
+          </button>
+        </div>
       </div>
       <p className="page-sub">{t("storage.subtitle")}</p>
 
@@ -1224,50 +1192,46 @@ export default function Storage({ apiBase }: { apiBase: string }) {
       ) : empty ? (
         <>
           <EmptyState title={t("storage.empty")} />
-          <AutoCleanupPolicyPanel
-            apiBase={apiBase}
-            locale={locale}
-            t={t}
-            onDone={() => refreshAll()}
-          />
+          <div className="storage-below-workspace">
+            <AutoCleanupPolicyPanel
+              apiBase={apiBase}
+              locale={locale}
+              t={t}
+              onDone={() => void refreshAll()}
+            />
+          </div>
         </>
       ) : (
         <>
           {data && data.total.fileCount > 0 && (
-            <>
-              <div className="usage-cards">
-                <div className="stat"><div className="muted">{t("storage.card.total")}</div><div className="stat-value">{formatBytes(data.total.bytes, locale)}</div></div>
-                <div className="stat"><div className="muted">{t("storage.card.files")}</div><div className="stat-value">{data.total.fileCount.toLocaleString(locale)}</div></div>
-                <div className="stat"><div className="muted">{t("storage.card.home")}</div><div className="stat-value mono" style={{ fontSize: "var(--text-body)", wordBreak: "break-all" }}>{data.codexHome}</div></div>
-              </div>
-              <BucketsTable buckets={data.buckets} locale={locale} t={t} />
-              <LargestFilesPanel buckets={data.buckets} locale={locale} t={t} />
-            </>
+            <StorageWorkspace report={data} locale={locale} />
           )}
-          <AutoCleanupPolicyPanel
-            apiBase={apiBase}
-            locale={locale}
-            t={t}
-            onDone={() => refreshAll()}
-          />
-          {archivedCount > 0 && (
-            <ArchivedCleanupPanel
+          <div className="storage-below-workspace">
+            <AutoCleanupPolicyPanel
               apiBase={apiBase}
               locale={locale}
               t={t}
-              onDone={() => refreshAll()}
+              onDone={() => void refreshAll()}
             />
-          )}
-          {showTrashWhileSettling && (
-            <QuarantineTrashPanel
-              apiBase={apiBase}
-              locale={locale}
-              t={t}
-              reloadToken={trashReloadToken}
-              onEntriesChange={onTrashEntriesChange}
-              onDone={() => refreshAll()}
-            />
-          )}
+            {archivedCount > 0 && (
+              <ArchivedCleanupPanel
+                apiBase={apiBase}
+                locale={locale}
+                t={t}
+                onDone={() => void refreshAll()}
+              />
+            )}
+            {showTrashWhileSettling && (
+              <QuarantineTrashPanel
+                apiBase={apiBase}
+                locale={locale}
+                t={t}
+                reloadToken={trashReloadToken}
+                onEntriesChange={onTrashEntriesChange}
+                onDone={() => void refreshAll()}
+              />
+            )}
+          </div>
         </>
       )}
     </>
