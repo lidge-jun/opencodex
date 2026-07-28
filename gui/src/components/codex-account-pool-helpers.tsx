@@ -1,7 +1,7 @@
 import type { TFn } from "../i18n/shared";
 import { IconTicket } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
-import { daysUntil, formatCreditDate } from "./codex-account-pool-utils";
+import { daysUntil, formatCreditDate, formatCreditDateTime } from "./codex-account-pool-utils";
 
 export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, t }: {
   index: number; grantedAt: string; expiresAt: string; isNext: boolean; t: TFn;
@@ -19,7 +19,7 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, t }: {
       </div>
       <div className="credit-item-dates">
         <span>{t("codexAuth.creditGranted", { date: formatCreditDate(grantedAt) })}</span>
-        <span className={urgent ? "credit-urgent" : ""}>{t("codexAuth.creditExpires", { date: formatCreditDate(expiresAt), days: String(days) })}</span>
+        <span className={urgent ? "credit-urgent" : ""}>{t("codexAuth.creditExpires", { date: formatCreditDateTime(expiresAt), days: String(days) })}</span>
       </div>
     </div>
   );

@@ -25,10 +25,24 @@ const CREDIT_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
 });
 
+const CREDIT_DATE_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 export function formatCreditDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "\u2014";
   return CREDIT_DATE_FORMAT.format(date);
+}
+
+export function formatCreditDateTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "\u2014";
+  return CREDIT_DATE_TIME_FORMAT.format(date);
 }
 
 /** Format a USD cost estimate for display. Returns "—" when unavailable. */
