@@ -167,7 +167,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // the request builder appends the per-model suffix (see effort-map.ts) and reasoning models
   // advertise effort so Codex exposes the tier picker. `supportsReasoningEffort` tracks whether the
   // model has *selectable effort tiers* (CURSOR_MODEL_EFFORT_TIERS), NOT merely whether it reasons:
-  // gemini/grok/kimi/gpt-5-mini are reasoning models in the SOT but are sent bare (no tier picker).
+  // gemini/grok/kimi-k2.7/gpt-5-mini are reasoning models in the SOT but are sent bare (no tier picker).
   ...CURSOR_ROUTER_MODEL_IDS.map(id => ({ id, contextWindow: CONTEXT_200K, supportsReasoningEffort: false })),
 
   { id: "claude-sonnet-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
@@ -224,6 +224,9 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // take PR #73's supportsReasoningEffort for glm-5.2 (its effort-map tiers landed with the PR).
   { id: "glm-5.2", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
   { id: "kimi-k2.7-code", contextWindow: CONTEXT_262K },
+  // kimi-k3: cursor.com/docs/models/kimi-k3; account-verified via GetUsableModels (2026-07-28) —
+  // ships only as effort-suffixed kimi-k3-{low,high,max}, so the tier picker is exposed.
+  { id: "kimi-k3", contextWindow: CONTEXT_262K, supportsReasoningEffort: true },
 
   { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
   { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },

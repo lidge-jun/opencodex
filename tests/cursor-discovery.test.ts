@@ -36,6 +36,7 @@ describe("Cursor discovery metadata", () => {
     expect(ids).toContain("gpt-5.5");
     expect(ids).toContain("glm-5.2");
     expect(ids).toContain("kimi-k2.7-code");
+    expect(ids).toContain("kimi-k3");
     expect(ids).toContain("claude-opus-4-7-fast");
     // 260709 refresh: stale ids dropped from the static seed (cursor.com docs); gpt-5.5-extra
     // stays — it survives the live GetUsableModels filter (004_live_snapshot.md).
