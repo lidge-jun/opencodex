@@ -4,11 +4,13 @@ import { join } from "node:path";
 import {
   clearPoolRotationState,
   notePoolRotationSuccess,
+  peekRoundRobinAccount,
   pickRoundRobinAccount,
 } from "../src/codex/pool-rotation";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  previewCodexAccountForRequest,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
@@ -93,6 +95,18 @@ describe("pickRoundRobinAccount", () => {
     expect(a).toBeTruthy();
     const next = pickRoundRobinAccount("codex", ["b"], 1);
     expect(next).toBe("b");
+  });
+
+  test("peek matches next pick without advancing ring weights", () => {
+    const ids = ["a", "b", "c"];
+    const peek1 = peekRoundRobinAccount("codex", ids, 1);
+    const peek2 = peekRoundRobinAccount("codex", ids, 1);
+    expect(peek2).toBe(peek1);
+    const picked = pickRoundRobinAccount("codex", ids, 1);
+    expect(picked).toBe(peek1);
+    const peekAfter = peekRoundRobinAccount("codex", ids, 1);
+    expect(peekAfter).not.toBe(picked);
+    expect(pickRoundRobinAccount("codex", ids, 1)).toBe(peekAfter);
   });
 });
 
@@ -236,5 +250,36 @@ describe("accountPoolStrategy new-session routing", () => {
     const pick = resolveCodexAccountForThread(null, config);
     expect(pick).not.toBe("a");
     expect(THREE_ACCOUNT_IDS).toContain(pick);
+  });
+
+  test("RR preview(null) matches next resolve(null) without advancing until resolve", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "round-robin" });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const preview1 = previewCodexAccountForRequest(null, config);
+    const preview2 = previewCodexAccountForRequest(null, config);
+    expect(preview2).toBe(preview1);
+
+    const resolve1 = resolveCodexAccountForThread(null, config);
+    expect(resolve1).toBe(preview1);
+
+    const previewAfter = previewCodexAccountForRequest(null, config);
+    const resolve2 = resolveCodexAccountForThread(null, config);
+    expect(resolve2).toBe(previewAfter);
+    expect(resolve2).not.toBe(resolve1);
+  });
+
+  test("invalid on-disk strategy defaults to quota like Anthropic", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "weighted" as OcxConfig["accountPoolStrategy"],
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const picks = Array.from({ length: 5 }, () => resolveCodexAccountForThread(null, config));
+    expect(picks.every(pick => pick === "a")).toBe(true);
   });
 });

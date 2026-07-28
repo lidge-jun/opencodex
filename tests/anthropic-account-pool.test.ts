@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearPoolRotationState } from "../src/codex/pool-rotation";
+import { clearPoolRotationState, notePoolRotationFailure } from "../src/codex/pool-rotation";
 import {
   anthropicSessionKeyFromParts,
   bindAnthropicSessionAffinity,
@@ -248,5 +248,59 @@ describe("anthropic account pool", () => {
     ];
     expect(picks).toEqual([aId, aId, aId]);
     expect(resolveAnthropicAccountForSession(null, config).reason).toBe("pool-disabled");
+  });
+
+  test("fill-first keeps active under threshold", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true, 80, { strategy: "fill-first" });
+
+    const picks = Array.from({ length: 8 }, () => resolveAnthropicAccountForSession(null, config).accountId);
+    expect(picks.every(id => id === aId)).toBe(true);
+    expect(resolveAnthropicAccountForSession(null, config).reason).toBe("fill-first");
+  });
+
+  test("stickyLimit holds across successive unbound resolves", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true, 80, { strategy: "round-robin", stickyLimit: 3 });
+
+    const first = resolveAnthropicAccountForSession(null, config).accountId;
+    expect(first).toBeTruthy();
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(first);
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(first);
+    const fourth = resolveAnthropicAccountForSession(null, config).accountId;
+    expect(fourth).not.toBe(first);
+  });
+
+  test("429 / notePoolRotationFailure advances past sticky while account stays eligible", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10 });
+    const config = cfg(true, 80, { strategy: "round-robin", stickyLimit: 10 });
+
+    const sticky = resolveAnthropicAccountForSession(null, config).accountId!;
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(sticky);
+
+    notePoolRotationFailure("anthropic", sticky);
+    const afterClear = resolveAnthropicAccountForSession(null, config).accountId;
+    expect(afterClear).toBeTruthy();
+    expect(afterClear).not.toBe(sticky);
+
+    // Re-establish sticky, then 429-cool the sticky account — failover + ring must leave it.
+    clearPoolRotationState();
+    const again = resolveAnthropicAccountForSession(null, config).accountId!;
+    expect(resolveAnthropicAccountForSession(null, config).accountId).toBe(again);
+    const failover = rotateAnthropicAccountOn429(config, again, "30");
+    expect(failover).toBeTruthy();
+    expect(failover).not.toBe(again);
+    const unboundAfter429 = resolveAnthropicAccountForSession(null, config).accountId;
+    expect(unboundAfter429).not.toBe(again);
+    expect([bId, cId, aId].filter(id => id !== again)).toContain(unboundAfter429);
   });
 });

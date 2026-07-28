@@ -50,6 +50,14 @@ function getOrCreateState(poolKey: string): SelectionState {
   return state;
 }
 
+function cloneSelectionState(state: SelectionState): SelectionState {
+  return {
+    activeKey: state.activeKey,
+    successes: state.successes,
+    currentWeights: new Map(state.currentWeights),
+  };
+}
+
 function smoothWeightedIndex(ids: string[], state: SelectionState): number {
   let best = -1;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -72,15 +80,19 @@ function smoothWeightedIndex(ids: string[], state: SelectionState): number {
   return best;
 }
 
-export function pickRoundRobinAccount(
-  poolKey: string,
+/**
+ * Shared pick core. Mutates `state` the same way live resolve does; callers pass
+ * either the live map entry or a scratch/clone for dry-run peek.
+ */
+function pickRoundRobinFromState(
   eligibleIds: string[],
   stickyLimit: number,
+  state: SelectionState,
+  commitSticky: boolean,
 ): string | null {
   if (eligibleIds.length === 0) return null;
 
   const limit = normalizeAccountPoolStickyLimit(stickyLimit);
-  const state = getOrCreateState(poolKey);
 
   if (state.activeKey && eligibleIds.includes(state.activeKey)) {
     return state.activeKey;
@@ -95,13 +107,35 @@ export function pickRoundRobinAccount(
   if (index < 0) return null;
 
   const picked = eligibleIds[index]!;
-  if (limit <= 1) {
-    return picked;
+  if (commitSticky && limit > 1) {
+    state.activeKey = picked;
+    state.successes = 0;
   }
-
-  state.activeKey = picked;
-  state.successes = 0;
   return picked;
+}
+
+export function pickRoundRobinAccount(
+  poolKey: string,
+  eligibleIds: string[],
+  stickyLimit: number,
+): string | null {
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true);
+}
+
+/**
+ * Dry-run of {@link pickRoundRobinAccount}: returns the same account resolve would
+ * pick without advancing ring weights, activeKey, or successes.
+ */
+export function peekRoundRobinAccount(
+  poolKey: string,
+  eligibleIds: string[],
+  stickyLimit: number,
+): string | null {
+  const live = selectionState.get(poolKey);
+  const scratch = live
+    ? cloneSelectionState(live)
+    : { successes: 0, currentWeights: new Map<string, number>() };
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false);
 }
 
 export function notePoolRotationSuccess(

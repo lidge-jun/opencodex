@@ -7,8 +7,10 @@ import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-
 import {
   POOL_KEY_CODEX,
   normalizeAccountPoolStickyLimit,
+  normalizeAccountPoolStrategy,
   notePoolRotationFailure,
   notePoolRotationSuccess,
+  peekRoundRobinAccount,
   pickRoundRobinAccount,
 } from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
@@ -524,8 +526,9 @@ function pickFillFirstCodexAccount(config: OcxConfig, now: number): string | nul
  * to the legacy quota path (or when the strategy is quota).
  *
  * When `commit` is true (resolve path), promotes active, binds thread affinity, and
- * notes RR success. Preview keeps commit=false so it does not mutate config/affinity
- * or advance sticky success counters; RR preview still consults the ring via pick.
+ * notes RR success. When `commit` is false (preview), returns the same RR/fill-first
+ * account resolve would pick via a dry-run peek — without mutating ring weights,
+ * activeKey, sticky counters, config, or affinity.
  */
 function pickUnboundStrategyAccount(
   config: OcxConfig,
@@ -533,19 +536,16 @@ function pickUnboundStrategyAccount(
   now: number,
   commit: boolean,
 ): string | null {
-  const strategy = config.accountPoolStrategy ?? "quota";
+  const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
   if (strategy === "quota") return null;
 
   let picked: string | null = null;
   if (strategy === "round-robin") {
     const eligible = listEligibleCodexAccountIds(config, now);
-    // Preview must not advance the ring — resolve commits the pick for the request.
-    if (!commit) {
-      const active = config.activeCodexAccountId;
-      if (active && eligible.includes(active)) return active;
-      return eligible[0] ?? null;
-    }
     const limit = stickyLimitForConfig(config);
+    if (!commit) {
+      return peekRoundRobinAccount(POOL_KEY_CODEX, eligible, limit);
+    }
     picked = pickRoundRobinAccount(POOL_KEY_CODEX, eligible, limit);
     if (!picked) return null;
     setActiveCodexAccount(config, picked);
