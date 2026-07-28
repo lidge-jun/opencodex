@@ -155,25 +155,25 @@ describe("native Codex pool compaction", () => {
     const config = nativePoolConfig();
     const resetAt = Math.floor((Date.now() + 4 * 24 * 60 * 60_000) / 1_000);
     let sparkPhase = true;
-    process.env.OPENCODEX_HOME = testDir;
-    process.env.CODEX_HOME = testDir;
-    clearCodexUpstreamHealth();
-    saveCodexAccountCredential("pool-a", {
-      accessToken: "pool-access-token",
-      refreshToken: "pool-refresh-token",
-      expiresAt: Date.now() + 300_000,
-      chatgptAccountId: "pool_acc",
-    });
-    globalThis.fetch = (async () => {
-      if (sparkPhase) {
-        return Response.json({ error: { message: "Spark quota exhausted" } }, {
-          status: 429,
-          headers: { "x-codex-primary-reset-at": String(resetAt) },
-        });
-      }
-      return jsonResponse(completedPayload("Terra compact response"));
-    }) as typeof fetch;
     try {
+      process.env.OPENCODEX_HOME = testDir;
+      process.env.CODEX_HOME = testDir;
+      clearCodexUpstreamHealth();
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-access-token",
+        refreshToken: "pool-refresh-token",
+        expiresAt: Date.now() + 300_000,
+        chatgptAccountId: "pool_acc",
+      });
+      globalThis.fetch = (async () => {
+        if (sparkPhase) {
+          return Response.json({ error: { message: "Spark quota exhausted" } }, {
+            status: 429,
+            headers: { "x-codex-primary-reset-at": String(resetAt) },
+          });
+        }
+        return jsonResponse(completedPayload("Terra compact response"));
+      }) as typeof fetch;
       const spark = await handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
         config,
@@ -196,6 +196,7 @@ describe("native Codex pool compaction", () => {
       );
       expect(terra.status).toBe(200);
     } finally {
+      globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
       rmSync(testDir, { recursive: true, force: true });
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
