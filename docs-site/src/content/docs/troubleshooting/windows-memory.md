@@ -52,11 +52,11 @@ runtime the leak itself remains an upstream problem:
   account identifiers — and the read is side-effect free (it never prunes or
   evicts). The dashboard's **Memory observability** card renders the
   same fields and offers a confirm-gated **Drain & restart** action: it shows
-  the current in-flight request count, waits up to 60s for active turns (reusing
-  the existing 503 + `Retry-After` drain), then restarts the proxy via
-  `ocx start` on the live port (or a failure-only service supervisor respawn)
-  without tearing down Codex injection. That is a longer, informed recycle than
-  the short drain on `POST /api/stop`.
+  the current active-turn count, waits up to 60s for active turns (reusing
+  the existing 503 + `Retry-After` drain), then aborts any remaining turns and
+  restarts the proxy via `ocx start` on the live port (or a failure-only
+  service supervisor respawn) without tearing down Codex injection. That is a
+  longer, informed recycle than the short drain on `POST /api/stop`.
 - **A gated alternative stream path** — a bounded single-reader relay that
   removes the unbounded buffering shape entirely. It becomes the default
   automatically once a bundled Bun release verifiably carries the #32111 fix;

@@ -3,6 +3,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
+import { setDraining } from "../src/server/lifecycle";
 import {
   MEMORY_DRAIN_RESTART_MS,
   acceptSystemRestart,
@@ -27,6 +28,7 @@ function config(): OcxConfig {
 
 afterEach(() => {
   setSystemRestartIoForTests();
+  setDraining(false);
 });
 
 describe("acceptSystemRestart", () => {
@@ -40,6 +42,7 @@ describe("acceptSystemRestart", () => {
       isSupervisedServiceChild: () => false,
       listenPort: () => 10123,
       schedule: (fn) => { scheduled = fn; },
+      setDraining: (value) => { calls.push(`draining:${value}`); },
       drainAndShutdown: async (_server, timeoutMs) => {
         calls.push(`drain:${timeoutMs}`);
       },
@@ -54,10 +57,12 @@ describe("acceptSystemRestart", () => {
       activeTurnCount: 3,
       drainTimeoutMs: MEMORY_DRAIN_RESTART_MS,
     });
+    // Data-plane reject must arm before the 200ms flush delay runs.
+    expect(calls).toEqual(["draining:true"]);
     expect(MEMORY_DRAIN_RESTART_MS).toBe(60_000);
     expect(scheduled).not.toBeNull();
     await scheduled!();
-    expect(calls).toEqual(["drain:60000", "start:10123", "recycle", "exit:0"]);
+    expect(calls).toEqual(["draining:true", "drain:60000", "start:10123", "recycle", "exit:0"]);
   });
 
   test("supervised service child exits 1 so failure-only supervisors respawn", async () => {
@@ -112,6 +117,7 @@ describe("POST /api/system/restart", () => {
       isDraining: () => false,
       getActiveTurnCount: () => 1,
       schedule: () => {},
+      setDraining: () => {},
     });
     const req = new Request("http://127.0.0.1:10100/api/system/restart", { method: "POST" });
     const res = await handleManagementAPI(req, new URL(req.url), config());

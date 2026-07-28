@@ -231,10 +231,15 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   useEffect(() => {
     if (restartPhase !== "reconnecting") return;
     let cancelled = false;
+    let inFlight = false;
     const started = Date.now();
     const tick = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5_000);
       try {
-        const res = await fetch(`${apiBase}/healthz`, { cache: "no-store" });
+        const res = await fetch(`${apiBase}/healthz`, { cache: "no-store", signal: controller.signal });
         if (res.ok && !cancelled) {
           let replaced = restartFromPid == null;
           if (restartFromPid != null) {
@@ -253,7 +258,10 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           }
         }
       } catch {
-        /* still down */
+        /* still down / aborted */
+      } finally {
+        clearTimeout(timeoutId);
+        inFlight = false;
       }
       if (!cancelled && Date.now() - started >= RECONNECT_GIVE_UP_MS) {
         setRestartPhase("error");
@@ -365,7 +373,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       </details>
 
       {supportsRestart && (
-        <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
+        <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }} aria-live="polite">
           <Stat
             label={t("dash.mem.inFlight")}
             value={typeof activeTurns === "number" ? plainNumberFormat(locale).format(activeTurns) : "—"}

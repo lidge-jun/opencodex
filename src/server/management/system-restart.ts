@@ -19,6 +19,7 @@ import {
   getServerListenPort,
   isDraining,
   markRecyclingForExit,
+  setDraining,
 } from "../lifecycle";
 import { isServiceInstalled } from "../../service";
 import { readRuntimePort } from "../../config";
@@ -35,6 +36,7 @@ export interface SystemRestartIo {
   exitProcess?: (code: number) => void;
   schedule?: (fn: () => void | Promise<void>, ms: number) => void;
   isDraining?: () => boolean;
+  setDraining?: (value: boolean) => void;
   getActiveTurnCount?: () => number;
   listenPort?: () => number | undefined;
 }
@@ -92,6 +94,8 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
 
   if (!alreadyDraining) {
     restartAccepted = true;
+    // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
+    (io.setDraining ?? setDraining)(true);
     schedule(async () => {
       const drain = io.drainAndShutdown ?? drainAndShutdown;
       await drain(undefined, MEMORY_DRAIN_RESTART_MS);
