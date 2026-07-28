@@ -49,6 +49,21 @@ function makeThreeAccountConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   });
 }
 
+const THREE_ACCOUNT_IDS = ["a", "b", "c"] as const;
+
+function countPicks(picks: Array<string | null>, ids: readonly string[]): Record<string, number> {
+  const counts = Object.fromEntries(ids.map(id => [id, 0]));
+  for (const pick of picks) {
+    if (pick && pick in counts) counts[pick]! += 1;
+  }
+  return counts;
+}
+
+function shareSpreadPercent(counts: Record<string, number>, total: number): number {
+  const shares = Object.values(counts).map(n => (n / total) * 100);
+  return Math.max(...shares) - Math.min(...shares);
+}
+
 describe("pickRoundRobinAccount", () => {
   beforeEach(() => clearPoolRotationState());
 
@@ -141,5 +156,85 @@ describe("accountPoolStrategy new-session routing", () => {
 
     expect(resolveCodexAccountForThread(null, config)).toBe("a");
     expect(resolveCodexAccountForThread("new-thread", config)).toBe("a");
+  });
+
+  test(
+    "round-robin histogram: 99 unbound picks at stickyLimit 1 split 33/33/33",
+    () => {
+      const config = makeThreeAccountConfig({
+        accountPoolStrategy: "round-robin",
+        accountPoolStickyLimit: 1,
+      });
+      updateAccountQuota("a", 10);
+      updateAccountQuota("b", 10);
+      updateAccountQuota("c", 10);
+
+      const picks = Array.from({ length: 99 }, () => resolveCodexAccountForThread(null, config));
+      const counts = countPicks(picks, THREE_ACCOUNT_IDS);
+      expect(counts).toEqual({ a: 33, b: 33, c: 33 });
+      expect(shareSpreadPercent(counts, 99)).toBe(0);
+    },
+    20_000,
+  );
+
+  test("quota baseline histogram: 100 unbound picks stay on active account", () => {
+    const config = makeThreeAccountConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const picks = Array.from({ length: 100 }, () => resolveCodexAccountForThread(null, config));
+    const counts = countPicks(picks, THREE_ACCOUNT_IDS);
+    expect(counts).toEqual({ a: 100, b: 0, c: 0 });
+    expect(shareSpreadPercent(counts, 100)).toBe(100);
+  });
+
+  test("round-robin affinity zero-flip on bound thread reuse", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "round-robin" });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const pinned = resolveCodexAccountForThread("thread-zero-flip", config);
+    expect(pinned).toBeTruthy();
+    config.activeCodexAccountId = pinned === "a" ? "b" : "a";
+
+    let flips = 0;
+    let previous = pinned;
+    for (let i = 0; i < 50; i++) {
+      const next = resolveCodexAccountForThread("thread-zero-flip", config);
+      if (next !== previous) flips += 1;
+      previous = next;
+    }
+    expect(flips).toBe(0);
+    expect(previous).toBe(pinned);
+  });
+
+  test("fill-first keeps active account for unbound sessions under threshold", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const picks = Array.from({ length: 10 }, () => resolveCodexAccountForThread(null, config));
+    expect(picks.every(pick => pick === "a")).toBe(true);
+  });
+
+  test("fill-first advances when active crosses threshold", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 90);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    const pick = resolveCodexAccountForThread(null, config);
+    expect(pick).not.toBe("a");
+    expect(THREE_ACCOUNT_IDS).toContain(pick);
   });
 });
