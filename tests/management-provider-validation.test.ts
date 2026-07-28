@@ -300,6 +300,42 @@ describe("provider management validation", () => {
       }
       expect(loadConfig().providers["custom-summary-capability"].modelSupportsReasoningSummaries).toEqual({ strict: false });
 
+      const acceptedSummaryDelivery = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-summary-delivery",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "https://api.example.test/v1",
+            modelSupportsReasoningSummaries: { summary: true },
+            modelReasoningSummaryDelivery: { summary: "sequential" },
+          },
+        }),
+      });
+      expect(acceptedSummaryDelivery.status).toBe(200);
+      for (const provider of [
+        {
+          adapter: "openai-responses",
+          baseUrl: "https://api.example.test/v1",
+          modelReasoningSummaryDelivery: { summary: "serial" },
+        },
+        {
+          adapter: "openai-responses",
+          baseUrl: "https://api.example.test/v1",
+          modelSupportsReasoningSummaries: { SUMMARY: false },
+          modelReasoningSummaryDelivery: { summary: "sequential" },
+        },
+      ]) {
+        const rejected = await fetch(new URL("/api/providers", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "custom-summary-delivery", provider }),
+        });
+        expect(rejected.status).toBe(400);
+      }
+      expect(loadConfig().providers["custom-summary-delivery"].modelReasoningSummaryDelivery).toEqual({ summary: "sequential" });
+
       const acceptedModelAdapters = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },

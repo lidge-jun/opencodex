@@ -83,6 +83,62 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.reasoning).toEqual({ effort: "high" });
   });
 
+  test("model reasoning-summary delivery rewrites only the configured stale-client enum (#538)", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      modelReasoningSummaryDelivery: { "summary-model": "sequential" },
+    });
+    const request = adapter.buildRequest({
+      modelId: "summary-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "summary-model",
+        input: [],
+        stream_options: {
+          include_usage: true,
+          reasoning_summary_delivery: "sequential_cutoff",
+        },
+        reasoning: { effort: "high", summary: "auto" },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, Record<string, unknown>>;
+
+    expect(body.stream_options).toEqual({
+      include_usage: true,
+      reasoning_summary_delivery: "sequential",
+    });
+    expect(body.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
+  test("model reasoning-summary delivery does not inject a missing caller field (#538)", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://compat.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      modelReasoningSummaryDelivery: { "summary-model": "concurrent" },
+    });
+    const request = adapter.buildRequest({
+      modelId: "summary-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "summary-model",
+        input: [],
+        stream_options: { include_usage: true },
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as Record<string, Record<string, unknown>>;
+
+    expect(body.stream_options).toEqual({ include_usage: true });
+  });
+
   test("reasoning-summary fields remain untouched without an explicit opt-out", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses",

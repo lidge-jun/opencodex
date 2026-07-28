@@ -329,6 +329,8 @@ describe("service memory section (#314 WP4)", () => {
     platform: "win32",
     rss: 5 * 1024 ** 3,
     heapUsed: 200 * 1024 ** 2,
+    external: 300 * 1024 ** 2,
+    arrayBuffers: 200 * 1024 ** 2,
     jscHeap: { heapSize: 180 * 1024 ** 2 },
     streamMode: "auto",
     eagerRelay: { useEagerRelay: false, reason: "auto-known-bad" },
@@ -366,21 +368,37 @@ describe("service memory section (#314 WP4)", () => {
     expect(lines.some(l => l.includes("native-side growth"))).toBe(true);
   });
 
-  test("interpretation: high RSS dominated by JS heap → bug-report line", () => {
+  test("interpretation: high RSS with large JS counters asks for corroboration", () => {
     const lines = formatServiceMemoryLines({
       status: "ok",
       data: { ...baseData, heapUsed: 4 * 1024 ** 3, jscHeap: { heapSize: 4 * 1024 ** 3 } },
     });
-    expect(lines.some(l => l.includes("likely an opencodex bug"))).toBe(true);
+    expect(lines.some(l => l.includes("possible JS-side retention"))).toBe(true);
+    expect(lines.some(l => l.includes("likely an opencodex bug"))).toBe(false);
   });
 
-  test("interpretation: rss below threshold → normal line", () => {
+  test("interpretation: all observed counters below threshold → normal line", () => {
     const lines = formatServiceMemoryLines({
       status: "ok",
       data: { ...baseData, rss: 300 * 1024 ** 2 },
     });
     expect(lines.some(l => l.includes("looks normal"))).toBe(true);
     expect(lines.some(l => l.includes("native-side growth"))).toBe(false);
+  });
+
+  test("interpretation: high external memory is not hidden by low RSS (#509)", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: {
+        ...baseData,
+        rss: 300 * 1024 ** 2,
+        external: 5 * 1024 ** 3,
+        arrayBuffers: 2 * 1024 ** 3,
+      },
+    });
+    expect(lines.some(l => l.includes("observed=5120MB (external)"))).toBe(true);
+    expect(lines.some(l => l.includes("high observed memory via external"))).toBe(true);
+    expect(lines.some(l => l.includes("looks normal"))).toBe(false);
   });
 
   test("guidance gating: win32 + auto-known-bad prints version-claiming guidance", () => {

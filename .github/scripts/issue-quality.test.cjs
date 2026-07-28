@@ -9,6 +9,7 @@ const {
   extractSection,
   detectIssueKind,
   validateIssue,
+  looksLikeUntemplatedBugReport,
   shouldReopen,
   shouldEnforceClosure,
   labelForKind,
@@ -162,6 +163,55 @@ describe("detectIssueKind", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateIssue - feature", () => {
+  it("keeps nested sub-headings and fenced heading text inside a section (#541)", () => {
+    const body = [
+      "### What are you trying to accomplish?",
+      "Route Studio models through the user's WordPress.com account.",
+      "### What prevents this today?",
+      "The provider needs two wire formats and one shared OAuth identity.",
+      "### What should OpenCodex do?",
+      "Add a first-class provider with model-specific transport selection.",
+      "### Example usage or interface",
+      "#### CLI flow",
+      "```bash",
+      "# This heading-shaped shell comment must stay inside the fence",
+      "ocx login wordpress-studio",
+      "```",
+      "#### Dashboard flow",
+      "Providers -> WordPress Studio Code -> Log in",
+      "### Alternatives or workarounds",
+      "Use Studio directly.",
+    ].join("\n");
+
+    const example = extractSection(body, "Example usage or interface");
+    assert.match(example, /^#### CLI flow/);
+    assert.match(example, /# This heading-shaped shell comment/);
+    assert.match(example, /#### Dashboard flow/);
+    assert.doesNotMatch(example, /Alternatives or workarounds/);
+
+    const result = validateIssue({ title: "Add WordPress Studio provider", body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true, `Expected valid but got reasons: ${result.reasons.join(", ")}`);
+  });
+
+  it("ignores markdown headings inside backtick and tilde fences when finding section boundaries (#541)", () => {
+    for (const fence of ["```", "~~~~"]) {
+      const body = [
+        "### Example usage or interface",
+        fence,
+        "### pasted heading",
+        "real example content",
+        fence,
+        "### Next sibling",
+        "outside",
+      ].join("\n");
+      assert.equal(
+        extractSection(body, "Example usage or interface"),
+        [fence, "### pasted heading", "real example content", fence].join("\n"),
+      );
+    }
+  });
+
   it("rejects issue #208-style duplicate content", () => {
     const repeated = "Add support for streaming responses in the proxy";
     const body = [
@@ -948,6 +998,95 @@ describe("translated feature headings and soft-pass", () => {
     assert.equal(result.valid, false);
   });
 
+  it("soft-passes retitled feature reports that drop the [Feature]: prefix", () => {
+    const body = [
+      "### Concrete user workflow that fails",
+      "User pastes an image in Codex App while a text-only routed model is selected and the App blocks upload.",
+      "### Why this matters",
+      "Vision sidecar is advertised but never reached from the App client path.",
+      "### Verification",
+      "Same proxy config works end-to-end in Claude Code with the sidecar describing the image.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Vision sidecar unusable from Codex App",
+      body,
+      labels: ["enhancement"],
+      storedKind: "feature",
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.softPass, true);
+  });
+
+  it("soft-passes retitled bug reports with substantial non-English structure (#545)", () => {
+    // Maintainer retitle removed `[Bug]:`; Korean structured body has no English
+    // Summary/Reproduction headings but is clearly actionable.
+    const body = [
+      "## 환경",
+      "- opencodex 2.7.41 (launchd, port 10100)",
+      "- Claude Desktop 3P + Anthropic OAuth (Pro/Max)",
+      "- Auto Mode classifier model = `claude-sonnet-5`",
+      "",
+      "## 증상",
+      "Auto Mode classifier requests truncate at outputTokens=64 with max_output_tokens,",
+      "then retry the same payload up to 5 times. Dashboard previously showed 502.",
+      "",
+      "## 재현",
+      "1. `ocx login anthropic` and enable Claude Desktop 3P gateway key mode",
+      "2. Enable Auto Mode and trigger a tool permission classifier turn",
+      "3. Observe five identical 64-token incomplete terminals for one approval",
+      "",
+      "## 증거",
+      "Inbound+outbound correlated captures show max_tokens:64 and stop_sequences preserved.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Claude Desktop 3P Auto Mode classifier retries after 64-token Anthropic OAuth outputs",
+      body,
+      labels: ["bug", "provider-compatibility"],
+      storedKind: "bug",
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.softPass, true, `Expected soft-pass but got: ${result.reasons.join("; ")}`);
+    assert.equal(result.valid, false);
+  });
+
+  it("does not soft-pass a single arbitrary rich heading (Codex #564)", () => {
+    const result = validateIssue({
+      title: "Something broke after upgrade",
+      body: [
+        "## Notes",
+        "x".repeat(80),
+      ].join("\n"),
+      labels: ["bug"],
+      storedKind: "bug",
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.softPass, false);
+    assert.equal(result.valid, false);
+    assert.match(result.reasons.join(" "), /Summary and Reproduction are empty/);
+  });
+
+  it("does not soft-pass provider reports that only fill mapped metadata headings", () => {
+    const result = validateIssue({
+      title: "Provider X fails on Responses",
+      body: [
+        "### Provider or upstream service",
+        "custom-openai-compatible gateway hosted on our internal mesh",
+        "### OpenCodex version",
+        "2.7.41",
+        "### Endpoint or capability",
+        "`POST /v1/responses` with streaming tool calls",
+        "## Extra notes",
+        "We see intermittent 502s after rotating the upstream API key for this gateway.",
+      ].join("\n"),
+      labels: ["provider-compatibility"],
+      storedKind: "provider-compatibility",
+    });
+    assert.equal(result.kind, "provider-compatibility");
+    assert.equal(result.softPass, false);
+    assert.equal(result.valid, false);
+    assert.match(result.reasons.join(" "), /current behaviour|expected behaviour/i);
+  });
+
   it("still rejects empty [Feature]: bodies", () => {
     const result = validateIssue({
       title: "[Feature]: do something cool",
@@ -1087,6 +1226,111 @@ describe("labelForKind", () => {
     assert.equal(labelForKind("provider-compatibility"), "provider-compatibility");
     assert.equal(labelForKind(null), null);
     assert.equal(labelForKind("unknown"), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Freeform / non-template bypass (e.g. issue #521)
+// ---------------------------------------------------------------------------
+
+describe("validateIssue - freeform / non-template", () => {
+  it("rejects a plain freeform body that previously skipped validation", () => {
+    const result = validateIssue({
+      title: "How do I configure?",
+      body: "Just a random question about setup.",
+      labels: [],
+    });
+    assert.equal(result.kind, null);
+    assert.equal(result.valid, false);
+    assert.equal(result.softPass, false);
+    assert.ok(result.reasons.some((r) => /recognized issue template/i.test(r)));
+    assert.ok(result.guidance.some((g) => /Bug report|Feature request/i.test(g)));
+  });
+
+  it("rejects a #521-shaped Description/Reproduction/Log entry body with a clear message", () => {
+    const body = [
+      "### Description",
+      "Proxy returns 502 when streaming is enabled on Windows.",
+      "### Reproduction",
+      "1. ocx start",
+      "2. Send a streaming request",
+      "3. Observe 502",
+      "### Log entry",
+      "```",
+      "upstream connect error or disconnect/reset before headers",
+      "```",
+    ].join("\n");
+    assert.equal(
+      detectIssueKind({ title: "Proxy 502 on streaming", body, labels: [] }),
+      null,
+      "near-miss headings must not silently classify as a structured bug",
+    );
+    assert.equal(looksLikeUntemplatedBugReport({ title: "Proxy 502 on streaming", body }), true);
+
+    const result = validateIssue({
+      title: "Proxy 502 on streaming",
+      body,
+      labels: [],
+    });
+    assert.equal(result.kind, null);
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /bug report/i.test(r) && /template/i.test(r)),
+      `Expected bug-template reason, got: ${result.reasons.join("; ")}`,
+    );
+    assert.ok(
+      result.guidance.some((g) => /Client or integration|Summary|Reproduction/i.test(g)),
+      `Expected template-heading guidance, got: ${result.guidance.join("; ")}`,
+    );
+  });
+
+  it("still detects and validates a real structured bug as before", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Summary",
+      "Proxy segfaults on ARM64 when streaming is enabled.",
+      "### Reproduction",
+      "ocx start on Raspberry Pi 4, send any streaming request.",
+      "### Version",
+      "2.7.30",
+      "### Operating system",
+      "Debian 12 aarch64",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Segfault on ARM64 streaming",
+      body,
+      labels: ["bug"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, true);
+  });
+
+  it("does not treat Summary+Reproduction alone as a bug without prefix or label", () => {
+    // Existing anti-false-positive rule; freeform gate still fails these as untemplated.
+    const body = [
+      "### Summary",
+      "Something went wrong in the proxy.",
+      "### Reproduction",
+      "Run ocx start.",
+    ].join("\n");
+    assert.equal(detectIssueKind({ title: "Something went wrong", body, labels: [] }), null);
+    const result = validateIssue({ title: "Something went wrong", body, labels: [] });
+    assert.equal(result.kind, null);
+    assert.equal(result.valid, false);
+  });
+
+  it("keeps label-backed storedKind validation for enhancement freeform", () => {
+    // Workflow passes storedKind from the enhancement label; empty feature form still fails.
+    const result = validateIssue({
+      title: "How do I configure?",
+      body: "Just a random question about setup.",
+      labels: ["enhancement"],
+      storedKind: "feature",
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /missing or empty/i.test(r)));
   });
 });
 

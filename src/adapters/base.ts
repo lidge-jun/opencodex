@@ -44,6 +44,12 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
+    reasoningLog?: {
+      effectiveEffort: string;
+      wireField: "reasoning_effort" | "thinking_budget" | "thinking.type";
+      wireValue: string | number;
+    };
     usageLog?: {
       inputTokens?: number;
       estimated?: boolean;

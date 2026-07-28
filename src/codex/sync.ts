@@ -4,15 +4,19 @@ import { refreshCodexModelCatalog } from "./refresh";
 import { applyProxyEnv, loadConfig } from "../config";
 import type { OcxConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
+import { summarizeComboCatalogOmissions, type ComboCatalogOmission } from "./catalog/aggregation";
 
 export interface CodexSyncResult {
   ok: boolean;
   added: number;
   catalogPath: string | null;
   catalogExists: boolean;
+  catalogWritten: boolean;
   cacheSynced: boolean;
   message: string;
   warning?: string;
+  comboOmissions?: ComboCatalogOmission[];
+  nativeSubagentDefaultsWarning?: string;
   projectConfigWarnings?: ProjectCodexConfigWarning[];
   projectConfigGrouped?: { path: string; issues: string[]; bypass: string }[];
 }
@@ -59,8 +63,10 @@ export async function syncModelsToCodex(
       added: 0,
       catalogPath: null,
       catalogExists: false,
+      catalogWritten: false,
       cacheSynced: false,
       message: result.message,
+      ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     };
   }
 
@@ -69,21 +75,32 @@ export async function syncModelsToCodex(
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;
   let catalogExists = false;
+  let catalogWritten = false;
   let cacheSynced = false;
   let warning: string | undefined;
+  let comboOmissions: ComboCatalogOmission[] = [];
 
   try {
     const cat = await deps.refreshCodexModelCatalog(config);
     added = cat.added;
     catalogExists = cat.catalogExists;
+    catalogWritten = cat.catalogWritten;
     cacheSynced = cat.cacheSynced;
     catalogPathForInjection = cat.catalogExists ? cat.path : null;
     catalogPath = catalogPathForInjection;
+    comboOmissions = cat.comboOmissions ?? [];
     if (cat.added > 0) {
       log?.log(`   + ${cat.added} models appended to Codex catalog (${cat.path})`);
     } else if (!cat.catalogExists) {
       warning = "catalog sync skipped: no Codex catalog source found; keeping Codex's native catalog.";
       log?.error(warning);
+    }
+    if (comboOmissions.length > 0) {
+      // Individual omission lines already went through console.warn during gather;
+      // keep a single summary on the sync logger to avoid duplicate stderr noise.
+      const summary = summarizeComboCatalogOmissions(comboOmissions);
+      log?.error(summary);
+      warning = warning ? `${warning} ${summary}` : summary;
     }
   } catch (e) {
     warning = `catalog sync skipped: ${e instanceof Error ? e.message : String(e)}`;
@@ -99,9 +116,12 @@ export async function syncModelsToCodex(
     added,
     catalogPath,
     catalogExists,
+    catalogWritten,
     cacheSynced,
     message: result.message,
     ...(warning ? { warning } : {}),
+    ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
+    ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     ...(projectConfigWarnings.length > 0 ? {
       projectConfigWarnings,
       projectConfigGrouped: groupProjectCodexConfigWarningsByPath(projectConfigWarnings),

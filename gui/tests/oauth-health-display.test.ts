@@ -66,11 +66,12 @@ describe("oauth health badge helpers", () => {
       .toContain("pws.healthSummary.staleCredentials");
   });
 
-  test("doctorCopyButtonLabel reflects feedback outcome", () => {
-    expect(doctorCopyButtonLabel(t, null, "a1")).toBe("pws.copyDoctor");
-    expect(doctorCopyButtonLabel(t, { accountId: "a1", outcome: "copied" }, "a1")).toBe("pws.doctorCopied");
-    expect(doctorCopyButtonLabel(t, { accountId: "a1", outcome: "unavailable" }, "a1")).toBe("pws.doctorCopyUnavailable");
-    expect(doctorCopyButtonLabel(t, { accountId: "a1", outcome: "copied" }, "a2")).toBe("pws.copyDoctor");
+  // Scope resolution now belongs to useCopyFeedback; the label only maps an outcome.
+  test("doctorCopyButtonLabel reflects the copy outcome", () => {
+    expect(doctorCopyButtonLabel(t, null)).toBe("pws.copyDoctor");
+    expect(doctorCopyButtonLabel(t, undefined)).toBe("pws.copyDoctor");
+    expect(doctorCopyButtonLabel(t, "copied")).toBe("pws.doctorCopied");
+    expect(doctorCopyButtonLabel(t, "unavailable")).toBe("pws.doctorCopyUnavailable");
   });
 
   test("copyTextToClipboard returns false when Clipboard API is missing", async () => {

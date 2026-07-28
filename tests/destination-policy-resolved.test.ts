@@ -28,6 +28,11 @@ describe("providerDestinationConfigError — reserved IPv4 ranges (review findin
   test("still passes ordinary public literals", () => {
     expect(providerDestinationConfigError("custom", provider("https://93.184.216.34/v1"))).toBeNull();
   });
+
+  test("rejects IPv6 site-local and multicast literals", () => {
+    expect(providerDestinationConfigError("custom", provider("http://[fec0::1]/v1"))).toContain("allowPrivateNetwork");
+    expect(providerDestinationConfigError("custom", provider("http://[ff02::1]/v1"))).toContain("allowPrivateNetwork");
+  });
 });
 
 describe("providerDestinationResolvedError — DNS-resolved SSRF check (activation)", () => {
@@ -56,6 +61,18 @@ describe("providerDestinationResolvedError — DNS-resolved SSRF check (activati
     lookupMock.mockResolvedValueOnce([{ address: "fd00::1", family: 6 }]);
     const error = await providerDestinationResolvedError("custom", provider("https://v6.example.com/v1"));
     expect(error).toContain("private-network address (fd00::1)");
+  });
+
+  test("blocks a hostname resolving to IPv6 site-local space", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "fec0::1", family: 6 }]);
+    const error = await providerDestinationResolvedError("custom", provider("https://v6-site.example.com/v1"));
+    expect(error).toMatch(/site-local address \(fec0::1\)/);
+  });
+
+  test("blocks a hostname resolving to IPv6 multicast space", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "ff02::1", family: 6 }]);
+    const error = await providerDestinationResolvedError("custom", provider("https://v6-mcast.example.com/v1"));
+    expect(error).toMatch(/multicast address \(ff02::1\)/);
   });
 
   test("passes a hostname resolving only to public addresses", async () => {

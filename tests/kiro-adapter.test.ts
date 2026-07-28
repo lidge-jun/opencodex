@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKiroAdapter } from "../src/adapters/kiro";
+import { KIRO_TOOL_RESULT_CARRIER_MESSAGE } from "../src/adapters/kiro-constants";
 import { applyProviderConfigHints, buildCatalogEntries } from "../src/codex/catalog";
+import { getValidAccessTokenSnapshot } from "../src/oauth";
+import { saveCredential } from "../src/oauth/store";
 import { normalizeKiroModelId } from "../src/providers/kiro-models";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../src/reasoning-effort";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
@@ -15,12 +19,14 @@ const origApiRegion = process.env.KIRO_API_REGION;
 const origArn = process.env.KIRO_PROFILE_ARN;
 const origCredsFile = process.env.KIRO_CREDS_FILE;
 const origCredentialsFile = process.env.KIRO_CREDENTIALS_FILE;
+const origOcxHome = process.env.OPENCODEX_HOME;
 let tmp: string;
 
 beforeEach(() => {
   // isolate: empty HOME so no kiro-cli SQLite is read; deterministic region.
   tmp = mkdtempSync(join(tmpdir(), "kiro-adapter-"));
   process.env.HOME = tmp;
+  process.env.OPENCODEX_HOME = tmp;
   process.env.KIRO_REGION = "us-east-1";
   delete process.env.KIRO_API_REGION;
   delete process.env.KIRO_PROFILE_ARN;
@@ -34,6 +40,7 @@ afterEach(() => {
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN; else process.env.KIRO_PROFILE_ARN = origArn;
   if (origCredsFile === undefined) delete process.env.KIRO_CREDS_FILE; else process.env.KIRO_CREDS_FILE = origCredsFile;
   if (origCredentialsFile === undefined) delete process.env.KIRO_CREDENTIALS_FILE; else process.env.KIRO_CREDENTIALS_FILE = origCredentialsFile;
+  if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -42,6 +49,18 @@ const bashTool = { name: "bash", description: "Run a shell command", parameters:
 
 function parsedWith(messages: unknown[], tools?: unknown[], modelId = "claude-sonnet-4.5"): OcxParsedRequest {
   return { modelId, stream: true, options: {}, context: { messages, tools } } as unknown as OcxParsedRequest;
+}
+
+function seedKiroCliMetadata(profileArn: string, region: string): void {
+  const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+  mkdirSync(dir, { recursive: true });
+  const db = new Database(join(dir, "data.sqlite3"));
+  db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
+  db.run("INSERT INTO auth_kv (key, value) VALUES (?, ?)", [
+    "kirocli:social:token",
+    JSON.stringify({ access_token: "local-access", refresh_token: "local-refresh", profile_arn: profileArn, region }),
+  ]);
+  db.close();
 }
 
 describe("kiro adapter — buildRequest", () => {
@@ -71,6 +90,65 @@ describe("kiro adapter — buildRequest", () => {
     const { url } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
 
     expect(url).toBe("https://runtime.ap-northeast-2.kiro.dev/");
+  });
+
+  test("account-scoped OAuth metadata selects the matching Kiro region and profile", async () => {
+    const parsed = parsedWith([{ role: "user", content: "hi" }]);
+    parsed._kiroAuthContext = {
+      apiRegion: "eu-central-1",
+      profileArn: "arn:aws:codewhisperer:eu-central-1:123456789012:profile/account-b",
+    };
+
+    const request = await createKiroAdapter(provider).buildRequest(parsed);
+    const body = JSON.parse(request.body) as { profileArn?: string };
+
+    expect(request.url).toBe("https://runtime.eu-central-1.kiro.dev/");
+    expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(parsed._kiroAuthContext.profileArn);
+    expect(body.profileArn).toBe(parsed._kiroAuthContext.profileArn);
+  });
+
+  test("an account with no stored Kiro metadata never borrows different local CLI metadata", async () => {
+    seedKiroCliMetadata(
+      "arn:aws:codewhisperer:eu-west-1:123456789012:profile/local-other-account",
+      "eu-west-1",
+    );
+    delete process.env.KIRO_REGION;
+    await saveCredential("kiro", {
+      access: "stored-access",
+      refresh: "stored-refresh",
+      expires: Date.now() + 3_600_000,
+      source: "oauth",
+    });
+
+    const snapshot = await getValidAccessTokenSnapshot("kiro");
+    expect(snapshot.kiro).toEqual({});
+    const parsed = parsedWith([{ role: "user", content: "hi" }]);
+    parsed._kiroAuthContext = { ...snapshot.kiro };
+    const request = await createKiroAdapter(provider).buildRequest(parsed);
+    const body = JSON.parse(request.body) as { profileArn?: string };
+
+    expect(request.url).toBe("https://runtime.us-east-1.kiro.dev/");
+    expect(request.headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
+    expect(body.profileArn).toBeUndefined();
+  });
+
+  test("genuinely accountless requests still honor Kiro environment overrides", async () => {
+    const previousApiRegion = process.env.KIRO_API_REGION;
+    const previousProfileArn = process.env.KIRO_PROFILE_ARN;
+    process.env.KIRO_API_REGION = "ap-northeast-1";
+    process.env.KIRO_PROFILE_ARN = "arn:aws:codewhisperer:ap-northeast-1:123456789012:profile/env";
+    try {
+      const parsed = parsedWith([{ role: "user", content: "hi" }]);
+      expect(parsed._kiroAuthContext).toBeUndefined();
+      const request = await createKiroAdapter(provider).buildRequest(parsed);
+      expect(request.url).toBe("https://runtime.ap-northeast-1.kiro.dev/");
+      expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(process.env.KIRO_PROFILE_ARN);
+    } finally {
+      if (previousApiRegion === undefined) delete process.env.KIRO_API_REGION;
+      else process.env.KIRO_API_REGION = previousApiRegion;
+      if (previousProfileArn === undefined) delete process.env.KIRO_PROFILE_ARN;
+      else process.env.KIRO_PROFILE_ARN = previousProfileArn;
+    }
   });
 
   test("a genuinely custom Kiro base URL is honored", async () => {
@@ -133,6 +211,20 @@ describe("kiro adapter — buildRequest", () => {
     const results = cs.currentMessage.userInputMessage.userInputMessageContext.toolResults;
     expect(results[0].toolUseId).toBe("call_1"); // matches the toolUse id
     expect(results[0].status).toBe("success");
+  });
+
+  test("empty tool output is normalized to a non-empty Kiro result block", async () => {
+    const messages = [
+      { role: "user", content: "run it" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-empty", name: "bash", arguments: {} }] },
+      { role: "toolResult", toolCallId: "call-empty", toolName: "bash", content: "", isError: false },
+    ];
+
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages, [bashTool]));
+    const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
+
+    expect(current.content.trim()).not.toBe("");
+    expect(current.userInputMessageContext.toolResults[0].content[0].text.trim()).not.toBe("");
   });
 
   test("tool result images are attached to Kiro carrier user messages", async () => {
@@ -541,7 +633,7 @@ describe("kiro adapter — buildRequest", () => {
 
     expect(assistant.toolUses).toEqual([{ name: "bash", input: { command: "pwd" }, toolUseId: "call-1" }]);
     expect(assistant.content).toBe("");
-    expect(current.content).toBe("");
+    expect(current.content).toBe(KIRO_TOOL_RESULT_CARRIER_MESSAGE);
     expect(current.userInputMessageContext.toolResults).toEqual([
       { content: [{ text: "/tmp" }], status: "success", toolUseId: "call-1" },
     ]);
@@ -690,7 +782,7 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
     const { body } = await createKiroAdapter(provider).buildRequest({ ...parsedWith(messages, [bashTool]), options: { reasoning: "high" } });
     const content = JSON.parse(body).conversationState.currentMessage.userInputMessage.content;
 
-    expect(content).toBe("");
+    expect(content).toBe(KIRO_TOOL_RESULT_CARRIER_MESSAGE);
     expect(content).not.toContain("<thinking_mode>");
   });
 

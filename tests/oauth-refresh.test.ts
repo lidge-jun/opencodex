@@ -10,6 +10,9 @@ import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefre
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
 const origRegion = process.env.KIRO_REGION;
+const origCliDbFile = process.env.KIRO_CLI_DB_FILE;
+const origCliDbPath = process.env.KIROCLI_DB_PATH;
+const origCliTokenKey = process.env.KIROCLI_TOKEN_KEY;
 const origClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const origFetch = globalThis.fetch;
 const origWarn = console.warn;
@@ -21,6 +24,9 @@ beforeEach(() => {
   process.env.HOME = tmp;
   process.env.OPENCODEX_HOME = join(tmp, "ocx");
   process.env.KIRO_REGION = "us-east-1";
+  delete process.env.KIRO_CLI_DB_FILE;
+  delete process.env.KIROCLI_DB_PATH;
+  delete process.env.KIROCLI_TOKEN_KEY;
   process.env.CLAUDE_CONFIG_DIR = join(tmp, ".claude");
 });
 
@@ -28,13 +34,22 @@ afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
   if (origRegion === undefined) delete process.env.KIRO_REGION; else process.env.KIRO_REGION = origRegion;
+  if (origCliDbFile === undefined) delete process.env.KIRO_CLI_DB_FILE; else process.env.KIRO_CLI_DB_FILE = origCliDbFile;
+  if (origCliDbPath === undefined) delete process.env.KIROCLI_DB_PATH; else process.env.KIROCLI_DB_PATH = origCliDbPath;
+  if (origCliTokenKey === undefined) delete process.env.KIROCLI_TOKEN_KEY; else process.env.KIROCLI_TOKEN_KEY = origCliTokenKey;
   if (origClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origClaudeConfigDir;
   globalThis.fetch = origFetch;
   console.warn = origWarn;
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function seedKiroCliDb(token: { access_token: string; refresh_token?: string; expires_at?: string }) {
+function seedKiroCliDb(token: {
+  access_token: string;
+  refresh_token?: string;
+  expires_at?: string;
+  profile_arn?: string;
+  region?: string;
+}) {
   const dir = join(tmp, "Library", "Application Support", "kiro-cli");
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "data.sqlite3"));
@@ -125,17 +140,68 @@ describe("oauth refresh hardening", () => {
     expect(getCredential("kiro")?.refresh).toBe("rt-fresh");
   });
 
-  test("fresh Kiro CLI SQLite token is imported before refresh endpoint", async () => {
-    const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
+  test("stored Kiro account refresh does not import a different local CLI session", async () => {
+    const mock = mockRefreshFetch([
+      new Response(JSON.stringify({ accessToken: "aoa-refreshed", refreshToken: "rt-refreshed", expiresIn: 3600 }), { status: 200 }),
+    ]);
     seedKiroCliDb({ access_token: "aoa-sqlite", refresh_token: "rt-sqlite", expires_at: "2099-01-01T00:00:00Z" });
     await saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
-    await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-sqlite");
-    expect(mock.count()).toBe(0);
-    expect(getCredential("kiro")?.refresh).toBe("rt-sqlite");
-    expect(getCredential("kiro")?.source).toBe("local-cli");
+    await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-refreshed");
+    expect(mock.count()).toBe(1);
+    expect(getCredential("kiro")?.refresh).toBe("rt-refreshed");
+    expect(getCredential("kiro")?.source).not.toBe("local-cli");
   });
 
-  test("failed refresh recovers from a now-fresh Kiro CLI SQLite token", async () => {
+  test("account-scoped Kiro OIDC refresh sends stored client registration and preserves metadata", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/account-scoped";
+    const urls: string[] = [];
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (input, init) => {
+      urls.push(String(input));
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        accessToken: "aoa-oidc-fresh",
+        refreshToken: "rt-oidc-fresh",
+        expiresIn: 3600,
+      }), { status: 200 });
+    }) as typeof fetch;
+    await saveCredential("kiro", {
+      access: "aoa-oidc-old",
+      refresh: "rt-oidc-old",
+      expires: Date.now() - 1,
+      accountId: profileArn,
+      kiro: {
+        profileArn,
+        apiRegion: "eu-west-1",
+        ssoRegion: "eu-west-1",
+        clientId: "stored-client",
+        clientSecret: "stored-secret",
+      },
+    });
+
+    await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-oidc-fresh");
+    expect(urls).toEqual(["https://oidc.eu-west-1.amazonaws.com/token"]);
+    expect(bodies).toEqual([{
+      grantType: "refresh_token",
+      clientId: "stored-client",
+      clientSecret: "stored-secret",
+      refreshToken: "rt-oidc-old",
+    }]);
+    expect(getCredential("kiro")).toMatchObject({
+      access: "aoa-oidc-fresh",
+      refresh: "rt-oidc-fresh",
+      accountId: profileArn,
+      kiro: {
+        profileArn,
+        apiRegion: "eu-west-1",
+        ssoRegion: "eu-west-1",
+        clientId: "stored-client",
+        clientSecret: "stored-secret",
+      },
+    });
+  });
+
+  test("failed Kiro refresh does not overwrite the stored account from local CLI", async () => {
     await saveCredential("kiro", { access: "aoa-old", refresh: "rt-old", expires: Date.now() - 1 });
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -144,10 +210,114 @@ describe("oauth refresh hardening", () => {
       throw new Error("network down");
     }) as typeof fetch;
 
-    await expect(getValidAccessToken("kiro")).resolves.toBe("aoa-recovered");
+    await expect(getValidAccessToken("kiro")).rejects.toThrow("network down");
     expect(calls).toBe(1);
-    expect(getCredential("kiro")?.refresh).toBe("rt-recovered");
-    expect(getCredential("kiro")?.source).toBe("local-cli");
+    expect(getCredential("kiro")?.refresh).toBe("rt-old");
+    expect(getCredential("kiro")?.access).toBe("aoa-old");
+  });
+
+  test("late Kiro refresh cannot overwrite a newer reauthentication", async () => {
+    await saveCredential("kiro", {
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: Date.now() - 1,
+      accountId: "kiro-race-account",
+      kiro: { profileArn: "old-profile", apiRegion: "us-east-1" },
+    });
+    let release!: () => void;
+    let started!: () => void;
+    const didStart = new Promise<void>(resolve => { started = resolve; });
+    const mayFinish = new Promise<void>(resolve => { release = resolve; });
+    globalThis.fetch = (async () => {
+      started();
+      await mayFinish;
+      return new Response(JSON.stringify({ accessToken: "late-access", refreshToken: "late-refresh", expiresIn: 3600 }), { status: 200 });
+    }) as typeof fetch;
+
+    const pending = getValidAccessToken("kiro");
+    await didStart;
+    await saveCredential("kiro", {
+      access: "reauth-access",
+      refresh: "reauth-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kiro-race-account",
+      kiro: { profileArn: "reauth-profile", apiRegion: "eu-west-1" },
+    });
+    release();
+
+    await expect(pending).resolves.toBe("reauth-access");
+    expect(getCredential("kiro")).toMatchObject({
+      access: "reauth-access",
+      refresh: "reauth-refresh",
+      kiro: { profileArn: "reauth-profile", apiRegion: "eu-west-1" },
+    });
+  });
+
+  test("terminal Kiro refresh errors mark only the rejected generation for reauthentication", async () => {
+    await saveCredential("kiro", {
+      access: "expired-access",
+      refresh: "revoked-refresh",
+      expires: Date.now() - 1,
+      accountId: "kiro-revoked-account",
+    });
+    mockRefreshFetch([
+      new Response(JSON.stringify({ error: "invalid_grant", error_description: "do not surface this detail" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+    ]);
+
+    const error = await getValidAccessToken("kiro").then(
+      () => undefined,
+      reason => reason,
+    );
+    expect(error).toBeInstanceOf(OAuthLoginRequiredError);
+    expect(String(error)).not.toContain("do not surface this detail");
+    expect(getAccountSet("kiro")?.accounts[0]?.needsReauth).toBe(true);
+  });
+
+  test("same-profile local rotation persists the recovered desktop generation without stale registration", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/persisted";
+    seedKiroCliDb({
+      access_token: "aoa-local",
+      refresh_token: "rt-local-new",
+      expires_at: "2099-01-01T00:00:00Z",
+      profile_arn: profileArn,
+      region: "eu-west-1",
+    });
+    await saveCredential("kiro", {
+      access: "aoa-stored",
+      refresh: "rt-stored-old",
+      expires: Date.now() - 1,
+      accountId: profileArn,
+      source: "local-cli",
+      kiro: {
+        profileArn,
+        ssoRegion: "eu-west-1",
+        clientId: "stale-client",
+        clientSecret: "stale-secret",
+      },
+    });
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      if (urls.length === 1) return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+      return new Response(JSON.stringify({ accessToken: "aoa-recovered", expiresIn: 3600 }), { status: 200 });
+    }) as typeof fetch;
+
+    const access = await getValidAccessToken("kiro");
+    expect(access).toBe("aoa-recovered");
+    expect(urls).toEqual([
+      "https://oidc.eu-west-1.amazonaws.com/token",
+      "https://prod.eu-west-1.auth.desktop.kiro.dev/refreshToken",
+    ]);
+    expect(getCredential("kiro")).toMatchObject({
+      access: "aoa-recovered",
+      refresh: "rt-local-new",
+      kiro: { profileArn, ssoRegion: "eu-west-1" },
+    });
+    expect(getCredential("kiro")?.kiro?.clientId).toBeUndefined();
+    expect(getCredential("kiro")?.kiro?.clientSecret).toBeUndefined();
   });
 
   test("refresh preserves existing credential source metadata", async () => {

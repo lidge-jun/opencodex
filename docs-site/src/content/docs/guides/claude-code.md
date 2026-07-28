@@ -7,6 +7,30 @@ opencodex serves `POST /v1/messages` (plus `count_tokens`) alongside `/v1/respon
 Code can use every routed provider — OAuth logins, account pools, key failover and sidecars
 included — with zero extra auth work.
 
+## Claude OAuth account pool (experimental)
+
+You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
+add-account). By default every request uses the **active** account only.
+
+An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
+session affinity and 429 cooldown failover across those OAuth accounts, with optional
+new-session lowest-usage pick from the 5-hour quota bars. It is **off by default**, shows a
+GUI warning, and is not battle-tested — Anthropic may restrict accounts that look like
+automated rotation.
+
+Operational contract when enabled:
+
+- Upstream **429** cools that account using `Retry-After` when present (else a default backoff),
+  clears its affinities, and may rotate to another eligible account within the same request
+  (bounded).
+- Affinity is **process-local** (lost on proxy restart).
+- **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
+  selection until re-authenticated.
+- If every eligible account is cooling, the proxy returns **429** (not 401) with `Retry-After`
+  when known.
+
+See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
+
 ## Quickstart
 
 ```bash
@@ -85,6 +109,13 @@ Import validates the complete file before saving, so an invalid file leaves the 
 unchanged. Add `--apply` to write a valid imported profile to Desktop immediately. Use `none` only
 for an empty family; every non-empty family must keep one default.
 
+Apply writes to Claude Desktop's real Electron user-data `configLibrary`: `~/Library/Application
+Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Windows, and
+`${XDG_CONFIG_HOME:-~/.config}/Claude/configLibrary` on Linux. Set
+`OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR` for an explicit library override or
+`CLAUDE_USER_DATA_DIR` for an alternate Desktop user-data root. The legacy `Claude-3p` directory is
+not read or deleted automatically.
+
 Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-2026MMDD`. The date-looking
 part is a synthetic route slot, not the model's release date. Real Anthropic Claude routes keep
 their real ids. New routes default to the Opus family, but moving a route does not change the
@@ -144,6 +175,11 @@ capabilities (reasoning-effort ladder, thinking types) in the official ModelInfo
 Desktop's third-party gateway mode can offer its effort selector. Real Anthropic models keep their
 canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases
 and `claude-ocx-<provider>--<model>` ids from older configs still resolve.
+
+If Claude Desktop's footer picker does not change the model for an already-running 3P
+conversation, use `/model <id>` in that conversation. OpenCodex cannot observe picker state; it
+routes the model id carried by each request. Confirm the result under **Logs → requestedModel**.
+
 Models with an authoritative 1M context window get an extra `…[1m]` picker row: selecting it makes
 Claude Code account a full 1M context for that model (auto-compaction stays on) — the proxy strips
 the marker before routing.

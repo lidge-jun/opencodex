@@ -33,7 +33,6 @@
 .pwi-device-code { font-size: 20px; font-weight: 800; letter-spacing: .14em; color: var(--text); user-select: all; }
 .pwi-auth-row-copy { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .pwi-auth-row-secondary { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-label); color: var(--muted); }
-.pwi-auth-open-link  { font-size: var(--text-label); color: var(--accent); text-decoration: underline; cursor: pointer; }
 
 .pwi-auth-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .pwi-auth-row {
@@ -43,6 +42,13 @@
 }
 .pwi-auth-row:hover { background: var(--hover); }
 .pwi-auth-row--active { background: var(--accent-soft); }
+
+/* One account entry: the row itself plus (optionally) that account's own rate-limit bars. */
+.pwi-auth-acct { display: flex; flex-direction: column; gap: 2px; border-radius: var(--radius-xs); }
+.pwi-auth-acct--active { background: var(--accent-soft); }
+.pwi-auth-acct--active .pwi-auth-row--active { background: none; }
+.pwi-auth-acct-quota { padding: 0 8px 8px 26px; }
+.pwi-auth-acct-quota-stale { margin: 4px 0 0; font-size: 0.85em; }
 .pwi-auth-row-main  {
   appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   padding: 2px; border: 0; background: transparent; color: inherit; text-align: left;

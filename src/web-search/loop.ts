@@ -1,4 +1,4 @@
-import type { ProviderAdapter } from "../adapters/base";
+import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
@@ -191,6 +191,8 @@ export interface WebSearchLoopDeps {
   onFirstOutput?: () => void;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
+  /** Observe the exact adapter request selected for each routed-model iteration. */
+  onRequestBuilt?: (request: AdapterRequest) => void;
   /**
    * 429 key-failover hook: rotate the provider's active pool key and return a rebuilt adapter,
    * or null when the pool is exhausted (same semantics as the normal routed path).
@@ -271,6 +273,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           headers: selectedForwardHeaders,
           abortSignal: headerDeadline.signal,
         });
+        try {
+          deps.onRequestBuilt?.(request);
+        } catch {
+          // Diagnostics are best-effort and must never abort a web-search iteration.
+        }
         const response = requestAdapter.fetchResponse
           ? await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,

@@ -8,6 +8,7 @@ import {
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { OcxUsage } from "../types";
+import type { AdapterRequest } from "../adapters/base";
 import { redactSecretString } from "../lib/redact";
 import {
   appendUsageEntry,
@@ -28,17 +29,23 @@ import {
   USAGE_DEBUG_BODY_SAMPLE_BYTES,
   type UsageDebugBodyKind,
 } from "../usage/debug";
+import { matchesLogConversationId } from "./request-log-conversation";
 
 export interface RequestLogContext {
   model: string;
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
+  /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
+  conversationId?: string;
   surface?: "claude" | "claude-desktop" | "grok";
   requestedModel?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
   requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -70,6 +77,8 @@ export interface RequestLogContext {
   upstreamError?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  /** Structured reason from `response.incomplete`; internal-only input to log classification. */
+  terminalIncompleteReason?: string;
   affinity?: "reused" | "new_bind" | "rebound" | "cleared";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
@@ -83,8 +92,13 @@ export interface RequestLogEntry {
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   surface?: "claude" | "claude-desktop" | "grok";
+  /** Best-effort chat/session correlation for Logs grouping (#330). */
+  conversationId?: string;
   requestedModel?: string;
   requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -146,8 +160,12 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     provider: entry.provider,
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+    ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
+    ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
+    ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
+    ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
     ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
     ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
     ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
@@ -222,9 +240,13 @@ export function addRequestLog(entry: RequestLogEntry) {
       provider: entry.provider,
       model: entry.model,
       ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+      ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
+      ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
+      ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
+      ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
       ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
       ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
       ...(entry.configuredServiceTier ? { configuredServiceTier: entry.configuredServiceTier } : {}),
@@ -269,6 +291,71 @@ export function recordFirstOutput(
   if (logCtx.activeAttempt && logCtx.activeAttempt.firstOutputMs === undefined) {
     const attemptStartedAt = logCtx.activeAttemptStartedAt ?? requestStartedAt;
     logCtx.activeAttempt.firstOutputMs = Math.max(0, now - attemptStartedAt);
+  }
+}
+
+/** Snapshot target-specific requested effort even for runTurn adapters with no AdapterRequest. */
+export function recordAttemptRequestedEffort(logCtx: RequestLogContext): void {
+  const attempt = logCtx.activeAttempt;
+  if (!attempt) return;
+  delete attempt.requestedEffort;
+  try {
+    if (typeof logCtx.requestedEffort === "string" && logCtx.requestedEffort) {
+      attempt.requestedEffort = redactSecretString(logCtx.requestedEffort).slice(0, 64);
+    }
+  } catch {
+    // Request logging is best-effort and must not affect request delivery.
+  }
+}
+
+/** Copy the adapter's exact outbound reasoning parameter into the durable request log. */
+export function recordAdapterReasoning(
+  logCtx: RequestLogContext,
+  request: AdapterRequest,
+): void {
+  delete logCtx.effectiveEffort;
+  delete logCtx.reasoningWireField;
+  delete logCtx.reasoningWireValue;
+  const attempt = logCtx.activeAttempt;
+  if (attempt) {
+    delete attempt.effectiveEffort;
+    delete attempt.reasoningWireField;
+    delete attempt.reasoningWireValue;
+  }
+  recordAttemptRequestedEffort(logCtx);
+
+  // Diagnostics must never make an otherwise valid upstream request fail. Config files
+  // written by older versions (or edited by hand) can contain values that violate the
+  // current TypeScript shape, so validate the runtime object before redacting strings.
+  try {
+    const raw: unknown = request.reasoningLog;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const reasoning = raw as Record<string, unknown>;
+    if (typeof reasoning.effectiveEffort !== "string" || !reasoning.effectiveEffort
+      || (reasoning.wireField !== "reasoning_effort"
+        && reasoning.wireField !== "thinking_budget"
+        && reasoning.wireField !== "thinking.type")
+      || (!(typeof reasoning.wireValue === "string" && reasoning.wireValue)
+        && !(typeof reasoning.wireValue === "number"
+          && Number.isFinite(reasoning.wireValue)
+          && reasoning.wireValue >= 0))) {
+      return;
+    }
+
+    const effectiveEffort = redactSecretString(reasoning.effectiveEffort).slice(0, 64);
+    const wireValue = typeof reasoning.wireValue === "string"
+      ? redactSecretString(reasoning.wireValue).slice(0, 64)
+      : reasoning.wireValue;
+    logCtx.effectiveEffort = effectiveEffort;
+    logCtx.reasoningWireField = reasoning.wireField;
+    logCtx.reasoningWireValue = wireValue;
+    if (attempt) {
+      attempt.effectiveEffort = effectiveEffort;
+      attempt.reasoningWireField = reasoning.wireField;
+      attempt.reasoningWireValue = wireValue;
+    }
+  } catch {
+    // Request logging is best-effort and must not affect request delivery.
   }
 }
 
@@ -447,7 +534,7 @@ export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload:
  * run it through redactSecretString so secrets never reach /api/logs. Pure; safe on any text.
  */
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
-  if (!text || logCtx.upstreamError) return;
+  if (!text) return;
   try {
     const json = JSON.parse(text) as {
       type?: unknown;
@@ -459,6 +546,14 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
       };
     };
     captureTerminalHttpStatus(logCtx, json);
+    const reason = json?.response?.incomplete_details?.reason;
+    if (json.type === "response.incomplete"
+      && logCtx.terminalIncompleteReason === undefined
+      && typeof reason === "string"
+      && reason.trim()) {
+      logCtx.terminalIncompleteReason = reason.trim();
+    }
+    if (logCtx.upstreamError) return;
     const message = json?.error?.message
       ?? json?.last_error?.message
       ?? json?.response?.error?.message;
@@ -470,11 +565,11 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
     // the bridge on a stall-timeout or adapter EOF (response.incomplete). Maps the raw reason to a
     // reader-facing label so a generic 502 in /api/logs explains WHY the turn ended, not just the
     // mapped HTTP code.
-    const reason = json?.response?.incomplete_details?.reason;
     if (typeof reason === "string" && reason.trim()) {
       logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
     }
   } catch {
+    if (logCtx.upstreamError) return;
     const trimmed = text.trim();
     if (trimmed) {
       logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
@@ -485,6 +580,8 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
 /** Map a raw `incomplete_details.reason` (emitted by the bridge) to a reader-facing label. */
 function incompleteReasonLabel(reason: string): string {
   switch (reason) {
+    case "max_output_tokens":
+      return `Output reached the requested token limit (${reason})`;
     case "upstream_stall_timeout":
       return `Upstream stalled: no data for the stall-timeout window (${reason})`;
     case "adapter_eof":
@@ -529,6 +626,21 @@ export function httpStatusForRequestLogTerminal(
   status: ResponsesTerminalStatus,
   logCtx?: RequestLogContext,
 ): number {
+  /**
+   * [Decision Log]
+   * - 목적과 의도: Keep request logs aligned with the successful HTTP/SSE contract.
+   * - 기존 구현 및 제약 조건: All incomplete terminals were recorded as 502 even when the
+   *   client-requested output limit was reached normally.
+   * - 검토한 주요 대안: Treat every incomplete as success, or infer the reason from display text.
+   * - 선택한 방식: Only structured max_output_tokens incompletes map to 200.
+   * - 다른 대안 대신 이 방식을 선택한 이유: Stall, EOF, and unknown incompletes must remain
+   *   visible failures, and display text is not a stable classification contract.
+   * - 장점, 단점 및 영향: Logs stop reporting false upstream errors while retaining the
+   *   incomplete terminal detail; native callers without a structured reason keep old behavior.
+   */
+  if (status === "incomplete" && logCtx?.terminalIncompleteReason === "max_output_tokens") {
+    return 200;
+  }
   if (status === "failed" && logCtx?.terminalHttpStatus !== undefined) {
     return logCtx.terminalHttpStatus;
   }
@@ -583,8 +695,12 @@ export function addFinalRequestLog(
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
+    ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
+    ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
+    ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),
+    ...(logCtx.reasoningWireValue !== undefined ? { reasoningWireValue: logCtx.reasoningWireValue } : {}),
     ...(logCtx.requestedServiceTier ? { requestedServiceTier: logCtx.requestedServiceTier } : {}),
     ...(logCtx.requestedSpeedLabel ? { requestedSpeedLabel: logCtx.requestedSpeedLabel } : {}),
     ...(logCtx.configuredServiceTier ? { configuredServiceTier: logCtx.configuredServiceTier } : {}),
@@ -628,6 +744,10 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
   if (provider) {
     filtered = filtered.filter(entry => entry.provider === provider
       || entry.attempts?.some(attempt => attempt.provider === provider));
+  }
+  const conversationId = params.get("conversationId")?.trim() || params.get("conversation")?.trim();
+  if (conversationId) {
+    filtered = filtered.filter(entry => matchesLogConversationId(entry.conversationId, conversationId));
   }
   const status = params.get("status")?.trim().toLowerCase();
   if (status) {

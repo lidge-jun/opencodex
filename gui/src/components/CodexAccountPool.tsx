@@ -15,7 +15,8 @@ import { CodexAccountResetModal } from "./codex-account-reset-modal";
 import { CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
 import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
-import { accountNeedsReauth, copyTextToClipboard, type DoctorCopyFeedback } from "../oauth-health-display";
+import { accountNeedsReauth } from "../oauth-health-display";
+import { useCopyFeedback } from "./use-copy-feedback";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
@@ -65,20 +66,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
-  const [copiedDoctorFor, setCopiedDoctorFor] = useState<DoctorCopyFeedback | null>(null);
+  const doctorCopy = useCopyFeedback<string>();
 
   const copyDoctor = useCallback((accountId: string) => {
-    void copyTextToClipboard(DOCTOR_CMD).then((ok) => {
-      const feedback: DoctorCopyFeedback = {
-        accountId,
-        outcome: ok ? "copied" : "unavailable",
-      };
-      setCopiedDoctorFor(feedback);
-      setTimeout(() => setCopiedDoctorFor(current => (
-        current?.accountId === accountId && current.outcome === feedback.outcome ? null : current
-      )), 2500);
-    });
-  }, []);
+    doctorCopy.copy(DOCTOR_CMD, accountId);
+  }, [doctorCopy]);
 
   // The controller owns loading and polling. This surface only feeds the auto-switch
   // threshold observer and leases a pause while an OAuth modal is open.
@@ -287,7 +279,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         pauseBusy={pauseUpdatingId !== null || pausingExhausted}
         onOpenReset={openResetPopup}
         onCopyDoctor={copyDoctor}
-        copiedDoctorFor={copiedDoctorFor}
+        doctorCopyOutcomeFor={doctorCopy.outcomeFor}
       />
 
       <div className="section-sep">
@@ -319,7 +311,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         onEditAlias={editAlias}
         onRemove={remove}
         onCopyDoctor={copyDoctor}
-        copiedDoctorFor={copiedDoctorFor}
+        doctorCopyOutcomeFor={doctorCopy.outcomeFor}
       />
 
       <CodexAutoSwitchSetting

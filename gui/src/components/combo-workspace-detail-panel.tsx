@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type ComboItem,
   comboModelId,
   comboPublicModelId,
   draftEquals,
+  intersectComboEfforts,
   validateComboDraft,
 } from "../combo-workspace-data";
 import { IconChevron, IconTrash } from "../icons";
@@ -52,6 +53,17 @@ export function DetailPanel({
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
   const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
+  const effortMap = useMemo(() => {
+    const map = new Map<string, string[] | undefined>();
+    for (const model of models) {
+      map.set(`${model.provider}/${model.id}`, model.reasoningEfforts);
+    }
+    return map;
+  }, [models]);
+  const allowedEfforts = useMemo(
+    () => intersectComboEfforts(draft.targets, effortMap),
+    [draft.targets, effortMap],
+  );
 
   const updateDraft = useCallback((updater: (prev: ComboItem) => ComboItem) => {
     const next = updater(draft);
@@ -216,6 +228,7 @@ export function DetailPanel({
                 id="cwi-effort"
                 value={draft.defaultEffort}
                 disabled={busy}
+                allowedEfforts={allowedEfforts}
                 onChange={(defaultEffort) => updateDraft((d) => ({ ...d, defaultEffort }))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>

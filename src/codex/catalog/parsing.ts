@@ -141,9 +141,24 @@ export function isMediaGenerationModelId(id: string): boolean {
   return MEDIA_GEN_ID_RE.test(id);
 }
 
+/**
+ * Gemini image-capable chat models produce inline images within text responses
+ * via the Responses API. Explicit allowlist only — a broad `/gemini/ && /image/`
+ * heuristic resurrects standalone media-gen IDs (e.g. gemini-3-pro-image).
+ */
+const GEMINI_IMAGE_CHAT_MODEL_IDS = new Set([
+  "gemini-3.1-flash-image",
+  "gemini-2.0-flash-preview-image-generation",
+  "gemini-3-pro-image-preview",
+]);
+
+function isGeminiImageChatModel(id: string): boolean {
+  return GEMINI_IMAGE_CHAT_MODEL_IDS.has(id);
+}
+
 export function shouldExposeRoutedModel(model: CatalogModel): boolean {
   if (isRoutedModelCompatibilityExcluded(`${model.provider}/${model.id}`)) return false;
-  if (model.provider === "cursor" && model.id === "gemini-3-pro-image-preview") return true;
+  if (isGeminiImageChatModel(model.id)) return true;
   return !isMediaGenerationModelId(model.id);
 }
 

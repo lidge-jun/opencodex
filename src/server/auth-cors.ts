@@ -8,6 +8,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  reasoningSummaryDeliveryRecordConfigError,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
@@ -17,6 +18,7 @@ import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
+/** The proxy's own listening port. No admission check uses it: both loopback predicates key on hostname alone. */
 export function configuredPort(): string {
   try { return new URL(_corsOrigin).port; } catch { return "10100"; }
 }
@@ -34,8 +36,18 @@ export function parseHttpHost(value: string | null): { hostname: string; port: s
 export function isLoopbackRequestHost(value: string | null): boolean {
   const parsed = parseHttpHost(value);
   if (!parsed) return true;
-  if (!isLoopbackHostname(parsed.hostname)) return false;
-  return parsed.port === "" || parsed.port === configuredPort();
+  // Loopback is a trust boundary by hostname, not by port. `ssh -L 20100:localhost:10100`
+  // legitimately arrives as `Host: localhost:20100`, and refusing it took the whole /v1/*
+  // data plane down with it, not just CORS. The sibling isLoopbackOriginValue() dropped its
+  // own port check for the same reason in e4e06125b ("same-trust-boundary"). Port equality
+  // was never the rebinding defense: a rebinding browser connects to the real port and sends
+  // it verbatim, so the hostname check below is what rejected it then and now.
+  //
+  // Scope of that guarantee: it holds for Hosts `parseHttpHost` can parse. An unparseable
+  // Host still returns true above — pre-existing behavior, not browser-reachable (a browser
+  // composes Host from its own connection), and pinned by a characterization test in
+  // tests/server-loopback-host-gate.test.ts. Tightening it is separate work.
+  return isLoopbackHostname(parsed.hostname);
 }
 
 export function isLoopbackOriginValue(value: string): boolean {
@@ -114,7 +126,9 @@ export function configuredApiAuthToken(_config: OcxConfig): string | undefined {
 }
 
 export function isLoopbackHostname(hostname: string | undefined): boolean {
-  const normalized = (hostname ?? "127.0.0.1").trim().toLowerCase();
+  // A fully-qualified "localhost." is the same host as "localhost": curl and some clients
+  // send the trailing dot verbatim, and refusing it 403s a legitimate loopback caller.
+  const normalized = (hostname ?? "127.0.0.1").trim().toLowerCase().replace(/\.$/, "");
   return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
@@ -235,6 +249,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
+  const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
+    raw.modelReasoningSummaryDelivery,
+    raw.modelSupportsReasoningSummaries,
+  );
+  if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");

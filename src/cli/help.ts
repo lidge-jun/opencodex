@@ -12,6 +12,7 @@ type HelpEntry = {
 
 const helpEntries: Record<string, HelpEntry> = {
   init: { usage: "ocx init", summary: "Interactive setup for providers and Codex config injection." },
+  setup: { usage: "ocx setup", summary: "Interactive setup for providers and Codex config injection (alias of init)." },
   start: { usage: "ocx start [--port <port>]", summary: "Start the proxy server and sync models to Codex." },
   stop: { usage: "ocx stop", summary: "Stop the proxy and restore native Codex config." },
   restore: {
@@ -64,8 +65,8 @@ const helpEntries: Record<string, HelpEntry> = {
   status: { usage: "ocx status", summary: "Check proxy server status." },
   doctor: { usage: "ocx doctor", summary: "Diagnose environment/network issues (paths, WSL /mnt, proxy env, ChatGPT reachability)." },
   debug: {
-    usage: "ocx debug [provider on|off|status|reset|logs [-f]|usage on|off|status|reset|logs [-f]]",
-    summary: "Show or toggle runtime provider debug logging on the running proxy.",
+    usage: "ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>",
+    summary: "Show or toggle runtime provider, usage, injection, and Claude debug capture.",
     details: [
       "Provider: ocx debug provider on | off | status | reset | logs [-f]",
       "Usage JSONL: ocx debug usage on | off | status | reset | logs [-f]",
@@ -80,16 +81,16 @@ const helpEntries: Record<string, HelpEntry> = {
     summary: "Update opencodex. Preview installs stay on the preview tag unless overridden.",
   },
   provider: {
-    usage: "ocx provider <list|add|remove|show|set-default>",
+    usage: "ocx provider <list|add|edit|test|remove|show|set-default|selected|quota|presets|account-mode>",
     summary: "Non-interactive provider management.",
     details: [
-      "Subcommands: list, add <name>, remove <name>, show <name>, set-default <name>",
+      "Subcommands: list, add/edit/test/remove/show, set-default, selected, quota, presets, account-mode",
       "Registry providers are auto-configured by name. Custom providers need --adapter and --base-url.",
       "Run `ocx provider --help` for full usage and examples.",
     ],
   },
   account: {
-    usage: "ocx account <list|current|use|refresh|auto-switch|remove|add-key> ...",
+    usage: "ocx account <list|current|use|refresh|auto-switch|login|reauth|code|cancel|remove|add-key|reset-credits> ...",
     summary: "List and switch provider accounts and API-key pools (GUI parity).",
     details: [
       "list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).",
@@ -99,11 +100,13 @@ const helpEntries: Record<string, HelpEntry> = {
       "auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.",
       "remove <provider> <id> --yes  Remove a stored account or key after an existence check.",
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
+      "login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.",
+      "reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.",
       "Codex pool switches apply to new sessions; running threads keep their account.",
     ],
   },
   models: {
-    usage: "ocx models [list] [--provider <name>] [--json] | add <provider> <modelId> [opts] | remove <id|provider/modelId> [--yes] | list-custom [--json]",
+    usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|context|shadow> ...",
     summary: "List models and manage custom (manually registered) models.",
     details: [
       "List available models from static config with no subcommand (liveModels may add more at runtime).",
@@ -115,6 +118,47 @@ const helpEntries: Record<string, HelpEntry> = {
       "list-custom: show all custom models.",
       "Changes apply immediately to a running proxy (catalog sync).",
     ],
+  },
+  model: {
+    usage: "ocx model <subcommand>",
+    summary: "Alias of ocx models.",
+  },
+  combo: {
+    usage: "ocx combo <list|show|set|remove> ...",
+    summary: "Manage combo failover and round-robin virtual models.",
+    details: ["Alias hierarchy: ocx route combo ...", "Use --targets provider/model[:weight],provider/model[:weight]."],
+  },
+  route: {
+    usage: "ocx route combo <list|show|set|remove> ...",
+    summary: "Manage routing features; combo is currently the supported routing resource.",
+  },
+  agent: {
+    usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...",
+    summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.",
+  },
+  observe: {
+    usage: "ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...",
+    summary: "Inspect proxy requests, usage, storage, memory, and debug data.",
+  },
+  logs: { usage: "ocx logs [filters] [--follow] [--json|--jsonl]", summary: "Alias of ocx observe logs." },
+  usage: { usage: "ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]", summary: "Alias of ocx observe usage." },
+  storage: { usage: "ocx storage [--json]", summary: "Alias of ocx observe storage." },
+  memory: { usage: "ocx memory [--json]", summary: "Alias of ocx observe memory." },
+  access: {
+    usage: "ocx access <key|endpoints|models|test> ...",
+    summary: "Manage OpenCodex admission API keys and inspect external endpoints.",
+  },
+  "api-key": { usage: "ocx api-key <list|create|remove> ...", summary: "Alias of ocx access key." },
+  grok: { usage: "ocx grok <status|exclude|include|set|clear|apply> ...", summary: "Manage and apply the Grok Build model fence." },
+  integration: { usage: "ocx integration <claude|grok> ...", summary: "Manage supported client integrations." },
+  system: {
+    usage: "ocx system <status|settings|startup|diagnostics|sync|update> ...",
+    summary: "Manage headless runtime settings, startup, sync, diagnostics, and updates.",
+  },
+  config: {
+    usage: "ocx config <show|get|set|unset|validate|export|import> ...",
+    summary: "Inspect and safely modify validated OpenCodex configuration.",
+    details: ["Secrets are masked by show/get. Import requires --yes and validates before writing."],
   },
   claude: {
     usage: "ocx claude [claude args...]",
@@ -136,6 +180,22 @@ const helpEntries: Record<string, HelpEntry> = {
       "Families: opus, fable, sonnet, haiku. New routes start in opus.",
       "`none` is valid only when that family is empty.",
       "Legacy apply flags remain supported: --static, --hybrid, --discovery-only.",
+      "",
+      "Claude Code settings: ocx claude config <status|set> ...",
+    ],
+  },
+  opencode: {
+    usage: "ocx opencode [opencode args...]",
+    summary: "Launch opencode wired to the proxy (runtime provider config).",
+    details: [
+      "Ensures the proxy is running, then execs `opencode` with the generated `provider.opencodex`",
+      "block injected through OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). Any",
+      "existing inline config in the environment is preserved and only `provider.opencodex` is",
+      "overwritten for this launch.",
+      "Global/project opencode.json may be read to warn about an existing provider.opencodex",
+      "override; on-disk files are never modified.",
+      "Routed models appear in the model picker as opencodex/<provider>/<model>.",
+      "Stop using `ocx opencode` and plain `opencode` behaves exactly as before.",
     ],
   },
   restart: {
@@ -174,7 +234,7 @@ export function printUsage(): void {
   console.log(`opencodex (ocx) — Universal provider proxy for Codex
 
 Usage:
-  ocx init                    Interactive setup (provider + Codex config injection)
+  ocx setup                   Interactive setup (alias: init)
   ocx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
@@ -190,20 +250,27 @@ Usage:
   ocx sync-cache              Refresh Codex's model cache from the active catalog
   ocx status                  Check proxy server status
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
-  ocx debug [provider|usage ...]
-                              provider/usage on|off|status|reset|logs [-f]
-  ocx login <provider>        OAuth login (xai) — opens browser, stores token in ~/.opencodex/auth.json
+  ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
+  ocx login <provider>        OAuth or API-key provider login
   ocx logout <provider>       Remove a stored OAuth login
   ocx gui                     Open the opencodex dashboard
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|threads)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
-  ocx provider <sub>          Manage providers (list|add|remove|show|set-default)
-  ocx account <sub>           Accounts/keys (list|current|use|refresh|auto-switch|remove|add-key)
-  ocx models <sub>            List models; manage custom models (add|remove|list-custom)
+  ocx provider <sub>          Providers, connectivity, quota, and selected models
+  ocx account <sub>           Accounts, login/reauth, key pools, and quota controls
+  ocx models <sub>            Live/custom models, visibility, context, and shadow calls
+  ocx combo <sub>             Combo failover/round-robin routing
+  ocx agent <sub>             Subagents, injection, effort caps, and sidecars
+  ocx observe <sub>           Logs, usage, storage, memory, and debug data
+  ocx access <sub>            External API keys and endpoint information
+  ocx grok <sub>              Grok Build model selection and apply
+  ocx system <sub>            Runtime settings, startup, sync, and updates
+  ocx config <sub>            Validated configuration show/get/set/import/export
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
+  ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)
   ocx help [command]          Show help
   ocx --version | -v          Print version
 

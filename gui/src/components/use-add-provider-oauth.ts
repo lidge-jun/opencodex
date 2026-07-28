@@ -19,15 +19,17 @@ export function useAddProviderOAuth({
       setOauthBusy: (v: boolean) => void;
       setOauthMsg: (v: string) => void;
       setOauthMsgTone: (v: "ok" | "warn") => void;
+      setOauthUrl: (url: string, providerId: string) => void;
       setManualCode: (v: string) => void;
       setManualCodeMsg: (v: string) => void;
       setManualCodeOk: (v: boolean) => void;
     },
   ) => {
-    const { setOauthBusy, setOauthMsg, setOauthMsgTone, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
+    const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
     setOauthBusy(true);
     setOauthMsg("");
     setOauthMsgTone("ok");
+    setOauthUrl("", providerId);
     setManualCode("");
     setManualCodeMsg("");
     setManualCodeOk(true);
@@ -47,7 +49,7 @@ export function useAddProviderOAuth({
         return;
       }
       const data = await res.json() as { url?: string; instructions?: string; error?: string };
-      if (data.url) { setOauthMsg(t("modal.waitingLogin")); }
+      if (data.url) { setOauthUrl(data.url, providerId); setOauthMsg(t("modal.waitingLogin")); }
       else { setOauthMsg(data.instructions || t("modal.loggingIn")); }
       for (let i = 0; i < 100; i++) {
         await new Promise(r => setTimeout(r, 2000));

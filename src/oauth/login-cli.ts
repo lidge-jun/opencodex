@@ -2,7 +2,7 @@ import * as readline from "node:readline";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
-import { isPublicOAuthProvider, listOAuthProviders, OAUTH_PROVIDERS, runLogin } from "./index";
+import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxProviderConfig } from "../types";
 
@@ -14,7 +14,7 @@ export function runningProxyUpdateHeaders(): Headers {
 }
 
 /** Push the new provider into a running proxy's live config so it routes without a restart. */
-async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
+export async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
   // Identity-checked runtime-port lookup: reaches a fallback-port proxy and avoids
   // posting credentials-adjacent config to whatever else answers on config.port.
   const live = await findLiveProxy();
@@ -28,6 +28,19 @@ async function notifyRunningProxy(name: string, provider: unknown): Promise<void
   } catch {
     /* proxy unreachable; disk config loads on next start */
   }
+}
+
+/**
+ * After `runLogin()` has persisted the merged provider (including preserved apiKey /
+ * apiKeyPool / authMode), push that on-disk entry into a running proxy.
+ *
+ * Must not send `OAUTH_PROVIDERS[name].providerConfig`: POST /api/providers replaces the
+ * live entry and saves it, which would drop the preserved key billing state.
+ */
+export async function notifyRunningProxyAfterOAuthLogin(name: string): Promise<void> {
+  const provider = loadConfig().providers[name];
+  if (!provider) return;
+  await notifyRunningProxy(name, provider);
 }
 
 export async function handleLogin(provider?: string): Promise<void> {
@@ -58,7 +71,7 @@ async function handleOAuthLogin(name: string): Promise<void> {
   } finally {
     rl.close();
   }
-  await notifyRunningProxy(name, OAUTH_PROVIDERS[name].providerConfig);
+  await notifyRunningProxyAfterOAuthLogin(name);
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
 }
 

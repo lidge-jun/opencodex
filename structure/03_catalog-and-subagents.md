@@ -82,6 +82,15 @@ Codex `spawn_agent` advertises only the highest-priority first five catalog mode
 is capped at five ids and may contain routed `provider/model` slugs or native model slugs. Startup
 seeds native GPT defaults only when the field is unset; an explicit empty list persists.
 
+`injectionModel` and `injectionEffort` are shared selections with two independent consumers.
+`multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.
+`syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to
+Codex's native `[agents]` defaults on sync/restart for newly created Codex tasks when OpenCodex owns
+the active Codex routing; external user-managed provider configs remain untouched. It does not itself
+cause delegation. The TOML edit owns only marker-tagged values, preserves existing unmarked
+user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
+without changing the file.
+
 Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
 whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke

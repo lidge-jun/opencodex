@@ -8,12 +8,19 @@ export type ProviderOption = {
   adapter?: string;
   baseUrl?: string;
 };
-export type ModelOption = { provider: string; id: string; namespaced?: string };
+export type ModelOption = {
+  provider: string;
+  id: string;
+  namespaced?: string;
+  reasoningEfforts?: string[];
+};
 
 export interface ComboWorkspaceProps {
   combos: ComboItem[];
   providers: ProviderOption[];
   models: ModelOption[];
+  /** Combo ids currently present in the live catalog (`provider === "combo"`). */
+  cataloguedComboIds?: ReadonlySet<string>;
   loading?: boolean;
   onRefresh: () => void;
   onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;

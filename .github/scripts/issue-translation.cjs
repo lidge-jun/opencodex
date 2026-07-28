@@ -134,11 +134,32 @@ function scrubDetectedLanguage(value) {
 
 /**
  * True when the model (or caller) reported English / no translation needed.
- * Used to omit visible English bookkeeping text from the bot control comment.
  */
 function isEnglishDetectedLanguage(value) {
   const lang = scrubDetectedLanguage(value).toLowerCase();
-  return !lang || lang === "english" || lang === "en" || lang === "eng";
+  return lang === "english" || lang === "en" || lang === "eng";
+}
+
+/**
+ * Language written into control-state on the no-translation persist path.
+ *
+ * Confirmed English only when `sourceComplete` is true (valid parsed
+ * `requires_translation: false`). Incomplete AI/parse/action failures always
+ * record `unknown` — never retain a language label that could look confirmed.
+ */
+function detectedLanguageForControlPersist({ detectedLanguage, sourceComplete } = {}) {
+  if (sourceComplete !== true) return "unknown";
+  return scrubDetectedLanguage(detectedLanguage || "English");
+}
+
+/**
+ * Visible bookkeeping language label for the sticky control comment.
+ * Always non-empty so the bot bubble never renders as a blank ghost comment.
+ * Missing language is `unknown` — never invent a confirmed English label.
+ */
+function bookkeepingLanguageLabel(state) {
+  if (state?.detectedLanguage) return scrubDetectedLanguage(state.detectedLanguage);
+  return "unknown";
 }
 
 /**
@@ -283,6 +304,7 @@ function parseControlStateFromCommentBody(body, now = Date.now()) {
 /**
  * Newest github-actions control comment with a valid decoded state.
  * Author-forged comments and far-future poisoned payloads are ignored.
+ * Used for *reading* authoritative rate-limit state.
  */
 function findControlComment(comments, now = Date.now()) {
   let best = null;
@@ -296,6 +318,22 @@ function findControlComment(comments, now = Date.now()) {
     }
   }
   return best;
+}
+
+/**
+ * Sticky upsert target: the oldest bot-owned control comment (by id).
+ * Prefer updating this in place so the bubble stays near the top of the
+ * thread instead of creating a new comment at the bottom after every
+ * English classification. Corrupt/unparseable bodies still qualify — we
+ * overwrite them — so a bad decode never forces a duplicate create.
+ */
+function findStickyControlComment(comments) {
+  let sticky = null;
+  for (const comment of findAllControlComments(comments)) {
+    if (!Number.isSafeInteger(comment?.id) || comment.id <= 0) continue;
+    if (!sticky || comment.id < sticky.id) sticky = comment;
+  }
+  return sticky;
 }
 
 function extractTranslationControlState(comments, now = Date.now()) {
@@ -314,13 +352,12 @@ function resolveControlState(comments, _issueNumber, now = Date.now()) {
 }
 
 /**
- * English / no-translation attempts use a marker-only bot comment (no visible text).
- * requiresTranslation:true is never treated as marker-only solely because language is empty.
+ * Always false: control comments always include a visible bookkeeping line
+ * so GitHub never renders an HTML-comment-only ghost bubble.
+ * Kept as an exported predicate for workflow/tests that assert the contract.
  */
-function shouldOmitVisibleBookkeeping(state) {
-  if (!state?.requiresTranslation) return true;
-  return Boolean(state.detectedLanguage)
-    && isEnglishDetectedLanguage(state.detectedLanguage);
+function shouldOmitVisibleBookkeeping(_state) {
+  return false;
 }
 
 function buildTranslationControlComment(state) {
@@ -334,18 +371,13 @@ function buildTranslationControlComment(state) {
     detectedLanguage: null,
   };
   const encoded = encodeControlState(safe);
-  const lines = [
+  const lang = bookkeepingLanguageLabel(safe);
+  return [
     CONTROL_MARKER,
     `<!-- opencodex-issue-inline-translator-control-state-v2:${encoded} -->`,
-  ];
-  if (!shouldOmitVisibleBookkeeping(safe)) {
-    const lang = scrubDetectedLanguage(safe.detectedLanguage);
-    lines.push(
-      "",
-      `<sub>Automated translation bookkeeping — detected language: ${lang}.</sub>`,
-    );
-  }
-  return lines.join("\n");
+    "",
+    `<sub>Automated translation bookkeeping — detected language: ${lang}.</sub>`,
+  ].join("\n");
 }
 
 function pruneRecent(recent, now, windowMs = 3_600_000) {
@@ -499,8 +531,9 @@ async function deleteVerifiedControlComments({
 
 /**
  * Upsert the canonical bot-owned control comment.
- * English / no-translation: marker-only (no visible bookkeeping sentence).
- * Non-English: includes visible detected-language bookkeeping.
+ * Always includes a visible detected-language bookkeeping line (English too).
+ * Updates the oldest sticky bot control comment in place when one exists —
+ * including corrupt bodies — so classification never spams a new bottom bubble.
  * Never mutates the issue title or body.
  */
 async function upsertTranslationControlComment({
@@ -515,7 +548,9 @@ async function upsertTranslationControlComment({
 }) {
   const merged = mergeTranslationAttemptState({ priorState, attempt, now });
   const body = buildTranslationControlComment(merged);
-  const existing = findControlComment(comments, now);
+  // Sticky target ≠ newest valid state: prefer oldest marker comment so the
+  // thread position stays stable even when state on that comment is corrupt.
+  const existing = findStickyControlComment(comments);
 
   if (existing) {
     if (existing.body !== body) {
@@ -612,7 +647,8 @@ async function persistTranslationControlState({
     storage: "comment",
     state: upserted.state,
     comment: upserted.comment,
-    markerOnly: shouldOmitVisibleBookkeeping(upserted.state),
+    // Always false: bookkeeping line is always visible (no ghost HTML-only bubble).
+    markerOnly: false,
     cleanup,
   };
 }
@@ -836,6 +872,7 @@ module.exports = {
   stripTranslationBlock,
   extractTranslationState,
   findControlComment,
+  findStickyControlComment,
   findAllControlComments,
   deleteVerifiedControlComments,
   extractTranslationControlState,
@@ -862,6 +899,8 @@ module.exports = {
   sanitizeTranslationBody,
   scrubDetectedLanguage,
   isEnglishDetectedLanguage,
+  detectedLanguageForControlPersist,
+  bookkeepingLanguageLabel,
   stripOrphanBodyControlState,
   buildTranslationBlock,
   maxTranslationChars,

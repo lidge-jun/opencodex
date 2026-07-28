@@ -79,6 +79,15 @@ streams the response back **untranslated**.
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
   `thoughtSignature` values so reasoning continuity survives later turns.
+- **Inline image output:** when the model is one of the explicit image-capable chat IDs
+  (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
+  `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
+  Standalone media-generation IDs such as `gemini-3-pro-image` are not included. Returned
+  `inlineData` parts are materialized under the configured OpenCodex `artifacts/` directory and
+  surfaced as markdown image links to the authenticated opaque route
+  `/v1/opencodex/artifacts/<id>` (not `file:` URIs or host filesystem paths). Each image is capped
+  at 50 MB and each response at 100 MB of decoded data; malformed base64 payloads are rejected.
+  Artifacts are pruned automatically when the count exceeds 200 files.
 
 ## `kiro`
 
@@ -94,45 +103,46 @@ streams the response back **untranslated**.
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
   shape is eligible for one bounded fallback to `q.{region}.amazonaws.com` after an endpoint,
   signature, DNS, or connection failure.
-- Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, and one OAuth
-  refresh/replay after HTTP 401. The client owns throttling, timeout, and ordinary service retries;
-  opencodex does not multiply those policies inside the adapter.
+- Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
+  refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
+  single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
+  hard quota failures and ordinary service errors are not replayed.
 - Its non-streaming parser drains the same event stream for the web-search loop.
 
 ### Completion semantics
 
 Kiro assistant text carries no dependable end-turn phase of its own. Its terminal `metadataEvent`
-can, however, carry a native `stopReason`. An `END_TURN` response holding plain assistant text with
-no client tool call ends the turn directly, with that text emitted as the final answer and no extra
-model round trip.
+can carry a native `stopReason`, but Kiro can label progress prose as `END_TURN`. On tool-enabled
+turns, `END_TURN` and `STOP_SEQUENCE` therefore prove only that the inference stopped; ordinary text
+remains commentary and enters the one bounded completion validation.
 
-Only a **missing** stop reason uses the compatibility path. Any other explicit reason has already
-terminated the inference upstream, so the adapter reports it instead of spending another model
-request: an output-token limit surfaces as incomplete output that a client may continue, while
+`END_TURN`, `STOP_SEQUENCE`, or a missing stop reason may use the compatibility path. Other explicit
+reasons have already terminated the inference upstream, so the adapter reports them instead of
+spending another model request: an output-token limit surfaces as incomplete output that a client may continue, while
 context-window exhaustion surfaces as a non-retryable context-length error rather than as truncated
 output. Filtering and guardrail stops surface as filtered incomplete output, and a `TOOL_USE` stop
 that arrives without an actual tool call is reported as a contradiction rather than treated as
-progress. `STOP_SEQUENCE` is an ordinary completion alongside `END_TURN`.
+progress.
 
-When no stop reason is present and an ordinary client tool exists, opencodex adds a private
+When an ordinary client tool exists, opencodex adds a private
 `codex_kiro_final_answer` tool to the upstream request; progress text streams as commentary and
 cannot terminate the turn. The adapter consumes the private call, emits its answer as final text,
 and never exposes the private tool to Codex or Claude Code. Because the stop reason only arrives at
 the end of the stream, assistant text in a tool-enabled turn is held until either a real tool call
-starts (released as commentary) or the stream ends (released as the final answer on `END_TURN` or
-`STOP_SEQUENCE`, otherwise as commentary). When the web-search sidecar is active, released
+starts or the stream ends, then releases it as commentary unless the private tool supplied the final
+answer. When the web-search sidecar is active, released
 commentary still streams ahead of the terminal event; only the events needed to decide whether the
 model requested a synthetic search remain buffered.
 
-If Kiro emits progress with no stop reason at all and without calling the completion tool, the
-adapter makes one continuation. That single retry may finish with a validated private completion or
-plain final text. It cannot recurse: an empty or reasoning-only retry is returned as retryable
-incomplete, while a real client tool call keeps the turn open. If the retry is a whitespace-
-normalized exact repeat of the preceding commentary, the duplicate is suppressed while the turn
-still completes. Suppression is deliberately limited to exact repeats: a reworded status update can
-change the outcome of the turn ("still pending" to "now complete"), and losing that sentence is
-worse than showing a cosmetic restatement. Tool-free requests retain normal text completion
-behavior.
+If Kiro stops without calling the completion tool, the adapter makes one continuation. Reasoning-
+only retries preserve the original valid user/tool-result turn rather than manufacturing an empty
+assistant message; visible progress is replayed with a non-empty adapter-owned instruction. Before
+transport, the generated conversation is checked for alternating roles, non-empty structural turns,
+and matched tool-use/result ids. Empty tool output receives a neutral non-empty placeholder. The
+retry cannot recurse: an empty or reasoning-only retry is returned as retryable incomplete, while a
+real client tool call keeps the turn open. A completion-tool answer is always emitted as
+`final_answer`, even when it exactly repeats prior commentary, because phase correctness is more
+important than cosmetic de-duplication. Tool-free requests retain normal text completion behavior.
 
 ### Reasoning effort
 

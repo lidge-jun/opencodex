@@ -20,10 +20,14 @@ import {
 import { reconcileOAuthProviders } from "../oauth";
 import { invalidateCodexModelsCache } from "../codex/catalog";
 import { startMemoryWatchdog } from "./memory-watchdog";
+import { setStorageCleanupPolicyLiveSink } from "../storage/policy";
+import { setStorageCleanupPolicyJobLiveApply } from "../storage/policy-job";
+import { scheduleStorageCleanupStartupRun, startStorageCleanupScheduler } from "../storage/policy-scheduler";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
+import type { StorageCleanupPolicy } from "../types";
 import {
   CodexAccountCooldownError,
   cooldownErrorMessage,
@@ -52,6 +56,8 @@ export {
   drainAndShutdown,
   getActiveTurnCount,
   isDraining,
+  isRecyclingForExit,
+  markRecyclingForExit,
   registerTurn,
   trackStreamLifetime,
   unregisterTurn,
@@ -288,6 +294,16 @@ export function startServer(port?: number) {
   // #314: warn-only RSS observability (unref'd, idempotent — safe under repeated
   // startServer(0) in tests). Snapshot surfaces via GET /api/system/memory.
   startMemoryWatchdog();
+  // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
+  // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
+  // Heavy work runs in a Worker via the single-flight job controller.
+  // Keep live config.policy in sync when background runs advance nextRun/lastRun.
+  const applyPolicy = (policy: StorageCleanupPolicy) => {
+    config.storageCleanupPolicy = policy;
+  };
+  setStorageCleanupPolicyLiveSink(applyPolicy);
+  setStorageCleanupPolicyJobLiveApply(applyPolicy);
+  startStorageCleanupScheduler();
 
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);
@@ -482,6 +498,36 @@ export function startServer(port?: number) {
         const response = await handleImages(req, config, endpoint, logCtx);
         addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
         return withCors(response, req, config);
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {
+        const apiAuthError = requireApiAuth(req, config, "data-plane");
+        if (apiAuthError) return withCors(apiAuthError, req, config);
+        if (!isAllowedRequestOrigin(req, config)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        }
+        const id = decodeURIComponent(url.pathname.slice("/v1/opencodex/artifacts/".length));
+        const { resolveArtifactPath } = await import("../images/artifacts");
+        const artifactPath = resolveArtifactPath(id);
+        if (!artifactPath) {
+          return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
+        }
+        const file = Bun.file(artifactPath);
+        const ext = artifactPath.split(".").pop()?.toLowerCase();
+        const contentType =
+          ext === "png" ? "image/png"
+            : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+              : ext === "webp" ? "image/webp"
+                : ext === "gif" ? "image/gif"
+                  : "application/octet-stream";
+        return withCors(new Response(file, {
+          status: 200,
+          headers: {
+            "content-type": contentType,
+            "cache-control": "private, max-age=3600",
+            "x-content-type-options": "nosniff",
+          },
+        }), req, config);
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
@@ -875,6 +921,9 @@ export function startServer(port?: number) {
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {});
   }
+
+  // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
+  scheduleStorageCleanupStartupRun();
 
   return server;
 }

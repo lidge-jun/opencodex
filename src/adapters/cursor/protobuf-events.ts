@@ -3,6 +3,10 @@ import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
 import {
+  cursorShellBridgeArgsValid,
+  cursorShellBridgeDropError,
+  defaultShellBridgeArgNormalizeSchema,
+  isCodexShellBridgeToolName,
   normalizeCursorWireName,
   OCX_RESPONSES_TOOL_PROVIDER,
   resolveShellBridgeAliasKey,
@@ -324,10 +328,18 @@ export function mapSyntheticMcpExecToToolEvents(
     out.push(...commitToolCall(options.state, callId, finalArgs));
     return out;
   }
+  const responsesName = responsesToolNameFromCursorWire(cursorWireName);
+  const normSchema = defaultShellBridgeArgNormalizeSchema(responsesName);
+  const normalizedArgs = JSON.stringify(normalizeArgKeys(decodeCursorArgsMap(args?.args), normSchema));
+  if (!cursorShellBridgeArgsValid(normalizedArgs, responsesName, normSchema)) {
+    if (isCodexShellBridgeToolName(responsesName)) {
+      return [{ type: "error", message: cursorShellBridgeDropError(responsesName) }];
+    }
+  }
   // Stateless fallback (no shared event state): emit a complete, self-contained tool call.
   return [
-    { type: "tool_call_start", id: callId, name: responsesToolNameFromCursorWire(cursorWireName) },
-    { type: "tool_call_delta", arguments: decodeMcpArgs(args) },
+    { type: "tool_call_start", id: callId, name: responsesName },
+    ...(normalizedArgs.length > 2 ? [{ type: "tool_call_delta" as const, arguments: normalizedArgs }] : []),
     { type: "tool_call_end", id: callId },
   ];
 }
@@ -361,9 +373,19 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
  * recorded in `openToolCalls`. Because each completion emits a whole non-interleaved unit, the bridge
  * (which tracks a single current tool call) serializes parallel Cursor calls correctly.
  */
+function dropShellBridgeCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
+  state.openToolCalls.delete(callId);
+  state.completedToolCalls.add(callId);
+  return [{ type: "error", message: cursorShellBridgeDropError(toolName) }];
+}
+
 function commitToolCall(state: CursorProtobufEventState, callId: string, finalArgs: string): CursorServerMessage[] {
   const open = state.openToolCalls.get(callId);
   if (!open) return [];
+  const schema = toolSchemaForWireName(state, open.name);
+  if (!cursorShellBridgeArgsValid(finalArgs, open.name, schema)) {
+    if (isCodexShellBridgeToolName(open.name)) return dropShellBridgeCall(state, callId, open.name);
+  }
   const out: CursorServerMessage[] = [{ type: "tool_call_start", id: callId, name: open.name }];
   if (finalArgs.length > 0) out.push({ type: "tool_call_delta", arguments: finalArgs });
   out.push(...endToolCall(state, callId));

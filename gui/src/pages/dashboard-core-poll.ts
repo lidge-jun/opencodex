@@ -19,11 +19,28 @@ import {
 
 export type InjectionPoll = {
   multiAgentGuidanceEnabled: boolean;
+  syncCodexSubagentDefaults: boolean;
   injectionModel: string;
   injectionEffort: string;
   injectionEfforts: string[];
   injectionAvailable: Array<{ provider: string; model: string; namespaced: string }>;
 };
+
+export type InjectionSelectionResponse = {
+  multiAgentGuidanceEnabled?: boolean;
+  syncCodexSubagentDefaults?: boolean;
+  model?: string | null;
+  effort?: string | null;
+};
+
+export function normalizeInjectionSelection(data: InjectionSelectionResponse) {
+  return {
+    multiAgentGuidanceEnabled: data.multiAgentGuidanceEnabled !== false,
+    syncCodexSubagentDefaults: data.syncCodexSubagentDefaults === true,
+    injectionModel: data.model ?? "",
+    injectionEffort: data.effort ?? "",
+  };
+}
 
 export type EffortCapPoll = {
   effortCap: string;
@@ -197,17 +214,12 @@ export async function fetchDashboardCore(
     try {
       const imRes = await fetch(`${apiBase}/api/injection-model`, { signal });
       if (imRes.ok) {
-        const imData = await imRes.json() as {
-          multiAgentGuidanceEnabled?: boolean;
-          model?: string | null;
-          effort?: string | null;
+        const imData = await imRes.json() as InjectionSelectionResponse & {
           efforts?: string[];
           available?: InjectionPoll["injectionAvailable"];
         };
         injection = {
-          multiAgentGuidanceEnabled: imData.multiAgentGuidanceEnabled !== false,
-          injectionModel: imData.model ?? "",
-          injectionEffort: imData.effort ?? "",
+          ...normalizeInjectionSelection(imData),
           injectionEfforts: imData.efforts ?? [],
           injectionAvailable: imData.available ?? [],
         };

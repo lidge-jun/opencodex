@@ -185,15 +185,22 @@ function warnIfBaseUrlDiscarded(providerName: string, userBaseUrl: string, effec
   );
 }
 
+function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
+  const resolved = resolveEnvValue(apiKey);
+  return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
+}
+
 function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry) {
     assertProviderDestinationAllowed(providerName, provider);
-    return { ...provider, apiKey: resolveEnvValue(provider.apiKey) };
+    return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
   }
+  const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const explicitKeyOverride = registryEntry.authKind === "oauth"
     && registryEntry.allowKeyAuthOverride === true
-    && provider.authMode === "key";
+    && provider.authMode === "key"
+    && resolvedApiKey !== undefined;
   const canonicalAuthMode = explicitKeyOverride
     ? "key"
     : registryEntry.authKind === "forward" || registryEntry.authKind === "oauth"
@@ -239,7 +246,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     adapter: registryEntry.adapter,
     baseUrl,
     authMode: canonicalAuthMode,
-    apiKey: resolveEnvValue(provider.apiKey),
+    apiKey: resolvedApiKey,
     // Backfill the Google wire mode + Vertex project/location from the registry when the user
     // config omits them, so a minimal `google-vertex`/`google-antigravity` entry still routes
     // through the correct branch (CCA/Vertex) instead of falling back to AI Studio.

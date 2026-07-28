@@ -20,6 +20,7 @@ export default function ComboWorkspace({
   combos,
   providers,
   models,
+  cataloguedComboIds,
   loading,
   onRefresh,
   onSave,
@@ -210,7 +211,12 @@ export default function ComboWorkspace({
             onDirtyChange={setDetailDirty}
           />
         ) : (
-          <OverviewPanel combos={combos} onSelect={(id) => trySelect(id)} onAdd={onAdd} />
+          <OverviewPanel
+            combos={combos}
+            cataloguedComboIds={cataloguedComboIds}
+            onSelect={(id) => trySelect(id)}
+            onAdd={onAdd}
+          />
         )}
       </div>
 

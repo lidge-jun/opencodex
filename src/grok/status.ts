@@ -86,3 +86,36 @@ export function readGrokStatus(opts: { grokHome?: string } = {}): GrokStatus {
 
   return { configPath, present: true, baseUrl, models: models.filter(model => model.id) };
 }
+
+/**
+ * Does the fence point somewhere the running proxy is NOT?
+ *
+ * Grok resolves its model at request time and retries a refused connection up to 15
+ * times, and those retries are invisible to us: nothing reaches the proxy, so nothing
+ * lands in our log. The user sees a correct context window (the stale entry carries it)
+ * and an endless "Retrying (attempt N/15)". That is a silent failure unless someone
+ * compares the fence's port against the port we actually bound — which is exactly what
+ * `ocx status` is for.
+ *
+ * Returns null when there is nothing to say: no fence, an unparsable endpoint, or a
+ * fence that already agrees with the live listener.
+ */
+export function grokFenceEndpointDrift(
+  status: Pick<GrokStatus, "present" | "baseUrl">,
+  livePort: number | undefined,
+): { fencePort: number; livePort: number } | null {
+  if (!status.present || !status.baseUrl) return null;
+  if (typeof livePort !== "number" || !Number.isFinite(livePort) || livePort <= 0) return null;
+  let fencePort: number;
+  try {
+    const url = new URL(status.baseUrl);
+    // An explicit port is the only thing we write, so an empty one means a shape we did
+    // not produce; stay quiet rather than guess a default.
+    if (!url.port) return null;
+    fencePort = Number(url.port);
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(fencePort) || fencePort === livePort) return null;
+  return { fencePort, livePort };
+}

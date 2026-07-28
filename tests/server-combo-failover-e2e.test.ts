@@ -15,7 +15,7 @@ import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
-import { clearRequestLogsForTests, type RequestLogContext } from "../src/server/request-log";
+import { clearRequestLogsForTests, hydrateRequestLogsFromDisk, type RequestLogContext } from "../src/server/request-log";
 import { responseWithDeferredRequestLog } from "../src/server/relay";
 import { readUsageEntries } from "../src/usage/log";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
@@ -411,6 +411,116 @@ describe("server combo failover 030 activation matrix", () => {
         attempts: [
           { ordinal: 1, provider: "a", model: "m1", status: 503, usage: { inputTokens: 7, outputTokens: 1 } },
           { ordinal: 2, provider: "b", model: "m2", status: 200, usage: { inputTokens: 2, outputTokens: 1 } },
+        ],
+      });
+    }
+  });
+
+  test("preserves distinct failed and winning reasoning wires through restart hydration", async () => {
+    const bodies: Array<{ provider: string; effort?: unknown }> = [];
+    const a = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push({ provider: "a", effort: body.reasoning_effort });
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push({ provider: "b", effort: body.reasoning_effort });
+      return chatSuccess("mapped backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "low" },
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "high" },
+      }),
+    });
+
+    const response = await postLogged(config, { reasoning: { effort: "max" } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("mapped backup");
+    expect(bodies).toEqual([
+      { provider: "a", effort: "low" },
+      { provider: "b", effort: "high" },
+    ]);
+
+    const expectMappedReceipt = (receipt: Record<string, unknown>) => {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
+        attempts: [
+          {
+            ordinal: 1,
+            provider: "a",
+            status: 503,
+            requestedEffort: "max",
+            effectiveEffort: "low",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "low",
+          },
+          {
+            ordinal: 2,
+            provider: "b",
+            status: 200,
+            requestedEffort: "max",
+            effectiveEffort: "high",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "high",
+          },
+        ],
+      });
+    };
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    expectMappedReceipt(log);
+    expectMappedReceipt(usage);
+    expect(log).not.toHaveProperty("upstreamError");
+
+    clearRequestLogsForTests();
+    expect(hydrateRequestLogsFromDisk()).toBe(1);
+    const hydratedResponse = await management(config, "GET", "/api/logs?tail=1");
+    const hydrated = await hydratedResponse!.json() as Array<Record<string, unknown>>;
+    expect(hydrated).toHaveLength(1);
+    expectMappedReceipt(hydrated[0]!);
+  });
+
+  test("all-target exhaustion promotes the final attempt reasoning wire to the logical row", async () => {
+    const a = serve(() => Response.json({ error: { message: "first overloaded" } }, { status: 503 }));
+    const b = serve(() => Response.json({ error: { message: "last overloaded" } }, { status: 503 }));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "low" },
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "high" },
+      }),
+    });
+
+    const response = await postLogged(config, { reasoning: { effort: "max" } });
+    expect(response.status).toBe(503);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
+        attempts: [
+          { provider: "a", status: 503, effectiveEffort: "low", reasoningWireValue: "low" },
+          { provider: "b", status: 503, effectiveEffort: "high", reasoningWireValue: "high" },
         ],
       });
     }
@@ -814,6 +924,42 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(await collectSse(response))).toContain("cursor backup");
     expect(bHits).toBe(1);
+  });
+
+  test("runTurn combo attempts retain requested effort without adapter wire metadata", async () => {
+    customRunTurn = async (parsed, _incoming, emit) => {
+      if (parsed.modelId === "m1") {
+        emit({ type: "error", message: "first target unavailable" });
+        return;
+      }
+      emit({ type: "text_delta", text: "runTurn backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await postLogged(config, {
+      reasoning: { effort: "high" },
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("runTurn backup");
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        attempts: [
+          { ordinal: 1, provider: "a", requestedEffort: "high" },
+          { ordinal: 2, provider: "b", requestedEffort: "high" },
+        ],
+      });
+      for (const attempt of receipt.attempts as Array<Record<string, unknown>>) {
+        expect(attempt).not.toHaveProperty("effectiveEffort");
+        expect(attempt).not.toHaveProperty("reasoningWireField");
+        expect(attempt).not.toHaveProperty("reasoningWireValue");
+      }
+    }
   });
 
   test("hosted web-search eager model failure hops through the loop path", async () => {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectGrokConfig } from "../src/grok/inject";
-import { readGrokStatus } from "../src/grok/status";
+import { grokFenceEndpointDrift, readGrokStatus } from "../src/grok/status";
 
 function tempGrokHome(): { root: string; grokHome: string } {
   const root = mkdtempSync(join(tmpdir(), "ocx-grok-status-"));
@@ -74,6 +74,51 @@ describe("readGrokStatus", () => {
       expect(status.models.map(m => m.id)).toEqual(["gpt-5.6-sol"]);
       expect(JSON.stringify(status)).not.toContain("sk-user-secret");
       expect(JSON.stringify(status)).not.toContain("secret-model");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * 2026-07-27 field report: the fence named 127.0.0.1:4179 while the proxy listened on
+ * 10100. Grok retried the refused connection 15 times per turn entirely on its own side,
+ * so no request — and therefore no log line — ever reached opencodex. The context window
+ * still read correctly, because the stale entry carried it. Nothing in the product said
+ * why, which is what this check exists to fix.
+ */
+describe("Grok fence endpoint drift", () => {
+  test("reports the mismatch when the fence names a port we do not listen on", () => {
+    const drift = grokFenceEndpointDrift(
+      { present: true, baseUrl: "http://127.0.0.1:4179/v1" },
+      10100,
+    );
+    expect(drift).toEqual({ fencePort: 4179, livePort: 10100 });
+  });
+
+  test("stays quiet when the fence agrees with the live listener", () => {
+    expect(grokFenceEndpointDrift(
+      { present: true, baseUrl: "http://127.0.0.1:10100/v1" },
+      10100,
+    )).toBeNull();
+  });
+
+  // No fence, no live port, or an endpoint shape we never emit: there is nothing the user
+  // could act on, and a false warning about their own config is worse than silence.
+  test("stays quiet when there is nothing to compare", () => {
+    expect(grokFenceEndpointDrift({ present: false, baseUrl: null }, 10100)).toBeNull();
+    expect(grokFenceEndpointDrift({ present: true, baseUrl: "http://127.0.0.1:4179/v1" }, undefined)).toBeNull();
+    expect(grokFenceEndpointDrift({ present: true, baseUrl: "not a url" }, 10100)).toBeNull();
+    expect(grokFenceEndpointDrift({ present: true, baseUrl: "http://127.0.0.1/v1" }, 10100)).toBeNull();
+  });
+
+  test("reads the real fence a sync just wrote", () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      injectGrokConfig(10100, [{ id: "gpt-5.6-sol", contextWindow: 372_000 }], { grokHome });
+      const status = readGrokStatus({ grokHome });
+      expect(grokFenceEndpointDrift(status, 10100)).toBeNull();
+      expect(grokFenceEndpointDrift(status, 4179)).toEqual({ fencePort: 10100, livePort: 4179 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

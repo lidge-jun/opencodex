@@ -10,6 +10,7 @@ import { diagnoseCodexShim } from "../codex/shim";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 import { collectOrcaCodexHomeDiagnostic, type OrcaCodexHomeDiagnostic } from "../codex/home";
+import { grokFenceEndpointDrift, readGrokStatus } from "../grok/status";
 
 type HealthCheck = {
   ok: boolean;
@@ -192,6 +193,22 @@ export async function collectStatus(): Promise<CliStatusView> {
   if (clampActive) {
     warningParts.push(
       `Catalog clamp removed: ${lastClamp!.removedEfforts.join(", ")}. Run ocx doctor for diagnosis and recovery.`,
+    );
+  }
+  // A Grok fence naming a port we are not listening on is invisible everywhere else:
+  // grok retries the refused connection on its own side, so no request — and therefore
+  // no log line — ever reaches us. Surface it here, where the live port is already known.
+  const grokDrift = (() => {
+    try {
+      return grokFenceEndpointDrift(readGrokStatus(), health.ok ? listen.port : undefined);
+    } catch {
+      return null; // reading grok's config must never break `ocx status`
+    }
+  })();
+  if (grokDrift) {
+    warningParts.push(
+      `Grok Build config points at port ${grokDrift.fencePort}, but the proxy is on `
+      + `${grokDrift.livePort}; grok turns will retry against a closed port. Run 'ocx ensure' to repoint it.`,
     );
   }
   const codexRuntime = {

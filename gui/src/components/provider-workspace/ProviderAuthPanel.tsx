@@ -5,12 +5,11 @@
  */
 import { useState } from "react";
 import { useT } from "../../i18n/shared";
-import { IconLock, IconExternal, IconTrash } from "../../icons";
+import { IconLock, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import { displayAccountId } from "../../lib/privacy";
 import {
-  copyTextToClipboard,
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
   formatOAuthHealthSummary,
@@ -18,9 +17,12 @@ import {
   oauthHealthIsCooldown,
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
-  type DoctorCopyFeedback,
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
+import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
+import { LoginUrlBlock } from "../login-url-block";
+import QuotaBars from "../QuotaBars";
+import { useCopyFeedback } from "../use-copy-feedback";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
@@ -49,8 +51,8 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
-  const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
-  const [copiedDoctorFor, setCopiedDoctorFor] = useState<DoctorCopyFeedback | null>(null);
+  const deviceCodeCopy = useCopyFeedback<string>();
+  const doctorCopy = useCopyFeedback<string>();
 
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
   const isOauth = surface === "oauth-accounts";
@@ -75,6 +77,13 @@ export default function ProviderAuthPanel({
   if (!surface || !authHandlers) return null;
 
   const hintForThis = loginHint?.provider === item.name ? loginHint : null;
+  const deviceCode = hintForThis?.deviceCode ?? "";
+  const deviceCodeOutcome = deviceCodeCopy.outcomeFor(deviceCode);
+  const deviceCodeCopyLabel = deviceCodeOutcome === "copied"
+    ? t("prov.codeCopied")
+    : deviceCodeOutcome === "unavailable"
+      ? t("prov.linkCopyUnavailable")
+      : t("prov.copyCode");
   const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
   const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
   const activeNeedsReauth = Boolean(activeReauthAccount);
@@ -97,6 +106,9 @@ export default function ProviderAuthPanel({
       <div className="pwi-auth-body">
         {isOauth && (
           <>
+            {item.name === "anthropic" && (
+              <AnthropicAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
+            )}
             <div className="pwi-auth-status-row">
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
               <span className="pwi-auth-status-text">
@@ -129,19 +141,13 @@ export default function ProviderAuthPanel({
                     <div className="pwi-device-code-wrap">
                       <span>{t("prov.deviceCode")}</span>
                       <code className="pwi-device-code">{hintForThis.deviceCode}</code>
-                      <button type="button" className="btn btn-primary btn-sm" onClick={() => {
-                        navigator.clipboard.writeText(hintForThis.deviceCode ?? "").then(() => {
-                          setDeviceCodeCopied(true);
-                          setTimeout(() => setDeviceCodeCopied(false), 2500);
-                        }).catch(() => {});
-                      }}>{deviceCodeCopied ? t("prov.codeCopied") : t("prov.copyCode")}</button>
+                      <button type="button" className="btn btn-primary btn-sm"
+                        onClick={() => deviceCodeCopy.copy(deviceCode, deviceCode)}>
+                        <span aria-live="polite">{deviceCodeCopyLabel}</span>
+                      </button>
                     </div>
                   )}
-                  {hintForThis.url && (
-                    <a href={hintForThis.url} target="_blank" rel="noreferrer" className="pwi-auth-open-link">
-                      <IconExternal style={{ width: 13, height: 13 }} /> {t("prov.didntOpen")}
-                    </a>
-                  )}
+                  <LoginUrlBlock url={hintForThis.url ?? ""} />
                   {authHandlers.onCancelLogin && (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
                       {t("common.cancel")}
@@ -178,20 +184,10 @@ export default function ProviderAuthPanel({
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
                   const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
-                  const copyDoctor = () => {
-                    void copyTextToClipboard(DOCTOR_CMD).then((ok) => {
-                      const feedback: DoctorCopyFeedback = {
-                        accountId: account.id,
-                        outcome: ok ? "copied" : "unavailable",
-                      };
-                      setCopiedDoctorFor(feedback);
-                      setTimeout(() => setCopiedDoctorFor(current => (
-                        current?.accountId === account.id && current.outcome === feedback.outcome ? null : current
-                      )), 2500);
-                    });
-                  };
+                  const copyDoctor = () => { doctorCopy.copy(DOCTOR_CMD, account.id); };
                   return (
-                  <li key={account.id} className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
+                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
+                    <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => { if (!account.active && !showReauth && !inCooldown && !switchingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
@@ -227,7 +223,7 @@ export default function ProviderAuthPanel({
                     )}
                     {showDoctor && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={copyDoctor}>
-                        {doctorCopyButtonLabel(t, copiedDoctorFor, account.id)}
+                        <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopy.outcomeFor(account.id))}</span>
                       </button>
                     )}
                     <button type="button" className="btn btn-ghost btn-sm"
@@ -241,6 +237,17 @@ export default function ProviderAuthPanel({
                       onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
+                    </div>
+                    {(account.quota || account.quotaUnavailable) && (
+                      <div className="pwi-auth-acct-quota">
+                        {account.quota && (
+                          <QuotaBars quota={account.quota} plan={null} threshold={80} t={t} layout="stacked" />
+                        )}
+                        {account.quotaUnavailable && (
+                          <p className="muted pwi-auth-acct-quota-stale">{t("pws.accountQuotaUnavailable")}</p>
+                        )}
+                      </div>
+                    )}
                   </li>
                   );
                 })}

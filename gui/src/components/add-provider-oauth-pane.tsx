@@ -1,5 +1,6 @@
 import { IconLock } from "../icons";
 import { useT } from "../i18n/shared";
+import { LoginUrlBlock } from "./login-url-block";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 
 export function AddProviderOAuthPane({
@@ -8,6 +9,7 @@ export function AddProviderOAuthPane({
   oauthBusy,
   oauthMsg,
   oauthMsgTone,
+  oauthUrl,
   manualCode,
   manualCodeBusy,
   manualCodeMsg,
@@ -23,6 +25,7 @@ export function AddProviderOAuthPane({
   oauthBusy: boolean;
   oauthMsg: string;
   oauthMsgTone: "ok" | "warn";
+  oauthUrl: string;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeMsg: string;
@@ -53,6 +56,7 @@ export function AddProviderOAuthPane({
           {oauthMsg}
         </div>
       )}
+      {oauthBusy && <LoginUrlBlock url={oauthUrl} />}
       {oauthBusy && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div className="muted text-label">

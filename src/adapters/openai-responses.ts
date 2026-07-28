@@ -220,6 +220,28 @@ function stripDisabledReasoningSummaries(
 }
 
 /**
+ * Normalize only the delivery enum Codex already emitted. Do not inject a field into callers that
+ * did not request summaries, and leave every unconfigured provider/model byte-for-byte unchanged.
+ */
+function normalizeConfiguredReasoningSummaryDelivery(
+  body: unknown,
+  provider: OcxProviderConfig,
+  modelId: string,
+): unknown {
+  const delivery = modelRecordValue(provider.modelReasoningSummaryDelivery, modelId);
+  if (delivery === undefined || !isPlainObject(body) || !isPlainObject(body.stream_options)) return body;
+  if (!Object.hasOwn(body.stream_options, "reasoning_summary_delivery")) return body;
+  if (body.stream_options.reasoning_summary_delivery === delivery) return body;
+  return {
+    ...body,
+    stream_options: {
+      ...body.stream_options,
+      reasoning_summary_delivery: delivery,
+    },
+  };
+}
+
+/**
  * Comprehensive Spark compatibility layer. codex-rs emits five tool types (function,
  * namespace, tool_search, web_search, custom) plus extensions (defer_loading,
  * parallel_tool_calls, tool_search_call/output items). Spark's serving path only
@@ -729,12 +751,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
+      const sanitizedBody = stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody)))))));
       return {
         url,
         method: "POST",
         headers,
         body: JSON.stringify(stripDisabledReasoningSummaries(
-          stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))),
+          normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
           provider,
           parsed.modelId,
         )),

@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AdapterRequest } from "../src/adapters/base";
-import { fetchKiroWithRetry } from "../src/adapters/kiro-retry";
+import {
+  fetchKiroWithRetry,
+  noteKiroTransientThrottle,
+  resetKiroThrottleStateForTests,
+} from "../src/adapters/kiro-retry";
 
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  resetKiroThrottleStateForTests();
 });
 
 const request: AdapterRequest = {
@@ -85,14 +90,145 @@ describe("kiro retry fetch", () => {
     }
   });
 
-  test("does not replay throttling responses", async () => {
+  test("does not replay hard quota exhaustion", async () => {
     const mock = mockFetch([
-      new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
+      new Response("monthly quota exceeded", { status: 429 }),
       new Response("ok", { status: 200 }),
     ]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
     expect(res.status).toBe(429);
-    expect(await res.text()).toContain("Kiro rate limit exceeded");
+    expect(await res.text()).toContain("Kiro quota exhausted");
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("retries a transient USER_REQUEST_RATE_EXCEEDED response inside the adapter", async () => {
+    const mock = mockFetch([
+      new Response(JSON.stringify({
+        __type: "ThrottlingException",
+        message: "USER_REQUEST_RATE_EXCEEDED: Too many requests, please wait before trying again.",
+      }), { status: 429, headers: { "Retry-After": "0" } }),
+      new Response("ok", { status: 200 }),
+    ]);
+
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+
+    expect(res.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("concurrent transient throttles elect one probe before followers resume", async () => {
+    let calls = 0;
+    let initialCalls = 0;
+    let releaseInitial!: () => void;
+    let releaseProbe!: () => void;
+    const initialBarrier = new Promise<void>(resolve => { releaseInitial = resolve; });
+    const probeBarrier = new Promise<void>(resolve => { releaseProbe = resolve; });
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>(resolve => { markProbeStarted = resolve; });
+
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls <= 2) {
+        initialCalls += 1;
+        if (initialCalls === 2) releaseInitial();
+        await initialBarrier;
+        return new Response(JSON.stringify({
+          __type: "ThrottlingException",
+          message: "USER_REQUEST_RATE_EXCEEDED: please wait",
+        }), { status: 429, headers: { "Retry-After": "0" } });
+      }
+      if (calls === 3) {
+        markProbeStarted();
+        await probeBarrier;
+      }
+      return new Response("ok", { status: 200 });
+    }) as typeof fetch;
+
+    const first = fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    const second = fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    await probeStarted;
+    await Bun.sleep(10);
+    expect(calls).toBe(3);
+
+    releaseProbe();
+    const responses = await Promise.all([first, second]);
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    expect(calls).toBe(4);
+  });
+
+  test("a waiting probe re-checks a cooldown extended by another 429", async () => {
+    let calls = 0;
+    let initialCalls = 0;
+    let releaseInitial!: () => void;
+    const initialBarrier = new Promise<void>(resolve => { releaseInitial = resolve; });
+    const startedAt = Date.now();
+
+    globalThis.fetch = (async () => {
+      const call = ++calls;
+      if (call <= 2) {
+        initialCalls += 1;
+        if (initialCalls === 2) releaseInitial();
+        await initialBarrier;
+        const retryAfter = call === 1 ? "0.02" : "0.08";
+        return new Response("USER_REQUEST_RATE_EXCEEDED", {
+          status: 429,
+          headers: { "Retry-After": retryAfter },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    }) as typeof fetch;
+
+    const responses = await Promise.all([
+      fetchKiroWithRetry(request, { timeoutMs: 5_000 }),
+      fetchKiroWithRetry(request, { timeoutMs: 5_000 }),
+    ]);
+
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    expect(calls).toBe(4);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
+  });
+
+  test("a follower can abort while a post-cooldown probe is in flight", async () => {
+    noteKiroTransientThrottle(20);
+    let calls = 0;
+    let releaseProbe!: () => void;
+    const probeBarrier = new Promise<void>(resolve => { releaseProbe = resolve; });
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>(resolve => { markProbeStarted = resolve; });
+    globalThis.fetch = (async () => {
+      calls += 1;
+      markProbeStarted();
+      await probeBarrier;
+      return new Response("ok", { status: 200 });
+    }) as typeof fetch;
+
+    const leader = fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    await probeStarted;
+    const abort = new AbortController();
+    const follower = fetchKiroWithRetry(request, { timeoutMs: 5_000, abortSignal: abort.signal });
+    abort.abort(new DOMException("client closed", "AbortError"));
+
+    await expect(follower).rejects.toThrow();
+    expect(calls).toBe(1);
+    releaseProbe();
+    expect((await leader).status).toBe(200);
+  });
+
+  test("an aborted cooldown owner releases the gate for the next request", async () => {
+    noteKiroTransientThrottle(40);
+    const ownerAbort = new AbortController();
+    const owner = fetchKiroWithRetry(request, { timeoutMs: 5_000, abortSignal: ownerAbort.signal });
+    await Bun.sleep(5);
+    ownerAbort.abort(new DOMException("owner cancelled", "AbortError"));
+    await expect(owner).rejects.toThrow();
+
+    const mock = mockFetch([new Response("ok", { status: 200 })]);
+    const next = fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    const response = await Promise.race([
+      next,
+      Bun.sleep(150).then(() => { throw new Error("Kiro throttle gate stayed locked after owner abort"); }),
+    ]);
+    expect(response.status).toBe(200);
     expect(mock.calls).toHaveLength(1);
   });
 
@@ -194,7 +330,7 @@ describe("kiro retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  test("normalizes final 429 without adapter replay", async () => {
+  test("normalizes final transient 429 after bounded adapter retries", async () => {
     const mock = mockFetch([
       new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
       new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),
@@ -203,7 +339,7 @@ describe("kiro retry fetch", () => {
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
     expect(res.status).toBe(429);
     expect(await res.text()).toContain("Kiro rate limit exceeded");
-    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls).toHaveLength(3);
   });
 
   test("does not start fetch when caller signal is already aborted", async () => {

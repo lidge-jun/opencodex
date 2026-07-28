@@ -158,7 +158,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
 
     const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/${id}"]`)!;
     const buttonText = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!;
-    expect(container.textContent).toContain("2/5 active");
+    expect(container.textContent).toContain("2/5 visible");
     expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
     expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
@@ -173,7 +173,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
 
     await act(async () => { switchFor("claude-sonnet").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "models", targets: [{ id: "claude-sonnet" }], enabled: true });
-    expect(container.textContent).toContain("3/5 active");
+    expect(container.textContent).toContain("3/5 visible");
 
     failNext = true;
     await act(async () => { switchFor("claude-opus").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
@@ -182,10 +182,10 @@ test("Models page combines final visibility, atomic actions, discovery status, a
 
     await act(async () => { buttonText("All on").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: true });
-    expect(container.textContent).toContain("5/5 active");
+    expect(container.textContent).toContain("5/5 visible");
     await act(async () => { buttonText("All off").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: false });
-    expect(container.textContent).toContain("0/5 active");
+    expect(container.textContent).toContain("0/5 visible");
   } finally {
     if (root) {
       await act(async () => root?.unmount());

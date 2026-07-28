@@ -31,7 +31,7 @@ import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
-import { drainAndShutdown, startServer } from "../server";
+import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
@@ -92,6 +92,21 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   return null;
+}
+
+/**
+ * A Grok fence sync that throws is best-effort by design — it must never block startup.
+ * Reporting nothing, however, is what lets a STALE fence survive: `~/.grok/config.toml`
+ * keeps naming whatever port the last successful sync wrote, and once that listener is
+ * gone every grok turn retries against a refused connection while our own log stays
+ * silent (2026-07-27 field report: 8 entries pinned to a dead 127.0.0.1:4179).
+ * So say what failed and name the single command that repairs it.
+ */
+function grokSyncFailureMessage(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `Grok Build config sync failed: ${detail}. `
+    + "~/.grok/config.toml may still point at a previous proxy port — "
+    + "run 'ocx ensure' (or apply from the dashboard's Grok page) to repoint it.";
 }
 
 /** Argv for detached `start`, optionally hard-pinning the listen port. */
@@ -212,24 +227,40 @@ async function handleStart(options: { block?: boolean } = {}) {
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
 
   let cleaned = false;
+  let cleanupSucceeded = true;
   const syncCleanup = () => {
-    if (cleaned) return;
+    if (cleaned) return cleanupSucceeded;
     cleaned = true;
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
-    try { revertSystemEnv(); } catch { /* best-effort */ }
+    // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
+    // process expects Codex/Grok/env fences to still be in place.
+    const recycling = isRecyclingForExit();
+    if (!recycling) {
+      try { revertSystemEnv(); } catch { /* best-effort */ }
+    }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (!process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
-      try { restoreNativeCodex(); } catch { /* best-effort restore */ }
+    if (!recycling && !process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
+      try {
+        const restored = restoreNativeCodex();
+        if (!restored.success) {
+          cleanupSucceeded = false;
+          console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+        }
+      } catch (error) {
+        cleanupSucceeded = false;
+        console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     // Same ownership rule as `ocx stop`: if the installed service belongs to another home, the
     // Grok fence is shared state we must not remove — that service keeps running and would be
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
-    if (!process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
+    if (!recycling && !process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
       try { stripGrokConfig(); } catch { /* best-effort restore */ }
     }
+    return cleanupSucceeded;
   };
 
   let shuttingDown = false;
@@ -254,8 +285,8 @@ async function handleStart(options: { block?: boolean } = {}) {
       try {
         await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
       } finally {
-        syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
-        process.exit(0);
+        const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
+        process.exit(restored ? 0 : 1);
       }
     })();
   };
@@ -273,7 +304,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Auto-install .zshrc hook (idempotent — skips if already present).
   installShellHook();
 
-  await maybeShowStarPrompt(); // once-only [Y/n] GitHub-star prompt on first interactive start
+  await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   await syncModelsToCodex(port).catch(() => {});
   if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();
@@ -299,7 +330,14 @@ async function handleStart(options: { block?: boolean } = {}) {
     const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!r.ok) console.error(`⚠️  ${r.message}`);
-  } catch { /* best-effort — grok integration must never block startup */ }
+  } catch (err) {
+    // Best-effort: grok integration must never block startup. But swallowing the error
+    // silently is how a stale fence survives unnoticed — ~/.grok/config.toml keeps
+    // pointing at whatever port the LAST successful sync wrote, and if that listener is
+    // gone every grok turn retries against a refused connection with nothing in our log
+    // to explain it. Name the failure and the one command that repairs it.
+    console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
+  }
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});
@@ -327,7 +365,7 @@ async function handleEnsure() {
         const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
         if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
         else if (!g.ok) console.error(`⚠️  ${g.message}`);
-      } catch { /* best-effort */ }
+      } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
       console.log(`✅ Proxy running on port ${live.port}`);
       return;
     }
@@ -354,7 +392,7 @@ async function handleEnsure() {
     const g = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
     if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!g.ok) console.error(`⚠️  ${g.message}`);
-  } catch { /* best-effort */ }
+  } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
   // Always sync the LIVE port: after a fallback-port start, config.port still names the
   // busy preferred port — syncing that would point Codex at a dead listener.
   await syncModelsToCodex(port).catch(e => {
@@ -477,7 +515,11 @@ async function handleStop() {
   }
   if (!ownershipBlocked) {
     const r = restoreNativeCodex();
-    console.log(`↩️  ${r.message}`);
+    if (r.success) console.log(`↩️  ${r.message}`);
+    else {
+      stopFailed = true;
+      console.error(`⚠️  ${r.message}`);
+    }
   }
   // revertSystemEnv is NOT gated: it carries its own ownership check and concerns launchctl
   // user env, not CODEX_HOME. Safety net for when the daemon's syncCleanup didn't run (SIGKILL).
@@ -666,7 +708,8 @@ function handleRecoverHistory() {
 }
 
 switch (command) {
-  case "init": {
+  case "init":
+  case "setup": {
     const { runInit } = await import("./init");
     await runInit();
     break;
@@ -693,19 +736,40 @@ switch (command) {
         console.error("No running proxy found. Run 'ocx start' — it injects opencodex automatically.");
         process.exit(1);
       }
-      await syncModelsToCodex(live.port);
+      const synced = await syncModelsToCodex(live.port);
+      if (!synced.ok) {
+        process.exitCode = 1;
+        console.error("Plain `codex` was not switched back to opencodex. Fix the reported Codex config issue and retry.");
+        break;
+      }
       const target = collectOrcaCodexHomeDiagnostic();
       console.log(`Plain \`codex\` now routes through opencodex in ${target.effectiveCodexHome} (undo with: ocx restore).`);
       break;
     }
-    const r = restoreNativeCodex();
-    console.log(r.success ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+    let r: { success: boolean; message: string };
+    try {
+      r = restoreNativeCodex();
+    } catch (err) {
+      r = { success: false, message: err instanceof Error ? err.message : String(err) };
+    }
+    if (r.success) console.log(`✅ ${r.message}`);
+    else {
+      console.error(`⚠️  ${r.message}`);
+      process.exitCode = 1;
+    }
     try {
       const g = stripGrokConfig();
       if (g.changed) console.log(`✅ ${g.message}`);
-      else if (!g.ok) console.error(`⚠️  ${g.message}`);
+      else if (!g.ok) {
+        console.error(`⚠️  ${g.message}`);
+        process.exitCode = 1;
+      }
     } catch { /* best-effort */ }
-    console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
+    if (r.success) {
+      console.log("Plain `codex` now runs natively (no proxy). Switch back with: ocx restore back");
+    } else {
+      console.error("Plain `codex` was not fully restored. Inspect $CODEX_HOME/config.toml before using native Codex.");
+    }
     break;
   }
   case "recover-history":
@@ -744,7 +808,11 @@ switch (command) {
     break;
   }
   case "sync": {
-    await syncModelsToCodex((await findLiveProxy())?.port);
+    const synced = await syncModelsToCodex((await findLiveProxy())?.port);
+    if (!synced.ok) {
+      process.exitCode = 1;
+      console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
+    }
     break;
   }
   case "v2": {
@@ -889,9 +957,82 @@ switch (command) {
     process.exitCode = await cmdAccount(args.slice(1));
     break;
   }
-  case "models": {
+  case "models":
+  case "model": {
     const { handleModels } = await import("./models");
-    handleModels(args.slice(1));
+    await handleModels(args.slice(1));
+    break;
+  }
+  case "combo": {
+    const { handleComboCommand } = await import("./combo");
+    process.exitCode = await handleComboCommand(args.slice(1));
+    break;
+  }
+  case "route": {
+    if (args[1] !== "combo") {
+      console.error("Usage: ocx route combo <subcommand>");
+      process.exitCode = 2;
+      break;
+    }
+    const { handleComboCommand } = await import("./combo");
+    process.exitCode = await handleComboCommand(args.slice(2));
+    break;
+  }
+  case "agent": {
+    const { handleAgentCommand } = await import("./agent");
+    process.exitCode = await handleAgentCommand(args.slice(1));
+    break;
+  }
+  case "observe": {
+    const { handleObserveCommand } = await import("./observe");
+    process.exitCode = await handleObserveCommand(args.slice(1));
+    break;
+  }
+  case "logs":
+  case "usage":
+  case "storage":
+  case "memory": {
+    const { handleObserveCommand } = await import("./observe");
+    process.exitCode = await handleObserveCommand([command, ...args.slice(1)]);
+    break;
+  }
+  case "access": {
+    const { handleAccessCommand } = await import("./access");
+    process.exitCode = await handleAccessCommand(args.slice(1));
+    break;
+  }
+  case "api-key": {
+    const { handleAccessCommand } = await import("./access");
+    process.exitCode = await handleAccessCommand(["key", ...args.slice(1)]);
+    break;
+  }
+  case "grok": {
+    const { handleGrokCommand } = await import("./integrations");
+    process.exitCode = await handleGrokCommand(args.slice(1));
+    break;
+  }
+  case "integration": {
+    const integration = args[1];
+    if (integration === "grok") {
+      const { handleGrokCommand } = await import("./integrations");
+      process.exitCode = await handleGrokCommand(args.slice(2));
+    } else if (integration === "claude") {
+      const { handleClaudeConfigCommand } = await import("./integrations");
+      process.exitCode = await handleClaudeConfigCommand(args.slice(2));
+    } else {
+      console.error("Usage: ocx integration <claude|grok> <subcommand>");
+      process.exitCode = 2;
+    }
+    break;
+  }
+  case "system": {
+    const { handleSystemCommand } = await import("./system-command");
+    process.exitCode = await handleSystemCommand(args.slice(1));
+    break;
+  }
+  case "config": {
+    const { handleConfigCommand } = await import("./config-command");
+    process.exitCode = await handleConfigCommand(args.slice(1));
     break;
   }
   case "claude": {
@@ -903,7 +1044,16 @@ switch (command) {
       if (exitCode !== 0) process.exit(exitCode);
       break;
     }
+    if (args[1] === "config") {
+      const { handleClaudeConfigCommand } = await import("./integrations");
+      process.exitCode = await handleClaudeConfigCommand(args.slice(2));
+      break;
+    }
     process.exit(await cmdClaude(args.slice(1)));
+  }
+  case "opencode": {
+    const { cmdOpencode } = await import("./opencode");
+    process.exit(await cmdOpencode(args.slice(1)));
   }
     case "help":
   case "--help":

@@ -37,7 +37,8 @@ import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSl
 import { loadCatalogForSync, resetBundledCatalogCacheForTests } from "./bundled";
 import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
 import { filterCatalogVisibleModels, gatherRoutedModels, lastDropWarnSignature } from "./provider-fetch";
-import { comboCatalogWarningSignatures, comboMasqueradeCollisionWarnings, exactComboCatalogSlugs, openAiApiCollisionWarnings, resolveSlugAliasCollisions, slugAliasCollisionWarnings, warnComboMasqueradeCollisionOnce } from "./aggregation";
+import { clearLastComboCatalogOmissions, comboCatalogWarningSignatures, comboMasqueradeCollisionWarnings, exactComboCatalogSlugs, openAiApiCollisionWarnings, resolveSlugAliasCollisions, slugAliasCollisionWarnings, warnComboMasqueradeCollisionOnce } from "./aggregation";
+import type { ComboCatalogOmission } from "./aggregation";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
@@ -293,6 +294,7 @@ export function resetCatalogRuntimeStateForTests(): void {
   comboCatalogWarningSignatures.clear();
   slugAliasCollisionWarnings.clear();
   comboMasqueradeCollisionWarnings.clear();
+  clearLastComboCatalogOmissions();
   clearModelCache();
 }
 
@@ -452,14 +454,20 @@ export function mergeCatalogEntriesForSync(
   return applyMultiAgentMode(applyNativeVisibility(mergedEntries, disabledNative), multiAgentMode);
 }
 
-export async function syncCatalogModels(config: OcxConfig): Promise<{ added: number; path: string }> {
+export async function syncCatalogModels(config: OcxConfig): Promise<{
+  added: number;
+  path: string;
+  catalogWritten: boolean;
+  comboOmissions: ComboCatalogOmission[];
+}> {
   const catalogPath = readCodexCatalogPath();
   const catalog = loadCatalogForSync(catalogPath);
-  if (!catalog) return { added: 0, path: catalogPath };
+  if (!catalog) return { added: 0, path: catalogPath, catalogWritten: false, comboOmissions: [] };
 
   const template = findNativeTemplate(catalog);
 
-  const goModels = await gatherRoutedModels(config);
+  const comboOmissions: ComboCatalogOmission[] = [];
+  const goModels = await gatherRoutedModels(config, { comboOmissions });
   try {
     // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
     // (later syncs would otherwise overwrite it with featured-modified priorities).
@@ -493,7 +501,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
-  return { added: goEntries.length, path: catalogPath };
+  return { added: goEntries.length, path: catalogPath, catalogWritten: true, comboOmissions };
 }
 
 export function restoreCodexCatalog(): { removed: number; kept: number; path: string } {
@@ -524,10 +532,11 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
   return { removed, kept: native.length, path: catalogPath };
 }
 
-export function invalidateCodexModelsCache(): void {
+/** Force Codex's models_cache stale from the on-disk catalog. Returns whether a cache write occurred. */
+export function invalidateCodexModelsCache(): boolean {
   try {
     const catalogPath = readCodexCatalogPath();
-    if (!existsSync(catalogPath)) return;
+    if (!existsSync(catalogPath)) return false;
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const models = catalog.models ?? catalog;
     const wrapper = {
@@ -536,5 +545,8 @@ export function invalidateCodexModelsCache(): void {
       models,
     };
     atomicWriteFile(activeCodexModelsCachePath(), JSON.stringify(wrapper, null, 2) + "\n");
-  } catch { /* best-effort */ }
+    return true;
+  } catch {
+    return false;
+  }
 }

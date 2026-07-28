@@ -47,11 +47,8 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
-import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, warnUncataloguedComboOnce } from "./aggregation";
-
-type OcxProviderConfigWithReasoningSummaries = OcxProviderConfig & {
-  modelSupportsReasoningSummaries?: Record<string, boolean>;
-};
+import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
+import type { ComboCatalogOmission } from "./aggregation";
 
 export type ProviderModelsApiItem = {
   id: string;
@@ -89,6 +86,13 @@ export function configuredMaxInputTokens(prov: OcxProviderConfig, id: string): n
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
+function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, id: string): boolean | undefined {
+  if (!prov) return undefined;
+  const explicit = modelRecordValue(prov.modelSupportsReasoningSummaries, id);
+  if (explicit !== undefined) return explicit;
+  return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
+}
+
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
   void name;
   const configuredCap = configuredContextWindow(prov, model.id);
@@ -104,10 +108,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
-  const supportsReasoningSummaries = modelRecordValue(
-    (prov as OcxProviderConfigWithReasoningSummaries).modelSupportsReasoningSummaries,
-    model.id,
-  );
+  const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
     ...(configuredCap !== undefined
@@ -464,7 +465,12 @@ export function filterCatalogVisibleModels(
   });
 }
 
-export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
+export async function gatherRoutedModels(
+  config: OcxConfig,
+  options?: { comboOmissions?: ComboCatalogOmission[] },
+): Promise<CatalogModel[]> {
+  // Per-invocation list: sync passes `comboOmissions` so overlapping gathers cannot race.
+  const localOmissions: ComboCatalogOmission[] = [];
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
   // Persisted provider entries can predate newer registry fields (noVisionModels,
   // modelInputModalities, ...). The ROUTER merges registry seeds at request time
@@ -542,15 +548,20 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
     if (derived) all.push(derived);
-    else warnUncataloguedComboOnce(id, combo, members);
+    else warnUncataloguedComboOnce(id, combo, members, localOmissions);
+  }
+  replaceLastComboCatalogOmissions(localOmissions);
+  if (options?.comboOmissions) {
+    options.comboOmissions.length = 0;
+    options.comboOmissions.push(...localOmissions);
   }
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
   // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
   const enrichedByName = new Map(activeProviders);
   const customModels = (config.customModels ?? []).map(cm => {
-    const rawProvider = config.providers[cm.provider] as OcxProviderConfigWithReasoningSummaries | undefined;
-    const supportsReasoningSummaries = modelRecordValue(rawProvider?.modelSupportsReasoningSummaries, cm.modelId);
+    const rawProvider = config.providers[cm.provider];
+    const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,

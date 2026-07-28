@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AccountLoadState } from "../components/provider-workspace/types";
 import { accountNeedsReauth } from "../oauth-health-display";
+import type { AccountQuota } from "../codex-quota-utils";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 
 export interface Config {
@@ -21,6 +22,10 @@ export interface OAuthAccount {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
+  /** Per-account rate limits (providers that report usage per credential, e.g. anthropic). */
+  quota?: AccountQuota | null;
+  /** Set when the per-account probe could not reach upstream (expired login, 429, network). */
+  quotaUnavailable?: boolean;
 }
 export interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
 
@@ -75,12 +80,34 @@ export function useProviderAccountPools(deps: {
       const generation = (accountRequestGenerationRef.current[provider] ?? 0) + 1;
       accountRequestGenerationRef.current[provider] = generation;
       try {
+        // Cheap local read first so account switch / reauth / remove controls appear
+        // even when Anthropic's usage endpoint is slow or timing out.
         const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`);
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
         if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;
         setAccountSets(current => ({ ...current, [provider]: { activeAccountId: data.activeAccountId ?? null, accounts: data.accounts ?? [] } }));
         setAccountLoadStates(current => ({ ...current, [provider]: "ready" }));
+
+        // Enrich with per-account rate limits asynchronously (Anthropic reports usage
+        // per credential). Failures leave the already-ready account rows untouched.
+        void (async () => {
+          try {
+            const quotaRes = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
+            if (!quotaRes.ok) return;
+            const quotaData = await quotaRes.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
+            if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return;
+            setAccountSets(current => ({
+              ...current,
+              [provider]: {
+                activeAccountId: quotaData.activeAccountId ?? data.activeAccountId ?? null,
+                accounts: quotaData.accounts ?? data.accounts ?? [],
+              },
+            }));
+          } catch {
+            /* keep local account rows without quota enrichment */
+          }
+        })();
         return true;
       } catch {
         if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;

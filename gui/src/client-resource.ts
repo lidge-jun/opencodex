@@ -299,3 +299,14 @@ export function setClientResourceData<T>(key: string, data: T) {
   store.snapshot = { data, error: undefined, loading: false };
   emit(store);
 }
+
+/** Test-only: drop every module cache entry so suite order cannot skip cold-start fetches. */
+export function clearClientResourceStoresForTests(): void {
+  for (const store of stores.values()) {
+    clearPollTimer(store);
+    store.inflight?.abort();
+    store.inflight = null;
+    store.inflightOwner = null;
+  }
+  stores.clear();
+}

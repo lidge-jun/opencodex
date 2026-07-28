@@ -250,28 +250,6 @@ export function useAddCodexAccountOAuth({
     void startOAuth();
   }, [reauthAccountId, startOAuth]);
 
-  const copyLoginLink = async () => {
-    if (!ui.authUrl) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(ui.authUrl);
-      } else {
-        const input = document.createElement("textarea");
-        input.value = ui.authUrl;
-        input.style.opacity = "0";
-        input.style.position = "fixed";
-        document.body.appendChild(input);
-        input.select();
-        document.execCommand("copy");
-        document.body.removeChild(input);
-      }
-      dispatch({ type: "set-copied", copied: true });
-      setTimeout(() => { if (aliveRef.current) dispatch({ type: "set-copied", copied: false }); }, 2500);
-    } catch {
-      dispatch({ type: "set-error", error: t("codexAuth.loginLinkCopyFailed") });
-    }
-  };
-
   const submitManualCode = useCallback(async () => {
     const flowId = flowRef.current;
     const input = ui.manualCode.trim();
@@ -308,7 +286,6 @@ export function useAddCodexAccountOAuth({
     bindCallbacks,
     closeModal,
     startOAuth,
-    copyLoginLink,
     submitManualCode,
   };
 }

@@ -74,6 +74,19 @@ bun run release <version> --publish # 确认 CI-gated dry-run 后真正 publish
 bun run release:watch               # 观察最新的 Release workflow run
 ```
 
+## 分支
+
+- `dev` — 默认的集成目标。除非属于下面的专用分支，否则请把 PR 提到这里。
+- `dev2-go` — Go 原生移植（`go/`、原生运行时入口、Go 发布产物工具链）的并行集成线。
+  与 `dev` 一样接受 pull request。只把属于 Go 移植的改动提到这里，其余都提到 `dev`。
+  目标分支检查同时接受这两个分支，但无法区分二者，因此范围由 review 决定：维护者可能会
+  请你把目标分支改成 `dev`。
+- `main` — 仅用于发布。只有维护者从 `dev` 提升时才会变动，请勿直接提功能 PR。
+- `preview` — 预发布通道。
+
+欢迎移植 PR 和变基 PR。把一条集成线上的修复带到另一条线，或把陈旧分支变基到当前 head，
+都是正常的贡献而非噪音。请在描述中注明来源提交。
+
 ## 约定
 
 - **仅使用 ES Modules**（`import`/`export`）、TypeScript 和 `strict` mode。保持

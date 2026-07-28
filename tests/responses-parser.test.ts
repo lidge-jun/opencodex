@@ -81,6 +81,18 @@ describe("Responses parser", () => {
     expect(parsed.options.toolChoice).toEqual({ allowedTools: ["web_search"], mode: "required" });
   });
 
+  test("maps type-only hosted image_generation tool_choice to required image_gen", () => {
+    const parsed = parseRequest({
+      model: "claude-opus-4-6",
+      input: "draw a cat",
+      tools: [{ type: "image_generation" }],
+      tool_choice: { type: "image_generation" },
+    });
+
+    expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
+    expect(parsed.options.toolChoice).toEqual({ name: "image_gen" });
+  });
+
   test("preserves requested service_tier for request logging", () => {
     const parsed = parseRequest({
       model: "gpt-5.5",
@@ -281,6 +293,20 @@ describe("codex-rs compat surface (260707)", () => {
   test("still drops unknown reasoning efforts instead of forwarding them", () => {
     const parsed = parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "banana" } });
     expect(parsed.options.reasoning).toBeUndefined();
+  });
+
+  test("detects image_generation hosted tool arriving via additional_tools (responses_lite WS shape)", () => {
+    // Codex Desktop responses_websockets lite path: NO body.tools; the hosted tool spec rides
+    // inside an input item {type:"additional_tools", tools:[...]}. extractHostedImageGeneration
+    // must still see it so the image bridge activates.
+    const parsed = parseRequest({
+      model: "p/m",
+      input: [
+        { type: "additional_tools", tools: [{ type: "image_generation" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "draw a cat" }] },
+      ],
+    });
+    expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
   });
 
   test("current parser ignores null empty and unknown string efforts", () => {

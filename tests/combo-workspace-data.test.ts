@@ -7,6 +7,7 @@ import {
   emptyDraft,
   filterCombos,
   groupCombos,
+  intersectComboEfforts,
   isValidComboId,
   parseComboList,
   toPutBody,
@@ -159,6 +160,27 @@ describe("combo-workspace-data", () => {
     expect(filterCombos(items, "gpt-balanced").map((item) => item.id)).toEqual(["balanced"]);
   });
 
+  test("intersectComboEfforts keeps only common advertised efforts (#488)", () => {
+    const map = new Map<string, readonly string[] | undefined>([
+      ["a/m1", ["low", "medium", "high", "ultra"]],
+      ["b/m2", ["medium", "high", "xhigh"]],
+    ]);
+    expect(intersectComboEfforts(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+      map,
+    )).toEqual(["medium", "high"]);
+  });
+
+  test("intersectComboEfforts treats unknown members as having no selectable efforts", () => {
+    const map = new Map<string, readonly string[] | undefined>([
+      ["a/m1", ["low", "medium"]],
+    ]);
+    expect(intersectComboEfforts(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "unknown" }],
+      map,
+    )).toEqual([]);
+  });
+
   test("attention flags zero-target and one-target defensive rows", () => {
     const attention = buildComboAttention([
       combo({ id: "empty", model: "combo/empty", targets: [] }),
@@ -169,6 +191,21 @@ describe("combo-workspace-data", () => {
     expect(attention).toEqual([
       { id: "empty", model: "combo/empty", reason: "empty-targets" },
       { id: "thin", model: "combo/thin", reason: "few-targets" },
+    ]);
+  });
+
+  test("attention flags combos missing from the live catalog (#484)", () => {
+    const attention = buildComboAttention(
+      [
+        combo({ id: "ok" }),
+        combo({ id: "missing", model: "combo/missing" }),
+        combo({ id: "empty", model: "combo/empty", targets: [] }),
+      ],
+      { cataloguedComboIds: new Set(["ok"]) },
+    );
+    expect(attention).toEqual([
+      { id: "missing", model: "combo/missing", reason: "catalog-omitted" },
+      { id: "empty", model: "combo/empty", reason: "empty-targets" },
     ]);
   });
 

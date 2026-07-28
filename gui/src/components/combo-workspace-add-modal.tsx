@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ComboItem,
   comboPublicModelId,
   emptyDraft,
+  intersectComboEfforts,
   validateComboDraft,
 } from "../combo-workspace-data";
 import { IconX } from "../icons";
@@ -34,6 +35,17 @@ export function AddComboModal({
   const [draft, setDraft] = useState<ComboItem>(() => emptyDraft());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const effortMap = useMemo(() => {
+    const map = new Map<string, string[] | undefined>();
+    for (const model of models) {
+      map.set(`${model.provider}/${model.id}`, model.reasoningEfforts);
+    }
+    return map;
+  }, [models]);
+  const allowedEfforts = useMemo(
+    () => intersectComboEfforts(draft.targets, effortMap),
+    [draft.targets, effortMap],
+  );
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -150,6 +162,7 @@ export function AddComboModal({
               id="cwi-new-effort"
               value={draft.defaultEffort}
               disabled={busy}
+              allowedEfforts={allowedEfforts}
               onChange={(defaultEffort) => setDraft((d) => ({ ...d, defaultEffort }))}
             />
             <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>

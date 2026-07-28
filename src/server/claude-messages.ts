@@ -15,6 +15,7 @@ import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
+import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
   anthropicErrorBody,
   anthropicErrorResponse,
@@ -29,6 +30,7 @@ import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
+import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 
@@ -555,6 +557,13 @@ export async function handleClaudeMessages(
       logCtx.surface = "claude-desktop";
       recordDesktopRequest();
     }
+    // Correlate before native passthrough so Anthropic-credential turns still filter/total (#330 / #522).
+    if (isRec(anthropicBody)) {
+      const claudeConversationId = conversationIdFromClaudeMetadata(
+        isRec(anthropicBody.metadata) ? anthropicBody.metadata : undefined,
+      );
+      if (claudeConversationId) logCtx.conversationId = claudeConversationId;
+    }
     if (isRec(anthropicBody) && wantsNativePassthrough(req, config, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
@@ -669,6 +678,7 @@ export async function handleClaudeMessages(
   };
   const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
     abortSignal: req.signal,
+    promptCacheKeyIsSharedCohort: cacheKeySource === "system",
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
@@ -689,12 +699,22 @@ export async function handleClaudeMessages(
         if (text) message = `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
     } catch { /* keep fallback message */ }
-    const retryAfter = response.headers.get("retry-after");
+    const upstreamRetryAfter = response.headers.get("retry-after");
+    const retryAfter = resolveClientRetryAfter({
+      status: response.status,
+      message,
+      upstreamRetryAfter,
+    })
+      // Instant-retry "0" is a valid client directive but rejected by cooldown parsers.
+      // Preserve it so it still wins over the transient "2" fallback (claude-529 mapping).
+      ?? (upstreamRetryAfter?.trim() === "0" ? "0" : undefined);
     // Transient upstream 5xx (already retried pre-stream, 010): reclassify as Anthropic
     // 529 overloaded_error so the Claude Code client applies its built-in backoff retry
     // instead of dying on a fatal api_error (260716 sol-builder incident). The request
     // log keeps the upstream status (captured in the deferred-log closure before this
     // rewrite): log = upstream truth, client = retry signal.
+    // Retryable 429s also get Retry-After (#507) so Codex-shaped clients and Claude Code
+    // share a backoff hint when the upstream omitted the header.
     const transient = isTransientUpstreamStatus(response.status);
     const outStatus = transient ? 529 : response.status;
     const out = new Response(JSON.stringify(anthropicErrorBody(outStatus, message)), {

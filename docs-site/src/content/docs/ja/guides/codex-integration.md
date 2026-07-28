@@ -41,7 +41,18 @@ ChatGPT bearer 認証で直接 POST します。注入された `base_url` が o
   bearer を使います。設定されたモードは画像リクエストにも同じく適用されます。
 - **OpenAI API キー:** forward 候補が認証失敗を所有しないときのみ使います。壊れた Pool 認証を
   別課金 API 使用で隠しません。
-- **両方なし:** 曖昧な 404 の代わりに明確なエラーを返します。ルーティングされる他のプロバイダー(Cursor、
+- **明示的なカスタムプロバイダー:** `images.provider` に、OpenAI Images API を実装するカスタムの
+  API キー方式 `openai-responses` プロバイダーを指定できます。明示的な選択が失敗しても、別の
+  有料上流へフォールバックしません。組み込みプロバイダー id には使わず、既定の OpenAI 経路を
+  使う場合は省略してください。
+- **Google Antigravity (CCA) フォールバック:** OpenAI forward 候補も API キープロバイダーもない場合、
+  `/v1/images/generations`(`/images/edits` を除く)は Antigravity **Cloud Code Assist** エンドポイントに
+  フォールバックし、`gemini-3.1-flash-image` モデルを使用します。OpenAI 認証の解決に失敗した場合
+  (例: ChatGPT 認証情報が期限切れまたは不在)も同様にフォールバックが発火し、OpenAI 候補が全くない
+  場合のみではありません。`ocx login google-antigravity` が
+  必要です。OAuth トークンは CCA レジストリホストにのみ送信され、設定の `baseUrl` オーバーライドには
+  送信されません。レスポンスは Codex が期待する `{created, data:[{b64_json}]}` 形式で返されます。
+- **いずれもなし:** 曖昧な 404 の代わりに明確なエラーを返します。ルーティングされる他のプロバイダー(Cursor、
   Gemini、Kiro など)は画像生成を提供できません。ツール自体をオフにしたい場合は Codex で
   `codex features disable image_generation`(`config.toml` の `[features] image_generation = false`)を
   使ってください。

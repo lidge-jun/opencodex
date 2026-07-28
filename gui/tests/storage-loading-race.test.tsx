@@ -132,6 +132,33 @@ test("effect cleanup invalidates generation before abort so loading stays owned 
   const container = document.createElement("div");
   document.body.append(container);
 
+  // Hold Storage's delay-0 deferred fetches so Windows/act timer flushing cannot
+  // collapse the cleanup→replacement gap this test is asserting.
+  type DeferredTimer = { id: number; run: () => void };
+  const deferredZero: DeferredTimer[] = [];
+  let nextTimerId = 1_000_000;
+  const realSetTimeout = window.setTimeout.bind(window);
+  const realClearTimeout = window.clearTimeout.bind(window);
+  window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay === 0 && typeof handler === "function") {
+      const id = nextTimerId++;
+      deferredZero.push({
+        id,
+        run: () => { (handler as (...a: unknown[]) => void)(...args); },
+      });
+      return id as unknown as ReturnType<typeof setTimeout>;
+    }
+    return realSetTimeout(handler as never, delay as never, ...(args as never[]));
+  }) as typeof setTimeout;
+  window.clearTimeout = ((id?: ReturnType<typeof setTimeout>) => {
+    const idx = deferredZero.findIndex(entry => entry.id === id);
+    if (idx >= 0) {
+      deferredZero.splice(idx, 1);
+      return;
+    }
+    return realClearTimeout(id as never);
+  }) as typeof clearTimeout;
+
   type Gate = {
     resolve: (body: unknown) => void;
     reject: (reason?: unknown) => void;
@@ -166,45 +193,51 @@ test("effect cleanup invalidates generation before abort so loading stays owned 
   }
 
   let root!: Root;
-  await act(async () => {
-    root = createRoot(container);
-    root.render(<Harness />);
-  });
-  await act(async () => {
-    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
-  });
-  await waitFor(() => gates.length === 1);
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<Harness />);
+    });
+    expect(deferredZero.length).toBe(1);
+    await act(async () => {
+      deferredZero.shift()!.run();
+    });
+    await waitFor(() => gates.length === 1);
 
-  // Cleanup aborts + invalidates generation; replacement is still deferred (setTimeout 0).
-  await act(async () => {
-    (window as unknown as { __bumpApiBase: () => void }).__bumpApiBase();
-  });
+    // Cleanup aborts + invalidates generation; replacement stays queued until we flush it.
+    await act(async () => {
+      (window as unknown as { __bumpApiBase: () => void }).__bumpApiBase();
+    });
+    expect(deferredZero.length).toBe(1);
 
-  // Flush abort rejection / finally microtasks without running the deferred fetch.
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+    // Flush abort rejection / finally microtasks without running the deferred fetch.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
-  const refresh = container.querySelector<HTMLButtonElement>("button.btn");
-  expect(gates.length).toBe(1);
-  expect(container.textContent).toContain("Scanning storage");
-  expect(refresh?.disabled).toBe(true);
+    const refresh = container.querySelector<HTMLButtonElement>("button.btn");
+    expect(gates.length).toBe(1);
+    expect(container.textContent).toContain("Scanning storage");
+    expect(refresh?.disabled).toBe(true);
 
-  await act(async () => {
-    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
-  });
-  await waitFor(() => gates.length === 2);
+    await act(async () => {
+      deferredZero.shift()!.run();
+    });
+    await waitFor(() => gates.length === 2);
 
-  await act(async () => {
-    gates[1]!.resolve(REPORT_B);
-    await Promise.resolve();
-  });
-  await waitFor(() => (container.textContent ?? "").includes("/tmp/b"));
-  expect(refresh?.disabled).toBe(false);
-
-  await act(async () => {
-    root.unmount();
-  });
-  container.remove();
+    await act(async () => {
+      gates[1]!.resolve(REPORT_B);
+      await Promise.resolve();
+    });
+    await waitFor(() => (container.textContent ?? "").includes("/tmp/b"));
+    expect(refresh?.disabled).toBe(false);
+  } finally {
+    window.setTimeout = realSetTimeout as typeof setTimeout;
+    window.clearTimeout = realClearTimeout as typeof clearTimeout;
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  }
 });

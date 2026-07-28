@@ -332,3 +332,80 @@ test("Logs: switching to the Debug tab stops scheduled log requests", async () =
 
   await act(async () => { root.unmount(); });
 });
+
+test("Logs: attempt details render exact reasoning wire values without legacy placeholders", async () => {
+  const attemptsLog = {
+    ...sampleLog,
+    requestedEffort: "max->high",
+    effectiveEffort: "high",
+    reasoningWireField: "reasoning_effort",
+    reasoningWireValue: "high",
+    attempts: [
+      {
+        ordinal: 1,
+        provider: "budget-provider",
+        model: "budget-model",
+        adapter: "openai-chat",
+        status: 503,
+        durationMs: 10,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+        requestedEffort: "minimal",
+        effectiveEffort: "low",
+        reasoningWireField: "thinking_budget",
+        reasoningWireValue: 0,
+      },
+      {
+        ordinal: 2,
+        provider: "toggle-provider",
+        model: "toggle-model",
+        adapter: "openai-chat",
+        status: 503,
+        durationMs: 11,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+        requestedEffort: "high",
+        effectiveEffort: "enabled",
+        reasoningWireField: "thinking.type",
+        reasoningWireValue: "enabled",
+      },
+      {
+        ordinal: 3,
+        provider: "legacy-provider",
+        model: "legacy-model",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 12,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+      },
+    ],
+  };
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([attemptsLog]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  const overviewReasoning = container.querySelector<HTMLElement>(".log-reasoning-cell");
+  expect(overviewReasoning?.textContent).toContain("max → high");
+  expect(overviewReasoning?.textContent).toContain("reasoning_effort=high");
+  expect(overviewReasoning?.textContent).not.toContain("max → high → high");
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(".log-detail-btn")!.click();
+  });
+
+  const rows = [...container.querySelectorAll<HTMLTableRowElement>(".log-detail-attempts tbody tr")];
+  expect(rows).toHaveLength(3);
+  expect(rows[0]?.textContent).toContain("minimal → low (thinking_budget=0)");
+  expect(rows[1]?.textContent).toContain("high → enabled (thinking.type=enabled)");
+  expect(rows[2]?.textContent).toContain("legacy-model");
+  expect(rows[2]?.querySelectorAll("br")).toHaveLength(1);
+  expect(rows[2]?.textContent).not.toContain("undefined");
+
+  await act(async () => { root.unmount(); });
+});

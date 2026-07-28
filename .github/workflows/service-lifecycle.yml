@@ -2,7 +2,7 @@ name: Service lifecycle
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, dev2-go]
     paths:
       - "src/service.ts"
       # Keep in sync with the release.yml service-gate regex (release.yml "Require

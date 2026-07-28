@@ -38,7 +38,6 @@ import {
 } from "./gen/agent_pb";
 import {
   appendCursorGenericToolUseHint,
-  appendCursorShellAliasHint,
   cursorToolsForActivePrompt,
   buildCursorToolGuidanceSystemNote,
   buildCursorToolDefinitions,
@@ -560,7 +559,7 @@ export function prepareCursorRunRequest(
   const rawText = activePromptText(request);
   const lastRole = request.messages.at(-1)?.role;
   const text = lastRole === "user" || lastRole === "developer"
-    ? appendCursorShellAliasHint(request.tools, appendCursorGenericToolUseHint(request.tools, rawText))
+    ? appendCursorGenericToolUseHint(request.tools, rawText)
     : rawText;
   // Tool-result-only turns resume the remembered Cursor conversation with results in history.
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";

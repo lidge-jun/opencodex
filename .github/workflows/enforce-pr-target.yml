@@ -23,7 +23,8 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const EXPECTED_BASE = "dev";
+            const ALLOWED_BASES = ["dev", "dev2-go"];
+            const DEFAULT_BASE = "dev";
             const TITLE_PREFIX = "[WRONG BRANCH] ";
             const COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
             const STATE_PATTERN =
@@ -153,7 +154,7 @@ jobs:
             }
 
             const storedState = parseState(botComment?.body);
-            const wrongBase = pr.base.ref !== EXPECTED_BASE;
+            const wrongBase = !ALLOWED_BASES.includes(pr.base.ref);
 
             // Wrong branch:
             // - add the title prefix
@@ -191,11 +192,11 @@ jobs:
                   "",
                   "⚠️ **Wrong target branch**",
                   "",
-                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target ${inlineCode(EXPECTED_BASE)}.`,
+                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${ALLOWED_BASES.map(inlineCode).join(" or ")}.`,
                   "",
                   `Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`,
                   "",
-                  `@${pr.user.login} Please retarget this PR to the \`dev\` branch. All contributions go to \`dev\` first, and \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`,
+                  `@${pr.user.login} Please retarget this PR to ${inlineCode(DEFAULT_BASE)}. Most contributions go to ${inlineCode(DEFAULT_BASE)} first; use ${inlineCode("dev2-go")} only for scoped Go native-port work. \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`,
                   "",
                   draftExplanation
                 ].join("\n")
@@ -271,7 +272,7 @@ jobs:
                 "",
                 "✅ **Target branch corrected**",
                 "",
-                `This pull request now targets ${inlineCode(EXPECTED_BASE)}.`,
+                `This pull request now targets ${inlineCode(pr.base.ref)}.`,
                 "",
                 `${titleResult} ${draftResult}`
               ].join("\n")

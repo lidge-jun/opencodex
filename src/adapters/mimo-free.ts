@@ -191,6 +191,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
         method: "POST",
         headers,
         body: JSON.stringify(markedBody),
+        ...(baseReq.reasoningLog ? { reasoningLog: baseReq.reasoningLog } : {}),
       };
     },
 

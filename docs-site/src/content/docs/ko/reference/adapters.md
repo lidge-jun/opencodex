@@ -91,17 +91,18 @@ interface ProviderAdapter {
 ### 완료와 네이티브 stop reason
 
 Kiro의 어시스턴트 텍스트에는 그 자체로 턴 종료를 알리는 신뢰할 만한 구분이 없습니다. 다만 종단
-`metadataEvent`가 네이티브 `stopReason`을 실어 올 수 있습니다. `END_TURN`과 `STOP_SEQUENCE`는 권위 있는
-종료로 보고 해당 텍스트를 최종 답변으로 내보냅니다. 추가 모델 왕복은 없습니다.
+`metadataEvent`가 네이티브 `stopReason`을 실어 올 수 있습니다. 하지만 Kiro가 진행 문구에도 `END_TURN`을
+붙일 수 있으므로, 툴이 있는 턴에서는 `END_TURN`과 `STOP_SEQUENCE`만으로 완료하지 않습니다. 일반 텍스트는
+commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 
-호환 경로를 타는 것은 stop reason이 **없을 때뿐**입니다. 명시적인 이유는 이미 상류에서 추론을 끝냈으므로
+`END_TURN`, `STOP_SEQUENCE`, 또는 stop reason이 없을 때는 한 번의 완료 호환 경로를 탈 수 있습니다. 그 외 명시적인 이유는 이미 상류에서 추론을 끝냈으므로
 다시 모델에 요청하지 않고 그대로 보고합니다. 출력 토큰 한도는 이어쓸 수 있는 incomplete로, 컨텍스트 윈도
 고갈은 재시도 불가한 context-length 오류로, 필터링이나 가드레일 정지는 filtered incomplete로 표면화합니다.
 실제 툴 호출 없이 온 `TOOL_USE`는 진행이 아니라 모순으로 처리합니다.
 
-stop reason이 아예 없을 때만 opencodex가 비공개 `codex_kiro_final_answer` 툴을 추가하고 한 번만
-이어갑니다. 중복 억제는 공백을 정규화한 완전 일치로 제한합니다. 표현만 바뀐 상태 업데이트가 결과 자체를
-뒤집을 수 있고("아직 진행 중"에서 "완료됨"으로), 그 문장을 잃는 편이 겉보기 반복을 보여주는 것보다 나쁩니다.
+툴이 있는 턴에는 비공개 `codex_kiro_final_answer`를 추가합니다. 완료 재시도는 빈 assistant/user 턴을 만들지
+않고 원래 user/tool-result를 보존하며, 전송 전에 역할 교대·빈 구조 메시지·tool use/result 짝을 검증합니다.
+완료 툴 답변은 이전 commentary와 같더라도 `final_answer`로 내보냅니다.
 
 ### Reasoning effort
 

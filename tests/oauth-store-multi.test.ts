@@ -14,11 +14,12 @@ import {
   setAccountAlias,
   setActiveAccount,
 } from "../src/oauth/store";
+import type { OAuthCredentials } from "../src/oauth/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
 let previousOpencodexHome: string | undefined;
 
-const cred = (over: Partial<{ access: string; refresh: string; expires: number; email: string; accountId: string; projectId: string }> = {}) => ({
+const cred = (over: Partial<OAuthCredentials> = {}): OAuthCredentials => ({
   access: "access-1",
   refresh: "refresh-1",
   expires: Date.now() + 3600_000,
@@ -81,6 +82,33 @@ describe("multi-account auth store", () => {
     await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
     expect(listAccounts("anthropic").length).toBe(2);
     expect(getCredential("anthropic")?.email).toBe("b@example.com");
+  });
+
+  test("Kiro account metadata stays attached to each distinct identity", async () => {
+    await saveCredential("kiro", cred({
+      accountId: "profile-a",
+      access: "kiro-a",
+      kiro: { profileArn: "profile-a", apiRegion: "us-east-1", clientSecret: "secret-a" },
+    }));
+    await saveCredential("kiro", cred({
+      accountId: "profile-b",
+      access: "kiro-b",
+      kiro: { profileArn: "profile-b", apiRegion: "eu-west-1", clientSecret: "secret-b" },
+    }));
+
+    const set = getAccountSet("kiro")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(set.accounts.find(account => account.credential.accountId === "profile-a")?.credential.kiro).toMatchObject({
+      profileArn: "profile-a",
+      apiRegion: "us-east-1",
+      clientSecret: "secret-a",
+    });
+    expect(set.accounts.find(account => account.credential.accountId === "profile-b")?.credential.kiro).toMatchObject({
+      profileArn: "profile-b",
+      apiRegion: "eu-west-1",
+      clientSecret: "secret-b",
+    });
+    expect(getCredential("kiro")).toMatchObject({ accountId: "profile-b", access: "kiro-b" });
   });
 
   test("same identity replaces credential without duplicating", async () => {

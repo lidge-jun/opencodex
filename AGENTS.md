@@ -38,7 +38,16 @@ non-trivial change. CI runs these on Linux, Windows, and macOS.
 
 ## Branch policy
 
-- `dev` — integration branch. All normal pull requests target `dev`.
+- `dev` — integration branch and the default target. A pull request goes here
+  unless it belongs to a scoped line below.
+- `dev2-go` — parallel integration line for the Go native port: `go/`,
+  `bin/native-runtime.mjs`, `src/lib/runtime-entry.ts`, and the Go
+  release-asset tooling. Open for pull requests: the target-branch check
+  accepts `dev` and `dev2-go` as integration targets. Keep it to scoped Go
+  native-port work — the check cannot tell an intentional target from a
+  mistaken one, so that boundary is a review decision. It converges back
+  through maintainer-controlled merges, and promotion to `main` still happens
+  only from `dev`.
 - `main` — release branch. It only moves by maintainer-controlled promotion
   from `dev` (releases, docs deploys). Do not open feature PRs against `main`.
 - `preview` — prerelease train (`x.y.z-preview.*` versions).
@@ -46,6 +55,11 @@ non-trivial change. CI runs these on Linux, Windows, and macOS.
 The Claude Desktop integration formerly carried on the `claudedesktop` branch is
 now fully merged into `dev`, and that branch has been retired. Desktop work
 continues as normal pull requests against `dev`.
+
+Porting and rebase pull requests are welcome. Forward-porting a fix from one
+integration line to another, or rebasing a stale branch onto the current head,
+is ordinary maintenance rather than noise — open it as a normal pull request
+and name the source commits in the description.
 
 [`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for review and merge
 policy (approvals, CI requirements, security review, promotion). This file
@@ -60,8 +74,12 @@ reviewers (Codex, CodeRabbit).
   language. Be detailed and specific: name the file and line, describe the
   concrete failure mode, and suggest a fix. Avoid vague or purely stylistic
   commentary.
-- **Branch targeting:** flag any pull request that targets `main` instead of
-  `dev` (releases and maintainer promotions are the only exceptions).
+- **Branch targeting:** flag any pull request that targets neither `dev` nor
+  `dev2-go` (releases and maintainer promotions are the only exceptions).
+  `dev2-go` is accepted by the automation but scoped by review: if a pull
+  request targets it without touching `go/`, the native runtime entrypoint, or
+  the Go release-asset tooling, ask the author to retarget to `dev`. The
+  automation cannot make that judgement, which is why it is yours.
 - **Security boundary (highest priority):** changes touching authentication,
   credential/token handling, OAuth flows, GitHub Actions workflows, release
   automation (`scripts/release.ts`, `.github/workflows/release.yml`), or

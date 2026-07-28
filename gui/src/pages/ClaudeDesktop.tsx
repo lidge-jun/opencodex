@@ -42,6 +42,12 @@ interface DesktopStatus {
   applied: boolean;
   appliedAt: string | null;
   stale: boolean;
+  /**
+   * Whether Desktop's _meta.json appliedId actually points at our profile.
+   * Desktop serves only that one, so false means it is ignoring us even when
+   * `applied` (our saved fingerprint) says otherwise. null = undeterminable.
+   */
+  activeProfile?: boolean | null;
   health: { lastRequestAt: string | null; requestCount: number; errorCount: number };
 }
 
@@ -327,9 +333,11 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
       </div>
 
       {status && (
-        <div className={`claude-status-bar ${status.stale ? "stale" : status.applied ? "applied" : "not-applied"}`}>
+        <div className={`claude-status-bar ${status.activeProfile === false ? "not-applied" : status.stale ? "stale" : status.applied ? "applied" : "not-applied"}`}>
           <span className="claude-status-dot" />
-          <span>{status.stale ? t("claudeDesktop.status.stale") : status.applied ? t("claudeDesktop.status.applied") : t("claudeDesktop.status.notApplied")}</span>
+          {/* Desktop serving another profile outranks content drift: stale config that is
+              read still works, a config that is never read does not. */}
+          <span>{status.activeProfile === false ? t("claudeDesktop.status.notActiveProfile") : status.stale ? t("claudeDesktop.status.stale") : status.applied ? t("claudeDesktop.status.applied") : t("claudeDesktop.status.notApplied")}</span>
           {status.health.lastRequestAt && <span className="claude-status-health">{t("claudeDesktop.health.lastRequest")}: {new Date(status.health.lastRequestAt).toLocaleTimeString()}</span>}
           {status.health.requestCount > 0 && <span className="claude-status-health">{t("claudeDesktop.health.stats", { count: status.health.requestCount, errors: status.health.errorCount })}</span>}
         </div>

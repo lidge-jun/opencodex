@@ -265,6 +265,15 @@ function handleRemove(args: string[]): void {
     process.exit(1);
   }
 
+  const dependentCombos = Object.entries(config.combos ?? {})
+    .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+    .map(([id]) => id)
+    .sort();
+  if (dependentCombos.length > 0) {
+    console.error(`Cannot remove "${name}" — combo(s) depend on it: ${dependentCombos.join(", ")}`);
+    process.exit(1);
+  }
+
   delete config.providers[name];
   validateAndSave(config);
 
@@ -374,9 +383,15 @@ const PROVIDER_USAGE = `Usage: ocx provider <subcommand>
 Subcommands:
   list                  List configured and available providers
   add <name>            Add a provider (registry or custom)
+  edit <name>           Edit live provider fields
+  test <name>           Test the provider's upstream model endpoint
   remove <name>         Remove a configured provider
   show <name>           Show provider config details
   set-default <name>    Change the default provider
+  selected <name>       Show or set the provider model allowlist
+  quota                 Show provider quota reports
+  presets               List GUI provider presets
+  account-mode <mode>   Set OpenAI Codex pool/direct mode
 
 Examples:
   ocx provider list
@@ -412,9 +427,16 @@ export async function handleProviderCommand(args: string[]): Promise<void> {
     case "set-default":
       handleSetDefault(subArgs);
       break;
-    default:
+    default: {
+      const { handleProviderRuntimeCommand } = await import("./provider-runtime");
+      const code = await handleProviderRuntimeCommand(sub, subArgs);
+      if (code !== null) {
+        process.exitCode = code;
+        break;
+      }
       console.error(`Unknown provider subcommand: ${sub}`);
       console.error(PROVIDER_USAGE);
       process.exit(1);
+    }
   }
 }

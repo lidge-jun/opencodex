@@ -108,8 +108,9 @@ opencodex 为每个目录条目的 `multi_agent_version` 提供三态 override�
 `{ "multiAgentMode": "v1" }` 的 `PUT /api/v2` 设置该模式。变更从新的 Codex session 开始生效。
 
 :::caution
-在 v2（`multi_agent_v2`）界面中，生成的子代理会继承父 session 的模型。仪表盘中的委派模型/
-reasoning 选择器只是 v1 prompt 指引，并不是由代理在每次生成时执行跨模型路由。权威说明见
+在 v2（`multi_agent_v2`）界面中，未显式指定模型的子代理可能继承父 session 的模型。
+OpenCodex 指引可以要求 Codex 显式传递所选模型/reasoning，独立的原生默认值开关则可在
+sync/restart 后提供默认值。两者都不是由代理在每次生成时执行的代理侧路由。权威说明见
 [子代理界面](/zh-cn/guides/sub-agent-surface/)。
 :::
 
@@ -145,8 +146,8 @@ override。你可以通过 `subagentModels` 或仪表盘的 Subagents 页面选�
 `provider/model` id；opencodex 会按所选顺序赋予它们 0-4 的 priority。其他模型仍可通过精确 id
 直接调用。
 
-置顶模型列表与 Dashboard 的 **Sub-agent delegation** 指引相互独立。尤其需要注意，置顶模型
-override 不能绕过 v2 的父模型继承规则。
+置顶模型列表与 Dashboard 的 **Sub-agent delegation** 选择相互独立。它只决定 Codex 优先显示
+哪些 override，本身不会选择模型或触发委派。
 
 ## 刷新模型状态
 

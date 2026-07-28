@@ -43,27 +43,42 @@ export function EffortSelect({
   value,
   onChange,
   disabled,
+  allowedEfforts,
 }: {
   id: string;
   value: ComboEffort | null;
   onChange: (next: ComboEffort | null) => void;
   disabled?: boolean;
+  /** When set, only these efforts (plus None) are offered. */
+  allowedEfforts?: readonly ComboEffort[];
 }) {
   const t = useT();
+  const options = allowedEfforts ?? COMBO_EFFORTS;
+  const unsupported = value !== null && !options.includes(value);
   return (
-    <select
-      id={id}
-      className="input"
-      value={value ?? ""}
-      disabled={disabled}
-      aria-label={t("cws.field.defaultEffort")}
-      onChange={(e) => onChange(e.target.value === "" ? null : e.target.value as ComboEffort)}
-    >
-      <option value="">{t("cws.field.defaultEffortNone")}</option>
-      {COMBO_EFFORTS.map((effort) => (
-        <option key={effort} value={effort}>{effort}</option>
-      ))}
-    </select>
+    <>
+      <select
+        id={id}
+        className="input"
+        value={value ?? ""}
+        disabled={disabled}
+        aria-label={t("cws.field.defaultEffort")}
+        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value as ComboEffort)}
+      >
+        <option value="">{t("cws.field.defaultEffortNone")}</option>
+        {unsupported && value ? (
+          <option value={value}>{value} ({t("cws.field.defaultEffortUnsupportedOption")})</option>
+        ) : null}
+        {options.map((effort) => (
+          <option key={effort} value={effort}>{effort}</option>
+        ))}
+      </select>
+      {unsupported ? (
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0 0", color: "var(--danger, #b42318)" }}>
+          {t("cws.field.defaultEffortUnsupported")}
+        </p>
+      ) : null}
+    </>
   );
 }
 

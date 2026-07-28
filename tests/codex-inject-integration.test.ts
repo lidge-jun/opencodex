@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
+import {
+  MANAGED_AGENTS_TABLE_MARKER,
+  MANAGED_SUBAGENT_DEFAULT_MARKER,
+} from "../src/codex/subagent-defaults";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -96,6 +100,124 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(second).toBe(first);
   });
 
+  test("opt-in injects native subagent defaults, removes them when disabled, and restores the native config", () => {
+    const original = [
+      'model = "gpt-5.5"',
+      "",
+      "[notice]",
+      "hide = true",
+      "",
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+    const enabled = JSON.stringify({
+      syncCodexSubagentDefaults: true,
+      injectionModel: "gpt-5.6-sol",
+      injectionEffort: "high",
+    });
+
+    expect(runInject(codexHome, ocxHome, enabled).status).toBe(0);
+    const injected = readFileSync(join(codexHome, "config.toml"), "utf8");
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(injected).toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(injected).toContain('default_subagent_model = "gpt-5.6-sol"');
+    expect(injected).toContain('default_subagent_reasoning_effort = "high"');
+    expect(injected).toContain(MANAGED_AGENTS_TABLE_MARKER);
+    expect(profile).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(profile).not.toContain("default_subagent_model");
+
+    expect(runInject(codexHome, ocxHome, "{}").status).toBe(0);
+    const disabled = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(disabled).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(disabled).not.toContain("default_subagent_model");
+    expect(disabled).not.toContain("default_subagent_reasoning_effort");
+    expect(disabled).toContain("[notice]\nhide = true");
+
+    expect(runInject(codexHome, ocxHome, enabled).status).toBe(0);
+    expect(runRestore(codexHome, ocxHome).status).toBe(0);
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
+  });
+
+  test("opt-in preserves a user-owned native default pair and reports the conflict", () => {
+    const original = [
+      'model = "gpt-5.5"',
+      "",
+      "[agents]",
+      'default_subagent_model = "user/model" # owned by user',
+      'default_subagent_reasoning_effort = "medium"',
+      "max_threads = 6",
+      "",
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+
+    const result = runInject(codexHome, ocxHome, JSON.stringify({
+      syncCodexSubagentDefaults: true,
+      injectionModel: "gpt-5.6-sol",
+      injectionEffort: "high",
+    }));
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).message).toContain("user-owned agents.default_subagent_model");
+
+    const injected = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(injected).toContain('default_subagent_model = "user/model" # owned by user');
+    expect(injected).toContain('default_subagent_reasoning_effort = "medium"');
+    expect(injected).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(injected).not.toContain('default_subagent_model = "gpt-5.6-sol"');
+  });
+
+  test("sync-disabled injection cleans managed-default residue before journaling and restore", () => {
+    const residue = [
+      MANAGED_AGENTS_TABLE_MARKER,
+      "[agents]",
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      'default_subagent_model = "stale/routed-model"',
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      'default_subagent_reasoning_effort = "high"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), residue, "utf8");
+
+    const injectedResult = runInject(codexHome, ocxHome, "{}");
+    expect(injectedResult.status).toBe(0);
+    expect(JSON.parse(injectedResult.stdout).success).toBe(true);
+    const injected = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(injected).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(injected).not.toContain("default_subagent_model");
+    expect(() => Bun.TOML.parse(injected)).not.toThrow();
+
+    const restoredResult = runRestore(codexHome, ocxHome);
+    expect(restoredResult.status).toBe(0);
+    expect(JSON.parse(restoredResult.stdout).success).toBe(true);
+    const restored = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(restored).not.toContain(MANAGED_AGENTS_TABLE_MARKER);
+    expect(restored).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(restored).not.toContain("default_subagent_model");
+    expect(restored).toContain("[features]\nfast_mode = true");
+  });
+
+  test("ambiguous managed-default residue refuses injection without changing files", () => {
+    const ambiguous = [
+      "[agents]",
+      MANAGED_SUBAGENT_DEFAULT_MARKER,
+      "",
+      'default_subagent_model = "stale/routed-model"',
+      "",
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), ambiguous, "utf8");
+
+    const result = runInject(codexHome, ocxHome, "{}");
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.success).toBe(false);
+    expect(payload.message).toContain("injection refused");
+    expect(payload.message).toContain("orphaned managed subagent default marker");
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(ambiguous);
+    expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
+  });
+
   test("kept-user-base-url: reports routing NOT injected and leaves the user's override alone", () => {
     writeFileSync(join(codexHome, "config.toml"), [
       'openai_base_url = "https://my-own-gateway.example/v1"',
@@ -103,16 +225,23 @@ describe("injectCodexConfig integration (Design B)", () => {
       "",
     ].join("\n"), "utf8");
 
-    const r = runInject(codexHome, ocxHome);
+    const r = runInject(codexHome, ocxHome, JSON.stringify({
+      syncCodexSubagentDefaults: true,
+      injectionModel: "gpt-5.6-sol",
+      injectionEffort: "high",
+    }));
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);
     expect(result.message).toContain("routing NOT injected");
     expect(result.message).not.toContain("All models now route through opencodex proxy");
+    expect(result.nativeSubagentDefaultsWarning).toContain("user-owned root openai_base_url");
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(config).toContain('openai_base_url = "https://my-own-gateway.example/v1"');
     expect(config).not.toContain("# Auto-injected by opencodex\nopenai_base_url");
+    expect(config).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER);
+    expect(config).not.toContain("default_subagent_model");
   });
 
   test("external model provider stays byte-for-byte unchanged so its session history remains visible", () => {
@@ -158,7 +287,11 @@ describe("injectCodexConfig integration (Design B)", () => {
       timestamp: new Date().toISOString(),
     }), "utf8");
 
-    const r = runInject(codexHome, ocxHome);
+    const r = runInject(codexHome, ocxHome, JSON.stringify({
+      syncCodexSubagentDefaults: true,
+      injectionModel: "gpt-5.6-sol",
+      injectionEffort: "high",
+    }));
     expect(r.status).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.success).toBe(true);
@@ -166,6 +299,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.message).toContain('external model_provider "custom"');
     expect(result.message).toContain("http://127.0.0.1:10100/v1");
     expect(result.message).toContain("Responses passthrough");
+    expect(result.nativeSubagentDefaultsWarning).toContain("external model_provider");
 
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
     expect(readFileSync(profilePath, "utf8")).toBe(profile);

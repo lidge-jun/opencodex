@@ -82,11 +82,19 @@ describe("formatPassthroughUpstreamError (#452)", () => {
   });
 
   test("empty body drops invalid Retry-After values", async () => {
-    for (const bad of ["", "nope", "-1", "0", "1e6", "not-a-delay"]) {
+    // "0" is intentionally preserved as an instant-retry client directive
+    // (see resolveClientRetryAfter / #507 review hardening).
+    for (const bad of ["", "nope", "-1", "1e6", "not-a-delay"]) {
       const headers = new Headers({ "retry-after": bad });
       const response = formatPassthroughUpstreamError(503, "", { headers, now: Date.now() });
       expect(response.headers.get("retry-after")).toBeNull();
     }
+  });
+
+  test("empty body preserves Retry-After: 0", async () => {
+    const headers = new Headers({ "retry-after": "0" });
+    const response = formatPassthroughUpstreamError(503, "", { headers, now: Date.now() });
+    expect(response.headers.get("retry-after")).toBe("0");
   });
 
   test("JSON with error.message is preserved for Codex", async () => {

@@ -18,7 +18,7 @@ type ProviderOption = {
   adapter?: string;
   baseUrl?: string;
 };
-type ModelOption = { provider: string; id: string; namespaced?: string };
+type ModelOption = { provider: string; id: string; namespaced?: string; reasoningEfforts?: string[] };
 type ProviderDto = {
   adapter: string;
   baseUrl: string;
@@ -44,6 +44,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
   const [combos, setCombos] = useState<ComboItem[]>([]);
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [cataloguedComboIds, setCataloguedComboIds] = useState<ReadonlySet<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
@@ -102,20 +103,36 @@ export default function Combos({ apiBase }: { apiBase: string }) {
       );
 
       const fromApi: ModelOption[] = [];
+      const catalogued = new Set<string>();
       for (const row of modelRows) {
         if (!row || typeof row !== "object") continue;
-        const m = row as { provider?: unknown; id?: unknown; namespaced?: unknown; disabled?: unknown };
+        const m = row as {
+          provider?: unknown;
+          id?: unknown;
+          namespaced?: unknown;
+          disabled?: unknown;
+          reasoningEfforts?: unknown;
+        };
         if (typeof m.provider !== "string" || typeof m.id !== "string") continue;
         const provider = m.provider.trim();
         const id = m.id.trim();
-        if (!provider || !id || provider === "combo") continue; // combos cannot nest other combos as targets
+        if (!provider || !id) continue;
+        if (provider === "combo") {
+          catalogued.add(id);
+          continue; // combos cannot nest other combos as targets
+        }
         if (m.disabled === true) continue;
+        const reasoningEfforts = Array.isArray(m.reasoningEfforts)
+          ? m.reasoningEfforts.filter((effort): effort is string => typeof effort === "string")
+          : undefined;
         fromApi.push({
           provider,
           id,
           namespaced: typeof m.namespaced === "string" ? m.namespaced : undefined,
+          ...(reasoningEfforts ? { reasoningEfforts } : {}),
         });
       }
+      setCataloguedComboIds(catalogued);
 
       // Ensure each provider's defaultModel appears even if catalog fetch lagged.
       for (const [name, p] of Object.entries(configJson.providers ?? {})) {
@@ -221,6 +238,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
           combos={combos}
           providers={providers}
           models={models}
+          cataloguedComboIds={cataloguedComboIds}
           loading={loading}
           onRefresh={() => { void fetchAll(); }}
           onSave={saveCombo}

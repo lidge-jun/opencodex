@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
+import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
@@ -85,6 +86,10 @@ interface LogAttempt {
   totalTokens?: number;
   errorCode?: string;
   firstOutputMs?: number;
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   displayMetrics?: LogDisplayMetrics;
 }
 
@@ -94,7 +99,11 @@ interface LogEntry {
   model: string;
   provider: string;
   surface?: "claude";
+  conversationId?: string;
   requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -161,6 +170,28 @@ function speedLabel(log: LogEntry): string | undefined {
   if (log.requestedSpeedLabel) return log.requestedSpeedLabel;
   if (log.modelSupportsServiceTier && log.configuredSpeedLabel) return log.configuredSpeedLabel;
   return undefined;
+}
+
+interface ReasoningLogFields {
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
+}
+
+function effortLabel(log: ReasoningLogFields): string {
+  const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
+  const effective = log.effectiveEffort;
+  if (!requested) return effective ?? "-";
+  // requestedEffort may already contain a cap/clamp chain (for example max->high).
+  // Only append the adapter result when it differs from that chain's terminal value.
+  if (!effective || requested === effective || requested.split(" → ").at(-1) === effective) return requested;
+  return `${requested} → ${effective}`;
+}
+
+function reasoningWireLabel(log: ReasoningLogFields): string | undefined {
+  if (!log.reasoningWireField || log.reasoningWireValue === undefined) return undefined;
+  return `${log.reasoningWireField}=${log.reasoningWireValue}`;
 }
 
 function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: string): string {
@@ -245,6 +276,34 @@ function modelTitle(log: LogEntry): string {
   return details.join(" \xC2\xB7 ");
 }
 
+function summarizeFilteredLogs(entries: LogEntry[]): {
+  requests: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  unpricedRequests: number;
+  unmeteredRequests: number;
+} {
+  let totalTokens = 0;
+  let estimatedCostUsd = 0;
+  let unpricedRequests = 0;
+  let unmeteredRequests = 0;
+  for (const entry of entries) {
+    const tokens = displayTokenTotal(entry);
+    if (tokens !== undefined) totalTokens += tokens;
+    if (entry.usageStatus === "unsupported") {
+      unmeteredRequests += 1;
+      continue;
+    }
+    const cost = entry.displayMetrics?.cost;
+    if (cost?.kind === "value" && Number.isFinite(cost.estimate.cost.total) && cost.estimate.cost.total >= 0) {
+      estimatedCostUsd += cost.estimate.cost.total;
+      continue;
+    }
+    unpricedRequests += 1;
+  }
+  return { requests: entries.length, totalTokens, estimatedCostUsd, unpricedRequests, unmeteredRequests };
+}
+
 export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -253,6 +312,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
   const [surfaceFilter, setSurfaceFilter] = useState<"all" | "claude" | "codex">("all");
+  const [conversationFilter, setConversationFilter] = useState("");
+  const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
@@ -295,10 +356,26 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   }, [autoRefresh, fetchLogs, tab]);
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
+  const conversationQuery = conversationFilter.trim();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!conversationQuery) {
+      setConversationQueryHash(undefined);
+      return;
+    }
+    void hashLogConversationQuery(conversationQuery).then(hash => {
+      if (!cancelled) setConversationQueryHash(hash);
+    });
+    return () => { cancelled = true; };
+  }, [conversationQuery]);
+
   const filteredLogs = logs.filter(log => (
-    surfaceFilter === "all"
-    || (surfaceFilter === "claude" ? log.surface === "claude" : log.surface !== "claude")
+    (surfaceFilter === "all"
+      || (surfaceFilter === "claude" ? log.surface === "claude" : log.surface !== "claude"))
+    && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
   ));
+  const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.
   // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
@@ -364,7 +441,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       <div role="tabpanel" id="logs-panel-logs" aria-labelledby="logs-tab-logs">
       <p className="page-sub">{t("logs.subtitle")}</p>
 
-      <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center" }}>
+      <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
         <div className="segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
           {(["all", "claude", "codex"] as const).map(surface => (
@@ -381,7 +458,46 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             </button>
           ))}
         </div>
+        <label className="muted text-control" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {t("logs.filter.conversation.label")}
+          <input
+            type="search"
+            className="input mono"
+            value={conversationFilter}
+            onChange={e => setConversationFilter(e.target.value)}
+            placeholder={t("logs.filter.conversation.placeholder")}
+            aria-label={t("logs.filter.conversation.label")}
+            style={{ minWidth: 220, maxWidth: 360 }}
+          />
+        </label>
+        {conversationQuery && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConversationFilter("")}>
+            {t("logs.filter.conversation.clear")}
+          </button>
+        )}
       </div>
+
+      {conversationTotals && (
+        <div style={{ marginBottom: 12 }}>
+          <Notice tone="ok">
+            {t("logs.conversation.totals", {
+              requests: conversationTotals.requests,
+              tokens: formatTokens(conversationTotals.totalTokens, localeTag ?? locale),
+              cost: formatEstimatedUsdValue(conversationTotals.estimatedCostUsd, localeTag),
+            })}
+            {" "}
+            <span className="muted">
+              {t("logs.conversation.scope")}
+              {(conversationTotals.unpricedRequests + conversationTotals.unmeteredRequests) > 0
+                ? ` ${t("logs.conversation.excluded", {
+                  unpriced: conversationTotals.unpricedRequests,
+                  unmetered: conversationTotals.unmeteredRequests,
+                })}`
+                : ""}
+            </span>
+          </Notice>
+        </div>
+      )}
 
       {error ? (
         <Notice tone="err">
@@ -420,6 +536,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               )}
               {virtualRows.map(virtualRow => {
                 const log = filteredLogs[filteredLogs.length - 1 - virtualRow.index];
+                const reasoningWire = reasoningWireLabel(log);
                 return (
                <tr
                  key={log.requestId ?? `${log.timestamp}-${virtualRow.index}`}
@@ -468,7 +585,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
-                  <td className="mono">{log.requestedEffort ?? "-"}</td>
+                  <td className="mono log-reasoning-cell" title={reasoningWire}>
+                    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                      <span>{effortLabel(log)}</span>
+                      {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
+                    </span>
+                  </td>
                   <td className="muted">{log.provider}</td>
                   <td>
                     <span className="log-status-cell">
@@ -500,7 +622,18 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       )}
 
       {detail && (
-        <LogDetailDialog detail={detail} detailInfo={detailInfo} localeCode={locale} localeTag={localeTag} t={t} onClose={() => setDetail(null)} />
+        <LogDetailDialog
+          detail={detail}
+          detailInfo={detailInfo}
+          localeCode={locale}
+          localeTag={localeTag}
+          t={t}
+          onClose={() => setDetail(null)}
+          onFilterConversation={id => {
+            setConversationFilter(id);
+            setDetail(null);
+          }}
+        />
       )}
       </div>
       )}
@@ -520,7 +653,7 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeCode, localeTag, t, onClose,
+  detail, detailInfo, localeCode, localeTag, t, onClose, onFilterConversation,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
@@ -528,11 +661,13 @@ function LogDetailDialog({
   localeTag?: string;
   t: TFn;
   onClose: () => void;
+  onFilterConversation?: (conversationId: string) => void;
 }) {
   const dialogRef = useModalDialog(true);
   const [copied, setCopied] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
+  const reasoningWire = reasoningWireLabel(detail);
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -575,8 +710,28 @@ function LogDetailDialog({
                 </button>
               )}
             </span>
+            {detail.conversationId && (
+              <>
+                <span className="muted">{t("logs.detail.conversation")}</span>
+                <span className="log-detail-request-row">
+                  <span className="mono log-detail-break">{detail.conversationId}</span>
+                  {onFilterConversation && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onFilterConversation(detail.conversationId!)}
+                    >
+                      {t("logs.filter.conversation.apply")}
+                    </button>
+                  )}
+                </span>
+              </>
+            )}
             <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
+            {(detail.requestedEffort || detail.effectiveEffort) && (
+              <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
+            )}
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
           </div>
@@ -647,6 +802,7 @@ function LogDetailDialog({
                 </tr></thead>
                 <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
+                  const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
                   const reason = attempt.errorCode
                     ?? (attempt.recoveryKinds.length ? attempt.recoveryKinds.join(", ") : undefined)
@@ -657,6 +813,14 @@ function LogDetailDialog({
                       <td>
                         <span>{attempt.provider}</span><br />
                         <span className="mono muted log-detail-break">{attempt.model}</span>
+                        {(attempt.requestedEffort || attempt.effectiveEffort) && (
+                          <>
+                            <br />
+                            <span className="mono muted text-caption log-detail-break">
+                              {effortLabel(attempt)}{attemptReasoningWire ? ` (${attemptReasoningWire})` : ""}
+                            </span>
+                          </>
+                        )}
                         {matched && (
                           <>
                             <br />

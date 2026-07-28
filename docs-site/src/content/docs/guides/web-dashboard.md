@@ -26,19 +26,20 @@ bun run dev:gui
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
-| **Sub-agent delegation** | Choose a native or routed guidance model and an optional reasoning effort for v1 delegation prompts. This is not a per-spawn router; see below. |
+| **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
-| **Providers** | Add, edit, enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. |
+| **Providers** | Add, edit, enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
-| **Logs** | Auto-refresh recent requests with tokens, requested effort, resolved model, provider, status, request id, duration, and error details. |
+| **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
+| **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). |
 
 ### Linking to a section
@@ -60,16 +61,28 @@ The **Models** switches show final Codex visibility: a routed model is on only w
 ## Delegation picker vs spawn routing
 
 The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
-`injectionEffort`. On a v1 turn, opencodex injects guidance telling the parent agent which exact
-model and reasoning effort to pass to `spawn_agent`. Choosing a model enables that guidance at any
-parent reasoning effort; clearing the model also clears the stored effort.
+`injectionEffort`. **OpenCodex multi-agent guidance** independently controls the delegation
+instructions that use those values. On eligible v2 turns, that guidance tells the parent
+agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
+the stored effort.
+
+The default-off **Use as native Codex subagent defaults** switch applies the same selection to Codex's
+native `[agents]` defaults on the next sync/restart when OpenCodex manages the active Codex routing.
+External user-managed provider configs remain untouched. Those defaults affect newly created Codex tasks
+and do not themselves cause delegation. Existing user-owned `[agents]` defaults are preserved rather
+than overwritten, so they may continue to override the requested defaults.
 
 :::caution
-This picker is delegation guidance for the v1 compatibility surface. On `multi_agent_v2`, the
-current proxy does not append the v1 injection message, and every spawned sub-agent inherits the
-parent session's model. It is not a proxy-side cross-model router. See
+Neither control is a proxy-side cross-model spawn router. OpenCodex guidance asks Codex to pass
+overrides to `spawn_agent`; native `[agents]` defaults apply only when Codex creates a new task after
+they have been synchronized. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical v1/base/v2 behavior.
 :::
+
+The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
+`injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`
+placeholders (and optionally `{{roster}}`) or those values will not appear in the injected
+guidance.
 
 The picker offers enabled native and routed models plus the global Codex effort ladder. The API
 validates the selected effort globally; Codex still validates a spawn effort against the target
@@ -106,7 +119,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache. |
 | `GET /api/update/check` · `POST /api/update/run` · `GET /api/update/status` | Check, run, and monitor self-update jobs. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
-| `GET` / `PUT /api/injection-model` | Read or set the v1 delegation guidance model and optional effort. |
+| `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, or remove providers. |
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |

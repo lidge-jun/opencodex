@@ -71,6 +71,10 @@ GitHub Actions intentionally stay small:
 - **Release** (`.github/workflows/release.yml`) is manual. It does not act as a second full CI
   pipeline; before dry-run or publish it requires the exact release commit (`GITHUB_SHA`) to already
   have a successful Cross-platform CI run.
+- **Stale needs-info** (`.github/workflows/stale-needs-info.yml`) runs daily on the default branch.
+  Open issues labeled `needs-info` with no activity for 14 days get a warning; after 7 more idle
+  days they close as not planned. Any update clears the stale warning. To keep long-lived work open,
+  remove `needs-info` (for example when promoting an issue to `roadmap`).
 
 Use the helper for releases:
 
@@ -79,6 +83,25 @@ bun run release <version>           # commits/pushes the bump; publish workflow 
 bun run release <version> --publish # publish after the CI-gated dry run is understood
 bun run release:watch               # watch the newest Release workflow run
 ```
+
+## Branches
+
+- `dev` — the default integration target. Open your pull request here unless it
+  belongs to a scoped line below.
+- `dev2-go` — parallel integration line for the Go native port (`go/`, the
+  native runtime entrypoint, and the Go release-asset tooling). Open for pull
+  requests alongside `dev`. Send work here only when it belongs to the Go port;
+  everything else goes to `dev`. The automated target-branch check accepts both
+  and cannot tell them apart, so scope is settled in review — a maintainer may
+  ask you to retarget.
+- `main` — releases only. It moves by maintainer-controlled promotion from
+  `dev`; do not open feature pull requests against it.
+- `preview` — the prerelease train.
+
+Porting and rebase pull requests are welcome. Carrying a fix from one
+integration line to another, or rebasing a stale branch onto the current head,
+is normal contribution rather than noise — note the source commits in the
+description.
 
 ## Project maintainers
 

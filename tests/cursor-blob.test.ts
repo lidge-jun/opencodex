@@ -310,12 +310,13 @@ describe("Cursor blob handshake", () => {
 
   });
 
-  test("adds exec_command prompt hints for active shell requests when native exec is available", () => {
+  test("keeps exec_command guidance in the system prompt without mutating the user request", () => {
+    const prompt = "Run: echo OCX via your shell tool, report stdout.";
     const bytes = encodeCursorRunRequest({
       modelId: "claude-4.6-sonnet",
       conversationId: "c1",
       system: ["You are helpful."],
-      messages: [{ role: "user", content: "Run: echo OCX via your shell tool, report stdout." }],
+      messages: [{ role: "user", content: prompt }],
       tools: [{
         name: "exec_command",
         description: "Run a command",
@@ -326,8 +327,8 @@ describe("Cursor blob handshake", () => {
     const roots = decodeRootMessages(bytes);
     expect(JSON.stringify(roots)).toContain("Shell commands use");
     expect(JSON.stringify(roots)).toContain("exec_command");
-    expect(actionText(bytes)).toContain("Run: echo OCX via your shell tool, report stdout.");
-    expect(actionText(bytes)).toContain("Use the Codex shell bridge tool listed this turn");
+    expect(actionText(bytes)).toBe(prompt);
+    expect(actionText(bytes)).not.toContain("Use the Codex shell bridge tool listed this turn");
   });
 
   test("adds generic exec_command guidance for active tool-count demo prompts", () => {

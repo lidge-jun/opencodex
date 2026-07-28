@@ -325,15 +325,26 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
     expect(text).toContain("event: response.completed");
   });
 
-  test("routed iterations use upstream streaming and never call parseResponse", async () => {
+  test("routed iterations isolate diagnostic failures and never call parseResponse", async () => {
     const seenStream: boolean[] = [];
+    const reasoningLogs: unknown[] = [];
     let parseStreamCalls = 0;
     let parseResponseCalls = 0;
     const adapter: ProviderAdapter = {
       name: "stream-only",
       buildRequest(parsed) {
         seenStream.push(parsed.stream);
-        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+        return {
+          url: "https://routed.test/v1",
+          method: "POST",
+          headers: {},
+          body: "{}",
+          reasoningLog: {
+            effectiveEffort: "high",
+            wireField: "reasoning_effort",
+            wireValue: "high",
+          },
+        };
       },
       fetchResponse: async () => new Response("wire", { status: 200 }),
       async *parseStream() {
@@ -355,11 +366,20 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
       selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
       settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
+      onRequestBuilt: request => {
+        reasoningLogs.push(request.reasoningLog);
+        throw new Error("diagnostic hook failure must not abort delivery");
+      },
     });
 
     expect(response.status).toBe(200);
     const frames = await collectSse(response.body!);
     expect(seenStream).toEqual([true]);
+    expect(reasoningLogs).toEqual([{
+      effectiveEffort: "high",
+      wireField: "reasoning_effort",
+      wireValue: "high",
+    }]);
     expect(parseStreamCalls).toBe(1);
     expect(parseResponseCalls).toBe(0);
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
@@ -481,16 +501,37 @@ describe("web-search sidecar native web_search_call emission", () => {
     ))) as typeof fetch;
 
     // First adapter always 429s via fetchResponse; the rotated adapter answers.
+    const reasoningLogs: unknown[] = [];
     const firstAdapter: ProviderAdapter = {
       name: "mock-429",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      buildRequest: () => ({
+        url: "https://routed.test/v1",
+        method: "POST",
+        headers: {},
+        body: "{}",
+        reasoningLog: {
+          effectiveEffort: "low",
+          wireField: "reasoning_effort",
+          wireValue: "low",
+        },
+      }),
       fetchResponse: async () => new Response("rate limited", { status: 429, headers: { "retry-after": "30" } }),
       async *parseStream() { /* unused */ },
       async parseResponse() { return [{ type: "text_delta", text: "should not reach" }, { type: "done" }] as AdapterEvent[]; },
     };
     const rotatedAdapter: ProviderAdapter = {
       name: "mock-rotated",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      buildRequest: () => ({
+        url: "https://routed.test/v1",
+        method: "POST",
+        headers: {},
+        body: "{}",
+        reasoningLog: {
+          effectiveEffort: "high",
+          wireField: "reasoning_effort",
+          wireValue: "high",
+        },
+      }),
       fetchResponse: async () => new Response("{}", { status: 200 }),
       async *parseStream() {
         yield { type: "text_delta", text: "answer from rotated key" };
@@ -508,6 +549,7 @@ describe("web-search sidecar native web_search_call emission", () => {
       selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
       settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
+      onRequestBuilt: request => reasoningLogs.push(request.reasoningLog),
       on429: retryAfter => {
         rotations++;
         expect(retryAfter).toBe("30");
@@ -520,6 +562,18 @@ describe("web-search sidecar native web_search_call emission", () => {
     const output = completed.output as { type: string; content?: { text?: string }[] }[];
     expect(output.find(o => o.type === "message")?.content?.[0]?.text).toBe("answer from rotated key");
     expect(rotations).toBe(1);
+    expect(reasoningLogs).toEqual([
+      {
+        effectiveEffort: "low",
+        wireField: "reasoning_effort",
+        wireValue: "low",
+      },
+      {
+        effectiveEffort: "high",
+        wireField: "reasoning_effort",
+        wireValue: "high",
+      },
+    ]);
   });
 
   test("loop 429 with exhausted pool (on429 null) surfaces the provider error", async () => {

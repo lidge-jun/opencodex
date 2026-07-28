@@ -22,7 +22,7 @@ export default function AddCodexAccountModal({
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   const oauth = useAddCodexAccountOAuth({ apiBase, reauthAccountId, ui, dispatch, t });
-  const { manualCodeBusy, manualCodeWaiting, bindCallbacks, closeModal, startOAuth, copyLoginLink, submitManualCode } = oauth;
+  const { manualCodeBusy, manualCodeWaiting, bindCallbacks, closeModal, startOAuth, submitManualCode } = oauth;
 
   useEffect(() => {
     bindCallbacks(onAdded, onClose);
@@ -69,7 +69,6 @@ export default function AddCodexAccountModal({
           <AddCodexAccountWaitingStep
             reauthAccountId={reauthAccountId}
             authUrl={ui.authUrl}
-            copied={ui.copied}
             manualCode={ui.manualCode}
             manualCodeBusy={manualCodeBusy}
             manualCodeWaiting={manualCodeWaiting}
@@ -77,7 +76,6 @@ export default function AddCodexAccountModal({
             statusTone={ui.statusTone}
             flowId={ui.flowId}
             error={ui.error}
-            onCopyLoginLink={() => { void copyLoginLink(); }}
             onManualCodeChange={value => dispatch({ type: "set-manual-code", manualCode: value })}
             onSubmitManualCode={() => { void submitManualCode(); }}
             onClose={closeModal}

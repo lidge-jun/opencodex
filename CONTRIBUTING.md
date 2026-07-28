@@ -10,9 +10,18 @@ Thanks for helping with opencodex.
 
 ## Branches
 
-- `dev` — integration target for all normal pull requests.
+- `dev` — default integration target for pull requests.
+- `dev2-go` — parallel integration line for the Go native port (`go/`, the
+  native runtime entrypoint, and the Go release-asset tooling). Open for pull
+  requests alongside `dev`. Send work here only when it belongs to the Go port;
+  anything else goes to `dev`. The automated check accepts both targets and
+  cannot tell them apart, so scope is settled in review.
 - `main` — releases only; moves by maintainer-controlled promotion from `dev`.
 - `preview` — prerelease train.
+
+Porting and rebase pull requests are welcome: carrying a fix across integration
+lines, or rebasing a stale branch onto the current head, is normal
+contribution. Note the source commits in the description.
 
 Agent-facing repository and review rules live in [`AGENTS.md`](./AGENTS.md).
 

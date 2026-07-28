@@ -2,11 +2,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 import Debug from "../src/pages/Debug";
 import type { DebugSettings } from "../src/pages/debug-shared";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
+/** Survives afterEach restore so a late React 19 dispatchSetState can read window.event. */
+const WINDOW_EVENT_STUB: { event: undefined } = { event: undefined };
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 const originalFetch = globalThis.fetch;
@@ -63,8 +66,13 @@ function installLayoutStubs(win: Window): void {
 }
 
 beforeEach(() => {
+  // Prior Debug tests share `debug-settings:http://localhost`; a warm module cache skips
+  // the cold-start GET and leaves pollCount at 0 (seen on Windows CI after mutation-busy).
+  clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/#debug" });
+  // React 19 resolveUpdatePriority reads window.event; happy-dom omits the IE legacy field.
+  Object.defineProperty(testWindow, "event", { configurable: true, writable: true, value: undefined });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow },
@@ -75,11 +83,35 @@ beforeEach(() => {
   installLayoutStubs(testWindow);
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
+  // Drain deferred React 19 work before restoring globals (same pattern as rail-hover).
+  await act(async () => {
+    for (let i = 0; i < 5; i++) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      await Promise.resolve();
+    }
+  });
   testWindow.close();
+  clearClientResourceStoresForTests();
   for (const key of globals) {
-    Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
+    let value = previousGlobals[key];
+    if (key === "window") {
+      if (value == null || typeof value !== "object") {
+        value = WINDOW_EVENT_STUB;
+      } else if (!Object.prototype.hasOwnProperty.call(value, "event")) {
+        try {
+          Object.defineProperty(value, "event", {
+            configurable: true,
+            writable: true,
+            value: undefined,
+          });
+        } catch {
+          value = WINDOW_EVENT_STUB;
+        }
+      }
+    }
+    Object.defineProperty(globalThis, key, { configurable: true, value });
   }
 });
 

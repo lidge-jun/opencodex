@@ -16,6 +16,7 @@ const {
   buildTranslationBlock,
   buildTranslationControlComment,
   findControlComment,
+  findStickyControlComment,
   extractTranslationControlState,
   resolveControlState,
   encodeControlState,
@@ -34,6 +35,8 @@ const {
   sanitizeTranslationBody,
   scrubDetectedLanguage,
   isEnglishDetectedLanguage,
+  detectedLanguageForControlPersist,
+  bookkeepingLanguageLabel,
   stripOrphanBodyControlState,
   fitTranslationBody,
   shouldOmitVisibleBookkeeping,
@@ -42,6 +45,7 @@ const {
   collectMergedRecentFromComments,
   isValidControlTimestamp,
   pruneRecent,
+  completedHashFor,
 } = require("./issue-translation.cjs");
 
 const HASH_A = "aaaaaaaaaaaaaaaa";
@@ -282,8 +286,8 @@ describe("isPreparedSourceStillCurrent", () => {
 });
 
 describe("bot-owned control state", () => {
-  it("keeps visible bookkeeping only when a non-English translation was applied", () => {
-    const comment = buildTranslationControlComment({
+  it("always includes visible bookkeeping, including English", () => {
+    const german = buildTranslationControlComment({
       v: 2,
       sourceHash: HASH_A,
       attemptedAt: 1,
@@ -291,14 +295,83 @@ describe("bot-owned control state", () => {
       requiresTranslation: true,
       detectedLanguage: "German",
     });
-    assert.match(comment, /Automated translation bookkeeping — detected language: German/);
+    assert.match(german, /Automated translation bookkeeping — detected language: German/);
     assert.equal(shouldOmitVisibleBookkeeping({
       requiresTranslation: true,
       detectedLanguage: "German",
     }), false);
+
+    const english = buildTranslationControlComment({
+      v: 2,
+      sourceHash: HASH_A,
+      attemptedAt: 1,
+      recent: [1],
+      requiresTranslation: false,
+      detectedLanguage: "English",
+    });
+    assert.match(english, /Automated translation bookkeeping — detected language: English/);
+    assert.equal(shouldOmitVisibleBookkeeping({
+      requiresTranslation: false,
+      detectedLanguage: "English",
+    }), false);
   });
 
-  it("English creates a marker-only bot comment with no visible bookkeeping", async () => {
+  it("incomplete AI/parse failures bookkeep as unknown, never false-English", async () => {
+    assert.equal(
+      detectedLanguageForControlPersist({ detectedLanguage: "", sourceComplete: false }),
+      "unknown",
+    );
+    assert.equal(
+      detectedLanguageForControlPersist({ detectedLanguage: undefined, sourceComplete: false }),
+      "unknown",
+    );
+    assert.equal(
+      detectedLanguageForControlPersist({ detectedLanguage: "unknown", sourceComplete: false }),
+      "unknown",
+    );
+    assert.equal(
+      detectedLanguageForControlPersist({ detectedLanguage: "English", sourceComplete: false }),
+      "unknown",
+    );
+    assert.equal(
+      detectedLanguageForControlPersist({ detectedLanguage: "", sourceComplete: true }),
+      "English",
+    );
+    assert.equal(
+      detectedLanguageForControlPersist({ detectedLanguage: "English", sourceComplete: true }),
+      "English",
+    );
+    assert.equal(bookkeepingLanguageLabel({ requiresTranslation: false, detectedLanguage: null }), "unknown");
+    assert.equal(bookkeepingLanguageLabel({ requiresTranslation: false, detectedLanguage: "English" }), "English");
+
+    const { github, calls } = mockGithub({ nextId: 77 });
+    const result = await persistTranslationControlState({
+      github,
+      owner: "o",
+      repo: "r",
+      issue_number: 9,
+      comments: [],
+      attempt: {
+        sourceHash: HASH_A,
+        requiresTranslation: false,
+        detectedLanguage: detectedLanguageForControlPersist({
+          detectedLanguage: "",
+          sourceComplete: false,
+        }),
+        sourceComplete: false,
+      },
+      now: 100,
+    });
+    assert.equal(result.state.sourceHash, "0000000000000000");
+    assert.equal(result.state.detectedLanguage, "unknown");
+    assert.match(calls[0][1].body, /detected language: unknown/);
+    assert.doesNotMatch(calls[0][1].body, /detected language: English/);
+    // Attempt counted (recent) but source stays retryable.
+    assert.deepEqual(result.state.recent, [100]);
+    assert.equal(completedHashFor(result.state, "issue"), null);
+  });
+
+  it("English creates a bot comment with visible English bookkeeping", async () => {
     const { github, calls } = mockGithub({ nextId: 42 });
     const result = await persistTranslationControlState({
       github,
@@ -315,12 +388,11 @@ describe("bot-owned control state", () => {
       now: 100,
     });
     assert.equal(result.storage, "comment");
-    assert.equal(result.markerOnly, true);
+    assert.equal(result.markerOnly, false);
     assert.equal(result.comment.id, 42);
     assert.deepEqual(calls.map((c) => c[0]), ["create"]);
     assert.match(calls[0][1].body, new RegExp(CONTROL_MARKER));
-    assert.doesNotMatch(calls[0][1].body, /Automated translation bookkeeping/);
-    assert.doesNotMatch(calls[0][1].body, /detected language/);
+    assert.match(calls[0][1].body, /Automated translation bookkeeping — detected language: English/);
     assert.equal(extractTranslationControlState([botComment(calls[0][1].body, 42)]).sourceHash, HASH_A);
   });
 
@@ -353,7 +425,44 @@ describe("bot-owned control state", () => {
     assert.equal(result.comment.id, 11);
     assert.deepEqual(calls.map((c) => c[0]), ["update"]);
     assert.equal(calls[0][1].comment_id, 11);
-    assert.doesNotMatch(calls[0][1].body, /Automated translation bookkeeping/);
+    assert.match(calls[0][1].body, /Automated translation bookkeeping — detected language: English/);
+  });
+
+  it("updates the oldest sticky control comment even when its state is corrupt", async () => {
+    const corrupt = botComment(
+      `${CONTROL_MARKER}\n<!-- opencodex-issue-inline-translator-control-state-v2:!!! -->`,
+      3,
+    );
+    const validNewer = botComment(buildTranslationControlComment({
+      v: 2,
+      sourceHash: HASH_B,
+      attemptedAt: 50,
+      recent: [50],
+      requiresTranslation: false,
+      detectedLanguage: "English",
+    }), 9);
+    const { github, calls } = mockGithub();
+    const result = await persistTranslationControlState({
+      github,
+      owner: "o",
+      repo: "r",
+      issue_number: 7,
+      comments: [corrupt, validNewer],
+      priorState: extractTranslationControlState([corrupt, validNewer]),
+      attempt: {
+        sourceHash: HASH_A,
+        requiresTranslation: false,
+        detectedLanguage: "English",
+        sourceComplete: true,
+      },
+      now: 100,
+    });
+    assert.equal(findStickyControlComment([corrupt, validNewer]).id, 3);
+    assert.equal(result.comment.id, 3);
+    assert.deepEqual(calls.map((c) => c[0]), ["update", "delete"]);
+    assert.equal(calls[0][1].comment_id, 3);
+    assert.match(calls[0][1].body, /detected language: English/);
+    assert.equal(calls[1][1].comment_id, 9);
   });
 
   it("non-English persist writes or updates a visible bot-owned comment", async () => {
@@ -447,16 +556,16 @@ describe("bot-owned control state", () => {
     assert.equal(stripOrphanBodyControlState(orphan).includes("control-state-v2:"), false);
   });
 
-  it("failed comment create preserves existing state and does not delete", async () => {
-    // Marker-bearing bot comment with undecodable state: forces create while a
-    // redundant id remains available for cleanup if create had succeeded.
+  it("failed sticky update preserves existing control comments and does not delete", async () => {
+    // Corrupt sticky comment is still the upsert target; update failure must
+    // not cascade into deleting it (or any sibling) as "redundant."
     const stale = botComment(
       `${CONTROL_MARKER}\n<!-- opencodex-issue-inline-translator-control-state-v2:!!! -->`,
       5,
     );
     const { github, calls } = mockGithub({
-      create: async () => {
-        throw new Error("API create failed");
+      update: async () => {
+        throw new Error("API update failed");
       },
     });
     await assert.rejects(
@@ -470,14 +579,16 @@ describe("bot-owned control state", () => {
           sourceHash: HASH_A,
           requiresTranslation: false,
           detectedLanguage: "English",
-        sourceComplete: true,
-      },
+          sourceComplete: true,
+        },
       }),
       /persistence failed/,
     );
-    assert.deepEqual(calls.map((c) => c[0]), ["create"]);
+    assert.deepEqual(calls.map((c) => c[0]), ["update"]);
+    assert.equal(calls[0][1].comment_id, 5);
     assert.ok(!calls.some((c) => c[0] === "delete"));
     assert.equal(findControlComment([stale]), null);
+    assert.equal(findStickyControlComment([stale]).id, 5);
   });
 
   it("re-fetches comments when none are supplied and still verifies authorship", async () => {
@@ -545,7 +656,7 @@ describe("bot-owned control state", () => {
     assert.equal(extractTranslationControlState([prior]).sourceHash, HASH_B);
   });
 
-  it("deletes redundant bot comments only after canonical replacement succeeds", async () => {
+  it("deletes redundant bot comments only after sticky replacement succeeds", async () => {
     const older = botComment(buildTranslationControlComment({
       v: 2,
       sourceHash: HASH_B,
@@ -578,11 +689,12 @@ describe("bot-owned control state", () => {
       },
       now: 300,
     });
-    assert.equal(result.comment.id, 2);
+    // Sticky = oldest id; update it in place and delete the newer duplicate.
+    assert.equal(result.comment.id, 1);
     assert.deepEqual(calls.map((c) => c[0]), ["update", "delete"]);
-    assert.equal(calls[0][1].comment_id, 2);
-    assert.equal(calls[1][1].comment_id, 1);
-    assert.deepEqual(result.cleanup.deleted, [1]);
+    assert.equal(calls[0][1].comment_id, 1);
+    assert.equal(calls[1][1].comment_id, 2);
+    assert.deepEqual(result.cleanup.deleted, [2]);
   });
 
   it("cleanup failure leaves valid fallback comments intact", async () => {
@@ -622,11 +734,12 @@ describe("bot-owned control state", () => {
       },
       now: 300,
     });
-    assert.equal(result.comment.id, 2);
+    assert.equal(result.comment.id, 1);
     assert.equal(result.cleanup.failed.length, 1);
-    assert.equal(result.cleanup.failed[0].id, 1);
+    assert.equal(result.cleanup.failed[0].id, 2);
     assert.ok(calls.some((c) => c[0] === "update"));
-    // Older comment body is unchanged in the caller's list — durable fallback remains.
+    // Newer duplicate remains when delete fails — durable fallback remains.
+    assert.equal(extractTranslationControlState([older, newer]).sourceHash, HASH_A);
     assert.equal(extractTranslationControlState([older]).sourceHash, HASH_B);
   });
 

@@ -87,16 +87,17 @@ token。
 ### 完成与原生 stop reason
 
 Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 `metadataEvent` 可能带有原生 `stopReason`。
-`END_TURN` 和 `STOP_SEQUENCE` 视为权威结束，其文本直接作为最终回答发出，不再额外往返模型。
+`END_TURN` 和 `STOP_SEQUENCE` 只能证明本次推理已停止；Kiro 也可能给进展文本加上该标记。因此在启用工具的
+回合中，普通文本仍作为 commentary，并通过私有完成工具做一次校验。
 
-只有在 stop reason **缺失**时才走兼容路径。任何显式原因都已在上游终止了本次推理，因此适配器直接报告而不是
+`END_TURN`、`STOP_SEQUENCE` 或缺失 stop reason 时可以走一次完成兼容路径。其他显式原因已在上游终止本次推理，因此适配器直接报告而不是
 再发一次请求：输出 token 上限表现为可继续的 incomplete，上下文窗口耗尽表现为不可重试的 context-length
 错误，内容过滤或 guardrail 停止表现为 filtered incomplete。没有真实工具调用却出现的 `TOOL_USE` 被视为
 矛盾而非进展。
 
-只有完全没有 stop reason 时，opencodex 才添加私有的 `codex_kiro_final_answer` 工具并做一次续写。
-重复抑制严格限定为空白归一化后的完全一致：改写过的状态更新可能改变本回合的结果（从"仍在进行"变成"已完成"），
-丢掉那句话比显示一次表面重复更糟糕。
+启用工具时，opencodex 会添加私有 `codex_kiro_final_answer`。重试不会制造空的 assistant/user 回合，
+而会保留原始 user/tool-result，并在发送前校验角色交替、非空结构消息以及 tool use/result 配对。
+完成工具的回答即使与先前 commentary 完全相同，也会作为 `final_answer` 发出。
 
 ### Reasoning effort
 

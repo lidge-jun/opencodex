@@ -1,4 +1,4 @@
-import type { ProviderAdapter } from "./base";
+import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
@@ -349,7 +349,9 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
 }
 
 function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
-  return provider.baseUrl.replace(/\/+$/, "") === "https://opencode.ai/zen/v1";
+  const baseUrl = provider.baseUrl.replace(/\/+$/, "");
+  return baseUrl === "https://opencode.ai/zen/v1"
+    || baseUrl === "https://opencode.ai/zen/go/v1";
 }
 
 const XAI_SCHEMA_BASE_URLS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
@@ -544,19 +546,37 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
       const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+      let reasoningLog: AdapterRequest["reasoningLog"];
       if (reasoningEffort !== undefined) {
         if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
           const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
-          if (budget !== undefined) body.thinking_budget = budget;
+          if (budget !== undefined) {
+            body.thinking_budget = budget;
+            reasoningLog = {
+              effectiveEffort: parsed.options.reasoning === "minimal" ? "minimal" : reasoningEffort,
+              wireField: "thinking_budget",
+              wireValue: budget,
+            };
+          }
         } else if (modelInList(provider.thinkingToggleModels, parsed.modelId)) {
           // Vendor thinking-toggle wire: the mapped value is sent as `thinking: {type}` because
           // these models ignore/reject reasoning_effort. Most use enabled/disabled; MiniMax-M3
           // uses adaptive/disabled.
           if (reasoningEffort === "enabled" || reasoningEffort === "disabled" || reasoningEffort === "adaptive") {
             body.thinking = { type: reasoningEffort };
+            reasoningLog = {
+              effectiveEffort: reasoningEffort,
+              wireField: "thinking.type",
+              wireValue: reasoningEffort,
+            };
           }
         } else {
           body.reasoning_effort = reasoningEffort;
+          reasoningLog = {
+            effectiveEffort: reasoningEffort,
+            wireField: "reasoning_effort",
+            wireValue: reasoningEffort,
+          };
         }
       }
       if (parsed.options.presencePenalty !== undefined && !modelInList(provider.noPenaltyModels, parsed.modelId)) {
@@ -610,7 +630,13 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         });
       }
 
-      return { url, method: "POST", headers, body: bodyJson };
+      return {
+        url,
+        method: "POST",
+        headers,
+        body: bodyJson,
+        ...(reasoningLog ? { reasoningLog } : {}),
+      };
     },
 
     async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {

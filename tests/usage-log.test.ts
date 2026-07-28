@@ -83,6 +83,25 @@ describe("usage log", () => {
     expect(usageLogRevisionKey(newSnapshot.revision)).not.toBe(usageLogRevisionKey(oldSnapshot.revision));
   });
 
+  test("persists conversationId for Logs session correlation", () => {
+    appendUsageEntry({
+      requestId: "ocx-conversation",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      conversationId: "thread-abc",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      totalTokens: 2,
+    });
+    expect(readUsageEntries()).toEqual([expect.objectContaining({
+      requestId: "ocx-conversation",
+      conversationId: "thread-abc",
+    })]);
+  });
+
   test("persists only canonical ordered attempt fields", () => {
     appendUsageEntry({
       requestId: "ocx-attempts",
@@ -109,6 +128,10 @@ describe("usage log", () => {
         inputTokenEstimate: 5,
         usage: { inputTokens: 5, outputTokens: 0, estimated: true },
         totalTokens: 5,
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
         headers: { authorization: "Bearer attempt-token" },
         body: "attempt body secret",
         messages: ["attempt message secret"],
@@ -141,7 +164,45 @@ describe("usage log", () => {
       inputTokenEstimate: 5,
       usage: { inputTokens: 5, outputTokens: 0, estimated: true },
       totalTokens: 5,
+      requestedEffort: "max",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
     }]);
+  });
+
+  test("omits malformed optional attempt reasoning metadata without dropping the attempt", () => {
+    appendUsageEntry({
+      requestId: "ocx-attempt-reasoning",
+      timestamp: 1,
+      provider: "combo",
+      model: "combo/free",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "unreported",
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+        requestedEffort: 123,
+        effectiveEffort: null,
+        reasoningWireField: {},
+        reasoningWireValue: -1,
+      } as never],
+    });
+
+    const attempt = readUsageEntries()[0]?.attempts?.[0];
+    expect(attempt?.ordinal).toBe(1);
+    expect(attempt).not.toHaveProperty("requestedEffort");
+    expect(attempt).not.toHaveProperty("effectiveEffort");
+    expect(attempt).not.toHaveProperty("reasoningWireField");
+    expect(attempt).not.toHaveProperty("reasoningWireValue");
   });
 
   test("drops only malformed persisted attempts while preserving valid siblings", () => {
@@ -476,7 +537,10 @@ describe("usage log", () => {
       provider: "openai",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
-      requestedEffort: "high",
+      requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",
@@ -488,7 +552,10 @@ describe("usage log", () => {
     });
     expect(readUsageEntries()[0]).toMatchObject({
       requestId: "ocx-effort",
-      requestedEffort: "high",
+      requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",

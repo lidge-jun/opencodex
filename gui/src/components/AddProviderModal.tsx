@@ -95,7 +95,7 @@ export default function AddProviderModal({
   const presetsLoading = presetsPoll.loading;
   const usageRank = usagePoll.data ?? {};
   const {
-    preset, form, saving, error, oauthBusy, oauthMsg, oauthMsgTone,
+    preset, form, saving, error, oauthBusy, oauthMsg, oauthMsgTone, oauthUrl, oauthUrlProvider,
     manualCode, manualCodeBusy, manualCodeMsg, manualCodeOk, endpointChoice, oauthTosPending,
   } = state;
 
@@ -195,6 +195,7 @@ export default function AddProviderModal({
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),
     setOauthMsg: (msg: string) => dispatch({ type: "set-oauth-msg", msg }),
     setOauthMsgTone: (tone: "ok" | "warn") => dispatch({ type: "set-oauth-tone", tone }),
+    setOauthUrl: (url: string, providerId: string) => dispatch({ type: "set-oauth-url", url, providerId }),
     setManualCode: (code: string) => dispatch({ type: "set-manual-code", code }),
     setManualCodeMsg: (msg: string) => dispatch({ type: "set-manual-code-msg", msg }),
     setManualCodeOk: (ok: boolean) => dispatch({ type: "set-manual-code-msg", msg: manualCodeMsg, ok }),
@@ -255,6 +256,7 @@ export default function AddProviderModal({
               oauthBusy={oauthBusy}
               oauthMsg={oauthMsg}
               oauthMsgTone={oauthMsgTone}
+              oauthUrl={oauthUrlProvider === preset.oauthProvider ? oauthUrl : ""}
               manualCode={manualCode}
               manualCodeBusy={manualCodeBusy}
               manualCodeMsg={manualCodeMsg}

@@ -146,6 +146,40 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
   }
 });
 
+test("native passthrough persists conversationId from metadata.user_id", async () => {
+  const { createHash } = await import("node:crypto");
+  const { clearRequestLogsForTests } = await import("../src/server/request-log");
+  clearRequestLogsForTests();
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const userId = "user_session_opaque_abc";
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({
+        ...claudeBody(),
+        metadata: { user_id: userId },
+      }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const logs = await (await fetch(new URL("/api/logs?tail=1", server.url))).json() as Array<{
+      provider?: string;
+      conversationId?: string;
+    }>;
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.provider).toBe("anthropic-native");
+    expect(logs[0]?.conversationId).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("count_tokens passes through with native credentials", async () => {
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);

@@ -9,9 +9,9 @@ read-only and do not start, stop, install, uninstall, or rewrite Codex/opencodex
 
 ## Setup & lifecycle
 
-### `ocx init`
+### `ocx setup` · `ocx init`
 
-Interactive setup wizard. Prompts for a provider (preset or custom), API key (literal or `${ENV}`),
+Interactive setup wizard (`init` is the compatibility alias). Prompts for a provider (preset or custom), API key (literal or `${ENV}`),
 default model, and proxy port; saves `~/.opencodex/config.json`; optionally injects the proxy into
 `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`); and optionally installs the Codex
 autostart shim.
@@ -179,11 +179,48 @@ Codex keys while flipping the native feature through `codex features enable|disa
 transition restores the original `config.toml`.
 Changes apply to new Codex sessions; running sessions keep their pinned surface.
 
-### `ocx models [--provider <name>] [--json]`
+## Headless dashboard parity
+
+Operational dashboard features are also available without a browser. These commands locate the
+identity-checked running proxy (including a fallback runtime port) and reuse the same management
+routes, validation, live configuration, and catalog refresh side effects as the GUI.
+
+| Resource | Commands |
+| --- | --- |
+| Routing | `ocx combo ...` or `ocx route combo ...` |
+| Agent policy | `ocx agent injection|effort|subagents|fallback|sidecar ...` |
+| Observability | `ocx observe logs|usage|storage|memory|debug ...` |
+| API admission | `ocx access key|endpoints|models|test ...` |
+| Claude Code | `ocx claude config status|set ...` |
+| Grok Build | `ocx grok status|exclude|include|set|clear|apply ...` |
+| Runtime control | `ocx system status|settings|startup|diagnostics|sync|update ...` |
+| Offline config | `ocx config show|get|set|unset|validate|export|import ...` |
+
+List/status is the default where unambiguous. Use `--json` for structured snapshots and
+`ocx observe logs --follow --jsonl` for a streaming request-log feed. Destructive removal/import
+and update actions require `--yes`. Live operations require a running proxy; validated config
+inspection and import/export work offline.
+
+```bash
+ocx provider test ark
+ocx models live --provider ark --json
+ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
+ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx observe usage --range 30d --json
+ocx access key create deployment
+ocx system settings --stream-mode eager-relay
+```
+
+Theme, language, navigation, and other purely visual browser state intentionally have no CLI
+equivalent. Cloudflare Tunnel setup is not part of this command set.
+
+### `ocx models [subcommand]`
 
 List the models statically seeded in configured providers. `--provider` filters one configured
-provider and `--json` returns model metadata plus a reminder that `liveModels` may add runtime-only
-entries. This command does not fetch live catalogs; use `ocx sync` or the dashboard for that.
+provider and `--json` returns model metadata. `live` reads the running catalog; `add`, `edit`,
+`remove`, and `list-custom` manage manual catalog entries; `enable`, `disable`, and `provider`
+control visibility; `selected` controls a provider allowlist; `context` controls provider context
+caps; and `shadow` manages background shadow-call interception.
 
 ### `ocx provider <subcommand>`
 
@@ -194,9 +231,15 @@ both `--adapter` and `--base-url`.
 | --- | --- | --- |
 | `list` | `--json` | List configured providers and the remaining registry entries. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Add a registry/custom provider. `--force` overwrites; `--sync` refreshes a running proxy in human-output mode. |
+| `edit <name>` | provider field flags, `--json` | Edit validated live provider fields without replacing key pools. |
+| `test <name>` | `--json` | Probe the real upstream model endpoint. |
 | `show <name>` | `--json` | Show config with API keys masked. |
 | `remove <name>` | `--json` | Remove a non-default provider; the last provider cannot be removed. |
 | `set-default <name>` | `--json` | Select an existing provider as the default. |
+| `selected <name>` | `--set <ids>`, `--clear`, `--json` | Read or update the provider model allowlist. |
+| `quota` | `--refresh`, `--json` | Read provider quota reports. |
+| `presets` | `--json` | List dashboard provider presets. |
+| `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
 
 ```bash
 ocx provider list --json

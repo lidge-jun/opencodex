@@ -2,7 +2,7 @@ name: Cross-platform CI
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, dev2-go]
     paths:
       - "src/**"
       - "bin/**"
@@ -17,6 +17,7 @@ on:
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
+      - ".github/workflows/stale-needs-info.yml"
   push:
     branches: [main, preview, dev]
     paths:
@@ -33,6 +34,7 @@ on:
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
+      - ".github/workflows/stale-needs-info.yml"
   workflow_dispatch:
 
 permissions:

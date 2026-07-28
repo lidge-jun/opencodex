@@ -11,6 +11,7 @@ export type AttemptRecoveryKind =
   | "connection-reset"
   | "oauth-401"
   | "key-429"
+  | "anthropic-oauth-429"
   | "image-413";
 
 export interface PersistedUsageAttempt {
@@ -29,6 +30,11 @@ export interface PersistedUsageAttempt {
   usage?: OcxUsage;
   totalTokens?: number;
   errorCode?: string;
+  /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
 }
 
 export interface PersistedUsageEntry {
@@ -37,10 +43,16 @@ export interface PersistedUsageEntry {
   provider: string;
   model: string;
   surface?: "claude" | "claude-desktop" | "grok";
+  /** Best-effort chat/session correlation for Logs grouping (#330). */
+  conversationId?: string;
   resolvedModel?: string;
   requestedModel?: string;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
   requestedEffort?: string;
+  /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -129,6 +141,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "connection-reset",
   "oauth-401",
   "key-429",
+  "anthropic-oauth-429",
   "image-413",
 ]);
 const USAGE_STATUSES = new Set<UsageStatus>([
@@ -213,6 +226,20 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       ? { totalTokens: attempt.totalTokens }
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(typeof attempt.requestedEffort === "string" && attempt.requestedEffort
+      ? { requestedEffort: capMetadataString(attempt.requestedEffort) }
+      : {}),
+    ...(typeof attempt.effectiveEffort === "string" && attempt.effectiveEffort
+      ? { effectiveEffort: capMetadataString(attempt.effectiveEffort) }
+      : {}),
+    ...(typeof attempt.reasoningWireField === "string" && attempt.reasoningWireField
+      ? { reasoningWireField: capMetadataString(attempt.reasoningWireField) }
+      : {}),
+    ...(typeof attempt.reasoningWireValue === "string" && attempt.reasoningWireValue
+      ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
+      : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
+        ? { reasoningWireValue: attempt.reasoningWireValue }
+        : {}),
   };
 }
 
@@ -235,11 +262,25 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     provider: entry.provider,
     model: entry.model,
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+    ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
+      ? { conversationId: entry.conversationId.trim().slice(0, 128) }
+      : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
       : {}),
+    ...(typeof entry.effectiveEffort === "string" && entry.effectiveEffort
+      ? { effectiveEffort: capMetadataString(entry.effectiveEffort) }
+      : {}),
+    ...(typeof entry.reasoningWireField === "string" && entry.reasoningWireField
+      ? { reasoningWireField: capMetadataString(entry.reasoningWireField) }
+      : {}),
+    ...(typeof entry.reasoningWireValue === "string" && entry.reasoningWireValue
+      ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
+      : isNonNegativeFiniteNumber(entry.reasoningWireValue)
+        ? { reasoningWireValue: entry.reasoningWireValue }
+        : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
       : {}),

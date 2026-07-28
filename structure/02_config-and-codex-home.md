@@ -71,6 +71,13 @@ requires_openai_auth = true
 Root TOML keys must be written before the first `[table]`. Re-injection strips stale opencodex
 blocks, stale root context-window overrides, and stale opencodex catalog paths before rewriting.
 
+Native Codex sub-agent defaults are a separate, explicit opt-in. When
+`syncCodexSubagentDefaults` is true and `injectionModel` is set, injection writes marker-owned
+`agents.default_subagent_model` and, when configured,
+`agents.default_subagent_reasoning_effort`. Unmarked values are user-owned and must never be
+overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
+restore must preserve later user edits while stripping those managed values.
+
 If the root config selects a provider other than `openai` or `opencodex`, injection must leave the
 config byte-for-byte unchanged and skip profile creation/updates and history migration. External
 provider managers own that routing configuration, and replacing their provider id can hide

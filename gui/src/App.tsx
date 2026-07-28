@@ -21,6 +21,7 @@ import { installApiAuthFetch } from "./api";
 import { readJsonIfOk } from "./fetch-json";
 import { type Page } from "./app-routing";
 import { useAppRouteState } from "./use-app-route-state";
+import { requestProxyStop } from "./stop-proxy";
 
 installApiAuthFetch();
 
@@ -185,17 +186,16 @@ export default function App() {
   const handleStop = async () => {
     if (!confirm(t("dash.stopConfirm"))) return;
     setStopping(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/stop`, { method: "POST" });
-      // A refusal (409: a service under another home owns this proxy) returns normally instead
-      // of dropping the connection, so the button would otherwise sit in "stopping…" forever
-      // with nothing explaining why.
-      if (!res.ok) {
-        setStopping(false);
-        const detail = await res.json().catch(() => null) as { message?: string } | null;
-        if (detail?.message) alert(detail.message);
-      }
-    } catch { /* connection drops — the proxy is going down as expected */ }
+    const outcome = await requestProxyStop(API_BASE, {
+      formatFailure: status => t("dash.stopFailed", { status: String(status) }),
+    });
+    // Refusals and restore failures return normally instead of dropping the connection.
+    // In both cases the proxy did not reach a clean-stop result, so re-enable the control
+    // and surface the server's remediation instead of leaving "stopping…" stuck forever.
+    if (!outcome.accepted) {
+      setStopping(false);
+      alert(outcome.message);
+    }
   };
 
   const brand = (

@@ -17,6 +17,7 @@ import {
   getRequestLogEntries,
   hydrateRequestLogsFromDisk,
   noteAttemptSend,
+  recordAdapterReasoning,
   recordFirstOutput,
   requestLogEntryFromPersistedUsage,
   sealRequestAttemptIdentity,
@@ -44,6 +45,105 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("records the adapter's exact outbound reasoning parameter", () => {
+    const attempt = beginRequestAttempt(1, "xai", "grok-4.5", "openai-chat");
+    const logCtx: RequestLogContext = {
+      model: "grok-4.5",
+      provider: "xai",
+      requestedEffort: "max",
+      activeAttempt: attempt,
+    };
+
+    recordAdapterReasoning(logCtx, {
+      url: "https://api.x.ai/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: "high",
+        wireField: "reasoning_effort",
+        wireValue: "high",
+      },
+    });
+
+    expect(logCtx).toMatchObject({
+      requestedEffort: "max",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
+    });
+    expect(attempt).toMatchObject({
+      requestedEffort: "max",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
+    });
+
+    const sensitiveAlias = ["sk", "proj", "redaction-fixture"].join("-");
+    recordAdapterReasoning(logCtx, {
+      url: "https://provider.test/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: sensitiveAlias,
+        wireField: "reasoning_effort",
+        wireValue: sensitiveAlias,
+      },
+    });
+    expect(logCtx.effectiveEffort).not.toContain("redaction-fixture");
+    expect(logCtx.reasoningWireValue).not.toContain("redaction-fixture");
+    expect(attempt.effectiveEffort).not.toContain("redaction-fixture");
+    expect(attempt.reasoningWireValue).not.toContain("redaction-fixture");
+  });
+
+  test("malformed adapter reasoning metadata never interrupts request logging", () => {
+    const malformed = [
+      { effectiveEffort: 123, wireField: "reasoning_effort", wireValue: 123 },
+      { effectiveEffort: null, wireField: "reasoning_effort", wireValue: "high" },
+      { effectiveEffort: {}, wireField: "reasoning_effort", wireValue: "high" },
+      { effectiveEffort: "high", wireField: "unknown", wireValue: "high" },
+      { effectiveEffort: "high", wireField: "reasoning_effort", wireValue: "" },
+      { effectiveEffort: "high", wireField: "thinking_budget", wireValue: null },
+      { effectiveEffort: "high", wireField: "thinking_budget", wireValue: {} },
+      { effectiveEffort: "high", wireField: "thinking_budget", wireValue: Number.NaN },
+      { effectiveEffort: "high", wireField: "thinking_budget", wireValue: -1 },
+    ];
+
+    for (const reasoningLog of malformed) {
+      const attempt = beginRequestAttempt(1, "xai", "grok-4.5", "openai-chat");
+      const logCtx: RequestLogContext = {
+        model: "grok-4.5",
+        provider: "xai",
+        requestedEffort: "max",
+        effectiveEffort: "stale",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "stale",
+        activeAttempt: attempt,
+      };
+      Object.assign(attempt, {
+        effectiveEffort: "stale",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "stale",
+      });
+
+      expect(() => recordAdapterReasoning(logCtx, {
+        url: "https://provider.test/v1/chat/completions",
+        method: "POST",
+        headers: {},
+        body: "{}",
+        reasoningLog: reasoningLog as never,
+      })).not.toThrow();
+      expect(logCtx.effectiveEffort).toBeUndefined();
+      expect(logCtx.reasoningWireField).toBeUndefined();
+      expect(logCtx.reasoningWireValue).toBeUndefined();
+      expect(attempt.requestedEffort).toBe("max");
+      expect(attempt.effectiveEffort).toBeUndefined();
+      expect(attempt.reasoningWireField).toBeUndefined();
+      expect(attempt.reasoningWireValue).toBeUndefined();
+    }
+  });
+
   test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
     const attempt = beginRequestAttempt(1, "a", "m1", "openai-chat");
     const logCtx: RequestLogContext = {
@@ -144,8 +244,25 @@ describe("request log metadata", () => {
 
   test("final combo logging keeps one logical row and finalizes its active attempt", () => {
     const entries: RequestLogEntry[] = [];
-    const a = finishRequestAttempt(
-      beginRequestAttempt(1, "a", "model-a", "openai-chat"),
+    const a = beginRequestAttempt(1, "a", "model-a", "openai-chat");
+    recordAdapterReasoning({
+      model: "model-a",
+      provider: "a",
+      requestedEffort: "minimal",
+      activeAttempt: a,
+    }, {
+      url: "https://provider-a.test/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: "low",
+        wireField: "thinking_budget",
+        wireValue: 0,
+      },
+    });
+    finishRequestAttempt(
+      a,
       503,
       3,
       { inputTokens: 4, outputTokens: 1 },
@@ -153,10 +270,11 @@ describe("request log metadata", () => {
     const b = beginRequestAttempt(2, "b", "model-b", "openai-chat");
     noteAttemptSend(b, undefined);
     const start = Date.now();
-    addFinalRequestLog("combo-parent", start, {
+    const logCtx: RequestLogContext = {
       model: "combo/free",
       provider: "combo",
       requestedModel: "combo/free",
+      requestedEffort: "max",
       comboId: "free",
       resolvedModel: "model-b",
       providerAdapter: "openai-chat",
@@ -164,7 +282,19 @@ describe("request log metadata", () => {
       attempts: [a, b],
       activeAttempt: b,
       activeAttemptStartedAt: start,
-    }, 200, undefined, entry => entries.push(entry));
+    };
+    recordAdapterReasoning(logCtx, {
+      url: "https://provider.test/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: "high",
+        wireField: "reasoning_effort",
+        wireValue: "high",
+      },
+    });
+    addFinalRequestLog("combo-parent", start, logCtx, 200, undefined, entry => entries.push(entry));
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
@@ -176,8 +306,23 @@ describe("request log metadata", () => {
       usage: { inputTokens: 14, outputTokens: 3, totalTokens: 17 },
       totalTokens: 17,
       attempts: [
-        { provider: "a", status: 503 },
-        { provider: "b", status: 200, usage: { inputTokens: 10, outputTokens: 2 } },
+        {
+          provider: "a",
+          status: 503,
+          requestedEffort: "minimal",
+          effectiveEffort: "low",
+          reasoningWireField: "thinking_budget",
+          reasoningWireValue: 0,
+        },
+        {
+          provider: "b",
+          status: 200,
+          usage: { inputTokens: 10, outputTokens: 2 },
+          requestedEffort: "max",
+          effectiveEffort: "high",
+          reasoningWireField: "reasoning_effort",
+          reasoningWireValue: "high",
+        },
       ],
     });
   });
@@ -398,6 +543,9 @@ describe("request log metadata", () => {
       provider: "chatgpt-p000001",
       requestedModel: "gpt-5.5",
       requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: requestLogSpeedLabel("priority"),
       configuredServiceTier: "fast",
@@ -421,6 +569,9 @@ describe("request log metadata", () => {
     expect(entries[0]).toMatchObject({
       requestedModel: "gpt-5.5",
       requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "fast",
@@ -835,6 +986,42 @@ describe("request log metadata", () => {
     expect(entries[0].upstreamError).toContain("Upstream stalled");
   });
 
+  test("deferred SSE logging treats the requested output limit as a successful terminal", async () => {
+    const entries: RequestLogEntry[] = [];
+    const incompletePayload = JSON.stringify({
+      type: "response.incomplete",
+      response: {
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: { input_tokens: 9, output_tokens: 64 },
+      },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${incompletePayload}\n\n`));
+        controller.close();
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-requested-output-limit",
+      Date.now(),
+      { model: "anthropic/claude-sonnet-5", provider: "anthropic" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "incomplete",
+      status: 200,
+      usageStatus: "reported",
+      usage: { inputTokens: 9, outputTokens: 64 },
+      upstreamError: "Output reached the requested token limit (max_output_tokens)",
+    });
+    expect(entries[0]).not.toHaveProperty("errorCode");
+  });
+
   test("deferred SSE logging surfaces adapter_eof reason as upstreamError", async () => {
     const entries: RequestLogEntry[] = [];
     const incompletePayload = JSON.stringify({
@@ -879,6 +1066,9 @@ describe("request log restart hydrate", () => {
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
       requestedEffort: "high",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",
@@ -898,6 +1088,9 @@ describe("request log restart hydrate", () => {
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
       requestedEffort: "high",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",

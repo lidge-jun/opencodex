@@ -16,6 +16,7 @@ import {
 } from "../chat/outbound";
 import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { resolveClientRetryAfter } from "../lib/retry-after";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
@@ -180,7 +181,11 @@ export async function handleChatCompletions(
         if (text) message = `upstream error (${upstream.status}): ${redactSecretString(text).slice(0, 400)}`;
       }
     } catch { /* keep fallback */ }
-    const retryAfter = upstream.headers.get("retry-after");
+    const retryAfter = resolveClientRetryAfter({
+      status: upstream.status,
+      message,
+      upstreamRetryAfter: upstream.headers.get("retry-after"),
+    });
     const classified = classifyError(
       upstream.status,
       upstreamType

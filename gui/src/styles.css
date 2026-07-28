@@ -11,6 +11,7 @@
 @import "./styles/provider-quota.css";
 @import "./styles/provider-workspace-shell.css";
 @import "./styles/provider-workspace-settings.css";
+@import "./styles/login-url-block.css";
 @import "./styles/provider-overview-dashboard.css";
 @import "./styles-combos-workspace.css";
 @import "./styles-models-workspace.css";

@@ -10,7 +10,7 @@
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
  *   for Codex pool logins, which have their own ledger (codex-accounts.json).
- * - Credentials without identity (no accountId/email — e.g. kiro) replace the active slot
+ * - Credentials without identity (no accountId/email) replace the active slot
  *   instead of appending: their refresh tokens rotate, so a derived id would duplicate the
  *   same human on every re-login. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor
  *   extracts JWT `sub` — both append distinct accounts under multiauth.
@@ -206,6 +206,28 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
     const validated = validateCopilotApiBaseUrl(candidate.apiBaseUrl);
     if (validated) normalized.apiBaseUrl = validated;
   }
+  if (candidate.kiro && typeof candidate.kiro === "object") {
+    const kiro = candidate.kiro;
+    const clean = (value: unknown, max: number): string | undefined => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed && trimmed.length <= max && !/[\x00-\x1f\x7f]/.test(trimmed) ? trimmed : undefined;
+    };
+    const profileArn = clean(kiro.profileArn, 1024);
+    const ssoRegion = clean(kiro.ssoRegion, 64);
+    const apiRegion = clean(kiro.apiRegion, 64);
+    const clientId = clean(kiro.clientId, 4096);
+    const clientSecret = clean(kiro.clientSecret, 4096);
+    if (profileArn || ssoRegion || apiRegion || clientId || clientSecret) {
+      normalized.kiro = {
+        ...(profileArn ? { profileArn } : {}),
+        ...(ssoRegion ? { ssoRegion } : {}),
+        ...(apiRegion ? { apiRegion } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(clientSecret ? { clientSecret } : {}),
+      };
+    }
+  }
   return normalized;
 }
 
@@ -293,7 +315,11 @@ export function getCredential(provider: string): OAuthCredentials | null {
  * (rotating refresh tokens would fabricate duplicates) and single-slot providers replace the
  * active slot / whole set instead.
  */
-export async function saveCredential(provider: string, cred: OAuthCredentials): Promise<void> {
+export async function saveCredential(
+  provider: string,
+  cred: OAuthCredentials,
+  opts: { preserveIdentityless?: boolean } = {},
+): Promise<void> {
   const safe = normalizeCredential(cred);
   if (!safe) return;
   await mutateStore(store => {
@@ -317,7 +343,7 @@ export async function saveCredential(provider: string, cred: OAuthCredentials): 
       // active identity-less row in place prevents a stale duplicate that stays selectable
       // and would re-refresh into a second row with the same identity.
       const active = set.accounts.find(a => a.id === set.activeAccountId);
-      if (active && active.credential.accountId === undefined && active.credential.email === undefined) {
+      if (!opts.preserveIdentityless && active && active.credential.accountId === undefined && active.credential.email === undefined) {
         active.credential = safe;
         delete active.needsReauth;
         return;
@@ -415,6 +441,29 @@ export async function removeAccount(provider: string, accountId: string): Promis
     }
     if (set.activeAccountId === accountId) set.activeAccountId = set.accounts[0]!.id;
     return true;
+  });
+}
+
+/** Replace or clear a provider account set (used for transactional Kiro add-account rollback). */
+export async function replaceProviderAccountSet(
+  provider: string,
+  set: ProviderAccountSet | null,
+): Promise<void> {
+  await mutateStore(store => {
+    if (!set || set.accounts.length === 0) {
+      delete store[provider];
+      return;
+    }
+    store[provider] = {
+      activeAccountId: set.activeAccountId,
+      accounts: set.accounts.map(account => ({
+        id: account.id,
+        credential: { ...account.credential, ...(account.credential.kiro ? { kiro: { ...account.credential.kiro } } : {}) },
+        ...(account.alias ? { alias: account.alias } : {}),
+        ...(account.needsReauth ? { needsReauth: true } : {}),
+        ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
+      })),
+    };
   });
 }
 
