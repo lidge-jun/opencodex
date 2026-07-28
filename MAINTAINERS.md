@@ -48,6 +48,10 @@ rule is written out under [Review and merge policy](#review-and-merge-policy).
     `dev2-go` before closing out the `dev` merge, label it `needs-go-port`,
     and name the source commits. That label is the durable signal that a
     deferred port is intentional, not forgotten.
+- The required **`enforce-target`** CI check rejects pull requests whose head
+  ancestry sits on the **`main`** tip while far behind **`dev`** or **`dev2-go`**,
+  and rejects empty, thin, or malformed descriptions; authors with repository
+  push permission skip the ancestry heuristic only.
 - A pull request requires approval from at least one maintainer and successful required CI checks
   before merge.
 - Authors do not approve their own pull requests.
