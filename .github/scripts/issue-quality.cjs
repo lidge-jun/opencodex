@@ -374,7 +374,10 @@ function detectIssueKind(issue) {
 // ---------------------------------------------------------------------------
 
 function isEmpty(text) {
-  return clean(text).length === 0;
+  const c = clean(text);
+  if (c.length === 0) return true;
+  // Stand-ins like "...", "…", "---" are not actionable report content.
+  return /^[\p{P}\p{S}\s]+$/u.test(c);
 }
 
 function allSameCanonical(sections) {
@@ -641,6 +644,17 @@ function validateIssue(issue) {
       } else {
         reasons.push("Both Summary and Reproduction are empty.");
         guidance.push("Describe what happened and how to reproduce it.");
+      }
+    } else {
+      // Each mapped field is required on its own — a filled Summary with an
+      // empty / ellipsis Reproduction (e.g. #598) must not pass.
+      if (isEmpty(summary)) {
+        reasons.push("Summary is empty.");
+        guidance.push("Describe what happened (the symptom or error).");
+      }
+      if (isEmpty(repro)) {
+        reasons.push("Reproduction is empty.");
+        guidance.push("List the exact steps to reproduce the problem.");
       }
     }
 

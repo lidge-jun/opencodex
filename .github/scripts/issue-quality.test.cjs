@@ -362,8 +362,8 @@ describe("validateIssue - feature", () => {
       assert.equal(result.kind, "feature");
       assert.equal(result.valid, false, `Expected terse goal "${goal}" to be invalid`);
       assert.ok(
-        result.reasons.some((r) => r.includes("too vague")),
-        `Expected too vague reason for "${goal}", got: ${result.reasons.join(", ")}`,
+        result.reasons.some((r) => r.includes("too vague") || /missing or empty/i.test(r)),
+        `Expected too vague or empty reason for "${goal}", got: ${result.reasons.join(", ")}`,
       );
     }
   });
@@ -534,6 +534,70 @@ describe("validateIssue - bug", () => {
     const result = validateIssue({ title: "Bug", body, labels: ["bug"] });
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, false);
+  });
+
+  it("rejects a bug with Summary filled but Reproduction empty", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+      "### Reproduction",
+      "No response",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "macOS",
+    ].join("\n");
+    const result = validateIssue({ title: "Open Codex Error", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Reproduction is empty/i.test(r)));
+    assert.ok(!result.reasons.some((r) => /Summary is empty/i.test(r)));
+  });
+
+  it("rejects a bug whose Reproduction is only an ellipsis (#598)", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "{\"detail\":\"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.\"}",
+      "### Reproduction",
+      "...",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "mac os",
+    ].join("\n");
+    const result = validateIssue({ title: "Open Codex Error", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Reproduction is empty/i.test(r)));
+  });
+
+  it("rejects a bug with Reproduction filled but Summary empty", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "",
+      "### Reproduction",
+      "1. Run ocx start\n2. Send a request",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "macOS",
+    ].join("\n");
+    const result = validateIssue({ title: "Crash", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Summary is empty/i.test(r)));
   });
 
   it("accepts a terse real crash report", () => {
