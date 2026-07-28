@@ -383,9 +383,10 @@ other 5xx `api_error`. `Retry-After` is preserved.
 and the penultimate user message, plus top-level automatic `cache_control`. Stable turns normally
 produce about a 99.9% cache hit rate.
 
-**Native OpenAI/ChatGPT routing:** derives a session-scoped `prompt_cache_key` (from
-`metadata.user_id` when present, falling back to a system-content hash) and `session_id` header
-for cache affinity. The cache key includes model and full tool schemas.
+**Native OpenAI/ChatGPT routing:** derives a content-scoped `prompt_cache_key` from the
+resolved model, normalized system content, and full tool schemas. When `metadata.user_id` is
+present, it separately derives a per-session `session_id` header for backend affinity. Tool and
+system-reminder listings are canonicalized before either cache input is built.
 
 **Token math:** Anthropic output subtracts `cached_tokens` and `cache_write_tokens` from
 `input_tokens`, exposing them as `cache_read_input_tokens` and `cache_creation_input_tokens`.

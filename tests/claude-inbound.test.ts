@@ -75,11 +75,12 @@ describe("claude inbound translation", () => {
 
     const tools = body.tools as Record<string, any>[];
     expect(tools).toHaveLength(2);
-    expect(tools[0]).toEqual({
+    // Sorted by name (devlog 260727b_routed_tool_sort): unnamed web_search sorts first.
+    expect(tools[0]).toEqual({ type: "web_search" });
+    expect(tools[1]).toEqual({
       type: "function", name: "Read", description: "Read a file",
       parameters: { type: "object", properties: { file_path: { type: "string" } }, required: ["file_path"] },
     });
-    expect(tools[1]).toEqual({ type: "web_search" });
 
     const input = body.input as Record<string, any>[];
     // user text, assistant text (thinking dropped), function_call, function_call_output, user tail
@@ -250,7 +251,7 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     }
   });
 
-  test("cache cohort key: model and full tool schemas participate, wire order preserved (devlog 260712 B4)", () => {
+  test("cache cohort key: model and full tool schemas participate, tool order canonicalized (devlog 260712 B4, 260727b)", () => {
     const tool = (desc: string) => ({ name: "Read", description: desc, input_schema: { type: "object", properties: { a: { type: "string" }, b: { type: "number" } } } });
     const base = { max_tokens: 1, messages, system: "be nice" };
     const k = (body: Record<string, unknown>) => anthropicToResponsesTranslation(body).body.prompt_cache_key as string;
@@ -262,16 +263,103 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     const orderedA = { name: "Read", description: "d", input_schema: { type: "object", properties: { a: { type: "string" }, b: { type: "number" } } } };
     const orderedB = { name: "Read", input_schema: { properties: { b: { type: "number" }, a: { type: "string" } }, type: "object" }, description: "d" };
     expect(k({ ...base, model: "m", tools: [orderedA] })).toBe(k({ ...base, model: "m", tools: [orderedB] }));
-    // different WIRE ORDER of the tool array -> different cohort (Pro review: the key
-    // must correspond to the actual outbound prefix, so array order participates).
+    // Wire order no longer participates for the SAME tool set (devlog 260727b_routed_tool_sort):
+    // toolsToResponses canonicalizes tool order by name before the wire body and this hash both
+    // see it, so any permutation of an identical tool set hashes identically — a stronger
+    // guarantee than "faithfully tracks whatever order arrived" (Claude Code's own MCP
+    // discovery race made that order turn-to-turn unstable, busting the cache prefix for no
+    // reason). A different tool SET still changes the cohort (covered above).
     const t1 = { name: "A", description: "a", input_schema: { type: "object" } };
     const t2 = { name: "B", description: "b", input_schema: { type: "object" } };
-    expect(k({ ...base, model: "m", tools: [t1, t2] })).not.toBe(k({ ...base, model: "m", tools: [t2, t1] }));
+    expect(k({ ...base, model: "m", tools: [t1, t2] })).toBe(k({ ...base, model: "m", tools: [t2, t1] }));
   });
 
   test("[1m] strip works for both alias families before decode", () => {
     // Legacy claude-ocx-* (pure decode, no registry needed).
     expect(resolveInboundModel("claude-ocx-cursor--gpt-5.6-luna[1m]")).toBe("cursor/gpt-5.6-luna");
+  });
+});
+
+describe("tool/system order stabilization (devlog 260727b_routed_tool_sort)", () => {
+  const messages = [{ role: "user", content: "hi" }];
+
+  test("toolsToResponses sorts tools by name regardless of input order", () => {
+    const toolB = { name: "B", description: "b", input_schema: { type: "object" } };
+    const toolA = { name: "A", description: "a", input_schema: { type: "object" } };
+    const body = anthropicToResponsesBody({ model: "m", max_tokens: 1, messages, tools: [toolB, toolA] }) as Record<string, any>;
+    expect((body.tools as Record<string, any>[]).map(t => t.name)).toEqual(["A", "B"]);
+  });
+
+  test("unnamed tools (e.g. web_search) sort first; ties keep relative order", () => {
+    const named = { name: "Read", input_schema: { type: "object" } };
+    const search = { type: "web_search_20250305", name: "web_search", max_uses: 1 };
+    const body = anthropicToResponsesBody({ model: "m", max_tokens: 1, messages, tools: [named, search] }) as Record<string, any>;
+    expect((body.tools as Record<string, any>[]).map(t => t.type)).toEqual(["web_search", "function"]);
+  });
+
+  test("prompt_cache_key is stable across any permutation of the same tool set", () => {
+    const t1 = { name: "A", input_schema: { type: "object" } };
+    const t2 = { name: "B", input_schema: { type: "object" } };
+    const t3 = { name: "C", input_schema: { type: "object" } };
+    const base = { model: "m", max_tokens: 1, messages, system: "be nice" };
+    const k = (tools: unknown[]) => anthropicToResponsesTranslation({ ...base, tools }).body.prompt_cache_key as string;
+    const key1 = k([t1, t2, t3]);
+    expect(k([t3, t1, t2])).toBe(key1);
+    expect(k([t2, t3, t1])).toBe(key1);
+  });
+
+  test("skills-list and deferred-tools-list system-reminder text sorted before joining into instructions", () => {
+    const skillsText =
+      "<system-reminder>\nUser-invocable skills:\n\n" +
+      "- zeta: does z things\n- alpha: does a things" +
+      "\n</system-reminder>";
+    const deferredText =
+      "<system-reminder>\nThe following deferred tools are now available via ToolSearch:\n" +
+      "zeta_tool\nalpha_tool" +
+      "\n</system-reminder>";
+    const body = anthropicToResponsesBody({
+      model: "m", max_tokens: 1, messages,
+      system: [{ type: "text", text: skillsText }, { type: "text", text: deferredText }],
+    }) as Record<string, any>;
+    const instructions = body.instructions as string;
+    expect(instructions.indexOf("- alpha: does a things")).toBeLessThan(instructions.indexOf("- zeta: does z things"));
+    expect(instructions.indexOf("alpha_tool")).toBeLessThan(instructions.indexOf("zeta_tool"));
+  });
+
+  test("normalizes reminder listings in system strings and role-system messages", () => {
+    const skillsText =
+      "<system-reminder>\nUser-invocable skills:\n\n" +
+      "- zeta: does z things\n- alpha: does a things" +
+      "\n</system-reminder>";
+    const deferredText =
+      "<system-reminder>\nThe following deferred tools are now available via ToolSearch:\n" +
+      "zeta_tool\nalpha_tool" +
+      "\n</system-reminder>";
+    const fromSystem = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages, system: skillsText,
+    });
+    const fromMessage = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1,
+      messages: [{ role: "system", content: [{ type: "text", text: skillsText }] }, ...messages],
+    });
+    const deferred = anthropicToResponsesBody({
+      model: "m", max_tokens: 1,
+      messages: [{ role: "system", content: deferredText }, ...messages],
+    }) as Record<string, any>;
+    expect(fromSystem.body.instructions).toBe(fromMessage.body.instructions);
+    expect(fromSystem.body.prompt_cache_key).toBe(fromMessage.body.prompt_cache_key);
+    expect(String(fromMessage.body.instructions).indexOf("- alpha: does a things"))
+      .toBeLessThan(String(fromMessage.body.instructions).indexOf("- zeta: does z things"));
+    expect(String(deferred.instructions).indexOf("alpha_tool"))
+      .toBeLessThan(String(deferred.instructions).indexOf("zeta_tool"));
+  });
+
+  test("non-matching system text is left unchanged", () => {
+    const body = anthropicToResponsesBody({
+      model: "m", max_tokens: 1, messages,
+      system: [{ type: "text", text: "You are Claude Code." }],
+    }) as Record<string, any>;
+    expect(body.instructions).toBe("You are Claude Code.");
   });
 });
 

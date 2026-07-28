@@ -10,6 +10,10 @@
  *  - top_k is accepted and silently dropped (no Responses equivalent, CCR parity).
  */
 import type { OcxClaudeCodeConfig } from "../types";
+import {
+  normalizeSystemReminderText,
+  sortToolsByName,
+} from "../adapters/anthropic-sort-stabilize";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
 import { resolveDesktop3pAlias } from "./desktop-3p";
@@ -69,11 +73,12 @@ export function effortFromOutputConfig(outputConfig: unknown): string | undefine
 }
 
 function systemToInstructions(system: unknown): string | undefined {
-  if (typeof system === "string") return system.length > 0 ? system : undefined;
+  if (typeof system === "string") return system.length > 0 ? normalizeSystemReminderText(system) : undefined;
   if (Array.isArray(system)) {
     const parts: string[] = [];
     for (const block of system) {
-      if (isRec(block) && block.type === "text" && typeof block.text === "string") parts.push(block.text);
+      if (!isRec(block) || block.type !== "text" || typeof block.text !== "string") continue;
+      parts.push(normalizeSystemReminderText(block.text));
     }
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }
@@ -229,11 +234,13 @@ function blockedSkillCallIds(messages: readonly unknown[], blocked: readonly str
  * `instructions` is the only shape that works on every route.
  */
 function systemMessageText(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return normalizeSystemReminderText(content);
   if (!Array.isArray(content)) return "";
   const parts: string[] = [];
   for (const raw of content) {
-    if (isRec(raw) && raw.type === "text" && typeof raw.text === "string") parts.push(raw.text);
+    if (isRec(raw) && raw.type === "text" && typeof raw.text === "string") {
+      parts.push(normalizeSystemReminderText(raw.text));
+    }
   }
   return parts.join("\n\n");
 }
@@ -340,7 +347,14 @@ function toolsToResponses(tools: unknown): Rec[] | undefined {
     }
     // Other server tools (bash_*, text_editor_*, ...) have no routed equivalent: drop.
   }
-  return out.length > 0 ? out : undefined;
+  if (out.length === 0) return undefined;
+  // Claude Code's MCP tool discovery races non-deterministically turn to turn, so this
+  // array can arrive in a different order for an otherwise-identical conversation. This
+  // feeds both the outgoing wire body and prompt_cache_key below, so an unstable order
+  // busts the cache prefix and the cache-key routing together. tool_choice targets by
+  // name (see toolChoiceToResponses), not position, so sorting is behavior-preserving.
+  sortToolsByName(out);
+  return out;
 }
 
 function toolChoiceToResponses(choice: unknown, body: Rec): void {
