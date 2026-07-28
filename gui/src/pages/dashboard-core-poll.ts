@@ -50,17 +50,21 @@ export type EffortCapPoll = {
 export type DashboardCorePoll = {
   health: HealthData | null;
   providers: ProviderInfo[];
-  settings: SettingsData | null;
-  /** Settings-derived seed payload; merge against latest startup-health at commit time. */
-  startupHealthSeed: SettingsData["startupHealth"] | null | undefined;
-  sidecar: SidecarData | null;
-  shadowCall: ShadowCallData | null | undefined;
   maMode: "v1" | "default" | "v2";
   maModeResolved: boolean;
   /** Absent when the optional endpoint failed — callers must keep prior UI state. */
   injection: InjectionPoll | undefined;
   effortCaps: EffortCapPoll | undefined;
   error: boolean;
+};
+
+/** Fast path for interactive toggles/selects — must not wait on health/providers/usage. */
+export type DashboardControlsPoll = {
+  settings: SettingsData | null;
+  /** Settings-derived seed payload; merge against latest startup-health at commit time. */
+  startupHealthSeed: SettingsData["startupHealth"] | null | undefined;
+  sidecar: SidecarData | null;
+  shadowCall: ShadowCallData | null | undefined;
 };
 
 export type DashboardEpochRefs = {
@@ -113,11 +117,15 @@ export async function fetchDashboardUsage(apiBase: string, signal: AbortSignal):
   return requireJson<UsageSummary30d>(response);
 }
 
-export async function fetchDashboardCore(
+/**
+ * Interactive dashboard controls (auto-start, sidecar, shadow-call). Fetched on their
+ * own poll so a slow healthz/providers response cannot gray out toggles/selects.
+ */
+export async function fetchDashboardControls(
   apiBase: string,
   signal: AbortSignal,
   epochs: DashboardEpochRefs,
-): Promise<DashboardCorePoll> {
+): Promise<DashboardControlsPoll> {
   const epochSnapshot = beginPollEpochs({
     settingsRequest: epochs.settingsRequestEpochRef,
     settingsMutation: epochs.settingsMutationEpochRef,
@@ -129,63 +137,32 @@ export async function fetchDashboardCore(
   const shadowRequestEpoch = epochSnapshot.shadow.request;
   const shadowMutationEpoch = epochSnapshot.shadow.mutation;
 
-  const empty: DashboardCorePoll = {
-    health: null,
-    providers: [],
-    settings: null,
-    startupHealthSeed: undefined,
-    sidecar: null,
-    shadowCall: undefined,
-    maMode: "default",
-    maModeResolved: true,
-    injection: undefined,
-    effortCaps: undefined,
-    error: true,
-  };
+  const [sRes, scRes, shRes] = await Promise.all([
+    fetch(`${apiBase}/api/settings`, { signal }),
+    fetch(`${apiBase}/api/sidecar-settings`, { signal }),
+    fetch(`${apiBase}/api/shadow-call-settings`, { signal }),
+  ]);
 
+  const nextSettings = await requireJson<SettingsData>(sRes);
+  let settings: SettingsData | null = null;
+  let startupHealthSeed: SettingsData["startupHealth"] | null | undefined = undefined;
+  if (settingsPollMayCommit(
+    { request: settingsRequestEpoch, mutation: settingsMutationEpoch },
+    {
+      request: epochs.settingsRequestEpochRef.current,
+      mutation: epochs.settingsMutationEpochRef.current,
+      mutationInFlight: epochs.settingsMutationInFlightRef.current,
+    },
+  )) {
+    settings = nextSettings;
+    startupHealthSeed = nextSettings.startupHealth;
+  }
+
+  const sidecar = await requireJson<SidecarData>(scRes);
+  let shadowCall: ShadowCallData | null | undefined = undefined;
   try {
-    const [hRes, pRes, sRes, scRes, shRes] = await Promise.all([
-      fetch(`${apiBase}/healthz`, { signal }),
-      fetch(`${apiBase}/api/providers`, { signal }),
-      fetch(`${apiBase}/api/settings`, { signal }),
-      fetch(`${apiBase}/api/sidecar-settings`, { signal }),
-      fetch(`${apiBase}/api/shadow-call-settings`, { signal }),
-    ]);
-
-    const health = await requireJson<HealthData>(hRes);
-    const providers = await requireJson<ProviderInfo[]>(pRes);
-    const nextSettings = await requireJson<SettingsData>(sRes);
-    let settings: SettingsData | null = null;
-    let startupHealthSeed: SettingsData["startupHealth"] | null | undefined = undefined;
-    if (settingsPollMayCommit(
-      { request: settingsRequestEpoch, mutation: settingsMutationEpoch },
-      {
-        request: epochs.settingsRequestEpochRef.current,
-        mutation: epochs.settingsMutationEpochRef.current,
-        mutationInFlight: epochs.settingsMutationInFlightRef.current,
-      },
-    )) {
-      settings = nextSettings;
-      startupHealthSeed = nextSettings.startupHealth;
-    }
-
-    const sidecar = await requireJson<SidecarData>(scRes);
-    let shadowCall: ShadowCallData | null | undefined = undefined;
-    try {
-      if (shRes.ok) {
-        const nextShadow = await shRes.json() as ShadowCallData;
-        if (settingsPollMayCommit(
-          { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
-          {
-            request: epochs.shadowCallRequestEpochRef.current,
-            mutation: epochs.shadowCallMutationEpochRef.current,
-            mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
-          },
-        )) {
-          shadowCall = nextShadow;
-        }
-      }
-    } catch {
+    if (shRes.ok) {
+      const nextShadow = await shRes.json() as ShadowCallData;
       if (settingsPollMayCommit(
         { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
         {
@@ -194,15 +171,55 @@ export async function fetchDashboardCore(
           mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
         },
       )) {
-        shadowCall = null;
+        shadowCall = nextShadow;
       }
     }
+  } catch {
+    if (settingsPollMayCommit(
+      { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
+      {
+        request: epochs.shadowCallRequestEpochRef.current,
+        mutation: epochs.shadowCallMutationEpochRef.current,
+        mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
+      },
+    )) {
+      shadowCall = null;
+    }
+  }
+
+  return { settings, startupHealthSeed, sidecar, shadowCall };
+}
+
+export async function fetchDashboardCore(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<DashboardCorePoll> {
+  const empty: DashboardCorePoll = {
+    health: null,
+    providers: [],
+    maMode: "default",
+    maModeResolved: true,
+    injection: undefined,
+    effortCaps: undefined,
+    error: true,
+  };
+
+  try {
+    const [hRes, pRes, v2Res, imRes, ecRes] = await Promise.all([
+      fetch(`${apiBase}/healthz`, { signal }),
+      fetch(`${apiBase}/api/providers`, { signal }),
+      fetch(`${apiBase}/api/v2`, { signal }).catch(() => null),
+      fetch(`${apiBase}/api/injection-model`, { signal }).catch(() => null),
+      fetch(`${apiBase}/api/effort-caps`, { signal }).catch(() => null),
+    ]);
+
+    const health = await requireJson<HealthData>(hRes);
+    const providers = await requireJson<ProviderInfo[]>(pRes);
 
     let maMode: "v1" | "default" | "v2" = "default";
     let maModeResolved = false;
     try {
-      const v2Res = await fetch(`${apiBase}/api/v2`, { signal });
-      if (v2Res.ok) {
+      if (v2Res?.ok) {
         const v2Data = await v2Res.json();
         if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") maMode = v2Data.multiAgentMode;
         else maMode = "default";
@@ -212,8 +229,7 @@ export async function fetchDashboardCore(
 
     let injection: InjectionPoll | undefined;
     try {
-      const imRes = await fetch(`${apiBase}/api/injection-model`, { signal });
-      if (imRes.ok) {
+      if (imRes?.ok) {
         const imData = await imRes.json() as InjectionSelectionResponse & {
           efforts?: string[];
           available?: InjectionPoll["injectionAvailable"];
@@ -228,8 +244,7 @@ export async function fetchDashboardCore(
 
     let effortCaps: EffortCapPoll | undefined;
     try {
-      const ecRes = await fetch(`${apiBase}/api/effort-caps`, { signal });
-      if (ecRes.ok) {
+      if (ecRes?.ok) {
         const ecData = await ecRes.json() as { effortCap?: string | null; subagentEffortCap?: string | null };
         effortCaps = {
           effortCap: ecData.effortCap ?? "",
@@ -241,10 +256,6 @@ export async function fetchDashboardCore(
     return {
       health,
       providers,
-      settings,
-      startupHealthSeed,
-      sidecar,
-      shadowCall,
       maMode,
       maModeResolved,
       injection,

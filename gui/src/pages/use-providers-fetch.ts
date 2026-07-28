@@ -32,16 +32,10 @@ export function useProvidersFetch({
 
   const fetchOauth = useCallback(async () => {
     try {
-      const provRes = await fetch(`${apiBase}/api/oauth/providers`);
-      const provData = await readJsonOrThrow<{ providers?: string[] }>(provRes);
-      const provs: string[] = provData?.providers ?? [];
-      setOauthProviders(provs);
-      const [oauthEntries, codexAccounts, codexActive] = await Promise.all([
-        Promise.all(provs.map(async p => {
-          const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${p}`).catch(() => null);
-          const s = sRes ? (await readJsonIfOk<OAuthStatus>(sRes) ?? { loggedIn: false }) : { loggedIn: false };
-          return [p, s] as const;
-        })),
+      // Kick oauth provider list and Codex account probes in parallel — accounts do
+      // not depend on the oauth/providers response, so a serial await was pure latency.
+      const [provRes, codexAccounts, codexActive] = await Promise.all([
+        fetch(`${apiBase}/api/oauth/providers`),
         fetch(`${apiBase}/api/codex-auth/accounts`)
           .then(r => readJsonIfOk<{ accounts?: Array<{ id?: string; email?: string; isMain?: boolean; hasCredential?: boolean; needsReauth?: boolean }> }>(r))
           .catch(() => null),
@@ -49,6 +43,14 @@ export function useProvidersFetch({
           .then(r => readJsonIfOk<{ activeCodexAccountId?: string | null }>(r))
           .catch(() => null),
       ]);
+      const provData = await readJsonOrThrow<{ providers?: string[] }>(provRes);
+      const provs: string[] = provData?.providers ?? [];
+      setOauthProviders(provs);
+      const oauthEntries = await Promise.all(provs.map(async p => {
+        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${p}`).catch(() => null);
+        const s = sRes ? (await readJsonIfOk<OAuthStatus>(sRes) ?? { loggedIn: false }) : { loggedIn: false };
+        return [p, s] as const;
+      }));
       const next: Record<string, OAuthStatus> = Object.fromEntries(oauthEntries);
       const accounts = codexAccounts?.accounts ?? [];
       const main = accounts.find(a => a.isMain) ?? accounts[0];

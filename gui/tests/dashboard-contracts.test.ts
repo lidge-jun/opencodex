@@ -26,12 +26,33 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
   const coreFnStart = core.indexOf("export async function fetchDashboardCore");
   const usageFnStart = core.indexOf("export async function fetchDashboardUsage");
+  const controlsFnStart = core.indexOf("export async function fetchDashboardControls");
   expect(coreFnStart).toBeGreaterThan(-1);
   expect(usageFnStart).toBeGreaterThan(-1);
+  expect(controlsFnStart).toBeGreaterThan(-1);
   expect(core.slice(coreFnStart)).not.toContain("/api/usage?range=30d");
+  expect(core.slice(coreFnStart)).not.toContain("/api/sidecar-settings");
+  expect(core.slice(coreFnStart)).not.toContain("/api/shadow-call-settings");
+  expect(core.slice(controlsFnStart, coreFnStart > controlsFnStart ? coreFnStart : undefined)).toContain("/api/sidecar-settings");
   expect(hook).toContain("dashboard-usage:${apiBase}");
+  expect(hook).toContain("dashboard-controls:${apiBase}");
   expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
+  expect(hook).toContain("fetchDashboardControls");
   expect(hook).toMatch(/dashboard-usage:\$\{apiBase\}[\s\S]*pollMs: 60_000/);
+});
+
+test("Dashboard interactive controls load independently of health/providers", async () => {
+  const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
+  const controlsFnStart = core.indexOf("export async function fetchDashboardControls");
+  const coreFnStart = core.indexOf("export async function fetchDashboardCore");
+  expect(controlsFnStart).toBeGreaterThan(-1);
+  const controlsBody = core.slice(controlsFnStart, coreFnStart > controlsFnStart ? coreFnStart : undefined);
+  expect(controlsBody).toContain("/api/settings");
+  expect(controlsBody).toContain("/api/sidecar-settings");
+  expect(controlsBody).toContain("/api/shadow-call-settings");
+  expect(controlsBody).not.toContain("/healthz");
+  expect(controlsBody).not.toContain("/api/providers");
+  expect(controlsBody).not.toContain("/api/usage");
 });
 
 test("Dashboard workspace pane is a labelled section, not a nested main landmark", async () => {

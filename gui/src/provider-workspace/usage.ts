@@ -150,17 +150,24 @@ export interface AttentionItem {
 
 /**
  * Derives the list of providers that require user attention:
- * - needsSetup with activeNeedsReauth → "Active account needs re-authentication"
+ * - any section row with activeNeedsReauth → "Active account needs re-authentication"
  * - other needsSetup providers → "Missing credentials" (or override)
  * - disabled providers that have an explicit override reason in `overrideReasons`
  *
- * Ready providers are never included.
+ * Ready providers without reauth are never included.
  */
 export function buildAttentionItems(
   sections: WorkspaceSections,
   overrideReasons: Record<string, string>,
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
+  for (const p of sections.ready) {
+    if (!p.activeNeedsReauth) continue;
+    items.push({
+      name: p.name,
+      reason: overrideReasons[p.name] ?? "Active account needs re-authentication",
+    });
+  }
   for (const p of sections.needsSetup) {
     const reason = p.activeNeedsReauth
       ? (overrideReasons[p.name] ?? "Active account needs re-authentication")

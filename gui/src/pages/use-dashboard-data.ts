@@ -8,6 +8,7 @@ import {
 } from "../startup-health-ui";
 import {
   fetchDashboardCore,
+  fetchDashboardControls,
   fetchDashboardUsage,
   fetchDashboardModels,
   fetchProjectConfigDiagnostics,
@@ -40,6 +41,30 @@ import {
   useModalDialog,
 } from "./dashboard-shared";
 
+const CONTROLS_CACHE_PREFIX = "ocx.dash.controls.v1:";
+
+type CachedControls = {
+  settings?: SettingsData | null;
+  sidecar?: SidecarData | null;
+  shadowCall?: ShadowCallData | null;
+};
+
+function readCachedControls(apiBase: string): CachedControls | null {
+  try {
+    const raw = sessionStorage.getItem(`${CONTROLS_CACHE_PREFIX}${apiBase}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as CachedControls;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedControls(apiBase: string, value: CachedControls) {
+  try {
+    sessionStorage.setItem(`${CONTROLS_CACHE_PREFIX}${apiBase}`, JSON.stringify(value));
+  } catch { /* private mode / quota */ }
+}
+
 export function useDashboardData(apiBase: string) {
   const { locale, t } = useI18n();
   // The hash is the source of truth for the active section (#dashboard, …).
@@ -50,9 +75,10 @@ export function useDashboardData(apiBase: string) {
   const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [sidecar, setSidecar] = useState<SidecarData | null>(null);
-  const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
+  const cachedControls = useMemo(() => readCachedControls(apiBase), [apiBase]);
+  const [settings, setSettings] = useState<SettingsData | null>(() => cachedControls?.settings ?? null);
+  const [sidecar, setSidecar] = useState<SidecarData | null>(() => cachedControls?.sidecar ?? null);
+  const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(() => cachedControls?.shadowCall ?? null);
   const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(null);
   const [sidecarSaving, setSidecarSaving] = useState(false);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
@@ -144,7 +170,18 @@ export function useDashboardData(apiBase: string) {
     async (signal) => {
       // Capture generation at fetch start so a newer probe can win at commit time.
       const startupHealthGeneration = startupHealthGenerationRef.current;
-      const data = await fetchDashboardCore(apiBase, signal, epochRefs);
+      const data = await fetchDashboardCore(apiBase, signal);
+      return { ...data, startupHealthGeneration };
+    },
+    { pollMs: 5000 },
+  );
+
+  const controlsPoll = useKeyedClientResource(
+    `dashboard-controls:${apiBase}`,
+    [apiBase],
+    async (signal) => {
+      const startupHealthGeneration = startupHealthGenerationRef.current;
+      const data = await fetchDashboardControls(apiBase, signal, epochRefs);
       return { ...data, startupHealthGeneration };
     },
     { pollMs: 5000 },
@@ -185,19 +222,6 @@ export function useDashboardData(apiBase: string) {
     if (!data) return;
     if (data.health) setHealth(data.health);
     setProviders(data.providers);
-    if (data.settings) setSettings(data.settings);
-    // Latest-wins: only seed from settings when no newer dedicated probe has committed
-    // while this core poll was in flight. Always merge against the live ref.
-    if (
-      data.startupHealthSeed !== undefined
-      && data.startupHealthGeneration === startupHealthGenerationRef.current
-    ) {
-      const merged = seedStartupHealthFromSettings(startupHealthRef.current, data.startupHealthSeed);
-      setStartupHealth(merged);
-      startupHealthRef.current = merged;
-    }
-    if (data.sidecar) setSidecar(data.sidecar);
-    if (data.shadowCall !== undefined) setShadowCall(data.shadowCall);
     setMaMode(data.maMode);
     setMaModeResolved(data.maModeResolved);
     if (data.injection) {
@@ -214,6 +238,29 @@ export function useDashboardData(apiBase: string) {
     }
     setError(data.error);
   }, [corePoll.data]);
+
+  useEffect(() => {
+    const data = controlsPoll.data;
+    if (!data) return;
+    if (data.settings) setSettings(data.settings);
+    // Latest-wins: only seed from settings when no newer dedicated probe has committed
+    // while this controls poll was in flight. Always merge against the live ref.
+    if (
+      data.startupHealthSeed !== undefined
+      && data.startupHealthGeneration === startupHealthGenerationRef.current
+    ) {
+      const merged = seedStartupHealthFromSettings(startupHealthRef.current, data.startupHealthSeed);
+      setStartupHealth(merged);
+      startupHealthRef.current = merged;
+    }
+    if (data.sidecar) setSidecar(data.sidecar);
+    if (data.shadowCall !== undefined) setShadowCall(data.shadowCall);
+    writeCachedControls(apiBase, {
+      settings: data.settings ?? undefined,
+      sidecar: data.sidecar ?? undefined,
+      shadowCall: data.shadowCall === undefined ? undefined : data.shadowCall,
+    });
+  }, [controlsPoll.data, apiBase]);
 
   useEffect(() => {
     if (usagePoll.data !== undefined) setUsage30d(usagePoll.data);
@@ -518,6 +565,8 @@ export function useDashboardData(apiBase: string) {
     modelQuery, setModelQuery,
     expandedProviders, setExpandedProviders,
     health, startupHealth, providers, models, settings, sidecar, shadowCall, usage30d,
+    usageLoading: usagePoll.loading && !usage30d,
+    healthLoading: corePoll.loading && !health,
     sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,
     maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
     effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,

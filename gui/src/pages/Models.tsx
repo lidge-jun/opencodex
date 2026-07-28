@@ -175,8 +175,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
         throw new Error("models payload missing");
       }
       if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
-      void loadV2(); // best-effort, independent of the models fetch
-      void loadShadowCall();
       const nextGroups = buildProviderModelGroups(data, providerData);
       setSelectedProvider(prev => (
         prev !== null && !nextGroups.some(group => group.provider === prev)
@@ -204,7 +202,23 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setLoading(false);
       }
     }
-  }, [apiBase, loadShadowCall, loadV2, t]);
+  }, [apiBase, t]);
+
+  // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadShadowCall();
+      void loadV2();
+    }, 0);
+    const timer = window.setInterval(() => {
+      if (!v2BusyRef.current) void loadV2();
+    }, 10000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(timer);
+    };
+  }, [loadShadowCall, loadV2]);
+
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       void load();
@@ -562,7 +576,23 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
-  if (loading) return <div className="row muted"><span className="spin" /> {t("models.loading")}</div>;
+  if (loading) {
+    return (
+      <>
+        <div className="models-control-top-row">
+          <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
+            <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
+            <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
+            <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
+            <div className="models-shadow-model-slot">
+              <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+            </div>
+          </div>
+        </div>
+        <div className="row muted"><span className="spin" /> {t("models.loading")}</div>
+      </>
+    );
+  }
   if (!selectedModels) {
     return <Notice tone="err">{t("models.loadFail")}</Notice>;
   }
@@ -806,7 +836,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const controlsBlock = (
     <>
       <div className="models-control-top-row">
-        <div className="models-shadow-row row muted text-control">
+        <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
           <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />

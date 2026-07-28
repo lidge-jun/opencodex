@@ -26,12 +26,16 @@ export default function ProviderOverviewDashboard({
   sections,
   quotaReports,
   usageTotals,
+  usageLoading = false,
+  quotasLoading = false,
   onSelectProvider,
   onEditConfig,
 }: {
   sections: WorkspaceSections;
   quotaReports: Record<string, ProviderQuotaReportView>;
   usageTotals: Record<string, ProviderUsageTotals>;
+  usageLoading?: boolean;
+  quotasLoading?: boolean;
   onSelectProvider: (name: string) => void;
   onEditConfig?: () => void;
 }) {
@@ -48,7 +52,7 @@ export default function ProviderOverviewDashboard({
   const attention = useMemo(() => buildAttentionItems(sections, {}), [sections]);
   const attentionCount = attention.length;
   const reauthCount = useMemo(
-    () => sections.needsSetup.filter(p => p.activeNeedsReauth).length,
+    () => [...sections.ready, ...sections.needsSetup].filter(p => p.activeNeedsReauth).length,
     [sections],
   );
 
@@ -132,9 +136,10 @@ export default function ProviderOverviewDashboard({
       )}
 
       <div className="pws-dashboard-columns">
-        {quotaProviders.length > 0 && (
-          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.rateLimits")}>
+        {(quotaProviders.length > 0 || quotasLoading) && (
+          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.rateLimits")} aria-busy={quotasLoading || undefined}>
             <h3 className="pws-dashboard-section-title">{t("pws.dashboard.rateLimits")}</h3>
+            {quotaProviders.length > 0 ? (
             <div className="pws-dashboard-rows">
               {quotaProviders.map(({ item, report }) => (
                 <button
@@ -162,11 +167,14 @@ export default function ProviderOverviewDashboard({
                 </button>
               ))}
             </div>
+            ) : (
+              <p className="muted"><span className="spin" aria-hidden="true" /> {t("prov.loadingConfig")}</p>
+            )}
           </section>
         )}
 
         {mostUsed.length > 0 ? (
-          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.recentlyUsed")}>
+          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.recentlyUsed")} aria-busy={usageLoading || undefined}>
             <h3 className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</h3>
             <div className="pws-dashboard-rows">
               {mostUsed.map(provider => (
@@ -187,9 +195,9 @@ export default function ProviderOverviewDashboard({
             </div>
           </section>
         ) : (
-          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.recentlyUsed")}>
+          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.recentlyUsed")} aria-busy={usageLoading || undefined}>
             <h3 className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</h3>
-            <p className="muted">{t("pws.dashboard.noUsage")}</p>
+            <p className="muted">{usageLoading ? <><span className="spin" aria-hidden="true" /> {t("prov.loadingConfig")}</> : t("pws.dashboard.noUsage")}</p>
           </section>
         )}
       </div>

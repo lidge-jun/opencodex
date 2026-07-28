@@ -11,6 +11,7 @@ import { formatProviderDisplayName } from "../provider-icons";
 import { useProviderAccountPools } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
+import { useKeyedClientResource } from "../client-resource";
 import type { ProvidersConfig } from "./providers-shared";
 import { useProvidersOAuth } from "./use-providers-oauth";
 import { useProvidersCrud } from "./use-providers-crud";
@@ -50,6 +51,32 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
 
+  // Warm the Add Provider catalog cache while the page is open so opening the
+  // modal does not wait on a cold /api/provider-presets round-trip (~same key as
+  // AddProviderModal). Prefetch usage too so the catalog does not paint alpha then
+  // re-rank when the slow usage probe (~5s cold) finally returns.
+  useKeyedClientResource(
+    `add-provider-presets:${apiBase}`,
+    [apiBase],
+    async (signal) => {
+      const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json() as { providers?: unknown[] };
+      return Array.isArray(data.providers) && data.providers.length > 0 ? data.providers : null;
+    },
+  );
+  useKeyedClientResource(
+    `add-provider-usage:${apiBase}`,
+    [apiBase],
+    async (signal) => {
+      const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
+      if (!res.ok) return {} as Record<string, number>;
+      const data = await res.json() as { providers?: Array<{ provider: string; requests: number }> };
+      const rank: Record<string, number> = {};
+      for (const row of data.providers ?? []) rank[row.provider] = row.requests;
+      return rank;
+    },
+  );
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, setQuotaReports, notify,
   });

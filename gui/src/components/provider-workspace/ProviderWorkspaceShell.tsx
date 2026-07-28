@@ -108,6 +108,8 @@ export default function ProviderWorkspaceShell({
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>({});
   const [usageModels, setUsageModels] = useState<Record<string, ProviderModelUsageRow[]>>({});
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>({});
+  const [usageLoading, setUsageLoading] = useState(true);
+  const [quotasLoading, setQuotasLoading] = useState(true);
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
@@ -152,61 +154,75 @@ export default function ProviderWorkspaceShell({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBase}/api/usage?range=30d`)
-      .then(r => readJsonIfOk<{
-        providers?: Array<{ provider: string; requests: number; totalTokens?: number }>;
-        models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
-      }>(r))
-      .then((data) => {
-        if (cancelled || !data) return;
-        const byProvider: Record<string, ProviderUsageTotals> = {};
-        for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, totalTokens: p.totalTokens };
-        setUsageTotals(byProvider);
-        // Group model rows by provider
-        const byProviderModels: Record<string, ProviderModelUsageRow[]> = {};
-        for (const m of data.models ?? []) {
-          const key = m.provider;
-          if (!byProviderModels[key]) byProviderModels[key] = [];
-          byProviderModels[key].push({
-            model: m.model,
-            ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
-            requests: m.requests,
-            totalTokens: m.totalTokens,
-            inputTokens: m.inputTokens,
-            outputTokens: m.outputTokens,
-            shareRatio: m.shareRatio,
-            ...(m.estimatedCostUsd !== undefined ? { estimatedCostUsd: m.estimatedCostUsd } : {}),
-          });
-        }
-        setUsageModels(byProviderModels);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    const timeout = window.setTimeout(() => {
+      setUsageLoading(true);
+      void fetch(`${apiBase}/api/usage?range=30d`)
+        .then(r => readJsonIfOk<{
+          providers?: Array<{ provider: string; requests: number; totalTokens?: number }>;
+          models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
+        }>(r))
+        .then((data) => {
+          if (cancelled || !data) return;
+          const byProvider: Record<string, ProviderUsageTotals> = {};
+          for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, totalTokens: p.totalTokens };
+          setUsageTotals(byProvider);
+          // Group model rows by provider
+          const byProviderModels: Record<string, ProviderModelUsageRow[]> = {};
+          for (const m of data.models ?? []) {
+            const key = m.provider;
+            if (!byProviderModels[key]) byProviderModels[key] = [];
+            byProviderModels[key].push({
+              model: m.model,
+              ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
+              requests: m.requests,
+              totalTokens: m.totalTokens,
+              inputTokens: m.inputTokens,
+              outputTokens: m.outputTokens,
+              shareRatio: m.shareRatio,
+              ...(m.estimatedCostUsd !== undefined ? { estimatedCostUsd: m.estimatedCostUsd } : {}),
+            });
+          }
+          setUsageModels(byProviderModels);
+        })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setUsageLoading(false); });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
   }, [apiBase]);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBase}/api/provider-quotas`)
-      .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown }> }>(r))
-      .then((data) => {
-        if (cancelled || !data) return;
-        // Merge so a partial/failed probe cannot wipe a previously good provider row.
-        setQuotaReports(prev => {
-          const next = { ...prev };
-          for (const report of data.reports ?? []) {
-            if (!report?.provider) continue;
-            next[report.provider] = {
-              label: report.label,
-              source: report.source,
-              updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
-              quota: report.quota,
-            };
-          }
-          return next;
-        });
-      })
-      .catch(() => { /* keep last-good */ });
-    return () => { cancelled = true; };
+    const timeout = window.setTimeout(() => {
+      setQuotasLoading(true);
+      void fetch(`${apiBase}/api/provider-quotas`)
+        .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown }> }>(r))
+        .then((data) => {
+          if (cancelled || !data) return;
+          // Merge so a partial/failed probe cannot wipe a previously good provider row.
+          setQuotaReports(prev => {
+            const next = { ...prev };
+            for (const report of data.reports ?? []) {
+              if (!report?.provider) continue;
+              next[report.provider] = {
+                label: report.label,
+                source: report.source,
+                updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
+                quota: report.quota,
+              };
+            }
+            return next;
+          });
+        })
+        .catch(() => { /* keep last-good */ })
+        .finally(() => { if (!cancelled) setQuotasLoading(false); });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
     // Key on active-account identity (not the reauth boolean map) so switching between two
     // healthy accounts still re-reads /api/provider-quotas for the Usage/overview bars.
   }, [apiBase, quotaRefreshKey]);
@@ -514,6 +530,8 @@ export default function ProviderWorkspaceShell({
             sections={sections}
             quotaReports={quotaReports}
             usageTotals={usageTotals}
+            usageLoading={usageLoading}
+            quotasLoading={quotasLoading}
             onSelectProvider={(name) => onSelect(name)}
             onEditConfig={onEditConfig}
           />
