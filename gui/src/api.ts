@@ -1,6 +1,12 @@
 let installed = false;
 /** Shared 401 refresh gate — concurrent waiters join one prompt / token resolution. */
 let promptInFlight: Promise<string | null> | null = null;
+/**
+ * After the user cancels (or submits blank) once, suppress further prompts for this page
+ * lifetime so a staggered 401 fan-out does not reopen the dialog N times (#647 / Codex).
+ * A full reload clears module state and allows prompting again.
+ */
+let promptCancelled = false;
 
 function needsApiAuth(input: RequestInfo | URL): boolean {
   try {
@@ -58,15 +64,21 @@ function withToken(input: RequestInfo | URL, init: RequestInit | undefined, toke
  * prompting so waiters that wake after another request already stored a token do not re-prompt.
  */
 async function resolveTokenAfter401(failedToken: string | null): Promise<string | null> {
+  if (promptCancelled) return null;
   if (promptInFlight) return promptInFlight;
 
   promptInFlight = (async () => {
+    if (promptCancelled) return null;
     const current = readToken();
     if (current && current !== failedToken) return current;
 
     const prompted = window.prompt("OpenCodex API token")?.trim() || null;
-    if (prompted) storeToken(prompted);
-    return prompted;
+    if (prompted) {
+      storeToken(prompted);
+      return prompted;
+    }
+    promptCancelled = true;
+    return null;
   })().finally(() => {
     promptInFlight = null;
   });
@@ -114,4 +126,5 @@ export function resetApiAuthFetchForTests(): void {
   installed = false;
   memoryToken = null;
   promptInFlight = null;
+  promptCancelled = false;
 }

@@ -177,6 +177,50 @@ test("concurrent 401s share one token prompt and all retry with the stored token
   expect([...new Set(statuses)]).toEqual([200]);
 });
 
+test("canceling the token prompt once does not reopen it for the rest of the 401 fan-out", async () => {
+  let promptCalls = 0;
+  const release401: Array<() => void> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (headers.get("X-OpenCodex-API-Key")) {
+      return new Response("{}", { status: 200 });
+    }
+    await new Promise<void>((resolve) => {
+      release401.push(resolve);
+    });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return null;
+  };
+  await installMockAuthFetch(mockFetch);
+
+  const endpoints = ["/api/config", "/api/providers", "/api/models", "/api/keys"];
+  const pending = endpoints.map((path) => fetch(path).then((r) => r.status));
+  for (let i = 0; i < 20 && release401.length < endpoints.length; i += 1) {
+    await Promise.resolve();
+  }
+  expect(release401.length).toBe(endpoints.length);
+
+  for (let i = 0; i < endpoints.length; i += 1) {
+    const done = pending[i]!;
+    let settled = false;
+    void done.then(() => {
+      settled = true;
+    });
+    release401.shift()!();
+    for (let spin = 0; spin < 50 && !settled; spin += 1) {
+      await Promise.resolve();
+    }
+    expect(settled).toBe(true);
+  }
+
+  const statuses = await Promise.all(pending);
+  expect(promptCalls).toBe(1);
+  expect([...new Set(statuses)]).toEqual([401]);
+});
+
 test("cross-origin /v1/* requests do not receive the API key or token prompt", async () => {
   let promptCalls = 0;
   let phase: "seed" | "cross" = "seed";
