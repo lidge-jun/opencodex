@@ -1070,7 +1070,7 @@ function taskXmlElementTextEquals(xml: string, tag: string, expectedDecoded: str
   if (count !== 1) return false;
   const raw = new RegExp(`<${tag}(?:\\s[^>]*?)?>\\s*([^<]*?)\\s*<\\/${tag}>`, "i").exec(xml)?.[1];
   if (raw === undefined || raw.includes("<")) return false;
-  return taskXmlDecodeEntities(raw) === expectedDecoded;
+  return taskXmlDecodeEntities(raw).trim() === expectedDecoded.trim();
 }
 
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
