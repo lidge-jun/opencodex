@@ -151,14 +151,21 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatal
   let cacheKey: string | null = null;
   const candidates = deps.commandCandidates?.() ?? (() => {
     const resolved = resolveAndPersistCodexRuntime({
-      execFileSync: execFile,
+      // Forward an INJECTED execFileSync only. Passing the real one unconditionally made
+      // resolveCacheKey() bail out (it refuses to memoize injected-dep resolves), so every
+      // catalog read re-ran the ~1s `codex --version` probe even on a warm cache hit.
+      ...(deps.execFileSync ? { execFileSync: deps.execFileSync } : {}),
       configDir: deps.configDir,
       env: deps.env,
       platform: deps.platform,
       existsSync: deps.existsSync,
       readFileSync: deps.readFileSync,
       now: deps.now,
-      discoverAlternatives: deps.discoverAlternatives,
+      // Catalog loading only consumes `resolved.runtime.command`, never `newerAvailable`.
+      // Full PATH discovery probes every candidate launcher (100+ on a dev machine, ~1.2s),
+      // which alone can exceed the 3s budget `ocx claude` allows /api/claude-code. Priority
+      // selection is identical either way; callers wanting discovery diagnostics opt in.
+      discoverAlternatives: deps.discoverAlternatives ?? false,
     });
     if (useCache) {
       cacheKey = [

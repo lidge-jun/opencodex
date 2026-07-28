@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import {
@@ -285,6 +285,124 @@ describe("resolveCodexRuntime", () => {
     expect(failed.runtime.command).toBe("C:\\keep\\codex.exe");
     expect(typeof failed.persistError).toBe("string");
     expect(failed.persistError!.length).toBeGreaterThan(0);
+  });
+
+  test("repeated catalog reads reuse the runtime probe instead of respawning it", async () => {
+    const { chmodSync, mkdirSync } = await import("node:fs");
+    const {
+      loadBundledCodexCatalog,
+      resetBundledCatalogCacheForTests,
+    } = await import("../src/codex/catalog/bundled");
+
+    const home = tempConfigDir();
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const bin = process.platform === "win32" ? join(binDir, "codex.cmd") : join(binDir, "codex");
+
+    // Count --version probes by having the launcher append a line per invocation.
+    const probeLog = join(binDir, "probes.log");
+    const catalog = JSON.stringify({
+      models: [{
+        slug: "gpt-5.5",
+        base_instructions: "x",
+        supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+        default_reasoning_level: "medium",
+      }],
+    });
+    writeFileSync(join(binDir, "catalog.json"), `${catalog}\n`, "utf8");
+    if (process.platform === "win32") {
+      writeFileSync(bin, [
+        "@echo off",
+        `if "%~1"=="--version" (`,
+        `  echo probe>>"%~dp0probes.log"`,
+        "  echo codex-cli 0.145.0-alpha.30",
+        "  exit /b 0",
+        ")",
+        `type "%~dp0catalog.json"`,
+        "",
+      ].join("\r\n"), "utf8");
+    } else {
+      writeFileSync(bin, [
+        "#!/bin/sh",
+        `d=$(dirname "$0")`,
+        `if [ "$1" = "--version" ]; then`,
+        `  echo probe >> "$d/probes.log"`,
+        `  echo "codex-cli 0.145.0-alpha.30"`,
+        "  exit 0",
+        "fi",
+        `cat "$d/catalog.json"`,
+        "",
+      ].join("\n"), "utf8");
+      chmodSync(bin, 0o755);
+    }
+
+    const countProbes = (): number => {
+      if (!existsSync(probeLog)) return 0;
+      return readFileSync(probeLog, "utf8").split("\n").filter(line => line.trim().length > 0).length;
+    };
+
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousCli = process.env.CODEX_CLI_PATH;
+    const previousPath = process.env.PATH;
+    process.env.OPENCODEX_HOME = home;
+    process.env.CODEX_CLI_PATH = bin;
+    process.env.PATH = "";
+    resetCodexRuntimeResolveCacheForTests();
+    resetBundledCatalogCacheForTests();
+
+    try {
+      expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.5");
+      expect(countProbes()).toBeGreaterThan(0);
+
+      // The first read has no persisted selection yet, so it legitimately writes one and the
+      // write clears the resolve memo — the second read re-probes once and then persists
+      // nothing. From there the count must STOP GROWING.
+      expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.5");
+      const warm = countProbes();
+
+      // Warm reads must not respawn the probe. Two regressions broke this and made the count
+      // grow once per read: (1) loadBundledCodexCatalog forwarding its own already-defaulted
+      // execFileSync, which opts resolveCacheKey() out of memoizing, and (2) an unconditional
+      // persist whose `updatedAt` both clears the memo and rekeys it. Either one made every
+      // catalog read spawn `codex --version` (~1s), pushing /api/claude-code past the 3s
+      // budget ocx claude allows and silently skipping the gateway-model cache refresh.
+      for (let i = 0; i < 4; i++) {
+        expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.5");
+      }
+      expect(countProbes()).toBe(warm);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCli;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      resetCodexRuntimeResolveCacheForTests();
+      resetBundledCatalogCacheForTests();
+    }
+  });
+
+  test("repeat resolveAndPersistCodexRuntime keeps an unchanged selection's persisted stamp", () => {
+    const configDir = tempConfigDir();
+    const deps = {
+      configDir,
+      env: { CODEX_CLI_PATH: "C:\\keep\\codex.exe", PATH: "" },
+      platform: "win32" as const,
+      existsSync: () => true,
+      execFileSync: (() => "codex-cli 0.145.0-alpha.30") as RuntimeExecFile,
+    };
+
+    const first = resolveAndPersistCodexRuntime(deps);
+    expect(first.persistError).toBeUndefined();
+    const firstStamp = loadPersistedCodexRuntime({ configDir })?.updatedAt;
+    expect(typeof firstStamp).toBe("string");
+
+    // An identical selection must not rewrite the file: the write clears the resolve memo
+    // and its `updatedAt` feeds the memo cache key, so rewriting defeats caching entirely.
+    const second = resolveAndPersistCodexRuntime(deps);
+    expect(second.runtime.command).toBe(first.runtime.command);
+    expect(second.runtime.version).toBe(first.runtime.version);
+    expect(loadPersistedCodexRuntime({ configDir })?.updatedAt).toBe(firstStamp);
   });
 
   test("catalog clamp clears diagnostics inside deps.configDir when probe fails", async () => {
