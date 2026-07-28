@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync, unlinkSync, existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, open, unlink } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import type { RequestOptions } from "node:https";
@@ -474,4 +474,114 @@ export async function downloadImageToArtifact(
 
   // Retention is post-batch via pruneArtifacts (see fulfill.ts).
   return writeArtifactUnique(dir, "dl-", bytes, ext);
+}
+
+const MAX_VIDEO_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MiB
+
+export interface VideoBudget {
+  spent: number;
+}
+
+export function createVideoBudget(): VideoBudget {
+  return { spent: 0 };
+}
+
+export function guessVideoExtFromMagic(bytes: Uint8Array): string {
+  const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
+  // MP4/QuickTime/MOV: bytes 4-7 == "ftyp" (ISO BMFF)
+  if (sig.slice(4, 8) === "ftyp") return "mp4";
+  // WebM/Matroska: \x1a\x45\xdf\xa3
+  if (sig.startsWith("\x1a\x45\xdf\xa3")) return "webm";
+  return "mp4";
+}
+
+/**
+ * Download a video from a URL to an artifact file with a 200 MiB hard cap, streaming the body
+ * to disk to avoid buffering. SSRF protection reuses the same destination policy + pinned HTTPS
+ * as image downloads. Format is sniffed from magic bytes.
+ */
+export async function downloadVideoToArtifact(
+  url: string,
+  budget?: VideoBudget,
+  signal?: AbortSignal,
+): Promise<string> {
+  // For data: URLs, handle inline (unlikely for video but keep parity)
+  if (url.startsWith("data:")) {
+    const commaIdx = url.indexOf(",");
+    const meta = url.slice(0, commaIdx);
+    const data = url.slice(commaIdx + 1);
+    const isBase64 = meta.includes(";base64");
+    if (!isBase64) throw new Error("non-base64 data URI for video is not supported");
+    const buf = Buffer.from(data, "base64");
+    if (budget) budget.spent += buf.byteLength;
+    if (buf.byteLength > MAX_VIDEO_DOWNLOAD_BYTES) throw new Error("video data URI exceeds size cap");
+    const ext = guessVideoExtFromMagic(buf);
+    const dir = getArtifactsDir();
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
+    const dest = join(dir, name);
+    await writeFile(dest, buf, { mode: 0o600 });
+    return dest;
+  }
+
+  // SSRF protection: same validation as downloadImageToArtifact
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error("video URL is not valid"); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`video URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  const assessment = assessUrlDestination(url);
+  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
+    throw new Error(`video URL targets ${assessment.detail}`);
+  }
+  const resolved = await resolvePublicAddresses(url);
+  const pinned = pickPinnedAddress(resolved.addresses);
+  const resp = await pinnedHttpsGet(url, pinned, signal, { maxBytes: MAX_VIDEO_DOWNLOAD_BYTES });
+  if (!resp.ok) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw new Error("video download failed: " + resp.status);
+  }
+
+  const dir = getArtifactsDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+
+  const reader = resp.body?.getReader();
+  if (!reader) throw new Error("video download returned no body");
+
+  // Peek the first chunk for magic-byte sniffing before opening the file.
+  const first = await reader.read();
+  if (first.done || !first.value) {
+    throw new Error("video download returned empty body");
+  }
+  const ext = guessVideoExtFromMagic(first.value);
+  const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
+  const dest = join(dir, name);
+  const fh = await open(dest, "w", 0o600);
+  let totalBytes = first.value.byteLength;
+  if (budget) budget.spent += totalBytes;
+  if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
+    reader.releaseLock();
+    await fh.close();
+    await unlink(dest).catch(() => {});
+    throw new Error("video download exceeds size cap");
+  }
+  let success = false;
+  try {
+    await fh.writeFile(first.value);
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
+        throw new Error("video download exceeds size cap");
+      }
+      await fh.writeFile(value);
+    }
+    success = true;
+  } finally {
+    reader.releaseLock();
+    await fh.close();
+    if (!success) await unlink(dest).catch(() => {});
+  }
+  return dest;
 }

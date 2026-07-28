@@ -52,7 +52,7 @@ import {
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
-import { buildImageTool, planImageBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME } from "../../images";
+import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -1597,48 +1597,54 @@ export async function handleResponses(
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
+  const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
-  if (imgPlan && (!wsPlan || adapter.runTurn)) {
+  if ((imgPlan || vidPlan) && (!wsPlan || adapter.runTurn)) {
     // The bridge forces stream:true internally and returns SSE. Non-streaming requests can't be
     // served — reject explicitly rather than returning SSE to a client expecting JSON.
     if (!parsed.stream) {
-      return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
+      return formatErrorResponse(400, "invalid_request_error", "media bridge requires stream=true");
     }
-    // Replace any pre-existing image_gen alias instead of appending a duplicate wire name.
+    // Replace any pre-existing image_gen/video_gen aliases instead of appending duplicate wire names.
     const priorTools = parsed.context.tools ?? [];
-    parsed.context.tools = [
-      ...priorTools.filter(t => {
-        if (t.imageGeneration) return false;
-        if (imgPlan.toolNames.has(t.name)) return false;
-        if (t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
-        return true;
-      }),
-      buildImageTool(),
-    ];
+    const bridgeTools = [...priorTools.filter(t => {
+      if (t.imageGeneration) return false;
+      if (t.videoGeneration) return false;
+      if (imgPlan && imgPlan.toolNames.has(t.name)) return false;
+      if (imgPlan && t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+      if (vidPlan && vidPlan.toolNames.has(t.name)) return false;
+      return true;
+    })];
+    const existingNames = new Set(bridgeTools.map(t => t.name));
+    if (imgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) bridgeTools.push(buildImageTool());
+    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
+    parsed.context.tools = bridgeTools;
     // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
     const tc = parsed.options.toolChoice;
     if (tc && typeof tc === "object" && "allowedTools" in tc && Array.isArray(tc.allowedTools)) {
       const mapped = tc.allowedTools.map(name =>
-        name === "image_generation" || name === "image_gen" || imgPlan.toolNames.has(name)
+        name === "image_generation" || name === "image_gen" || (imgPlan?.toolNames.has(name) ?? false)
           ? IMAGE_GEN_TOOL_NAME
           : name,
       );
       parsed.options.toolChoice = { ...tc, allowedTools: [...new Set(mapped)] };
     } else if (tc && typeof tc === "object" && "name" in tc && typeof tc.name === "string"
-      && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
+      && (tc.name === "image_generation" || (imgPlan?.toolNames.has(tc.name) ?? false))) {
       parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
     }
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
-      plan: imgPlan,
+      ...(imgPlan ? { plan: imgPlan } : {}),
+      ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
       onAttemptSend: () => noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens),
       abortSignal: options.abortSignal,
-      maxRounds: clampImageMaxRounds(config.images?.maxRounds),
+      maxRounds: imgPlan ? clampImageMaxRounds(config.images?.maxRounds) : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       stallTimeoutSec: config.stallTimeoutSec,
       fetchImpl: providerFetch(route.provider),
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
+      ...(config.images?.videoTimeoutMs ? { videoTimeoutMs: config.images.videoTimeoutMs } : {}),
       onUsage: usage => {
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
         // backfill so Logs can filter/total that opening request (parity with the normal
