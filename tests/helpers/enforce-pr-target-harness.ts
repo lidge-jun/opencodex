@@ -15,6 +15,9 @@
  * either way.
  */
 
+import { createRequire } from "node:module";
+import path from "node:path";
+
 export type RecordedCall = { method: string; args: unknown };
 
 export type HarnessResult = {
@@ -39,6 +42,7 @@ export type PullRequestState = {
   number?: number;
   node_id?: string;
   title?: string;
+  body?: string;
   draft?: boolean;
   base?: { ref: string };
   user?: { login: string };
@@ -79,6 +83,12 @@ export type RunOptions = {
    * exercise that branch.
    */
   failStatus?: number;
+  /** Collaborator permission returned by `getCollaboratorPermissionLevel`. */
+  authorPermission?: string;
+  /** When true, permission lookup rejects like a transient API failure. */
+  failPermissionLookup?: boolean;
+  /** Overrides for `compareCommitsWithBasehead` keyed by `basehead`. */
+  compareByBasehead?: Record<string, { ahead_by: number; behind_by: number }>;
 };
 
 /**
@@ -89,11 +99,23 @@ export type RunOptions = {
  * `context.payload.pull_request.head.sha` to tell the two apart. The extra
  * fields are inert to the logic and load-bearing for fidelity.
  */
+const DEFAULT_BODY = [
+  "## Summary",
+  "",
+  "This change adds enough substantive detail for reviewers to understand the motivation and approach taken.",
+  "",
+  "## Test plan",
+  "",
+  "- [x] Run `bun test tests/ci-workflows.test.ts`",
+  "- [x] Confirm enforce-pr-target behaviour locally",
+].join("\n");
+
 const DEFAULT_PR = {
   number: 42,
   node_id: "PR_kwDOnode42",
   id: 1122334455,
   title: "Add a thing",
+  body: DEFAULT_BODY,
   draft: false,
   state: "open",
   merged: false,
@@ -223,6 +245,7 @@ function octokitError(method: string, status: number): Error & { status: number 
 }
 
 function nodeLikeProcess(): Record<string, unknown> {
+  const workspace = process.cwd();
   return {
     platform: "linux",
     arch: "x64",
@@ -259,7 +282,7 @@ function nodeLikeProcess(): Record<string, unknown> {
       GITHUB_SERVER_URL: "https://github.com",
       GITHUB_SHA: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
       GITHUB_WORKFLOW: "Enforce PR target branch",
-      GITHUB_WORKSPACE: "/home/runner/work/opencodex/opencodex",
+      GITHUB_WORKSPACE: workspace,
       HOME: "/home/runner",
       RUNNER_ARCH: "X64",
       RUNNER_NAME: "GitHub Actions 1",
@@ -270,7 +293,7 @@ function nodeLikeProcess(): Record<string, unknown> {
       ACTIONS_RUNTIME_URL: "https://pipelines.actions.githubusercontent.com/",
     },
     argv: ["/usr/bin/node", "/home/runner/work/_actions/actions/github-script/dist/index.js"],
-    cwd: () => "/home/runner/work/opencodex/opencodex",
+    cwd: () => workspace,
     exit: () => { throw new Error("the script must not call process.exit"); },
   };
 }
@@ -427,6 +450,34 @@ export async function runEnforcePrTarget(
   const respond = async (method: string, args: unknown, data?: unknown) =>
     record(method, args, data);
 
+  const nodeRequire = createRequire(path.join(process.cwd(), "package.json"));
+  const scriptsRoot = path.resolve(process.cwd(), ".github", "scripts");
+
+  function scopedRequire(id: string) {
+    calls.push({ method: "require", args: [id] });
+    const isRelative = id.startsWith(".") || id.startsWith("/") || path.isAbsolute(id);
+    if (!isRelative) {
+      return nodeRequire(id);
+    }
+    const resolved = path.isAbsolute(id) ? id : path.resolve(process.cwd(), id);
+    if (!resolved.startsWith(scriptsRoot + path.sep) && resolved !== scriptsRoot) {
+      const norm = resolved.replace(/\\/g, "/");
+      if (!norm.includes("/.github/scripts/")) {
+        throw new Error(`the script must not require ${id}`);
+      }
+    }
+    return nodeRequire(resolved);
+  }
+
+  function compareResult(basehead: string): { ahead_by: number; behind_by: number } {
+    const override = options.compareByBasehead?.[basehead];
+    if (override) return override;
+    if (basehead.startsWith("main...")) {
+      return { ahead_by: 0, behind_by: 5 };
+    }
+    return { ahead_by: 0, behind_by: 0 };
+  }
+
   const rest = {
     pulls: {
       get: (args: unknown) => respond("pulls.get", args, pr),
@@ -441,6 +492,20 @@ export async function runEnforcePrTarget(
       },
       createComment: (args: unknown) => respond("issues.createComment", args, { id: 99 }),
       updateComment: (args: unknown) => respond("issues.updateComment", args, { id: 7 }),
+    },
+    repos: {
+      getCollaboratorPermissionLevel: (args: unknown) => {
+        if (options.failPermissionLookup) {
+          return Promise.reject(octokitError("repos.getCollaboratorPermissionLevel", failStatus));
+        }
+        return respond("repos.getCollaboratorPermissionLevel", args, {
+          permission: options.authorPermission ?? "read",
+        });
+      },
+      compareCommitsWithBasehead: (args: unknown) => {
+        const basehead = String((args as { basehead?: string })?.basehead ?? "");
+        return respond("repos.compareCommitsWithBasehead", args, compareResult(basehead));
+      },
     },
   };
 
@@ -705,8 +770,8 @@ export async function runEnforcePrTarget(
     glob: forbidden("glob"),
     io: forbidden("io"),
     fetch: forbidden("fetch"),
-    require: forbidden("require"),
-    __original_require__: forbidden("__original_require__"),
+    require: scopedRequire,
+    __original_require__: scopedRequire,
     // `github-script` runs under Node. An audit round detected the harness with
     // `if (!process.versions.bun) return;` — a no-op in production, green here.
     // Shadow `process` with something that looks like the Node the workflow
