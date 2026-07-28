@@ -84,6 +84,11 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 
+正規の Kimi Coding Plan プリセット（`kimi` アカウントログインと `kimi-code` API key）では、
+opencodex はリクエストの安定した `prompt_cache_key` を Chat Completions リクエストへ転送します。
+Kimi のドキュメントでは、Kimi Code Plan のキャッシュヒットには安定したセッション/タスク key が
+必須とされています。このフィールドを拒否する可能性がある他のプロバイダーは変更されません。
+
 [ウェブダッシュボード](/ja/guides/web-dashboard/)からも OAuth を開始できます。
 
 ### 複数の OAuth アカウント
