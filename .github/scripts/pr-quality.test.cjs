@@ -102,6 +102,20 @@ describe("collectPrQualityFailures", () => {
     assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
   });
 
+  it("reports wrong_base and bad_description together for main + empty body", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "main",
+      allowedBases: allowed,
+      body: "",
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+    });
+    assert.ok(failures.some((f) => f.code === "wrong_base"));
+    assert.ok(failures.some((f) => f.code === "bad_description"));
+    assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
+  });
+
   it("reports wrong_ancestry for contributor on #644-shaped compare", () => {
     const failures = collectPrQualityFailures({
       baseRef: "dev",
