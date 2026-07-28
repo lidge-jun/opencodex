@@ -72,6 +72,11 @@ export type DashboardEpochRefs = {
   shadowCallMutationInFlightRef: { current: boolean };
 };
 
+function isAbortError(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return true;
+  return error instanceof Error && error.name === "AbortError";
+}
+
 export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): Promise<StartupHealthStatus> {
   try {
     const response = await fetch(`${apiBase}/api/startup-health`, { signal });
@@ -80,7 +85,11 @@ export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): 
     const mapped = mapStartupHealthProbe(data);
     if (!mapped) throw new Error("invalid startup health response");
     return mapped;
-  } catch {
+  } catch (error) {
+    // Aborts must propagate so client-resource can discard the generation.
+    // Swallowing them as "error" briefly shows "Could not read startup protection"
+    // after refresh / remount races.
+    if (isAbortError(error, signal)) throw error;
     return "error";
   }
 }

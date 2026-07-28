@@ -78,3 +78,21 @@ test("Dashboard sync surfaces native subagent default warnings", async () => {
   expect(sections).toContain('"notice-warn"');
   expect(sections).toContain("<IconAlert />");
 });
+
+test("fetchStartupHealth does not map abort into a sticky error status", async () => {
+  const { fetchStartupHealth } = await import("../src/pages/dashboard-core-poll");
+  const controller = new AbortController();
+  controller.abort();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.signal?.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
+    return Response.json({ status: "protected", diagnosticStale: false });
+  }) as typeof fetch;
+  try {
+    await expect(fetchStartupHealth("http://test", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
