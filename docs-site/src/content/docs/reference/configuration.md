@@ -130,7 +130,7 @@ organization can share quota; pooling those will not help.
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | When true, sticky session affinity + 429 cooldown failover across eligible Anthropic OAuth accounts. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For **new** sessions only: if the active account's **known** cached 5-hour usage is at/above this percent, pick the lowest-usage eligible account. Unknown usage does not force a switch. `0` disables quota-based picking (affinity + active only). Also used as the drain threshold for `fill-first`. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy when the pool is enabled. Same semantics as `accountPoolStrategy`; applies to **new** sessions only. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy when the pool is enabled. Same round-robin/fill-first semantics as `accountPoolStrategy`; `quota` uses 5-hour bars only (not Codex multi-window scoring). Applies to **new** sessions only. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only when `strategy` is `round-robin`. |
 
 Reliability contract when enabled:
