@@ -1445,6 +1445,8 @@ export async function handleResponses(
           request = retry.request;
           upstreamResponse = retry.upstreamResponse;
           selectedForwardHeaders = retry.selectedForwardHeaders;
+          // Keep subagent quota-failure health keyed to the account that actually served.
+          subagentFallbackAccountId = retry.authCtx.accountId;
         }
       }
     }
