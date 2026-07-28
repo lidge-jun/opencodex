@@ -5,6 +5,7 @@ import { IconChevron } from "../icons";
 import { EmptyState, Notice } from "../ui";
 import { useT, type TFn, type TKey } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { createBoundedFetch } from "../bounded-fetch";
 
 const FAMILIES = ["opus", "fable", "sonnet", "haiku"] as const;
 type Family = typeof FAMILIES[number];
@@ -209,13 +210,13 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
-    let controller: AbortController | null = null;
+    let active: ReturnType<typeof createBoundedFetch> | null = null;
     const poll = () => {
       if (inFlight) return;
       inFlight = true;
-      controller = new AbortController();
-      const active = controller;
-      void fetch(`${apiBase}/api/claude-desktop/status`, { signal: active.signal })
+      const bounded = createBoundedFetch(10_000);
+      active = bounded;
+      void fetch(`${apiBase}/api/claude-desktop/status`, { signal: bounded.signal })
         .then((response) => readJsonIfOk<DesktopStatus>(response))
         .then((data) => {
           if (cancelled) return;
@@ -223,7 +224,8 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
         })
         .catch(() => { /* offline / older proxy / aborted */ })
         .finally(() => {
-          if (controller === active) controller = null;
+          bounded.clear();
+          if (active === bounded) active = null;
           inFlight = false;
         });
     };
@@ -232,7 +234,8 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
     return () => {
       cancelled = true;
       clearInterval(timer);
-      controller?.abort();
+      active?.controller.abort();
+      active?.clear();
     };
   }, [apiBase]);
 

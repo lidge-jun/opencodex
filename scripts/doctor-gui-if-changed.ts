@@ -21,9 +21,13 @@ export function guiPathsChanged(files: string[]): boolean {
 /** True when stderr/stdout looks like a registry/network failure rather than findings. */
 export function looksLikeDoctorInfraFailure(output: string): boolean {
   // Keep this narrow: bare words like "network"/"offline" also appear in findings text.
-  return /(?:^|\b)(?:npm ERR!|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo ENOTFOUND|fetch failed|ERR_INVALID_URL|UNABLE_TO_GET_ISSUER_CERT|certificate has expired|unable to resolve|could not resolve host|socket hang up|connect ECONNREFUSED|connect ENOTFOUND)(?:\b|$)/im
+  // `npm ERR!` deliberately has no trailing \b — `!` is non-word so `\b` after it never matches.
+  return /(?:^|\b)(?:npm ERR!|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|getaddrinfo ENOTFOUND|fetch failed|ERR_INVALID_URL|UNABLE_TO_GET_ISSUER_CERT|certificate has expired|unable to resolve|could not resolve host|socket hang up|connect ECONNREFUSED|connect ENOTFOUND|connect ECONNRESET)(?:\b|$)/im
     .test(output);
 }
+
+/** Large enough for verbose doctor scans; overflows must not soft-skip the gate. */
+const DOCTOR_MAX_BUFFER = 20 * 1024 * 1024;
 
 if (import.meta.main) {
   const repoRoot = resolve(import.meta.dirname, "..");
@@ -86,6 +90,7 @@ if (import.meta.main) {
       cwd: guiDir,
       encoding: "utf8",
       stdio: ["inherit", "pipe", "pipe"],
+      maxBuffer: DOCTOR_MAX_BUFFER,
       env: { ...process.env, npm_config_yes: "true" },
     });
     if (out) process.stdout.write(out);
@@ -93,6 +98,9 @@ if (import.meta.main) {
     const status = typeof err === "object" && err !== null && "status" in err
       ? (err as { status?: unknown }).status
       : undefined;
+    const code = typeof err === "object" && err !== null && "code" in err
+      ? String((err as { code?: unknown }).code ?? "")
+      : "";
     const stdout = typeof err === "object" && err !== null && "stdout" in err
       ? String((err as { stdout?: unknown }).stdout ?? "")
       : "";
@@ -102,6 +110,12 @@ if (import.meta.main) {
     const combined = `${stdout}\n${stderr}`;
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
+
+    // Buffer overflow means doctor ran and produced a large report — gate, do not soft-skip.
+    if (code === "ENOBUFS") {
+      console.error("doctor:gui: react-doctor output exceeded buffer — failing push");
+      process.exit(1);
+    }
 
     // Spawn failed (missing binary) — do not brick the push on infra.
     if (typeof status !== "number") {

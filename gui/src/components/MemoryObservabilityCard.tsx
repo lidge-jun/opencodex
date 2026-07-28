@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatUptime } from "../formatUptime";
 import { IconActivity } from "../icons";
 import { useI18n, type Locale } from "../i18n/shared";
+import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 
 /**
  * Memory observability card. Polls GET /api/system/memory (#314 WP3) every 5s
@@ -135,13 +136,6 @@ const DRAIN_TIMEOUT_S = 60;
 const RECONNECT_POLL_MS = 1500;
 const RECONNECT_GIVE_UP_MS = 120_000;
 
-/** Bound a fetch with AbortSignal.timeout when available; else unmount-abort only. */
-function boundedSignal(controller: AbortController, ms: number): AbortSignal {
-  return typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal
-    ? AbortSignal.any([controller.signal, AbortSignal.timeout(ms)])
-    : controller.signal;
-}
-
 export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }) {
   const { locale, t } = useI18n();
   const [data, setData] = useState<SystemMemory | null>(null);
@@ -170,20 +164,17 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
-    let activeController: AbortController | null = null;
+    let active: BoundedFetch | null = null;
     const fetchMemory = async () => {
       // Serialize polls: a stalled request must not stack up or let an older
       // payload land after a newer one.
       if (inFlight) return;
       inFlight = true;
       // Bound each poll so a hung request cannot pin inFlight forever.
-      // Prefer AbortSignal.timeout (no setTimeout to clean up); fall back to
-      // unmount-only abort when the browser lacks timeout/any.
-      const controller = new AbortController();
-      activeController = controller;
-      const signal = boundedSignal(controller, 10_000);
+      const bounded = createBoundedFetch(10_000);
+      active = bounded;
       try {
-        const res = await fetch(`${apiBase}/api/system/memory`, { signal });
+        const res = await fetch(`${apiBase}/api/system/memory`, { signal: bounded.signal });
         if (!res.ok) throw new Error("memory unavailable");
         const json = await res.json() as SystemMemory;
         if (cancelled) return;
@@ -213,7 +204,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           setUnavailable(true);
         }
       } finally {
-        if (activeController === controller) activeController = null;
+        bounded.clear();
+        if (active === bounded) active = null;
         inFlight = false;
       }
     };
@@ -221,7 +213,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     const interval = setInterval(() => void fetchMemory(), 5000);
     return () => {
       cancelled = true;
-      activeController?.abort();
+      active?.controller.abort();
+      active?.clear();
       clearInterval(interval);
     };
   }, [apiBase, restartPhase, restartFromPid]);
@@ -230,15 +223,14 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     if (restartPhase !== "reconnecting") return;
     let cancelled = false;
     let inFlight = false;
-    let activeController: AbortController | null = null;
+    let active: BoundedFetch | null = null;
     const started = Date.now();
     const tick = () => {
       if (inFlight || cancelled) return;
       inFlight = true;
-      const controller = new AbortController();
-      activeController = controller;
-      const signal = boundedSignal(controller, 5_000);
-      void fetch(`${apiBase}/healthz`, { cache: "no-store", signal })
+      const bounded = createBoundedFetch(5_000);
+      active = bounded;
+      void fetch(`${apiBase}/healthz`, { cache: "no-store", signal: bounded.signal })
         .then(async (res) => {
           if (cancelled) return;
           if (!res.ok) {
@@ -277,7 +269,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
           }
         })
         .finally(() => {
-          if (activeController === controller) activeController = null;
+          bounded.clear();
+          if (active === bounded) active = null;
           inFlight = false;
         });
     };
@@ -285,7 +278,8 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     const interval = setInterval(tick, RECONNECT_POLL_MS);
     return () => {
       cancelled = true;
-      activeController?.abort();
+      active?.controller.abort();
+      active?.clear();
       clearInterval(interval);
     };
   }, [apiBase, restartPhase, restartFromPid, t]);

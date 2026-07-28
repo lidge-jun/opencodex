@@ -1918,7 +1918,7 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784");
     expect(workflow).not.toMatch(
-      /^\s*-\s+uses:\s+\S+@(?![0-9a-f]{40}\b)\S+/m,
+      /^\s*-\s+uses:\s+\S+@(?![0-9a-f]{40}(?=[ \t]*(?:#.*)?$))\S+/m,
     );
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
@@ -1971,6 +1971,7 @@ describe("doctor-gui-if-changed", () => {
   test("looksLikeDoctorInfraFailure detects registry/network outages", async () => {
     const { looksLikeDoctorInfraFailure } = await import("../scripts/doctor-gui-if-changed");
     expect(looksLikeDoctorInfraFailure("npm ERR! network getaddrinfo ENOTFOUND registry.npmjs.org")).toBe(true);
+    expect(looksLikeDoctorInfraFailure("npm ERR! code ECONNRESET")).toBe(true);
     expect(looksLikeDoctorInfraFailure("All 2 issues\nBugs > 1 errors")).toBe(false);
     // Findings copy can mention "network" without being an infra outage.
     expect(looksLikeDoctorInfraFailure("Network requests > 1 errors")).toBe(false);
