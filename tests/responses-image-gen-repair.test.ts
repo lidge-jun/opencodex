@@ -258,7 +258,7 @@ describe("Responses image-gen call restoration", () => {
     }
   });
 
-  test("handleResponses restores client-facing SSE calls on the Windows rewrite path", async () => {
+  test("handleResponses restores client-facing SSE calls on the passthrough rewrite path", async () => {
     const savedFetch = globalThis.fetch;
     let outboundBody: Record<string, unknown> | undefined;
     const item = {
