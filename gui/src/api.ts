@@ -32,6 +32,11 @@ function clearToken(): void {
   memoryToken = null;
 }
 
+/** Clear memory only when it still holds `expected` (avoid wiping a newer concurrent store). */
+function clearTokenIfCurrent(expected: string | null): void {
+  if (expected != null && readToken() === expected) clearToken();
+}
+
 function clearLegacySessionToken(): void {
   try {
     sessionStorage.removeItem(LEGACY_TOKEN_KEY);
@@ -83,15 +88,15 @@ export function installApiAuthFetch(): void {
     const response = await originalFetch(firstInput, firstInit);
     if (response.status !== 401) return response;
 
-    if (token) clearToken();
-
     // Another request may have stored a token while this one was in flight (or while prompt blocked).
     const refreshed = readToken();
     if (refreshed && refreshed !== token) {
       const [retryInput, retryInit] = withToken(input, init, refreshed);
       const retry = await originalFetch(retryInput, retryInit);
       if (retry.status !== 401) return retry;
-      clearToken();
+      clearTokenIfCurrent(refreshed);
+    } else {
+      clearTokenIfCurrent(token);
     }
 
     const nextToken = await resolveTokenAfter401(token);
@@ -99,7 +104,7 @@ export function installApiAuthFetch(): void {
 
     const [retryInput, retryInit] = withToken(input, init, nextToken);
     const retry = await originalFetch(retryInput, retryInit);
-    if (retry.status === 401) clearToken();
+    if (retry.status === 401) clearTokenIfCurrent(nextToken);
     return retry;
   };
 }
