@@ -133,7 +133,11 @@ export async function collectStatus(): Promise<CliStatusView> {
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
   // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
-  const live = await findLiveProxy();
+  // Pass the already-resolved diagnostics config so findLiveProxy does not re-load and
+  // warn on malformed config.json (status --json must stay stderr-clean).
+  const live = await findLiveProxy({
+    configFn: () => ({ port: config.port, hostname: config.hostname }),
+  });
   const pidFile = readPid();
   const pid = live?.pid ?? pidFile;
   const listen = live
