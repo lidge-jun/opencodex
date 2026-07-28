@@ -84,6 +84,54 @@ describe("acceptSystemRestart", () => {
     expect(calls).toEqual(["drain", "exit:1"]);
   });
 
+  test("spawn sync throw exits 1 without marking recycle", async () => {
+    const calls: string[] = [];
+    let scheduled: (() => void | Promise<void>) | null = null;
+
+    acceptSystemRestart({
+      isDraining: () => false,
+      getActiveTurnCount: () => 0,
+      isSupervisedServiceChild: () => false,
+      listenPort: () => 10123,
+      schedule: (fn) => { scheduled = fn; },
+      setDraining: () => {},
+      drainAndShutdown: async () => { calls.push("drain"); },
+      spawnStart: () => {
+        calls.push("start");
+        throw new Error("ENOENT");
+      },
+      markRecycling: () => { calls.push("recycle"); },
+      exitProcess: (code) => { calls.push(`exit:${code}`); },
+    });
+
+    await scheduled!();
+    expect(calls).toEqual(["drain", "start", "exit:1"]);
+  });
+
+  test("spawn async rejection exits 1 without marking recycle", async () => {
+    const calls: string[] = [];
+    let scheduled: (() => void | Promise<void>) | null = null;
+
+    acceptSystemRestart({
+      isDraining: () => false,
+      getActiveTurnCount: () => 0,
+      isSupervisedServiceChild: () => false,
+      listenPort: () => 10123,
+      schedule: (fn) => { scheduled = fn; },
+      setDraining: () => {},
+      drainAndShutdown: async () => { calls.push("drain"); },
+      spawnStart: async () => {
+        calls.push("start");
+        throw new Error("spawn error before start");
+      },
+      markRecycling: () => { calls.push("recycle"); },
+      exitProcess: (code) => { calls.push(`exit:${code}`); },
+    });
+
+    await scheduled!();
+    expect(calls).toEqual(["drain", "start", "exit:1"]);
+  });
+
   test("does not schedule a second drain while already draining", async () => {
     let scheduled = 0;
     const result = acceptSystemRestart({
