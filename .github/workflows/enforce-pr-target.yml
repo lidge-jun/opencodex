@@ -332,8 +332,15 @@ jobs:
                 failure => failure.code === "bad_description"
               );
 
+              const shouldStripTitlePrefix =
+                !hasWrongBase &&
+                state.titlePrefixedByBot &&
+                pr.title.startsWith(TITLE_PREFIX);
+
               if (willPrefixTitle) {
                 state.titlePrefixedByBot = true;
+              } else if (shouldStripTitlePrefix) {
+                state.titlePrefixedByBot = false;
               }
 
               let draftConversionFailed = false;
@@ -356,6 +363,13 @@ jobs:
                   repo,
                   pull_number,
                   title: `${TITLE_PREFIX}${pr.title}`
+                });
+              } else if (shouldStripTitlePrefix) {
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number,
+                  title: pr.title.slice(TITLE_PREFIX.length)
                 });
               }
 

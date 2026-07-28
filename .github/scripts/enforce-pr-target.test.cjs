@@ -60,4 +60,16 @@ describe("enforce-pr-target workflow", () => {
     assert.match(workflow, /pr-quality\.cjs/);
     assert.match(workflow, /collectPrQualityFailures/);
   });
+
+  it("strips stale WRONG BRANCH prefix on failure when base is corrected", () => {
+    const failureBlock = workflow.match(
+      /if \(failures\.length > 0\) \{([\s\S]*?)core\.setFailed\(/,
+    );
+    assert.ok(failureBlock, "workflow must have a failure path");
+    const failurePath = failureBlock[1];
+    assert.match(failurePath, /shouldStripTitlePrefix/);
+    assert.match(failurePath, /!hasWrongBase/);
+    assert.match(failurePath, /titlePrefixedByBot = false/);
+    assert.match(failurePath, /pr\.title\.slice\(TITLE_PREFIX\.length\)/);
+  });
 });
