@@ -7,6 +7,7 @@ import { useCodexAccountPool, type CodexAccountPoolController } from "../hooks/u
 import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import CodexAutoSwitchSetting from "./CodexAutoSwitchSetting";
+import CodexPoolStrategySetting from "./CodexPoolStrategySetting";
 import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
@@ -296,6 +297,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           void load();
         }}
       />
+
+      <CodexPoolStrategySetting apiBase={apiBase} />
 
       {confirm && (
         <CodexAccountSwitchModal
