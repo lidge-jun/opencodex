@@ -384,6 +384,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
     modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
+    // Kimi K3 documents `max` as its API default, and its Cursor ladder has no `medium`
+    // rung — so applyReasoningLevels' medium->high->first fallback would settle the catalog
+    // default on `high`, the picker would send `high` explicitly, and the request builder's
+    // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
+    // routes (kimi, kimi-code, opencode-go).
+    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
     // Cursor's wire protocol never forwards image parts (request-builder emits an unsupported-
     // content marker), so the vision sidecar covers ALL cursor models regardless of what the
     // upstream model could natively do. Live-discovered models outside the static list fall back

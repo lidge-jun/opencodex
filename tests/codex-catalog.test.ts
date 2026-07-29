@@ -686,6 +686,34 @@ describe("Google Gemini catalog metadata", () => {
   });
 });
 
+describe("Cursor Kimi K3 catalog default effort", () => {
+  // Regression for the effort-tier ladder added with cursor/kimi-k3: the Cursor ladder is
+  // low/high/max with NO medium rung, so applyReasoningLevels' medium -> high -> first
+  // preference would settle default_reasoning_level on "high" unless the registry supplies a
+  // default. Kimi documents `max` as K3's API default, and a "high" default makes the picker
+  // send high explicitly so the request builder never falls back to kimi-k3-max.
+  test("keeps max as the catalog default instead of falling back to high", async () => {
+    const cursor = {
+      adapter: "cursor",
+      authMode: "oauth" as const,
+      liveModels: false,
+    };
+    enrichProviderFromRegistry("cursor", cursor);
+    const models = await gatherRoutedModels({
+      port: 0,
+      defaultProvider: "cursor",
+      providers: { cursor },
+    });
+    const entry = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(row => row.slug === "cursor/kimi-k3");
+
+    expect(entry).toBeDefined();
+    expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
+    expect(entry?.default_reasoning_level).toBe("max");
+  });
+});
+
 describe("configured CatalogModel displayName -> catalog display_name", () => {
   test("a routed CatalogModel displayName becomes the catalog display_name", () => {
     const model = { provider: "deepseek", id: "deepseek-v4", displayName: "DeepSeek V4", owned_by: "deepseek" };
