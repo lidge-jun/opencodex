@@ -45,7 +45,9 @@ rule is written out under [Review and merge policy](#review-and-merge-policy).
     indistinguishable from a forgotten one.
   - If the port cannot be completed immediately (a blocking dependency, a
     subsystem the port has not reached), open a tracking issue against
-    `dev2-go` before closing out the `dev` merge, and name the source commits.
+    `dev2-go` before closing out the `dev` merge, label it `needs-go-port`,
+    and name the source commits. That label is the durable signal that a
+    deferred port is intentional, not forgotten.
 - A pull request requires approval from at least one maintainer and successful required CI checks
   before merge.
 - Authors do not approve their own pull requests.
