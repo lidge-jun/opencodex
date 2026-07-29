@@ -39,7 +39,11 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import {
+  ProviderOutboundPolicyError,
+  providerOutboundGet,
+  providerRedirectError,
+} from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
@@ -69,6 +73,32 @@ export function isProviderModelsApiItems(value: unknown): value is ProviderModel
     && typeof (item as { id?: unknown }).id === "string"
     && (item as { id: string }).id.trim().length > 0
   );
+}
+
+/**
+ * Normalize OpenAI-compatible /models payloads for catalog discovery.
+ * Supports `{ data: [...] }` and top-level arrays (Together AI `#617`).
+ * Google's `{ models: [...] }` is handled by the connectivity probe only — catalog
+ * discovery must not treat a stray `models` key on openai-chat responses as valid.
+ */
+export function providerModelsListFromResponse(json: unknown): unknown {
+  if (Array.isArray(json)) return json;
+  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+    const data = (json as { data?: unknown }).data;
+    if (Array.isArray(data)) return data;
+  }
+  return undefined;
+}
+
+/** Connectivity-probe shape: also accepts Google `{ models: [...] }`. */
+export function providerModelsListFromProbeResponse(json: unknown): unknown {
+  if (Array.isArray(json)) return json;
+  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+    const obj = json as { data?: unknown; models?: unknown };
+    if (Array.isArray(obj.data)) return obj.data;
+    if (Array.isArray(obj.models)) return obj.models;
+  }
+  return undefined;
 }
 
 export function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
@@ -322,21 +352,20 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     };
   };
   try {
-    const destinationError = await providerDestinationResolvedError(name, {
-      baseUrl: url,
-      allowPrivateNetwork: prov.allowPrivateNetwork,
+    const res = await providerOutboundGet(name, prov, url, {
+      headers,
+      signal: AbortSignal.timeout(8000),
     });
-    if (destinationError) {
-      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
+    const redirectError = await providerRedirectError(res, url);
+    if (redirectError) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${destinationError} [urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" ${redirectError} [urlClass=${urlClass}, fallback=${fallback}].`,
         );
       }
       return models;
     }
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
       if (shouldLog) {
@@ -366,9 +395,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       }
       return models;
     }
-    const data = json !== null && typeof json === "object" && !Array.isArray(json)
-      ? (json as { data?: unknown }).data
-      : undefined;
+    const data = providerModelsListFromResponse(json);
     if (!isProviderModelsApiItems(data)) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       if (shouldLog) {
@@ -421,6 +448,15 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     setCached(name, live);
     return live;
   } catch (error) {
+    if (error instanceof ProviderOutboundPolicyError) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${error.message} [urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
+      return models;
+    }
     const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "network" });
     if (shouldLog) {
       console.warn(

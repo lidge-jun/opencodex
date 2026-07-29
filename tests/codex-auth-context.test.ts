@@ -167,6 +167,37 @@ describe("Codex auth context", () => {
     )).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
   });
 
+  test("pause excludes new auth selection without invalidating an in-flight context", async () => {
+    const cfg = config();
+    cfg.codexAccounts?.push({
+      id: "pool-b",
+      email: "pool-b@example.test",
+      isMain: false,
+      chatgptAccountId: "pool_b_acc",
+    });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+
+    const captured = await resolveCodexAuthContext(new Headers(), cfg, "pool");
+    expect(captured).toMatchObject({ kind: "pool", accountId: "pool-a" });
+
+    cfg.pausedCodexAccountIds = ["pool-a"];
+
+    expect(isCodexAuthContextUsable(captured, cfg)).toBe(true);
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+  });
+
   test("selected pool headers replace inbound main auth", () => {
     const headers = headersForCodexAuthContext(
       new Headers({ authorization: "Bearer main_token", "chatgpt-account-id": "main_acc", "openai-beta": "responses=experimental" }),
@@ -252,6 +283,160 @@ describe("Codex auth context", () => {
         kind: "pool",
         accountId: "pool-a",
       });
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("reset-derived native cooldowns stay within their confirmed quota group", async () => {
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const cfg = config();
+    const headers = new Headers({ authorization: "Bearer main_token" });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token",
+      refreshToken: "pool_refresh",
+      expiresAt: now + 24 * 60 * 60_000,
+      chatgptAccountId: "pool_acc",
+    });
+    try {
+      Date.now = () => now;
+      const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now,
+        resetAt,
+        modelId: "gpt-5.3-codex-spark",
+      });
+
+      // Spark owns a separate quota, so Terra can use the same account.
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now,
+        resetAt,
+        modelId: "gpt-5.6-terra",
+      });
+
+      // Terra and Luna stay in the shared native quota group, while Spark keeps
+      // its independent cooldown instead of being overwritten by Terra's 429.
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-luna" }))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+
+      // An explicit retry directive is still account-wide, regardless of the
+      // originating model's otherwise independent quota group.
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now,
+        retryAfter: "60",
+        modelId: "gpt-5.3-codex-spark",
+      });
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("a scoped cooldown uses another account without moving the independent native scope", async () => {
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const cfg = config();
+    cfg.codexAccounts?.push({
+      id: "pool-b",
+      email: "pool-b@example.test",
+      isMain: false,
+      chatgptAccountId: "pool_b_acc",
+    });
+    const headers = new Headers({
+      authorization: "Bearer main_token",
+      "x-codex-parent-thread-id": "independent-scope-thread",
+    });
+    for (const accountId of ["pool-a", "pool-b"]) {
+      saveCodexAccountCredential(accountId, {
+        accessToken: `${accountId}-token`,
+        refreshToken: `${accountId}-refresh`,
+        expiresAt: now + 24 * 60 * 60_000,
+        chatgptAccountId: `${accountId}-acc`,
+      });
+    }
+    try {
+      Date.now = () => now;
+      // Establish the shared-scope binding first. The Spark fallback below must
+      // create a second binding rather than replacing this one.
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.3-codex-spark",
+      });
+
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+      expect(cfg.activeCodexAccountId).toBe("pool-a");
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-terra" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      // This second Spark request proves routing retained the peer choice for
+      // the Spark affinity instead of relying on an auth-layer substitution.
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("a successful Spark recovery probe leaves the shared native cooldown intact", async () => {
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const cfg = config();
+    const headers = new Headers({ authorization: "Bearer main_token" });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token",
+      refreshToken: "pool_refresh",
+      expiresAt: now + 24 * 60 * 60_000,
+      chatgptAccountId: "pool_acc",
+    });
+    try {
+      Date.now = () => now;
+      const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000);
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now,
+        resetAt,
+        modelId: "gpt-5.3-codex-spark",
+      });
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now,
+        resetAt,
+        modelId: "gpt-5.6-terra",
+      });
+
+      const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      Date.now = () => probeAt;
+      const sparkProbe = await resolveCodexAuthContext(headers, cfg, "pool", {
+        modelId: "gpt-5.3-codex-spark",
+      });
+      expect(sparkProbe).toMatchObject({
+        kind: "pool",
+        probeQuotaScope: "spark",
+      });
+
+      recordCodexUpstreamOutcome(cfg, "pool-a", 200, {
+        now: probeAt + 1,
+        modelId: "gpt-5.3-codex-spark",
+        probeLeaseId: (sparkProbe as { probeLeaseId?: string }).probeLeaseId,
+        probeQuotaScope: (sparkProbe as { probeQuotaScope?: "spark" }).probeQuotaScope,
+      });
+
+      Date.now = () => probeAt + 1;
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.3-codex-spark" }))
+        .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", { modelId: "gpt-5.6-luna" }))
+        .resolves.toMatchObject({ kind: "pool", probeQuotaScope: "shared" });
     } finally {
       Date.now = originalNow;
     }
@@ -422,6 +607,20 @@ describe("cooldown error surface", () => {
     // proxy binds a non-loopback hostname.
     expect(message).not.toContain("acct_9f3c21");
     expect(message).toContain("account-…3c21");
+  });
+
+  test("message identifies a model-scoped cooldown without implying an account-wide block", () => {
+    const err = new CodexAccountCooldownError(
+      "acct_9f3c21",
+      Date.parse("2026-07-26T10:00:00.000Z"),
+      "reset-derived",
+      "spark",
+    );
+
+    const message = cooldownErrorMessage(err);
+
+    expect(message).toContain("Spark quota is cooling down");
+    expect(message).not.toContain("Selected Codex account (account-…3c21) is cooling down");
   });
 
   test("the main login renders as the alias users actually type", () => {

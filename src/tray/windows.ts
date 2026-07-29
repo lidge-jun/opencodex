@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { durableBunPath } from "../lib/bun-runtime";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
@@ -476,6 +477,7 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   for (const path of [entry.bun, entry.cli, sourceScript, ...iconPairs.map(pair => pair.source)]) {
     if (!existsSync(path)) throw new Error(`Cannot install the tray because a required file is missing: ${path}`);
   }
+  recordOwnedConfigPath(getConfigDir(), trayStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
   const runCommand = buildWindowsTrayRunCommand(entry);
   const runValue = windowsTrayRunValue(entry.opencodexHome);

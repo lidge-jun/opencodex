@@ -89,3 +89,4 @@ describe("/api/subagent-model-fallback atomic validation", () => {
     expect(config.subagentModelFallback).toEqual(next);
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

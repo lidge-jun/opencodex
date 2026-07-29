@@ -276,6 +276,70 @@ describe("Windows service task", () => {
     });
   });
 
+  // --- #608: Task Scheduler canonicalizes escaped text when exporting ---------
+
+  test("accepts an export whose Arguments quotes were canonicalized", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    // We write `&quot;`; Task Scheduler hands the same value back with literal
+    // quotes. Comparing encodings made a healthy task read as stale forever.
+    const canonical = xml.replace(
+      `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
+      `<Arguments>/b /nologo "${launcher}"</Arguments>`,
+    );
+    expect(canonical).toContain(`<Arguments>/b /nologo "${launcher}"</Arguments>`);
+    expect(windowsTaskRegistrationHealthy(canonical, wscript, launcher)).toBe(true);
+    // The escaped form we emit must keep working too.
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher)).toBe(true);
+  });
+
+  test("accepts a canonicalized export whose launcher path contains an ampersand", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\a&b\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    // `&` stays `&amp;` (it must, or the XML is malformed); only the quotes flip.
+    const canonical = xml.replace(
+      "<Arguments>/b /nologo &quot;C:\\Users\\a&amp;b\\.opencodex\\service-launcher.vbs&quot;</Arguments>",
+      "<Arguments>/b /nologo \"C:\\Users\\a&amp;b\\.opencodex\\service-launcher.vbs\"</Arguments>",
+    );
+    expect(windowsTaskRegistrationHealthy(canonical, wscript, launcher)).toBe(true);
+  });
+
+  test("the canonicalization tolerance does not weaken the launcher check", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    const canonicalArgs = `<Arguments>/b /nologo "${launcher}"</Arguments>`;
+    const canonical = xml.replace(
+      `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
+      canonicalArgs,
+    );
+
+    for (const [reason, mutated] of [
+      // A foreign launcher must still be refused in the canonical shape.
+      ["foreign launcher", canonical.replace(launcher, "C:\\Temp\\foreign.vbs")],
+      // A foreign interpreter, likewise.
+      ["foreign command", canonical.replace(wscript, "C:\\Windows\\System32\\cmd.exe")],
+      // Decoding twice would accept this; we decode once.
+      ["double-encoded quotes", xml.replace(
+        `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
+        `<Arguments>/b /nologo &amp;quot;${launcher}&amp;quot;</Arguments>`,
+      )],
+      // Absence is not a schema default here — it means nothing runs.
+      ["missing Arguments", canonical.replace(canonicalArgs, "")],
+      // Two elements make "which one runs?" ambiguous.
+      ["duplicate Arguments", canonical.replace(canonicalArgs, `${canonicalArgs}${canonicalArgs}`)],
+      // A namespace-prefixed element must not read as absent.
+      ["prefixed Arguments", canonical.replace("<Arguments>", "<t:Arguments>").replace("</Arguments>", "</t:Arguments>")],
+    ] as const) {
+      expect(windowsTaskRegistrationHealthy(mutated, wscript, launcher), reason).toBe(false);
+    }
+  });
+
   test("rejects explicit unsafe values even though defaults may be omitted", () => {
     const wscript = "C:\\Windows\\System32\\wscript.exe";
     const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";

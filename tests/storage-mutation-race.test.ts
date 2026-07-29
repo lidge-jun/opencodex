@@ -2,6 +2,7 @@
  * Regression: cleanup and restore must not mutate CODEX_HOME concurrently.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { managementFetch as fetch } from "./helpers/management-auth";
 import { Database } from "bun:sqlite";
 import {
   existsSync,

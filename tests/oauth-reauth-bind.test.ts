@@ -200,3 +200,4 @@ describe("OAuth account-scoped reauth", () => {
     expect(source).toContain("Unknown account for reauth");
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

@@ -52,7 +52,7 @@ describe("stopProxyGracefully", () => {
     expect(calls).toEqual([{ url: "http://127.0.0.1:10123/api/stop", method: "POST" }]);
   });
 
-  test("sends the management auth header when OPENCODEX_API_AUTH_TOKEN is set", async () => {
+  test("sends the management token instead of the data token", async () => {
     let headers: Record<string, string> | undefined;
     await stopProxyGracefully(1, {
       readRuntime: () => ({ port: 10100 }),
@@ -61,10 +61,13 @@ describe("stopProxyGracefully", () => {
         return okResponse();
       }) as typeof fetch,
       waitExit: () => true,
-      env: { OPENCODEX_API_AUTH_TOKEN: "secret-token" },
+      env: {
+        OPENCODEX_API_AUTH_TOKEN: "data-secret",
+        OPENCODEX_ADMIN_AUTH_TOKEN: "admin-secret",
+      },
     });
 
-    expect(headers?.["x-opencodex-api-key"]).toBe("secret-token");
+    expect(headers?.["x-opencodex-api-key"]).toBe("admin-secret");
   });
 
   test("returns false when no runtime port is recorded (caller falls back to killProxy)", async () => {

@@ -140,3 +140,4 @@ describe("GET /api/logs display metrics", () => {
     expect(dto!.displayMetrics.cost).toEqual({ kind: "unavailable", reason: "invalid_cache_breakdown" });
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

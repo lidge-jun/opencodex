@@ -73,14 +73,53 @@ describe("kiro adapter — buildRequest", () => {
     }
   });
 
-  test("headers carry Bearer token + CW targets", async () => {
-    const { url, method, headers } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
+  test("Builder ID requests without a profile ARN use the Kiro CLI wire contract", async () => {
+    const { url, method, headers, body } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }]));
+    const payload = JSON.parse(body) as {
+      profileArn?: string;
+      conversationState: {
+        agentContinuationId?: string;
+        agentTaskType?: string;
+        currentMessage: { userInputMessage: Record<string, unknown> };
+      };
+    };
     expect(url).toBe("https://runtime.us-east-1.kiro.dev/");
     expect(method).toBe("POST");
     expect(headers.authorization).toBe("Bearer tok-123");
     expect(headers["x-amz-target"]).toBe("AmazonCodeWhispererStreamingService.GenerateAssistantResponse");
-    expect(headers.accept).toBe("application/vnd.amazon.eventstream");
-    expect(headers["x-amzn-kiro-agent-mode"]).toBe("vibe");
+    expect(headers.accept).toBe("*/*");
+    expect(headers["user-agent"]).toContain("app/AmazonQ-For-CLI");
+    expect(headers["x-amzn-kiro-agent-mode"]).toBeUndefined();
+    expect(headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
+    expect(headers["x-amzn-codewhisperer-optout"]).toBe("true");
+    expect(headers.tokentype).toBeUndefined();
+    expect(payload.profileArn).toBeUndefined();
+    expect(payload.conversationState.agentTaskType).toBe("vibe");
+    expect(payload.conversationState.agentContinuationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(payload.conversationState.currentMessage.userInputMessage).toMatchObject({
+      content: "hi",
+      origin: "KIRO_CLI",
+    });
+    expect(payload.conversationState.currentMessage.userInputMessage).not.toHaveProperty("userInputMessageContext.envState");
+  });
+
+  test("Kiro API keys force the CLI token type and ignore unrelated profile metadata", async () => {
+    const apiKeyProvider = { ...provider, authMode: "key", apiKey: "ksk_example" } as unknown as OcxProviderConfig;
+    const parsed = parsedWith([{ role: "user", content: "hi" }]);
+    parsed._kiroAuthContext = {
+      profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/unrelated",
+    };
+    const request = await createKiroAdapter(apiKeyProvider).buildRequest(parsed);
+    const body = JSON.parse(request.body) as {
+      profileArn?: string;
+      conversationState: { currentMessage: { userInputMessage: { origin?: string } } };
+    };
+
+    expect(request.headers.authorization).toBe("Bearer ksk_example");
+    expect(request.headers.tokentype).toBe("API_KEY");
+    expect(request.headers["x-amzn-kiro-profile-arn"]).toBeUndefined();
+    expect(body.profileArn).toBeUndefined();
+    expect(body.conversationState.currentMessage.userInputMessage.origin).toBe("KIRO_CLI");
   });
 
   test("runtime URL uses KIRO_API_REGION separately from auth region", async () => {
@@ -104,6 +143,8 @@ describe("kiro adapter — buildRequest", () => {
 
     expect(request.url).toBe("https://runtime.eu-central-1.kiro.dev/");
     expect(request.headers["x-amzn-kiro-profile-arn"]).toBe(parsed._kiroAuthContext.profileArn);
+    expect(request.headers.accept).toBe("application/vnd.amazon.eventstream");
+    expect(request.headers["x-amzn-kiro-agent-mode"]).toBe("vibe");
     expect(body.profileArn).toBe(parsed._kiroAuthContext.profileArn);
   });
 
@@ -668,7 +709,7 @@ describe("kiro adapter — buildRequest", () => {
     ];
     const cs = JSON.parse((await createKiroAdapter(provider).buildRequest(parsedWith(messages))).body).conversationState;
     expect(cs.history).toEqual([
-      { userInputMessage: { content: "first\n\nsecond", modelId: "claude-sonnet-4.5", origin: "AI_EDITOR" } },
+      { userInputMessage: { content: "first\n\nsecond", modelId: "claude-sonnet-4.5", origin: "KIRO_CLI" } },
       { assistantResponseMessage: { content: "one\n\ntwo" } },
     ]);
     expect(cs.currentMessage.userInputMessage.content).toBe("third");

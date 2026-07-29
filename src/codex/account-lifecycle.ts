@@ -6,6 +6,7 @@ import { clearAccountQuota } from "./quota";
 import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } from "./routing";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountInfoCache } from "./main-account-cache";
+import { forgetCodexAccountPause } from "./account-pause";
 import type { OcxConfig } from "../types";
 
 let observedMainChatgptAccountId: string | undefined;
@@ -45,7 +46,9 @@ export function resetMainCodexAccountIdentityTrackingForTests(): void {
 
 export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): void {
   removeCodexAccountCredential(accountId);
-  runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? []).filter(account => account.id !== accountId);
+  runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? [])
+    .filter(account => account.isMain || account.id !== accountId);
+  forgetCodexAccountPause(runtimeConfig, accountId);
   if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
   purgeCodexAccountRuntimeState(accountId);
   invalidateCodexWebSocketsForAccount(accountId);

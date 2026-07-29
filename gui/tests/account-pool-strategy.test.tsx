@@ -175,6 +175,41 @@ describe("AccountPoolStrategyControls", () => {
     expect(rr).toContain("Sticky successes before rotate");
     expect(rr).toContain('value="2"');
   });
+
+  test("keeps the visual field label by default (Anthropic card has its own title)", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls
+          strategy="quota"
+          stickyDraft="1"
+          onStrategyChange={() => {}}
+          onStickyDraftChange={() => {}}
+          onStickyCommit={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markup).toContain('class="field-label"');
+    expect(markup).not.toContain('class="sr-only"');
+  });
+
+  test("strategyLabelHidden drops the duplicate visual label but keeps the accessible name", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls
+          strategy="quota"
+          stickyDraft="1"
+          strategyLabelHidden
+          onStrategyChange={() => {}}
+          onStickyDraftChange={() => {}}
+          onStickyCommit={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markup).not.toContain('class="field-label"');
+    expect(markup).toContain('class="sr-only"');
+    // The select must still expose an accessible name.
+    expect(markup).toContain('aria-label="Rotation strategy"');
+  });
 });
 
 describe("CodexPoolStrategySetting optimistic strategy select", () => {
@@ -281,5 +316,44 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
 
     expect(select()?.value).toBe("quota");
     expect(host.textContent).toContain("Rotation strategy could not be saved");
+  });
+
+  test("renders the card title once, without a duplicate field label", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/codex-auth/active") && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({
+          accountPoolStrategy: "quota",
+          accountPoolStickyLimit: 1,
+        }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+    }) as typeof fetch;
+
+    const host = testWindow.document.createElement("div");
+    testWindow.document.body.appendChild(host as never);
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      mountedRoot = createRoot(host);
+      mountedRoot.render(
+        <LanguageProvider>
+          <CodexPoolStrategySetting apiBase="http://proxy" />
+        </LanguageProvider>,
+      );
+    });
+    await act(async () => { await flush(); });
+
+    // The card title is the only VISIBLE occurrence; the select's label is sr-only.
+    const visible = [...host.querySelectorAll("*")]
+      .filter((el) => !el.classList.contains("sr-only"))
+      .filter((el) => el.children.length === 0)
+      .map((el) => el.textContent?.trim() ?? "")
+      .filter((text) => text === "Rotation strategy");
+    expect(visible).toHaveLength(1);
+    expect(host.querySelector(".field-label")).toBeNull();
+
+    // Accessibility is preserved: the select still has an accessible name.
+    const select = host.querySelector<HTMLSelectElement>("#codex-pool-strategy");
+    expect(select?.getAttribute("aria-label")).toBe("Rotation strategy");
   });
 });

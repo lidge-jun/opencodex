@@ -58,10 +58,9 @@ beforeEach(() => {
   process.env.CLAUDE_CONFIG_DIR = empty;
   process.env.HOME = empty;
 
-  execSpy = spyOn(childProcess, "execSync").mockImplementation(((command: string) => {
-    // No keychain item, no launchctl value: a clean "absent" world.
-    if (String(command).startsWith("launchctl getenv")) return "";
-    if (String(command).startsWith("security ")) throw new Error("no keychain item");
+  execSpy = spyOn(childProcess, "execFileSync").mockImplementation(((file: string, args?: string[]) => {
+    // No launchctl value: a clean "absent" world.
+    if (file === "/bin/launchctl" && args?.[0] === "getenv") return "";
     return "";
   }) as never);
   // 44 = SecKeychainSearchCopyNext "item not found": a REAL absent, not a probe failure.

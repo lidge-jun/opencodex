@@ -77,10 +77,42 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     }
     expect(fields.name).toBe(def!.name);
     expect(fields.model).toBe(def!.model);
+    expect(fields.effort).toBeUndefined();
     expect(typeof fields.description).toBe("string");
     expect(body).toContain("generated-by: opencodex");
     expect(body).toContain(`ocx-route: ${def!.model}`);
     expect(body).toContain("IDENTITY: your ACTUAL underlying model");
+  });
+
+  test("configured Claude Code subagent effort is rendered for roster and self definitions", () => {
+    const levels = ["low", "medium", "high", "xhigh", "max"] as const;
+    for (const effort of levels) {
+      const dir = tempDir();
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
+      const defs = buildClaudeAgentDefs(cfg({
+        subagentModels: ["gpt-5.6-sol"],
+        claudeCode: { subagentEffort: effort },
+      }), {}, dir);
+      expect(defs).toHaveLength(2);
+      expect(defs.every(def => def.effort === effort)).toBe(true);
+      syncClaudeAgentDefs(defs, dir);
+      for (const def of defs) {
+        const body = readFileSync(join(dir, "agents", def.file), "utf8");
+        expect(body.match(new RegExp(`^effort: ${JSON.stringify(effort)}$`, "gm"))).toHaveLength(1);
+        expect(body).toContain(`<!-- ocx-effort: ${effort} -->`);
+      }
+    }
+  });
+
+  test("regeneration removes a previously configured effort when the option is cleared", () => {
+    const dir = tempDir();
+    const configured = cfg({ subagentModels: ["gpt-5.6-sol"], claudeCode: { subagentEffort: "max" } });
+    injectClaudeAgentDefs(configured, {}, dir);
+    const target = join(dir, "agents", "ocx-gpt-5-6-sol.md");
+    expect(readFileSync(target, "utf8")).toContain('effort: "max"');
+
+    injectClaudeAgentDefs(cfg({ subagentModels: ["gpt-5.6-sol"] }), {}, dir);
+    expect(readFileSync(target, "utf8")).not.toContain("effort:");
   });
 
   test("generated routed agents refuse the default blocked skill before its bundle expands", () => {

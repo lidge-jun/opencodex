@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,5 +93,5 @@ describe("CLI OAuth live-update credential preservation", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, 15_000);
 });

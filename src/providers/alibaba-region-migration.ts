@@ -2,6 +2,7 @@ import { ALIBABA_INTL_BASE_URL_CHOICES } from "./base-url-choices";
 import { providerConfigSeed } from "./derive";
 import { rewriteProviderReferences } from "./provider-id-rewrite";
 import { PROVIDER_REGISTRY } from "./registry";
+import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 const BEIJING_ID = "alibaba-token-plan";
@@ -91,15 +92,27 @@ function buildIntlRow(source: OcxProviderConfig): OcxProviderConfig {
  * those contracts across. That override fix shipped once, was backed out twice,
  * and was refused again when PR #459 closed.
  *
- * Refuses to act when the destination already holds a value — a provider row or a
- * key the reference rewrite would land on — because merging two settings is a
- * user decision, not a migration's.
+ * Refuses to act when the destination is reserved by an account namespace or
+ * already holds a value — a provider row or a key the reference rewrite would
+ * land on — because choosing which setting wins is a user decision, not a
+ * migration's.
  */
 export function projectAlibabaRegionMigration(config: OcxConfig): AlibabaRegionMigrationProjection {
   const beijing = config.providers[BEIJING_ID];
   const savedBaseUrl = typeof beijing?.baseUrl === "string" ? beijing.baseUrl : "";
   if (!beijing || !savedBaseUrl || !isInternationalEndpoint(savedBaseUrl)) {
     return { config, changed: false, warnings: [] };
+  }
+  if (codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, INTL_ID)) {
+    return {
+      config,
+      changed: false,
+      warnings: [
+        `provider "${BEIJING_ID}" needs to move to "${INTL_ID}", but that destination is reserved `
+        + `by a configured Codex account namespace. Nothing was changed. Rename the account `
+        + `selector or move the provider manually, then restart.`,
+      ],
+    };
   }
   if (config.providers[INTL_ID]) {
     return {

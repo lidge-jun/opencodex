@@ -1,5 +1,14 @@
 # OpenCodex GUI — agent rules
 
+This file applies to `gui/` and inherits the repository-wide rules in `/AGENTS.md`.
+
+## Ownership and generated output
+
+- `gui/` is the React + Vite dashboard.
+- `gui/dist/` is generated packaged output. Do not edit it by hand.
+- Use the existing component, state, routing, styling, and data-access patterns before introducing a new abstraction.
+- Keep dashboard behavior aligned with the management API and provider configuration model.
+
 ## Text and i18n
 
 - **No hardcoded visible UI text** in `src/pages`, `src/components`, `src/App.tsx`, or `src/ui.tsx`.
@@ -19,7 +28,33 @@
   - Keep **code comments** (including shell `# …` comments in samples). Never strip them to “satisfy” i18n.
 - Run `bun run lint:i18n` after UI copy changes; fix real violations before committing. If a hit is technical, extend the allowlist or put the string in `<pre>`/`<code>` — do not invent nonsense translation keys.
 
+## Implementation rules
+
+- Preserve accessibility: keyboard operation, labels, focus behavior, semantic controls, and readable validation errors.
+- Do not introduce a dependency for behavior already provided by the current stack or a small local implementation.
+- Dependency changes require explicit security review.
+- Update `docs-site/` when dashboard behavior, setup, or configuration changes for users.
 
 ## Failure mode
 
 Hardcoding English (or German) in JSX to “fix” a bad translation is **not** allowed. Add or fix the key in all locale files instead.
+
+## Required validation
+
+Run all of the following for every functional `gui/` change:
+
+```bash
+cd gui
+bun test tests
+bun run lint
+bun run build
+```
+
+After any UI-copy or locale change, also run:
+
+```bash
+cd gui
+bun run lint:i18n
+```
+
+Run the repository-level checks required by any non-GUI files changed in the same work.

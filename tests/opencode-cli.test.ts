@@ -247,6 +247,8 @@ describe("ocx opencode proxy model catalog", () => {
           baseUrl: "https://proxyenv.test/v1",
           apiKey: `\${${ENV_KEY}}`,
           models: ["static-fallback"],
+          // Discovery runs on the pinned transport; hand it back the stub above.
+          fetch: ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init)) as typeof fetch,
         },
       },
     } as OcxConfig;
@@ -568,3 +570,4 @@ describe("ocx opencode not-found hint", () => {
     expect(opencodeNotFoundHint(0, null, "win32")).toBeNull();
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

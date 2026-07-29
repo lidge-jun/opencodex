@@ -798,6 +798,7 @@ describe("immutable update target (WP160)", () => {
 
   test("bun worker execution pins the resolved version through updateExecutionCommand", () => {
     const cmd = updateExecutionCommand("bun", "latest", "/pkg/bin/ocx.mjs", "2.7.24");
+    expect(cmd.bin).toBe(process.platform === "win32" ? process.execPath : "bun");
     expect(cmd.args).toEqual(["add", "-g", "@bitkyc08/opencodex@2.7.24"]);
     expect(cmd.display).toContain("@2.7.24");
   });

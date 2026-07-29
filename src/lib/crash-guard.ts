@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { recordOwnedConfigPath } from "./config-ownership";
 import { redactSecretString, redactUrlForLog } from "./redact";
 import { sidecarBreadcrumb, activityBreadcrumb } from "./sidecar-tracker";
 
@@ -27,6 +28,7 @@ let installed = false;
 function crashLogPath(): string {
   const dir = getConfigDir();
   try {
+    recordOwnedConfigPath(dir, join(dir, "crash.log"));
     mkdirSync(dir, { recursive: true });
   } catch {
     /* best-effort: directory usually already exists */

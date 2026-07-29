@@ -8,7 +8,8 @@ import { LanguageProvider } from "../src/i18n/provider";
 import Models from "../src/pages/Models";
 import { EmptyProviderHint } from "../src/pages/models-provider-hints";
 import type { ProviderDiscoverySummary } from "../src/models-groups";
-import { gatherRoutedModels } from "../../src/codex/catalog";
+import { gatherRoutedModels as gatherRoutedModelsDirect } from "../../src/codex/catalog";
+import { withStubbedProviderFetch } from "../../tests/helpers/catalog-provider-fetch";
 import {
   clearModelCache,
   getProviderDiscoveryStatus,
@@ -19,6 +20,14 @@ import { handleManagementAPI } from "../../src/server/management-api";
 
 let previousLanguage: unknown;
 const originalFetch = globalThis.fetch;
+
+/**
+ * Discovery runs on the pinned outbound transport, which does not read
+ * `globalThis.fetch`. These tests stub that global, so every config gets the
+ * caller-owned executor that hands control back to the stub.
+ */
+const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
+  gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
 
 beforeEach(() => {
   previousLanguage = (globalThis.navigator as { language?: unknown } | undefined)?.language;
@@ -52,7 +61,7 @@ async function providerDto(
 ): Promise<Record<string, unknown>> {
   const requestUrl = new URL("http://127.0.0.1/api/providers");
   const response = await handleManagementAPI(
-    new Request(requestUrl),
+    new Request(requestUrl, { headers: { Host: requestUrl.host } }),
     requestUrl,
     {
       providers: {

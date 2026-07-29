@@ -7,8 +7,15 @@ on:
       - reopened
       - edited
       - ready_for_review
+      - synchronize
 
+# pull-requests:write covers title/comment updates.
+# contents:write is required for convertPullRequestToDraft /
+# markPullRequestReadyForReview GraphQL mutations with GITHUB_TOKEN
+# (otherwise: "Resource not accessible by integration"). This workflow
+# never checks out PR head code.
 permissions:
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -19,30 +26,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Require dev as PR target
+      - name: Checkout trusted PR-quality scripts
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Enforce PR target, ancestry, and description
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            const path = require("path");
+            const { collectPrQualityFailures } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-quality.cjs"),
+            );
+
             const ALLOWED_BASES = ["dev", "dev2-go"];
             const DEFAULT_BASE = "dev";
             const TITLE_PREFIX = "[WRONG BRANCH] ";
-            const COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
+            const COMMENT_MARKER = "<!-- pr-quality-enforcer -->";
+            const LEGACY_COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
             const STATE_PATTERN =
-              /<!-- wrong-branch-enforcer-state:([\s\S]*?) -->/;
+              /<!-- (?:wrong-branch-enforcer|pr-quality-enforcer)-state:([\s\S]*?) -->/;
 
             const { owner, repo } = context.repo;
             const pull_number = context.payload.pull_request.number;
 
-            // Fetch the latest PR state instead of relying on a possibly
-            // outdated event payload.
             const { data: pr } = await github.rest.pulls.get({
               owner,
               repo,
               pull_number
             });
 
-            // Find the workflow's existing comment. Its hidden state records
-            // whether the workflow changed the title or draft status.
             const comments = await github.paginate(
               github.rest.issues.listComments,
               {
@@ -56,8 +72,10 @@ jobs:
             const botComment = comments.find(
               comment =>
                 comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(COMMENT_MARKER)
+                (comment.body?.includes(COMMENT_MARKER) ||
+                  comment.body?.includes(LEGACY_COMMENT_MARKER))
             );
+            let botCommentId = botComment?.id ?? null;
 
             function parseState(body) {
               const match = body?.match(STATE_PATTERN);
@@ -79,7 +97,7 @@ jobs:
 
             function stateMarker(state) {
               return (
-                "<!-- wrong-branch-enforcer-state:" +
+                "<!-- pr-quality-enforcer-state:" +
                 JSON.stringify(state) +
                 " -->"
               );
@@ -90,23 +108,24 @@ jobs:
             }
 
             async function upsertComment(body) {
-              if (botComment) {
+              if (botCommentId) {
                 await github.rest.issues.updateComment({
                   owner,
                   repo,
-                  comment_id: botComment.id,
+                  comment_id: botCommentId,
                   body
                 });
 
                 return;
               }
 
-              await github.rest.issues.createComment({
+              const created = await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: pull_number,
                 body
               });
+              botCommentId = created.data.id;
             }
 
             async function convertToDraft() {
@@ -153,82 +172,303 @@ jobs:
               );
             }
 
-            const storedState = parseState(botComment?.body);
-            const wrongBase = !ALLOWED_BASES.includes(pr.base.ref);
+            function descriptionFailureLines(reason) {
+              switch (reason) {
+                case "empty":
+                  return [
+                    "The pull request body is empty after stripping HTML comments.",
+                    "",
+                    "Include a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance)."
+                  ];
+                case "placeholder":
+                  return [
+                    "The pull request body contains only placeholder text (for example `N/A`, `TODO`, or `No response`).",
+                    "",
+                    "Replace placeholders with a **Summary** and **Test plan**, or another description with at least two substantive sections or paragraphs."
+                  ];
+                case "escaped_newlines":
+                  return [
+                    "The pull request body uses literal `\\n` escape sequences instead of real line breaks.",
+                    "",
+                    "Fix the formatting so the body uses normal markdown line breaks, then add a **Summary** and **Test plan**."
+                  ];
+                case "thin":
+                default:
+                  return [
+                    "The pull request description is too thin to review.",
+                    "",
+                    "Add a **Summary** and **Test plan** (two sections with at least 40 characters each), or an unstructured body of at least 120 characters with two paragraphs or bullet groups."
+                  ];
+              }
+            }
 
-            // Wrong branch:
-            // - add the title prefix
-            // - convert ready PRs to draft
-            // - post or update the explanation
-            // - remember which changes were made by this workflow
-            if (wrongBase) {
+            function buildFailureSections(failures) {
+              const sections = [];
+
+              if (failures.some(failure => failure.code === "wrong_base")) {
+                sections.push(
+                  "⚠️ **Wrong target branch**",
+                  "",
+                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${ALLOWED_BASES.map(inlineCode).join(" or ")}.`,
+                  "",
+                  `@${pr.user.login} Please retarget this PR to ${inlineCode(DEFAULT_BASE)}. Most contributions go to ${inlineCode(DEFAULT_BASE)} first; use ${inlineCode("dev2-go")} only for scoped Go native-port work. \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`
+                );
+              }
+
+              if (failures.some(failure => failure.code === "wrong_ancestry")) {
+                sections.push(
+                  "⚠️ **Wrong branch ancestry**",
+                  "",
+                  `This pull request targets ${inlineCode(pr.base.ref)}, but its head appears to sit on the current ${inlineCode("main")} tip while being far behind ${inlineCode(pr.base.ref)}.`,
+                  "",
+                  `@${pr.user.login} Rebase onto the current ${inlineCode(pr.base.ref)} branch instead of opening from ${inlineCode("main")}. That keeps already-released commits out of the integration branch.`
+                );
+              }
+
+              const badDescription = failures.find(
+                failure => failure.code === "bad_description"
+              );
+              if (badDescription) {
+                sections.push(
+                  "⚠️ **Pull request description**",
+                  "",
+                  ...descriptionFailureLines(badDescription.reason)
+                );
+              }
+
+              return sections;
+            }
+
+            function failureSummary(failures) {
+              return failures
+                .map(failure => {
+                  if (failure.code === "wrong_base") {
+                    return `wrong base (${pr.base.ref})`;
+                  }
+                  if (failure.code === "wrong_ancestry") {
+                    return "wrong ancestry";
+                  }
+                  if (failure.code === "bad_description") {
+                    return `bad description (${failure.reason})`;
+                  }
+                  return failure.code;
+                })
+                .join("; ");
+            }
+
+            const storedState = parseState(botComment?.body);
+
+            let authorPermission = null;
+            let permissionLookupFailed = false;
+            try {
+              const { data: permissionData } =
+                await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username: pr.user.login
+                });
+              authorPermission = permissionData.permission;
+            } catch (error) {
+              permissionLookupFailed = true;
+              core.warning(
+                `Could not look up collaborator permission: ${error.message}`
+              );
+            }
+
+            let behindMain = 0;
+            let behindBase = 0;
+            let aheadMain = 0;
+            let ancestryLookupFailed = false;
+            const baseAllowed = ALLOWED_BASES.includes(pr.base.ref);
+
+            if (baseAllowed) {
+              const headSha = pr.head.sha;
+              try {
+                const { data: mainCompare } =
+                  await github.rest.repos.compareCommitsWithBasehead({
+                    owner,
+                    repo,
+                    basehead: `main...${headSha}`
+                  });
+                behindMain = mainCompare.behind_by;
+                aheadMain = mainCompare.ahead_by;
+
+                const { data: baseCompare } =
+                  await github.rest.repos.compareCommitsWithBasehead({
+                    owner,
+                    repo,
+                    basehead: `${pr.base.ref}...${headSha}`
+                  });
+                behindBase = baseCompare.behind_by;
+              } catch (error) {
+                ancestryLookupFailed = true;
+                core.warning(
+                  `Could not compare commits for ancestry check: ${error.message}`
+                );
+              }
+            }
+
+            const failures = collectPrQualityFailures({
+              baseRef: pr.base.ref,
+              allowedBases: ALLOWED_BASES,
+              body: pr.body,
+              behindMain,
+              behindBase,
+              aheadMain,
+              authorPermission,
+              permissionLookupFailed,
+              ancestryLookupFailed
+            });
+
+            if (failures.length > 0) {
+              const hasWrongBase = failures.some(
+                failure => failure.code === "wrong_base"
+              );
+              const willPrefixTitle =
+                hasWrongBase && !pr.title.startsWith(TITLE_PREFIX);
               const state = storedState?.active
                 ? { ...storedState }
                 : {
                     version: 1,
                     active: true,
                     autoDraftedByBot: false,
-                    titlePrefixedByBot: false
+                    titlePrefixedByBot: false,
+                    ancestryFailed: false,
+                    descriptionFailed: false
                   };
 
-              if (!pr.draft) {
-                state.autoDraftedByBot = true;
-              }
+              state.ancestryFailed = failures.some(
+                failure => failure.code === "wrong_ancestry"
+              );
+              state.descriptionFailed = failures.some(
+                failure => failure.code === "bad_description"
+              );
 
-              if (!pr.title.startsWith(TITLE_PREFIX)) {
+              const shouldStripTitlePrefix =
+                !hasWrongBase &&
+                state.titlePrefixedByBot &&
+                pr.title.startsWith(TITLE_PREFIX);
+
+              // Claim title ownership before adding a prefix. Do not clear
+              // ownership until strip succeeds — a failed update must retry.
+              if (willPrefixTitle) {
                 state.titlePrefixedByBot = true;
               }
 
-              const draftExplanation = state.autoDraftedByBot
-                ? "This pull request is being kept as a draft automatically. Once the target branch is corrected, it will be marked ready for review again."
-                : "This pull request was already a draft. Its draft status will be preserved after the target branch is corrected.";
+              let draftConversionFailed = false;
+              const failureSections = buildFailureSections(failures);
 
-              // Store the restoration state before changing the PR, allowing
-              // a rerun to recover if an API request fails partway through.
               await upsertComment(
                 [
                   COMMENT_MARKER,
                   stateMarker(state),
                   "",
-                  "⚠️ **Wrong target branch**",
+                  ...failureSections,
                   "",
-                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${ALLOWED_BASES.map(inlineCode).join(" or ")}.`,
-                  "",
-                  `Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`,
-                  "",
-                  `@${pr.user.login} Please retarget this PR to ${inlineCode(DEFAULT_BASE)}. Most contributions go to ${inlineCode(DEFAULT_BASE)} first; use ${inlineCode("dev2-go")} only for scoped Go native-port work. \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`,
-                  "",
-                  draftExplanation
+                  "Recording ownership state before applying title/draft changes…"
                 ].join("\n")
               );
 
-              if (!pr.title.startsWith(TITLE_PREFIX)) {
+              if (willPrefixTitle) {
                 await github.rest.pulls.update({
                   owner,
                   repo,
                   pull_number,
                   title: `${TITLE_PREFIX}${pr.title}`
                 });
+              } else if (shouldStripTitlePrefix) {
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number,
+                  title: pr.title.slice(TITLE_PREFIX.length)
+                });
+                state.titlePrefixedByBot = false;
+                await upsertComment(
+                  [
+                    COMMENT_MARKER,
+                    stateMarker(state),
+                    "",
+                    ...failureSections,
+                    "",
+                    "Stale title prefix removed; continuing…"
+                  ].join("\n")
+                );
               }
 
               if (!pr.draft) {
-                await convertToDraft();
+                // Claim draft ownership before the mutation so a successful
+                // convert followed by a failed comment still restores later.
+                state.autoDraftedByBot = true;
+                await upsertComment(
+                  [
+                    COMMENT_MARKER,
+                    stateMarker(state),
+                    "",
+                    ...failureSections,
+                    "",
+                    "Draft conversion pending…"
+                  ].join("\n")
+                );
+                try {
+                  await convertToDraft();
+                  await upsertComment(
+                    [
+                      COMMENT_MARKER,
+                      stateMarker(state),
+                      "",
+                      ...failureSections,
+                      "",
+                      "Draft conversion succeeded; finalising explanation…"
+                    ].join("\n")
+                  );
+                } catch (error) {
+                  draftConversionFailed = true;
+                  state.autoDraftedByBot = false;
+                  core.warning(
+                    `Could not convert pull request to draft: ${error.message}`
+                  );
+                }
               }
 
+              const draftExplanation = draftConversionFailed
+                ? "Automatic draft conversion failed (token cannot change draft status). Please convert this pull request to a draft manually. The required `enforce-target` check will keep failing until every issue above is resolved."
+                : state.autoDraftedByBot
+                  ? "This pull request is being kept as a draft automatically. Once every issue above is resolved, it will be marked ready for review again."
+                  : "This pull request was already a draft. Its draft status will be preserved after every issue above is resolved.";
+
+              const finalSections = [...failureSections];
+
+              if (hasWrongBase && state.titlePrefixedByBot) {
+                finalSections.push(
+                  "",
+                  `Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`
+                );
+              }
+
+              await upsertComment(
+                [
+                  COMMENT_MARKER,
+                  stateMarker(state),
+                  "",
+                  ...finalSections,
+                  "",
+                  draftExplanation
+                ].join("\n")
+              );
+
+              core.setFailed(`PR quality gate failed: ${failureSummary(failures)}`);
               return;
             }
 
-            // The target is correct and the workflow has nothing to restore.
             if (!storedState?.active) {
               core.info(
-                "Target branch is correct and there is no active bot state."
+                "All PR quality gates passed and there is no active bot state."
               );
 
               return;
             }
 
-            // Remove only the exact prefix added by this workflow. Other title
-            // edits made by the contributor are preserved.
             if (
               storedState.titlePrefixedByBot &&
               pr.title.startsWith(TITLE_PREFIX)
@@ -241,38 +481,57 @@ jobs:
               });
             }
 
-            // Mark the PR ready only if this workflow originally converted it
-            // to draft. Intentionally drafted PRs remain drafts.
+            let readyConversionFailed = false;
             if (
               storedState.autoDraftedByBot &&
               pr.draft
             ) {
-              await markReadyForReview();
+              try {
+                await markReadyForReview();
+              } catch (error) {
+                readyConversionFailed = true;
+                core.warning(
+                  `Could not mark pull request ready for review: ${error.message}`
+                );
+              }
             }
 
-            const completedState = {
-              version: 1,
-              active: false,
-              autoDraftedByBot: false,
-              titlePrefixedByBot: false
-            };
+            const completedState = readyConversionFailed
+              ? {
+                  version: 1,
+                  active: true,
+                  autoDraftedByBot: true,
+                  titlePrefixedByBot: false,
+                  ancestryFailed: false,
+                  descriptionFailed: false
+                }
+              : {
+                  version: 1,
+                  active: false,
+                  autoDraftedByBot: false,
+                  titlePrefixedByBot: false,
+                  ancestryFailed: false,
+                  descriptionFailed: false
+                };
 
             const titleResult = storedState.titlePrefixedByBot
               ? `The ${inlineCode(TITLE_PREFIX.trim())} title prefix has been removed.`
               : "The title was left unchanged.";
 
-            const draftResult = storedState.autoDraftedByBot
-              ? "The pull request has been marked ready for review again."
-              : "Its existing draft status has been preserved.";
+            const draftResult = readyConversionFailed
+              ? "Automatic ready-for-review conversion failed; please mark the pull request ready manually if it is still a draft."
+              : storedState.autoDraftedByBot
+                ? "The pull request has been marked ready for review again."
+                : "Its existing draft status has been preserved.";
 
             await upsertComment(
               [
                 COMMENT_MARKER,
                 stateMarker(completedState),
                 "",
-                "✅ **Target branch corrected**",
+                "✅ **PR quality gates passed**",
                 "",
-                `This pull request now targets ${inlineCode(pr.base.ref)}.`,
+                `This pull request now targets ${inlineCode(pr.base.ref)} with acceptable ancestry and description.`,
                 "",
                 `${titleResult} ${draftResult}`
               ].join("\n")

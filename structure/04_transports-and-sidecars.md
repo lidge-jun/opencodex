@@ -1,5 +1,21 @@
 # Transports And Sidecars SOT
 
+## Provider diagnostic outbound safety
+
+Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
+Direct HTTP(S) resolves once and pins the validated address; HTTPS preserves the original Host/SNI
+and always verifies certificates. Proxy-configured requests stay on Bun fetch so HTTP(S)_PROXY,
+ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies successful local DNS answers, but
+only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
+resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
+cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
+
+Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
+does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
+Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
+redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
+executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
+
 ## Responses HTTP/SSE
 
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a

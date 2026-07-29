@@ -9,7 +9,7 @@
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { enforceAnthropicImageLimits } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
-import { AnthropicRequestError, anthropicToResponsesTranslation, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { AnthropicRequestError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
@@ -523,6 +523,7 @@ export async function handleClaudeMessages(
   let anthropicBody: unknown;
   let internalBody: Rec;
   let cacheKeySource: ClaudeCacheKeySource = null;
+  let effortOverride: ReturnType<typeof extractOcxEffortDirective> = null;
   try {
     anthropicBody = await readAnthropicBody(req);
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
@@ -539,6 +540,7 @@ export async function handleClaudeMessages(
       const routeOverride = extractOcxRouteDirective(anthropicBody);
       if (routeOverride && typeof anthropicBody.model === "string") {
         anthropicBody.model = stripOneMillionMarker(routeOverride);
+        effortOverride = extractOcxEffortDirective(anthropicBody);
       }
     }
     // Debug capture (opt-in allowlist scalars) BEFORE the passthrough branch so
@@ -566,6 +568,10 @@ export async function handleClaudeMessages(
     }
     if (isRec(anthropicBody) && wantsNativePassthrough(req, config, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
+    }
+    if (isRec(anthropicBody) && effortOverride) {
+      anthropicBody.output_config = { effort: effortOverride };
+      delete anthropicBody.thinking;
     }
     const translation = anthropicToResponsesTranslation(anthropicBody, config.claudeCode);
     internalBody = translation.body;

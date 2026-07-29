@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
+import { recordOwnedConfigPath } from "./config-ownership";
 import { durableBunPath } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
 
@@ -133,6 +134,7 @@ export async function ensureWinswBinary(fetchImpl: typeof fetch = fetch): Promis
     unlinkSync(exe);
     console.warn("⚠️  Existing WinSW binary failed hash verification; re-downloading.");
   }
+  recordOwnedConfigPath(getConfigDir(), winswDir());
   if (!existsSync(winswDir())) mkdirSync(winswDir(), { recursive: true });
   let body: ArrayBuffer;
   try {

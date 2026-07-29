@@ -24,6 +24,11 @@ afterEach(() => {
 });
 
 function baseConfig(providers: OcxConfig["providers"]): OcxConfig {
+  if (globalThis.fetch !== originalFetch) {
+    for (const provider of Object.values(providers)) {
+      (provider as typeof provider & { fetch?: typeof fetch }).fetch = globalThis.fetch;
+    }
+  }
   const config = {
     port: 0,
     hostname: "127.0.0.1",
@@ -51,6 +56,28 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(status).toBe(200);
     expect(body.ok).toBe(false);
     expect(typeof body.error).toBe("string");
+  });
+
+  test("metadata endpoints stay blocked even with private-network opt-in", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(JSON.stringify({ data: [{ id: "should-not-load" }] }), { status: 200 });
+    }) as typeof fetch;
+    const config = baseConfig({
+      metadata: {
+        adapter: "openai-chat",
+        baseUrl: "http://169.254.169.254/latest/meta-data",
+        apiKey: "sk-x",
+        allowPrivateNetwork: true,
+      },
+    });
+
+    const { body } = await probe(config, "metadata");
+
+    expect(body.ok).toBe(false);
+    expect(String(body.error)).toContain("blocked metadata endpoint");
+    expect(fetches).toBe(0);
   });
 
   test("static catalog cannot masquerade as a live connection", async () => {
@@ -135,6 +162,19 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(body.models).toBe(3);
   });
 
+  test("Together-style top-level /models array is accepted (#617)", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify([{ id: "meta/llama" }, { id: "Qwen/Qwen" }]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      together: { adapter: "openai-chat", baseUrl: "https://api.together.xyz/v1", apiKey: "tg-key" },
+    });
+    const { body } = await probe(config, "together");
+    expect(body.ok).toBe(true);
+    expect(body.models).toBe(2);
+  });
+
   test("malformed 2xx data is an explicit failure, not a silent pass", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ nope: true }), {
       status: 200,
@@ -187,3 +227,4 @@ describe("POST /api/oauth/login/cancel (WP040)", () => {
     expect(ok.body).toEqual({ ok: true, cancelled: false });
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

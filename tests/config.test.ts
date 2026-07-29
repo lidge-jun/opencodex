@@ -21,6 +21,7 @@ import {
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  validateConfigCandidate,
   writeRuntimePort,
   writePid,
 } from "../src/config";
@@ -66,6 +67,25 @@ function writeResponsesPathConfig(responsesPath: string): void {
   });
 }
 
+function writeAccountNamespaceConfig(
+  codexAccountNamespaces: unknown,
+  overrides: Record<string, unknown> = {},
+): void {
+  writeConfig({
+    port: 10100,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+    defaultProvider: "openai",
+    codexAccountNamespaces,
+    ...overrides,
+  });
+}
+
 describe("opencodex config defaults", () => {
   test("atomic rename retries transient Windows sharing violations", () => {
     const sleeps: number[] = [];
@@ -103,6 +123,116 @@ describe("opencodex config defaults", () => {
   test("Codex autostart can be disabled explicitly", () => {
     expect(codexAutoStartEnabled({ codexAutoStart: false })).toBe(false);
     expect(codexAutoStartEnabled({ codexAutoStart: true })).toBe(true);
+  });
+
+  test("config candidates reject blank server hostnames", () => {
+    const base = getDefaultConfig();
+
+    expect(validateConfigCandidate({ ...base, hostname: "" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("hostname"),
+    });
+    expect(validateConfigCandidate({ ...base, hostname: "   " })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("hostname"),
+    });
+    expect(validateConfigCandidate({ ...base, hostname: "127.0.0.1" })).toMatchObject({
+      ok: true,
+      config: expect.objectContaining({ hostname: "127.0.0.1" }),
+    });
+  });
+
+  test("config candidates validate Claude Code subagent effort levels", () => {
+    const base = getDefaultConfig();
+    for (const subagentEffort of ["low", "medium", "high", "xhigh", "max"]) {
+      expect(validateConfigCandidate({
+        ...base,
+        claudeCode: { ...base.claudeCode, subagentEffort },
+      })).toMatchObject({
+        ok: true,
+        config: { claudeCode: { subagentEffort } },
+      });
+    }
+    expect(validateConfigCandidate({
+      ...base,
+      claudeCode: { ...base.claudeCode, subagentEffort: "ultra" },
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("claudeCode.subagentEffort"),
+    });
+  });
+
+  test("an invalid persisted Claude Code subagent effort is ignored without wiping config or logging its value", () => {
+    const invalidEffort = "credential-like-value";
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+      claudeCode: { subagentEffort: invalidEffort },
+    });
+
+    const config = loadConfig();
+    const diagnostics = readConfigDiagnostics();
+
+    expect(config.claudeCode?.subagentEffort).toBeUndefined();
+    expect(config).toMatchObject({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
+    });
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      warnings: [expect.stringContaining("claudeCode.subagentEffort ignored")],
+    });
+    expect(diagnostics.config.claudeCode?.subagentEffort).toBeUndefined();
+    expect(backupNames()).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls.flat().join(" ")).not.toContain(invalidEffort);
+    warnSpy.mockRestore();
+  });
+
+  test("a blank hostname already on disk degrades without wiping providers or keys", () => {
+    // Regression: rejecting a blank hostname in the schema made loadConfig fail twice
+    // (getDefaultConfig() has no hostname key, so the merge-defaults repair cannot fix
+    // one), which backed the file up and returned defaults — resetting providers and
+    // apiKeys for exactly the users the blank-hostname hardening was meant to protect.
+    writeConfig({
+      port: 12345,
+      hostname: "",
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [{ id: "key-1", name: "default", key: "ocx_persisted", createdAt: "2026-07-28T00:00:00.000Z" }],
+    });
+
+    const config = loadConfig();
+
+    expect(config.hostname).toBeUndefined();
+    expect(config).toMatchObject({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      apiKeys: [expect.objectContaining({ id: "key-1", key: "ocx_persisted" })],
+    });
+    expect(backupNames()).toEqual([]);
+  });
+
+  test("a whitespace hostname on disk is treated the same as a blank one", () => {
+    writeConfig({
+      port: 12345,
+      hostname: "   ",
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    });
+
+    const config = loadConfig();
+
+    expect(config.hostname).toBeUndefined();
+    expect(config.providers.custom.baseUrl).toBe("https://example.test/v1");
+    expect(backupNames()).toEqual([]);
   });
 
   test("Codex shim auto-restore defaults on with config and environment opt-out precedence", () => {
@@ -232,7 +362,6 @@ describe("opencodex config defaults", () => {
       },
       defaultProvider: "openai",
     };
-
     writeConfig({
       ...base,
       injectionModel: "gpt-5.6-terra",
@@ -310,6 +439,29 @@ describe("opencodex config defaults", () => {
     expect(normalized.error).toBeNull();
     expect(normalized.config.syncCodexSubagentDefaults).toBeUndefined();
     expect(loadConfig().syncCodexSubagentDefaults).toBeUndefined();
+  });
+
+  test("paused Codex account ids persist and reject malformed values", () => {
+    const base = {
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+    };
+    writeConfig({ ...base, pausedCodexAccountIds: ["__main__", "pool-a"] });
+    expect(loadConfig().pausedCodexAccountIds).toEqual(["__main__", "pool-a"]);
+
+    for (const invalid of ["pool-a", ["bad/account"], [1]]) {
+      writeConfig({ ...base, pausedCodexAccountIds: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("fallback");
+      expect(diagnostics.error).toContain("pausedCodexAccountIds");
+    }
   });
 
   test("loads valid config from OPENCODEX_HOME", () => {
@@ -989,6 +1141,170 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("openrouter/custom")).toBe(false);
     expect(isValidProviderName("__proto__")).toBe(false);
     expect(isValidProviderName("constructor")).toBe(false);
+  });
+
+  test("persists an explicit Codex account selector map without enabling it by default", () => {
+    const selectors = {
+      desktop: "@main",
+      work: "work-account",
+      legacy: "work-account",
+      poolNamedMain: "main",
+    };
+    writeAccountNamespaceConfig(selectors);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.codexAccountNamespaces).toEqual(selectors);
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountNamespaces")).toBe(false);
+  });
+
+  test("validates Claude Desktop profiles and Codex account selectors independently", () => {
+    const desktopProfile = {
+      version: 1,
+      assignments: {},
+      defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+    };
+    writeAccountNamespaceConfig({ main: "@main" }, { claudeCode: { desktopProfile } });
+    expect(readConfigDiagnostics()).toMatchObject({
+      error: null,
+      config: { claudeCode: { desktopProfile }, codexAccountNamespaces: { main: "@main" } },
+    });
+
+    writeAccountNamespaceConfig({ main: "@main" }, {
+      claudeCode: { desktopProfile: { ...desktopProfile, version: 2 } },
+    });
+    expect(readConfigDiagnostics().error).toContain("claudeCode.desktopProfile");
+
+    writeAccountNamespaceConfig({ "bad/selector": "account-id" }, { claudeCode: { desktopProfile } });
+    expect(readConfigDiagnostics().error).toContain("codexAccountNamespaces.bad/selector");
+  });
+
+  test.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "main"],
+  ] as const)("rejects Codex account selectors stored as %s", (_label, selectors) => {
+    writeAccountNamespaceConfig(selectors);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain("codexAccountNamespaces must be a plain object");
+  });
+
+  test.each([
+    ["blank", "", "side-account"],
+    ["surrounding whitespace", " side", "side-account"],
+    ["a slash", "side/account", "side-account"],
+    ["a reserved prototype key", "__proto__", "side-account"],
+    ["a reserved constructor key", "constructor", "side-account"],
+    ["an empty target", "side", ""],
+    ["the internal main account id", "side", "__main__"],
+    ["a reserved prototype target", "side", "__proto__"],
+    ["a reserved prototype-name target", "side", "prototype"],
+    ["a reserved constructor target", "side", "Constructor"],
+    ["a target with whitespace", "side", "side account"],
+    ["a target with a slash", "side", "account/id"],
+    ["an overlong target", "side", "a".repeat(65)],
+    ["a non-string target", "side", 42],
+  ] as const)("rejects %s in the Codex account selector map", (_label, selector, target) => {
+    writeAccountNamespaceConfig(Object.fromEntries([[selector, target]]));
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain(`codexAccountNamespaces.${selector}`);
+  });
+
+  test.each([
+    [
+      "a configured provider",
+      { side: "side-account" },
+      {
+        providers: {
+          side: { adapter: "openai-chat", baseUrl: "https://side.example.test/v1" },
+        },
+        defaultProvider: "side",
+      },
+      "must not collide",
+    ],
+    [
+      "a configured provider with different casing",
+      { SIDE: "side-account" },
+      {
+        providers: {
+          side: { adapter: "openai-chat", baseUrl: "https://side.example.test/v1" },
+        },
+        defaultProvider: "side",
+      },
+      "must not collide",
+    ],
+    ["the combo namespace", { combo: "side-account" }, {}, "must not collide"],
+    ["the combo namespace with different casing", { Combo: "side-account" }, {}, "must not collide"],
+    ["the canonical OpenAI namespace with different casing", { OpenAI: "side-account" }, {}, "must not collide"],
+    [
+      "the canonical OpenAI provider namespace before legacy migration",
+      { openai: "side-account" },
+      {
+        providers: {
+          "openai-multi": {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+          },
+        },
+        defaultProvider: "openai-multi",
+      },
+      "must not collide",
+    ],
+    [
+      "a combo alias prefix",
+      { side: "side-account" },
+      {
+        combos: {
+          intentional: {
+            alias: "side/gpt-5.5",
+            targets: [{ provider: "openai", model: "gpt-5.5" }],
+          },
+        },
+      },
+      "combo alias must not use a configured Codex account namespace",
+    ],
+    [
+      "a whitespace-padded combo alias prefix",
+      { side: "side-account" },
+      {
+        combos: {
+          intentional: {
+            alias: " side/gpt-5.5 ",
+            targets: [{ provider: "openai", model: "gpt-5.5" }],
+          },
+        },
+      },
+      "combo alias must not use a configured Codex account namespace",
+    ],
+    [
+      "a configured pool account id",
+      { work: "pool-a" },
+      {
+        codexAccounts: [{
+          id: "work",
+          email: "work@example.test",
+          isMain: false,
+        }],
+      },
+      "must not collide with configured Codex pool-account ids or account selector targets",
+    ],
+    [
+      "another selector target",
+      { primary: "side", side: "pool-a" },
+      {},
+      "must not collide with configured Codex pool-account ids or account selector targets",
+    ],
+  ] as const)("rejects a Codex account selector colliding with %s", (_label, selectors, overrides, error) => {
+    writeAccountNamespaceConfig(selectors, overrides);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain(error);
   });
 
   test("backs up config when defaultProvider only exists on Object prototype", () => {

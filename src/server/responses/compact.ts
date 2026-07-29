@@ -51,6 +51,7 @@ import {
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   codexProbeLeaseId,
+  codexProbeQuotaScope,
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
@@ -217,7 +218,7 @@ export async function handleResponsesCompact(
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
-        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, { modelId: selectedModelId });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
@@ -255,12 +256,17 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
-    const recordCompactPoolOutcome = (outcome: CodexUpstreamOutcome, meta: { retryAfter?: string | null } = {}) => {
+    const recordCompactPoolOutcome = (
+      outcome: CodexUpstreamOutcome,
+      meta: { retryAfter?: string | null; resetAt?: unknown | unknown[] } = {},
+    ) => {
       if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
       recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
         ...meta,
         threadId: compactThreadId,
+        modelId: selectedModelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
+        probeQuotaScope: codexProbeQuotaScope(authCtx),
       });
     };
     let upstream: Response;
@@ -283,28 +289,30 @@ export async function handleResponsesCompact(
         { abortSignal: req.signal, label: safeHostLabel(compactUrl) },
       );
     } catch (err) {
-      if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      if (req.signal.aborted) {
+        recordCompactPoolOutcome(499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
       recordCompactPoolOutcome(outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
     const retryAfter = upstream.headers.get("retry-after");
+    const resetAt = [
+      upstream.headers.get("x-codex-primary-reset-at"),
+      upstream.headers.get("x-codex-secondary-reset-at"),
+      upstream.headers.get("x-codex-tertiary-reset-at"),
+    ].filter(Boolean);
     const buffered = await bufferCompactResponse(upstream, req.signal);
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
+      recordCompactPoolOutcome(499);
       return buffered;
     }
-    if (upstream.ok && buffered.status >= 500) {
-      // The upstream account returned 200 — it is healthy. The buffering failure
-      // (oversized body exceeding COMPACT_RESPONSE_MAX_BYTES, or a rare mid-read
-      // reset on a small JSON payload) is a local proxy issue, not account flakiness.
-      // Record the upstream status so a deterministic payload-size limit does not
-      // soft-avoid a healthy account and rotate a thread for 30s.
-      recordCompactPoolOutcome(upstream.status, { retryAfter });
-    } else {
-      recordCompactPoolOutcome(upstream.status, { retryAfter });
-    }
+    // Always record the real upstream status: a local buffering failure after a
+    // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
+    recordCompactPoolOutcome(upstream.status, { retryAfter, resetAt });
     return buffered;
   }
 

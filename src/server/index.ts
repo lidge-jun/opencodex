@@ -104,8 +104,10 @@ export {
 import {
   assertServerAuthConfig,
   corsHeaders,
+  managementCorsHeaders,
   hasValidApiAuth,
   isAllowedRequestOrigin,
+  isAllowedManagementOrigin,
   isApiAuthRequired,
   isLoopbackHostname,
   jsonResponse,
@@ -114,6 +116,7 @@ import {
   safeConfigDTO,
   setCorsOrigin,
   withCors,
+  withManagementCors,
 } from "./auth-cors";
 export {
   assertServerAuthConfig,
@@ -135,6 +138,7 @@ import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
+import { initializeManagementAuthState, issueGuiSession, requireManagementAuth } from "./management-auth";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -250,6 +254,7 @@ export function startServer(port?: number) {
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
   applyProxyEnv(config);
   assertServerAuthConfig(config);
+  const managementAuth = initializeManagementAuthState(config);
   // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
   // adding/dropping models reaches existing configs on start — not just fresh installs.
   reconcileOAuthProviders(config);
@@ -314,7 +319,8 @@ export function startServer(port?: number) {
   // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
   // is 127.0.0.1, so binding literal "localhost" would reintroduce the F4 refusal. Wildcards
   // (0.0.0.0/::) and specific hosts are left untouched so intentional exposure is preserved.
-  const bindHost = /^localhost$/i.test(config.hostname ?? "") ? "127.0.0.1" : (config.hostname ?? "127.0.0.1");
+  const configuredHost = config.hostname?.trim();
+  const bindHost = !configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1" : configuredHost;
 
   // Codex treats empty / non-JSON 503 bodies as "Unknown error" (#452). Keep Retry-After and
   // the server_is_overloaded code so clients can back off, but always return a JSON envelope.
@@ -337,10 +343,17 @@ export function startServer(port?: number) {
       markActivity(`${req.method} ${url.pathname}`);
 
       if (req.method === "OPTIONS") {
-        if (!isAllowedRequestOrigin(req, config)) {
+        const managementPreflight = url.pathname.startsWith("/api/");
+        const allowed = managementPreflight
+          ? isAllowedManagementOrigin(req, config)
+          : isAllowedRequestOrigin(req, config);
+        if (!allowed) {
           return new Response(null, { status: 403, headers: corsHeaders() });
         }
-        return new Response(null, { status: 204, headers: corsHeaders(req, config) });
+        return new Response(null, {
+          status: 204,
+          headers: managementPreflight ? managementCorsHeaders(req, config) : corsHeaders(req, config),
+        });
       }
 
       // Responses WebSocket (phase 120.2). Codex upgrades the same /v1/responses path; auth is
@@ -376,10 +389,11 @@ export function startServer(port?: number) {
       }
 
       if (url.pathname.startsWith("/api/")) {
-        const apiAuthError = requireApiAuth(req, config, "management");
-        if (apiAuthError) return withCors(apiAuthError, req, config);
+        const apiAuthError = requireManagementAuth(req, managementAuth, config);
+        if (apiAuthError) return withManagementCors(apiAuthError, req, config);
         const mgmtResponse = await handleManagementAPI(req, url, config);
-        if (mgmtResponse) return withCors(mgmtResponse, req, config);
+        if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
+        return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
@@ -723,7 +737,10 @@ export function startServer(port?: number) {
         return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
 
-      const guiFile = serveGuiFile(url.pathname);
+      const guiSessionCandidate = req.method === "GET" && (url.pathname === "/" || !url.pathname.includes("."))
+        ? issueGuiSession(req, config, managementAuth)
+        : null;
+      const guiFile = serveGuiFile(url.pathname, undefined, guiSessionCandidate ?? undefined);
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {
         return jsonResponse(rootFallbackPayload());

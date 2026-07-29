@@ -221,7 +221,13 @@ describe("Kiro review regressions", () => {
       OAUTH_PROVIDERS.kiro.login = originalLogin;
     }
 
-    expect(events).toEqual(["load-config", "save-config", "settle:false"]);
+    expect(events).toEqual([
+      "load-config", // namespace preflight before browser/CLI auth
+      "load-config", // provider validation before credential persistence
+      "load-config", // latest-row upsert after credential persistence
+      "save-config",
+      "settle:false",
+    ]);
     expect(getAccountSet("kiro")?.activeAccountId).toBe(previousActive);
     expect(getAccountSet("kiro")?.accounts).toHaveLength(1);
     expect(getAccountCredential("kiro", previousActive)).toMatchObject({

@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/lidge-jun/opencodex/security/advisories/new
+    about: Report undisclosed vulnerabilities privately to the maintainers. Do not open a public issue.
   - name: Security policy
     url: https://github.com/lidge-jun/opencodex/blob/main/SECURITY.md
     about: Read the supported-version and reporting guidance before sharing security-sensitive details.

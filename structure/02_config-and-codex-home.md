@@ -107,3 +107,14 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 
 `ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip
 opencodex config and routed catalog entries without damaging native Codex state.
+
+Full `ocx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
+root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
+validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
+and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
+traversing their targets. Unknown files remain in place and make the command report a partial
+uninstall with their exact paths.
+
+Legacy nonempty config directories are deliberately not retroactively claimed. If either ownership
+file is missing, malformed, or bound to another root, uninstall refuses config deletion and reports
+the residual directory for manual review; there is no recursive-delete fallback.
