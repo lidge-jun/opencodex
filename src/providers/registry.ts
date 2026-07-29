@@ -27,11 +27,16 @@ export type ProviderModelDiscoveryPredicate =
     }
   | {
       path: readonly string[];
+      /**
+       * A string-valued upstream target uses substring matching; an array-valued target uses
+       * exact element matching. Use `equalsAny` when the string must match in full.
+       */
       containsAny: readonly ProviderModelDiscoveryScalar[];
       caseInsensitive?: boolean;
     }
   | {
       path: readonly string[];
+      /** Uses the same string-substring and array-element semantics as `containsAny`. */
       containsAll: readonly ProviderModelDiscoveryScalar[];
       caseInsensitive?: boolean;
     };
