@@ -102,6 +102,14 @@ export function selectListenTarget(
   };
 }
 
+/** Prefer live result (including authoritative null pid) over the on-disk pid file. */
+export function resolveStatusPid(
+  live: { pid: number | null } | null,
+  pidFile: number | null,
+): number | null {
+  return live ? live.pid : pidFile;
+}
+
 async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
   const url = target.healthUrl;
   const controller = new AbortController();
@@ -139,12 +147,13 @@ export async function collectStatus(): Promise<CliStatusView> {
     configFn: () => ({ port: config.port, hostname: config.hostname }),
   });
   const pidFile = readPid();
-  const pid = live?.pid ?? pidFile;
+  // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
+  const pid = resolveStatusPid(live, pidFile);
   const listen = live
     ? {
       port: live.port,
       hostname: live.hostname,
-      source: "runtime" as const,
+      source: live.source,
       healthUrl: `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
       dashboardUrl: `http://localhost:${live.port}/`,
     }
