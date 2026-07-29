@@ -16,11 +16,15 @@ Bun-native TypeScript with no separate server compile step.
   `tests/helpers/`, broader scenarios in `tests/e2e-style/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
+- `go/` — Go native runtime (primary on the `dev2-go` line during transition).
 - `structure/` — maintainer invariants and architecture notes; read before
   changing shared subsystems.
 - `scripts/` — release and maintenance tooling; `scripts/release.ts` is the
   release authority.
 - `devlog/` — planning and investigation artifacts (mostly gitignored).
+
+Read the nearest nested `AGENTS.md` before changing files in a scoped
+directory (`src/`, `gui/`, `docs-site/`, `scripts/`, `.github/`).
 
 ## Commands
 
