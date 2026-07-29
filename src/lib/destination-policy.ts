@@ -219,7 +219,7 @@ export function assessUrlDestination(url: string): UrlDestinationAssessment | nu
  * so callers can pin the connect peer and avoid a second, rebindable resolution.
  * DNS resolution failures are treated as unsafe (fail-closed).
  */
-export async function resolvePublicAddresses(url: string): Promise<{
+export async function resolvePublicAddresses(url: string, noun: string = "image"): Promise<{
   hostname: string;
   addresses: { address: string; family: number }[];
 }> {
@@ -227,12 +227,12 @@ export async function resolvePublicAddresses(url: string): Promise<{
   try {
     hostname = normalizeHostname(new URL(url.trim()).hostname);
   } catch {
-    throw new Error("image URL is not a valid URL");
+    throw new Error(`${noun} URL is not a valid URL`);
   }
-  if (!hostname) throw new Error("image URL has no hostname");
+  if (!hostname) throw new Error(`${noun} URL has no hostname`);
   const literalAssessment = assessDestination(url);
   if (literalAssessment && literalAssessment.kind !== "public" && literalAssessment.kind !== "hostname") {
-    throw new Error(`image URL targets ${literalAssessment.detail}`);
+    throw new Error(`${noun} URL targets ${literalAssessment.detail}`);
   }
   // Literal public IPs: no DNS round-trip; pin the literal itself.
   const literalKind = isIP(hostname);
@@ -245,10 +245,10 @@ export async function resolvePublicAddresses(url: string): Promise<{
   } catch {
     // If DNS fails, we can't verify — fail-closed (unlike provider config-time validation,
     // this is a runtime fetch to an untrusted URL, so be conservative).
-    throw new Error(`image URL hostname ${hostname} could not be resolved`);
+    throw new Error(`${noun} URL hostname ${hostname} could not be resolved`);
   }
   if (addresses.length === 0) {
-    throw new Error(`image URL hostname ${hostname} could not be resolved`);
+    throw new Error(`${noun} URL hostname ${hostname} could not be resolved`);
   }
   const publicAddresses: { address: string; family: number }[] = [];
   for (const { address, family } of addresses) {
@@ -257,7 +257,7 @@ export async function resolvePublicAddresses(url: string): Promise<{
     const ipKind = isIP(address) || (family === 4 || family === 6 ? family : 0);
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind !== "public") {
-      throw new Error(`image URL hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
+      throw new Error(`${noun} URL hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
     }
     publicAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
   }

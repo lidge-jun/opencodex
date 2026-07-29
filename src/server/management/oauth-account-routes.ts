@@ -10,6 +10,8 @@ import {
   multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  readConfigDiagnostics,
+  reconcileLiveConfigFromDisk,
   saveConfigPreservingClaudeCode,
 } from "../../config";
 import {
@@ -19,7 +21,6 @@ import {
   listOAuthProviders,
   startLoginFlow,
   submitManualLoginCode,
-  upsertOAuthProvider,
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
@@ -65,6 +66,7 @@ import { buildApiAccessEndpoints } from "./api-access";
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
+import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
@@ -86,6 +88,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await req.json().catch(() => ({})) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
+    if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
     const accountId = body.accountId?.trim();
     const reauth = body.reauth === true || Boolean(accountId);
     try {
@@ -96,12 +100,19 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           return jsonResponse({ error: "Unknown account for reauth" }, 404);
         }
       }
+      // Use persisted state, not the live object, as the merge base: another management
+      // request may already have mutated live config and yielded before its save.
+      const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
       const { url: authUrl, instructions, deviceCode } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
+      }, {
+        // startLoginFlow returns the authorization URL before background persistence completes.
+        // Three-way reconcile settled disk changes so a failed login cannot leave a provider
+        // live-only and an in-flight management mutation cannot be erased before it saves.
+        onSettled: () => reconcileLiveConfigFromDisk(config, persistedBaseline),
       });
-      upsertOAuthProvider(config, provider); // mutate LIVE config — routing sees it without restart
       if (authUrl && !deviceCode) {
         // Open the browser server-side (the proxy runs on the user's machine) — the GUI's
         // window.open is popup-blocked because it runs after an await, not a direct click.

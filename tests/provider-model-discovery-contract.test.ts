@@ -213,6 +213,18 @@ describe("registry-owned provider model discovery", () => {
     });
   });
 
+  test("accepts Together-style top-level /models arrays for catalog discovery (#617)", async () => {
+    await withTogetherDiscovery({}, async () => {
+      globalThis.fetch = (async () => Response.json([
+        { id: "meta/llama", type: "chat" },
+        { id: "Qwen/Qwen", type: "chat" },
+      ])) as typeof fetch;
+      const models = await gatherRoutedModels(togetherConfig());
+      expect(models.filter(model => model.provider === "together").map(model => model.id))
+        .toEqual(["meta/llama", "Qwen/Qwen"]);
+    });
+  });
+
   test("accepts only positive safe-integer token limits from live metadata", () => {
     expect(catalogHintsFromModelsApiItem("example", {
       id: "fractional",

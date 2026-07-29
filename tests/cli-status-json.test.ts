@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { selectListenTarget } from "../src/cli/status";
+import { resolveStatusPid, selectListenTarget } from "../src/cli/status";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -283,6 +283,13 @@ describe("CLI status JSON", () => {
     expect(target.port).toBe(58195);
     expect(target.healthUrl).toBe("http://127.0.0.1:58195/healthz");
     expect(target.dashboardUrl).toBe("http://localhost:58195/");
+  });
+
+  test("resolveStatusPid preserves an authoritative null from live orphan checks", () => {
+    expect(resolveStatusPid({ pid: null }, 4242)).toBeNull();
+    expect(resolveStatusPid({ pid: 1111 }, 4242)).toBe(1111);
+    expect(resolveStatusPid(null, 4242)).toBe(4242);
+    expect(resolveStatusPid(null, null)).toBeNull();
   });
 
   test("listen target brackets raw IPv6 hostnames in the health URL", () => {

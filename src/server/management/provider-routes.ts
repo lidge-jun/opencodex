@@ -35,6 +35,7 @@ import {
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { getProviderDiscoveryStatus } from "../../codex/model-cache";
@@ -104,6 +105,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     if (!isValidProviderName(name)) {
       return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
+    }
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
+    if (namespaceCollision) {
+      return jsonResponse({ error: namespaceCollision }, 409);
     }
     // Hostname destinations additionally get a DNS-resolved SSRF check at write time —
     // the sync check above only classifies literal IPs (review finding, PR #96).
@@ -376,13 +381,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             : "upstream /models returned invalid JSON",
         });
       }
-      // OpenAI-style lists must use the same validation, dedupe, and registry eligibility filter
-      // as catalog discovery. Google's /v1beta/models uses a different `models[].name` shape and
-      // remains a connectivity-only count because it is not an authoritative catalog source.
+      // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
+      // as catalog discovery. Google's /v1beta/models uses `models[].name` and remains a
+      // connectivity-only count because it is not an authoritative catalog source.
       const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
         ? bounded.value as Record<string, unknown>
         : undefined;
-      const extracted = Array.isArray(record?.data)
+      const extracted = Array.isArray(bounded.value) || Array.isArray(record?.data)
         ? extractProviderModelItems(bounded.value, discovery)
         : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
       if (!extracted.ok) {

@@ -308,14 +308,23 @@ export function extractModelEnvelopeRows(
   return { ok: true, rows };
 }
 
-/** Validate, bound, deduplicate, and declaratively filter an OpenAI `{data:[...]}` envelope. */
+/** Validate, bound, deduplicate, and declaratively filter OpenAI `{data:[...]}` or top-level arrays (Together `#617`). */
 export function extractProviderModelItems(
   value: unknown,
   discovery: ResolvedProviderModelDiscovery,
 ): ProviderModelItemsResult {
-  const envelope = extractModelEnvelopeRows(value, discovery.maxModels, ["data"]);
-  if (!envelope.ok) return envelope;
-  const data = envelope.rows;
+  const limit = positiveIntegerAtMost(discovery.maxModels, MODEL_DISCOVERY_MAX_MODELS);
+  let data: unknown[];
+  if (Array.isArray(value)) {
+    // Together-style top-level /models arrays. Catalog discovery must not treat a stray
+    // `models` key on openai-chat responses as valid — only `data` envelopes or top-level arrays.
+    if (value.length > limit) return { ok: false, reason: "too_many_models" };
+    data = value;
+  } else {
+    const envelope = extractModelEnvelopeRows(value, discovery.maxModels, ["data"]);
+    if (!envelope.ok) return envelope;
+    data = envelope.rows;
+  }
 
   const items: ProviderModelsApiItem[] = [];
   const seen = new Set<string>();

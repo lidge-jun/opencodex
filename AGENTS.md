@@ -16,11 +16,15 @@ Bun-native TypeScript with no separate server compile step.
   `tests/helpers/`, broader scenarios in `tests/e2e-style/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
+- `go/` — Go native runtime (primary on the `dev2-go` line during transition).
 - `structure/` — maintainer invariants and architecture notes; read before
   changing shared subsystems.
 - `scripts/` — release and maintenance tooling; `scripts/release.ts` is the
   release authority.
 - `devlog/` — planning and investigation artifacts (mostly gitignored).
+
+Read the nearest nested `AGENTS.md` before changing files in a scoped
+directory (`src/`, `gui/`, `docs-site/`, `scripts/`, `.github/`).
 
 ## Commands
 
@@ -52,6 +56,21 @@ non-trivial change. CI runs these on Linux, Windows, and macOS.
   from `dev` (releases, docs deploys). Do not open feature PRs against `main`.
 - `preview` — prerelease train (`x.y.z-preview.*` versions).
 
+### Transition to `dev2-go`
+
+The project is moving its primary runtime to the Go native port, so `dev2-go`
+has to keep receiving everything that lands on `dev`. Pull requests against
+`dev` stay welcome and unchanged — the extra work belongs to the maintainer who
+merges them.
+
+A merge into `dev` does not finish the task. The merging maintainer also
+rebases that work onto `dev2-go`, ports whatever needs a Go counterpart under
+`go/`, and merges the port. The item is done only when both lines carry the
+change. If a change has no Go counterpart, say so in the merge or tracking
+issue; if the port has to wait, open a `needs-go-port` tracking issue against
+`dev2-go` naming the source commits before closing out the `dev` merge.
+[`MAINTAINERS.md`](./MAINTAINERS.md) holds the authoritative wording.
+
 The Claude Desktop integration formerly carried on the `claudedesktop` branch is
 now fully merged into `dev`, and that branch has been retired. Desktop work
 continues as normal pull requests against `dev`.
@@ -60,6 +79,13 @@ Porting and rebase pull requests are welcome. Forward-porting a fix from one
 integration line to another, or rebasing a stale branch onto the current head,
 is ordinary maintenance rather than noise — open it as a normal pull request
 and name the source commits in the description.
+
+The **`enforce-target`** CI check rejects pull requests whose head
+ancestry sits on the **`main`** tip while far behind **`dev`** or **`dev2-go`**,
+and rejects empty, thin, or malformed descriptions; authors with repository
+push permission skip the ancestry heuristic only. As with approval requirements
+in [`MAINTAINERS.md`](./MAINTAINERS.md), this is enforced by convention until
+branch protection is configured.
 
 [`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for review and merge
 policy (approvals, CI requirements, security review, promotion). This file

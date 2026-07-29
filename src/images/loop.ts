@@ -1,16 +1,18 @@
 /**
- * Image bridge agentic loop — adapted from src/web-search/loop.ts but significantly simpler.
+ * Media bridge agentic loop — supports both image and video generation sidecars.
  *
  * The routed (non-OpenAI) model runs in a bounded loop. Each iteration is streamed and fully
- * buffered internally. If the model calls an image-generation tool, the bridge fulfills it via
- * the xAI sidecar, injects the result as a tool_result, and loops (bounded by maxRounds). When
- * the model produces a real tool call or the budget is exhausted, the passthrough events are
- * replayed to the bridge for final SSE output.
+ * buffered internally. If the model calls an image-generation or video-generation tool, the
+ * bridge fulfills it via the xAI sidecar, injects the result as a tool_result, and loops
+ * (bounded by maxRounds). When the model produces a real tool call or the budget is exhausted,
+ * the passthrough events are replayed to the bridge for final SSE output.
  *
  * Removed vs web-search: no sidecar backend selection, no forced-answer nudge, no failed-query
  * dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
  */
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
+import { existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
@@ -20,9 +22,11 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
-import { createImageBudget } from "./artifacts";
-import { IMAGE_GEN_TOOL_NAME } from "./synthetic-tool";
-import type { ImageBridgePlan } from "./types";
+import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
+import { submitVideoJob } from "./xai-video-client";
+import { downloadVideoToArtifact, createImageBudget, pruneArtifacts } from "./artifacts";
+import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "./synthetic-tool";
+import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -36,8 +40,10 @@ const STALL_TIMEOUT_MS = 200_000;
 export const DEFAULT_MAX_ROUNDS = 3;
 /** Absolute ceiling so a hand-edited `images.maxRounds: 10000` cannot unbound paid xAI calls. */
 export const MAX_ROUNDS_HARD_LIMIT = 10;
-/** Cap paid xAI fulfillments per turn (parallel calls in one round count separately). */
+/** Cap paid xAI image fulfillments per turn (parallel calls in one round count separately). */
 export const MAX_IMAGE_CALLS_PER_TURN = 10;
+/** Cap paid xAI video fulfillments per turn (video is slower/costlier than image). */
+export const MAX_VIDEO_CALLS_PER_TURN = 3;
 
 /**
  * Clamp a configured maxRounds value to a safe integer in [0, MAX_ROUNDS_HARD_LIMIT].
@@ -48,23 +54,27 @@ export function clampImageMaxRounds(value: unknown): number {
   return Math.max(0, Math.min(MAX_ROUNDS_HARD_LIMIT, Math.floor(value)));
 }
 
-/** Drop image-specific tool_choice when image tools are stripped for a forced-final pass. */
-function stripImageToolChoice(
+/** Drop image/video-specific tool_choice when media tools are stripped for a forced-final pass. */
+function stripMediaToolChoice(
   options: OcxRequestOptions,
-  plan: ImageBridgePlan,
+  plan?: ImageBridgePlan,
+  videoPlan?: VideoBridgePlan,
 ): OcxRequestOptions {
   const tc = options.toolChoice;
   if (!tc || typeof tc !== "object") return options;
+  const isMediaTool = (name: string): boolean =>
+    name === IMAGE_GEN_TOOL_NAME ||
+    name === VIDEO_GEN_TOOL_NAME ||
+    (plan?.toolNames.has(name) ?? false) ||
+    (videoPlan?.toolNames.has(name) ?? false);
   if ("name" in tc && typeof tc.name === "string") {
-    if (tc.name === IMAGE_GEN_TOOL_NAME || plan.toolNames.has(tc.name)) {
+    if (isMediaTool(tc.name)) {
       return { ...options, toolChoice: "auto" };
     }
     return options;
   }
   if ("allowedTools" in tc && Array.isArray(tc.allowedTools)) {
-    const filtered = tc.allowedTools.filter(
-      (name) => name !== IMAGE_GEN_TOOL_NAME && !plan.toolNames.has(name),
-    );
+    const filtered = tc.allowedTools.filter(name => !isMediaTool(name));
     if (filtered.length === tc.allowedTools.length) return options;
     if (filtered.length === 0) return { ...options, toolChoice: "auto" };
     return { ...options, toolChoice: { ...tc, allowedTools: filtered } };
@@ -190,7 +200,10 @@ class LoopError extends Error {
 export interface ImageBridgeDeps {
   parsed: OcxParsedRequest;
   adapter: ProviderAdapter;
-  plan: ImageBridgePlan;
+  plan?: ImageBridgePlan;
+  videoPlan?: VideoBridgePlan;
+  /** Per-video generation timeout (ms) including polling. */
+  videoTimeoutMs?: number;
   /** Headers forwarded from the original request (e.g. Codex auth). Cloned per iteration. */
   forwardHeaders?: Headers;
   /** Called before each routed-model dispatch in the bridge loop, for attempt telemetry. */
@@ -227,7 +240,7 @@ export interface ImageBridgeDeps {
  * inject the answer as a tool_result, and loop (bounded by `maxRounds`).
  */
 export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Response> {
-  const { parsed, plan, abortSignal } = deps;
+  const { parsed, plan, videoPlan, videoTimeoutMs, abortSignal } = deps;
   let adapter = deps.adapter;
   const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
   const HARD_CAP = maxRounds + 1;
@@ -239,6 +252,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     : STALL_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   let paidImageCalls = 0;
+  let paidVideoCalls = 0;
   let hiddenUsage: OcxUsage | undefined;
 
   const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined): OcxUsage | undefined => {
@@ -275,17 +289,24 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
 
   const messages: OcxMessage[] = [...parsed.context.messages];
   const allTools = parsed.context.tools ?? [];
-  // Forced-final must strip every image-generation alias the plan knows about — not only tools
-  // flagged `imageGeneration:true`. Hosted `image_generation` / function aliases would otherwise
-  // remain callable; scanEventsForImageCall would strip the call while forceFinal blocks fulfillment,
-  // leaving the client an empty completion.
-  const toolsNoImage = allTools.filter(t => {
+  // Merge tool names from both plans for event scanning.
+  const mediaToolNames = new Set<string>();
+  if (plan) for (const n of plan.toolNames) mediaToolNames.add(n);
+  if (videoPlan) for (const n of videoPlan.toolNames) mediaToolNames.add(n);
+  // Forced-final must strip every image/video-generation alias the plans know about — not only
+  // tools flagged `imageGeneration:true` or `videoGeneration:true`. Hosted `image_generation` /
+  // function aliases would otherwise remain callable; scanEventsForImageCall would strip the
+  // call while forceFinal blocks fulfillment, leaving the client an empty completion.
+  const toolsNoMedia = allTools.filter(t => {
     if (t.imageGeneration) return false;
-    if (plan.toolNames.has(t.name)) return false;
-    if (t.namespace && plan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+    if (t.videoGeneration) return false;
+    if (plan && plan.toolNames.has(t.name)) return false;
+    if (plan && t.namespace && plan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+    if (videoPlan && videoPlan.toolNames.has(t.name)) return false;
     return true;
   });
   const budget = createImageBudget();
+  const vBudget = createVideoBudget();
 
   // Link an internal AbortController to the turn signal so a client cancel of the SSE body aborts
   // in-flight model fetches AND the sidecar.
@@ -310,8 +331,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     const iterParsed: OcxParsedRequest = {
       ...parsed,
       stream: true,
-      context: { ...parsed.context, messages, tools: forceFinal ? toolsNoImage : allTools },
-      options: forceFinal ? stripImageToolChoice(parsed.options, plan) : parsed.options,
+      context: { ...parsed.context, messages, tools: forceFinal ? toolsNoMedia : allTools },
+      options: forceFinal ? stripMediaToolChoice(parsed.options, plan, videoPlan) : parsed.options,
     };
 
     // runTurn adapters (Cursor) own all upstream communication via an emit callback. They don't
@@ -500,7 +521,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
     const terminal = events[terminalIndexes[0]!];
     if (terminal.type === "error") throw new LoopError(502, terminal.message);
-    return scanEventsForImageCall(events, plan.toolNames);
+    return scanEventsForImageCall(events, mediaToolNames);
   };
 
   // Eagerly acquire only the FIRST iteration's final headers so connect/header/HTTP failures remain
@@ -566,38 +587,147 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Discarded iteration still contributed tokens — accumulate for the final onUsage.
           takeUsageFrom(split.passthrough);
 
-          // Fulfill each image call, then inject ONE assistant turn (thinking once + all tool
+          // Fulfill each image/video call, then inject ONE assistant turn (thinking once + all tool
           // calls) so Anthropic extended-thinking continuations stay valid across parallel calls.
           const iterationThinking = extractIterationThinking(split.passthrough);
           const fulfilled: Array<{ call: ImageCall; result: Awaited<ReturnType<typeof fulfillImageCall>>; args: Record<string, unknown> }> = [];
           for (const call of split.calls) {
-            yield { type: "heartbeat" };
-            let result: Awaited<ReturnType<typeof fulfillImageCall>>;
-            if (paidImageCalls >= MAX_IMAGE_CALLS_PER_TURN) {
-              result = {
-                ok: false,
-                model: plan.model,
-                prompt: "",
-                files: [],
-                count: 0,
-                error: `image call budget exhausted (max ${MAX_IMAGE_CALLS_PER_TURN} per turn)`,
-              };
-            } else {
-              paidImageCalls += 1;
-              result = await fulfillImageCall(
-                { id: call.id, name: call.name, arguments: call.args },
-                plan, budget, signal,
-              );
-            }
-            if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-            let parsedArgs: Record<string, unknown> = {};
-            try {
-              const raw: unknown = JSON.parse(call.args || "{}");
-              if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-                parsedArgs = raw as Record<string, unknown>;
+            const isVideoCall = videoPlan?.toolNames.has(call.name) === true;
+            if (isVideoCall) {
+              yield { type: "heartbeat" };
+              if (paidVideoCalls >= MAX_VIDEO_CALLS_PER_TURN) {
+                const vResult = {
+                  ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                  error: `video call budget exhausted (max ${MAX_VIDEO_CALLS_PER_TURN} per turn)`,
+                };
+                let pArgs: Record<string, unknown> = {};
+                try { const raw: unknown = JSON.parse(call.args || "{}"); if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) pArgs = raw as Record<string, unknown>; } catch { /* malformed args */ }
+                fulfilled.push({ call, result: vResult, args: pArgs });
+                continue;
               }
-            } catch { /* malformed args */ }
-            fulfilled.push({ call, result, args: parsedArgs });
+              const vArgs = parseVideoCallArgs(call.args);
+              let vResult;
+              if (!vArgs.ok) {
+                vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
+              } else {
+                paidVideoCalls += 1;
+                const videoTimeout = videoTimeoutMs ?? 300_000;
+                const deadlineSignal = AbortSignal.timeout(videoTimeout);
+                try {
+                  const videoDeadline = Date.now() + videoTimeout;
+                  // Bind submit to the shared deadline so submit + poll fit one budget.
+                  const linkedDeadline = signal
+                    ? AbortSignal.any([signal, deadlineSignal])
+                    : deadlineSignal;
+                  const { requestId } = await submitVideoJob(
+                    {
+                      prompt: vArgs.prompt, model: videoPlan!.model,
+                      ...(vArgs.duration != null ? { duration: vArgs.duration } : {}),
+                      ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
+                      ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
+                    },
+                    videoPlan!.auth, linkedDeadline,
+                  );
+                  const remainingMs = videoDeadline - Date.now();
+                  if (remainingMs <= 0) {
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
+                  } else {
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, linkedDeadline, remainingMs);
+                  let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
+                  try {
+                    for (;;) {
+                      const { value, done } = await pollGen.next();
+                      if (done) { pollResult = value; break; }
+                      yield { type: "heartbeat" };
+                    }
+                  } finally {
+                    await pollGen.return({ ok: false, error: "cancelled" }).catch(() => {});
+                  }
+                  if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
+                  if (pollResult.ok) {
+                    const dlPath = await downloadVideoToArtifact(pollResult.videoUrl, vBudget, signal);
+                    vResult = buildVideoResult(dlPath, vArgs.prompt, videoPlan!.model);
+                  } else {
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: pollResult.error };
+                  }
+                  }
+                } catch (e) {
+                  if (deadlineSignal.aborted && !signal.aborted) {
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
+                  } else if (signal.aborted) {
+                    throw new LoopError(499, "client closed request during video-bridge");
+                  } else {
+                    const error = e instanceof Error ? e.message : String(e);
+                    vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt ?? "", files: [], count: 0, error };
+                  }
+                }
+              }
+              if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
+              let vParsedArgs: Record<string, unknown> = {};
+              try { const raw: unknown = JSON.parse(call.args || "{}"); if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) vParsedArgs = raw as Record<string, unknown>; } catch { /* malformed args */ }
+              fulfilled.push({ call, result: vResult, args: vParsedArgs });
+            } else {
+              yield { type: "heartbeat" };
+              if (!plan) {
+                fulfilled.push({ call, result: { ok: false, model: "", prompt: "", files: [], count: 0, error: "image bridge not configured" }, args: {} });
+                continue;
+              }
+              let result: Awaited<ReturnType<typeof fulfillImageCall>>;
+              if (paidImageCalls >= MAX_IMAGE_CALLS_PER_TURN) {
+                result = {
+                  ok: false,
+                  model: plan.model,
+                  prompt: "",
+                  files: [],
+                  count: 0,
+                  error: `image call budget exhausted (max ${MAX_IMAGE_CALLS_PER_TURN} per turn)`,
+                };
+              } else {
+                paidImageCalls += 1;
+                result = await fulfillImageCall(
+                  { id: call.id, name: call.name, arguments: call.args },
+                  plan, budget, signal,
+                );
+              }
+              if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+              let parsedArgs: Record<string, unknown> = {};
+              try {
+                const raw: unknown = JSON.parse(call.args || "{}");
+                if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+                  parsedArgs = raw as Record<string, unknown>;
+                }
+              } catch { /* malformed args */ }
+              fulfilled.push({ call, result, args: parsedArgs });
+            }
+          }
+          // Prune artifacts once after the entire batch so a tight keepCount
+          // cannot delete a video from an earlier call in this same iteration.
+          pruneArtifacts(videoPlan?.artifactsKeepCount ?? plan?.artifactsKeepCount);
+          // Drop results whose artifact files were pruned — never hand the model a dead path.
+          for (const f of fulfilled) {
+            if (!f.result.ok || !f.result.files || f.result.files.length === 0) continue;
+            const survivors = f.result.files.filter(p => existsSync(p));
+            if (survivors.length === f.result.files.length) continue; // nothing pruned
+            if (survivors.length === 0) {
+              f.result = {
+                ok: false, model: f.result.model, prompt: f.result.prompt ?? "",
+                files: [], count: 0,
+                error: "artifact was pruned before delivery (increase artifactsKeepCount)",
+              } as typeof f.result;
+            } else {
+              // Some files survived — refresh from survivors
+              f.result = { ...f.result, files: survivors, count: survivors.length };
+              const primary = survivors[0]!;
+              (f.result as { path?: string }).path = primary;
+              if ("markdown" in f.result && f.result.markdown) {
+                // Image markdown references the primary path; video uses pathToFileURL
+                if (f.result.markdown.startsWith("![")) {
+                  (f.result as { markdown: string }).markdown = `![image](${pathToFileURL(primary).href})`;
+                } else {
+                  (f.result as { markdown: string }).markdown = `[video](${pathToFileURL(primary).href})`;
+                }
+              }
+            }
           }
           const now = Date.now();
           messages.push({

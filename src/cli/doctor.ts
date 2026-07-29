@@ -11,6 +11,7 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntimePort, resolveEnvValue } from "../config";
+import { findLiveProxy } from "../server/proxy-liveness";
 import { gracefulStopHost } from "../lib/process-control";
 import { maskAccountId } from "../lib/privacy";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
@@ -718,9 +719,21 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     }
   }
 
+  // #618: identity-verified liveness first so pid-file absence does not hide a live service.
+  // Reuse the diagnostics config already loaded above so doctor stays read-only on malformed JSON.
+  const live = await findLiveProxy({
+    configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
+  });
+  const livePid = live ? live.pid : readPid();
+  const liveRuntime = live
+    ? { pid: live.pid ?? 0, port: live.port, hostname: live.hostname }
+    : (livePid ? readRuntimePort(livePid) : null);
+
   const currentProxyEnv = collectProxyEnv();
   const configuredProxy = collectConfiguredProxy();
-  const runningProxyEnv = collectRunningProxyEnv();
+  const runningProxyEnv = collectRunningProxyEnv({
+    readPidFn: () => (live ? live.pid : readPid()),
+  });
 
   console.log("\nCurrent doctor process proxy env (presence only)");
   for (const row of currentProxyEnv) {
@@ -742,17 +755,10 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     }
   }
 
-  // #314: service-process memory/runtime identity via the authed management
-  // endpoint. readPid() FIRST (liveness), then the pid-scoped runtime record —
-  // readRuntimePort alone can serve a stale file pointing at a foreign port.
-  // Hoisted out of the block below: the Hints section reuses the same liveness pair
-  // for the proxy-down restart hint.
-  const livePid = readPid();
-  const liveRuntime = livePid ? readRuntimePort(livePid) : null;
   console.log("\nMemory / runtime");
   {
     const runtime = liveRuntime;
-    if (!runtime) {
+    if (!runtime || !live) {
       console.log(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
       console.log("  --     no running ocx proxy found (no live pid/runtime record)");
     } else {
@@ -815,8 +821,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   // Hints, not fixes.
   const hints: string[] = [];
   const proxyDown = proxyDownRestartHint({
-    proxyRunning: Boolean(livePid && liveRuntime),
-    port: doctorConfig.port ?? 10100,
+    proxyRunning: Boolean(live),
+    port: live?.port ?? doctorConfig.port ?? 10100,
     serviceViable: startup.serviceViable,
   });
   if (proxyDown) hints.push(proxyDown);

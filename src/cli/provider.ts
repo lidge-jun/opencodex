@@ -15,6 +15,7 @@ import { providerConfigSeed } from "../providers/derive";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
+import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 // ---------------------------------------------------------------------------
 // Arg helpers
@@ -152,6 +153,12 @@ async function handleAdd(args: string[]): Promise<void> {
   rejectUnknownArgs(restArgs, ADD_USAGE);
 
   const config = loadConfig();
+
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
+  if (namespaceCollision) {
+    console.error(`Error: ${namespaceCollision}.`);
+    process.exit(1);
+  }
 
   if (hasOwnProvider(config.providers, name) && !force) {
     console.error(`Provider "${name}" already exists. Use --force to overwrite.`);

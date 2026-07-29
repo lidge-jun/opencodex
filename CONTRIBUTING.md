@@ -19,6 +19,13 @@ Thanks for helping with opencodex.
 - `main` — releases only; moves by maintainer-controlled promotion from `dev`.
 - `preview` — prerelease train.
 
+While the project moves its primary runtime to the Go native port, `dev2-go`
+has to keep receiving everything that lands on `dev`. Nothing changes for
+contributors: keep opening pull requests against `dev`. After merging, a
+maintainer rebases the work onto `dev2-go` and ports whatever needs a Go
+counterpart, and the item is finished only once both lines carry it. See
+[`MAINTAINERS.md`](./MAINTAINERS.md) for the full rule.
+
 Porting and rebase pull requests are welcome: carrying a fix across integration
 lines, or rebasing a stale branch onto the current head, is normal
 contribution. Note the source commits in the description.

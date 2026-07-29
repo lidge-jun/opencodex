@@ -2,6 +2,8 @@ import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 
+export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
+
 export function useAddProviderOAuth({
   apiBase,
   t,
@@ -52,17 +54,17 @@ export function useAddProviderOAuth({
       if (data.url) { setOauthUrl(data.url, providerId); setOauthMsg(t("modal.waitingLogin")); }
       else { setOauthMsg(data.instructions || t("modal.loggingIn")); }
       for (let i = 0; i < 100; i++) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
         const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string }>(sRes) : null;
         if (!aliveRef.current) return;
-        if (s?.loggedIn) { onAdded(providerId); return; }
         if (s?.error) {
           setOauthMsgTone("warn");
           setOauthMsg(t("modal.loginError", { error: s.error }));
           return;
         }
+        if (s?.loggedIn) { onAdded(providerId); return; }
       }
       setOauthMsgTone("warn");
       setOauthMsg(t("modal.loginTimeout"));

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync, unlinkSync, existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, open, unlink } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import type { RequestOptions } from "node:https";
@@ -474,4 +474,148 @@ export async function downloadImageToArtifact(
 
   // Retention is post-batch via pruneArtifacts (see fulfill.ts).
   return writeArtifactUnique(dir, "dl-", bytes, ext);
+}
+
+const MAX_VIDEO_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MiB
+/** Aggregate per-turn video download cap (600 MiB = 3 × max single download). */
+const MAX_VIDEO_BYTES_PER_TURN = MAX_VIDEO_DOWNLOAD_BYTES * 3;
+
+export interface VideoBudget {
+  spent: number;
+  /** Ceiling on total bytes across all downloads this turn. */
+  cap: number;
+}
+
+export function createVideoBudget(): VideoBudget {
+  return { spent: 0, cap: MAX_VIDEO_BYTES_PER_TURN };
+}
+
+/** Charge bytes to the budget; returns false if the ceiling would be exceeded. */
+export function chargeVideoBudget(budget: VideoBudget, bytes: number): boolean {
+  if (budget.spent + bytes > budget.cap) return false;
+  budget.spent += bytes;
+  return true;
+}
+
+export function guessVideoExtFromMagic(bytes: Uint8Array): string {
+  if (bytes.byteLength < 12) throw new Error("video data too short for magic byte sniffing");
+  const sig = Buffer.from(bytes.slice(0, 12)).toString("latin1");
+  // MP4/QuickTime/MOV: bytes 4-7 == "ftyp" (ISO BMFF)
+  if (sig.slice(4, 8) === "ftyp") return "mp4";
+  // WebM/Matroska: \x1a\x45\xdf\xa3
+  if (sig.startsWith("\x1a\x45\xdf\xa3")) return "webm";
+  throw new Error("unrecognized video format — magic bytes do not match MP4 or WebM");
+}
+
+/**
+ * Download a video from a URL to an artifact file with a 200 MiB hard cap, streaming the body
+ * to disk to avoid buffering. SSRF protection reuses the same destination policy + pinned HTTPS
+ * as image downloads. Format is sniffed from magic bytes.
+ */
+export async function downloadVideoToArtifact(
+  url: string,
+  budget?: VideoBudget,
+  signal?: AbortSignal,
+): Promise<string> {
+  // For data: URLs, handle inline (unlikely for video but keep parity)
+  if (url.startsWith("data:")) {
+    const commaIdx = url.indexOf(",");
+    const meta = url.slice(0, commaIdx);
+    const data = url.slice(commaIdx + 1);
+    const isBase64 = meta.includes(";base64");
+    if (!isBase64) throw new Error("non-base64 data URI for video is not supported");
+    const buf = Buffer.from(data, "base64");
+    if (budget && !chargeVideoBudget(budget, buf.byteLength)) {
+      throw new Error("video data URI exceeds per-turn download budget");
+    }
+    if (buf.byteLength > MAX_VIDEO_DOWNLOAD_BYTES) throw new Error("video data URI exceeds size cap");
+    const ext = guessVideoExtFromMagic(buf);
+    const dir = getArtifactsDir();
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
+    const dest = join(dir, name);
+    await writeFile(dest, buf, { mode: 0o600 });
+    return dest;
+  }
+
+  // SSRF protection: same validation as downloadImageToArtifact
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { throw new Error("video URL is not valid"); }
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(`video URL must use HTTPS, got ${parsedUrl.protocol}`);
+  }
+  const assessment = assessUrlDestination(url);
+  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
+    throw new Error(`video URL targets ${assessment.detail}`);
+  }
+  const resolved = await resolvePublicAddresses(url, "video");
+  const pinned = pickPinnedAddress(resolved.addresses);
+  const resp = await pinnedHttpsGet(url, pinned, signal, { maxBytes: MAX_VIDEO_DOWNLOAD_BYTES });
+  if (!resp.ok) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw new Error("video download failed: " + resp.status);
+  }
+
+  const dir = getArtifactsDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+
+  const reader = resp.body?.getReader();
+  if (!reader) throw new Error("video download returned no body");
+
+  // Buffer at least 12 bytes for magic-byte sniffing before opening the file.
+  // A single read() can return fewer bytes; accumulate until we have enough.
+  let dest: string | undefined;
+  let fh: { close(): Promise<void>; writeFile(data: Uint8Array): Promise<void> } | undefined;
+  try {
+    const sniffChunks: Uint8Array[] = [];
+    let sniffLen = 0;
+    while (sniffLen < 12) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      sniffChunks.push(value);
+      sniffLen += value.byteLength;
+    }
+    if (sniffLen === 0) {
+      throw new Error("video download returned empty body");
+    }
+    const sniffBuf = Buffer.concat(sniffChunks);
+    const ext = guessVideoExtFromMagic(new Uint8Array(sniffBuf));
+    const name = `vid-${timestampPrefix()}-${crypto.randomUUID()}.${ext}`;
+    dest = join(dir, name);
+    fh = await open(dest, "w", 0o600);
+    // Write all buffered chunks and set up accounting
+    let totalBytes = sniffBuf.byteLength;
+    if (budget && !chargeVideoBudget(budget, totalBytes)) {
+      throw new Error("video download exceeds per-turn budget");
+    }
+    if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
+      throw new Error("video download exceeds size cap");
+    }
+    await fh.writeFile(new Uint8Array(sniffBuf));
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (budget && !chargeVideoBudget(budget, value.byteLength)) {
+        throw new Error("video download exceeds per-turn budget");
+      }
+      if (totalBytes > MAX_VIDEO_DOWNLOAD_BYTES) {
+        throw new Error("video download exceeds size cap");
+      }
+      await fh.writeFile(value);
+    }
+    await fh.close();
+    try { await reader.cancel(); } catch { /* ignore */ }
+    reader.releaseLock();
+    return dest;
+  } catch (err) {
+    try { await reader.cancel(); } catch { /* ignore */ }
+    reader.releaseLock();
+    if (fh) {
+      try { await fh.close(); } catch { /* ignore */ }
+    }
+    if (dest) await unlink(dest).catch(() => {});
+    throw err;
+  }
 }

@@ -1,5 +1,12 @@
 let installed = false;
+/** Shared 401 refresh gate — concurrent waiters join one prompt / token resolution. */
 let promptInFlight: Promise<string | null> | null = null;
+/**
+ * After the user cancels (or submits blank) once, suppress further prompts for this page
+ * lifetime so a staggered 401 fan-out does not reopen the dialog N times (#647 / Codex).
+ * A full reload clears module state and allows prompting again.
+ */
+let promptCancelled = false;
 
 function needsApiAuth(input: RequestInfo | URL): boolean {
   try {
@@ -31,6 +38,11 @@ function clearToken(): void {
   memoryToken = null;
 }
 
+/** Clear memory only when it still holds `expected` (avoid wiping a newer concurrent store). */
+function clearTokenIfCurrent(expected: string | null): void {
+  if (expected != null && readToken() === expected) clearToken();
+}
+
 function clearLegacySessionToken(): void {
   try {
     sessionStorage.removeItem(LEGACY_TOKEN_KEY);
@@ -46,11 +58,31 @@ function withToken(input: RequestInfo | URL, init: RequestInit | undefined, toke
   return [input, { ...init, headers }];
 }
 
-async function promptForToken(): Promise<string | null> {
+/**
+ * Resolve a token after a 401. Concurrent callers share one in-flight resolution so a dashboard
+ * fan-out does not open one window.prompt per /api request (#647). Re-reads memoryToken before
+ * prompting so waiters that wake after another request already stored a token do not re-prompt.
+ */
+async function resolveTokenAfter401(failedToken: string | null): Promise<string | null> {
+  if (promptCancelled) return null;
   if (promptInFlight) return promptInFlight;
-  promptInFlight = Promise.resolve()
-    .then(() => window.prompt("OpenCodex API token")?.trim() || null)
-    .finally(() => { promptInFlight = null; });
+
+  promptInFlight = (async () => {
+    if (promptCancelled) return null;
+    const current = readToken();
+    if (current && current !== failedToken) return current;
+
+    const prompted = window.prompt("OpenCodex API token")?.trim() || null;
+    if (prompted) {
+      storeToken(prompted);
+      return prompted;
+    }
+    promptCancelled = true;
+    return null;
+  })().finally(() => {
+    promptInFlight = null;
+  });
+
   return promptInFlight;
 }
 
@@ -68,14 +100,23 @@ export function installApiAuthFetch(): void {
     const response = await originalFetch(firstInput, firstInit);
     if (response.status !== 401) return response;
 
-    if (token) clearToken();
-    const nextToken = await promptForToken();
+    // Another request may have stored a token while this one was in flight (or while prompt blocked).
+    const refreshed = readToken();
+    if (refreshed && refreshed !== token) {
+      const [retryInput, retryInit] = withToken(input, init, refreshed);
+      const retry = await originalFetch(retryInput, retryInit);
+      if (retry.status !== 401) return retry;
+      clearTokenIfCurrent(refreshed);
+    } else {
+      clearTokenIfCurrent(token);
+    }
+
+    const nextToken = await resolveTokenAfter401(token);
     if (!nextToken) return response;
 
-    storeToken(nextToken);
     const [retryInput, retryInit] = withToken(input, init, nextToken);
     const retry = await originalFetch(retryInput, retryInit);
-    if (retry.status === 401) clearToken();
+    if (retry.status === 401) clearTokenIfCurrent(nextToken);
     return retry;
   };
 }
@@ -85,4 +126,5 @@ export function resetApiAuthFetchForTests(): void {
   installed = false;
   memoryToken = null;
   promptInFlight = null;
+  promptCancelled = false;
 }

@@ -69,7 +69,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   }, [load]);
 
   const modelOptions = useMemo(() => {
-    const options = (state?.available ?? []).map(m => ({ value: m, label: String(modelLabel(m)) }));
+    const options = (state?.available ?? []).map(m => ({ value: m, label: modelLabel(m) }));
     return [{ value: "", label: t("claude.smallFastModelUnsetOption") }, ...options];
   }, [state?.available, t]);
 
