@@ -6,6 +6,7 @@ import {
   armClaudeCodeBaseline,
   getConfigPath,
   loadConfig,
+  reconcileLiveConfigFromDisk,
   saveConfig,
   saveConfigPreservingClaudeCode,
 } from "../src/config";
@@ -134,6 +135,42 @@ test("our own change wins a conflict and rebases the baseline", () => {
   live.port = 10102;
   saveConfigPreservingClaudeCode(live);
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
+});
+
+test("OAuth reconciliation keeps a pending live Claude subtree authoritative", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  const persistedBaseline = loadConfig();
+  live.claudeCode = { authMode: "subscription", systemEnv: true };
+  live.disabledModels = ["pending/model"];
+  writeDiskConfig({
+    claudeCode: { authMode: "proxy" },
+    contextCapValue: 240_000,
+  });
+
+  reconcileLiveConfigFromDisk(live, persistedBaseline);
+
+  expect(live.claudeCode).toEqual({ authMode: "subscription", systemEnv: true });
+  expect(live.disabledModels).toEqual(["pending/model"]);
+  expect(live.contextCapValue).toBe(240_000);
+
+  saveConfigPreservingClaudeCode(live);
+  expect(diskConfig().claudeCode).toEqual({ authMode: "subscription", systemEnv: true });
+  expect(diskConfig().disabledModels).toEqual(["pending/model"]);
+  expect(diskConfig().contextCapValue).toBe(240_000);
+});
+
+test("OAuth reconciliation adopts a guarded Claude edit that predates its disk snapshot", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  writeDiskConfig({ claudeCode: { authMode: "proxy" } });
+  const persistedBaseline = loadConfig();
+
+  reconcileLiveConfigFromDisk(live, persistedBaseline);
+
+  expect(live.claudeCode).toEqual({ authMode: "proxy" });
+  saveConfigPreservingClaudeCode(live);
+  expect(diskConfig().claudeCode).toEqual({ authMode: "proxy" });
 });
 
 // Structural compare, not JSON.stringify: key order must not fake an external edit.

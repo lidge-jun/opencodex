@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import AddProviderModal from "../src/components/AddProviderModal";
+import { OAUTH_LOGIN_POLL_INTERVAL_MS } from "../src/components/use-add-provider-oauth";
 
 /**
  * The add-provider OAuth pane renders the authorization URL so a user whose
@@ -23,6 +24,7 @@ let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let pendingLogins: Array<(url: string) => void> = [];
+let oauthStatus: { loggedIn: boolean; error?: string } = { loggedIn: false };
 
 const PRESETS = [
   { id: "claude", label: "Claude", adapter: "anthropic", baseUrl: "https://api.anthropic.com", auth: "oauth", oauthProvider: "claude" },
@@ -43,6 +45,7 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
   pendingLogins = [];
+  oauthStatus = { loggedIn: false };
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -56,7 +59,7 @@ beforeEach(() => {
           pendingLogins.push((authUrl: string) => resolve(Response.json({ url: authUrl })));
         });
       }
-      if (url.pathname === "/api/oauth/status") return Response.json({ loggedIn: false });
+      if (url.pathname === "/api/oauth/status") return Response.json(oauthStatus);
       return Response.json({});
     },
   });
@@ -78,13 +81,13 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function mountModal() {
+async function mountModal(onAdded: (name: string) => void = () => {}) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
     root.render(
       <LanguageProvider>
-        <AddProviderModal apiBase="" existingNames={[]} initialTier="paid" onClose={() => {}} onAdded={() => {}} />
+        <AddProviderModal apiBase="" existingNames={[]} initialTier="paid" onClose={() => {}} onAdded={onAdded} />
       </LanguageProvider>,
     );
   });
@@ -166,4 +169,47 @@ test("a late URL for an abandoned provider cannot overwrite the one already show
 
   expect(host.querySelector(".login-url-block-text")?.textContent).toBe(B_URL);
   expect(host.textContent).not.toContain(A_URL);
+});
+
+test("a login error wins over a retained OAuth credential", async () => {
+  const added: string[] = [];
+  oauthStatus = {
+    loggedIn: true,
+    error: "The credential was saved, but the provider entry was not written.",
+  };
+  const realSetTimeout = globalThis.setTimeout;
+  const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: (...args: unknown[]) => void,
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    if (delay === OAUTH_LOGIN_POLL_INTERVAL_MS) {
+      queueMicrotask(() => callback(...args));
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }
+    return realSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout);
+
+  try {
+    await mountModal(name => added.push(name));
+    await act(async () => {
+      clickByText("Claude");
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await act(async () => {
+      clickByText("Log in with Claude");
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(pendingLogins).toHaveLength(1);
+    await act(async () => {
+      pendingLogins.shift()!(A_URL);
+      await new Promise((r) => setTimeout(r, 40));
+    });
+
+    expect(added).toEqual([]);
+    expect(host.textContent).toContain("provider entry was not written");
+  } finally {
+    timeoutSpy.mockRestore();
+  }
 });

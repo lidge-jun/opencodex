@@ -682,6 +682,12 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /**
+   * Public model-selector namespaces bound to one Codex account. Values are stored account ids;
+   * `"@main"` selects the Codex Desktop/main auth.json account. Account display aliases
+   * are intentionally separate from these selectors.
+   */
+  codexAccountNamespaces?: Record<string, string>;
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
