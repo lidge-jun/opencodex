@@ -23,6 +23,27 @@ through GitHub repository settings.
   distinguish scoped Go port work from anything else aimed at `dev2-go`, so
   that boundary is enforced in review: redirect an out-of-scope pull request to
   `dev` rather than treating the automation's silence as approval.
+- **Transition to `dev2-go` (current phase).** The project is moving its
+  primary runtime to the Go native port, so `dev2-go` has to keep receiving
+  everything that lands on `dev`. Contributors still open pull requests against
+  `dev`, and that stays allowed — the extra work is the maintainer's, not
+  theirs. A merge into `dev` is therefore not the end of the task. The
+  maintainer who merges it also rebases that work onto `dev2-go`, ports
+  whatever needs a Go counterpart under `go/`, and merges the port. The item is
+  finished only when both lines carry the change.
+  - Do the rebase and the port in the same session as the merge. A `dev` merge
+    left unported is the failure mode this rule exists to prevent: `dev2-go`
+    silently falls behind, and the divergence surfaces later as a conflict
+    nobody has context for.
+  - When a change genuinely has no Go counterpart — docs, TypeScript-only
+    paths the port does not cover yet, GUI-only work — record that decision in
+    the merge or the tracking issue. An unexplained missing port is
+    indistinguishable from a forgotten one.
+  - If the port cannot be completed immediately (a blocking dependency, a
+    subsystem the port has not reached), open a tracking issue against
+    `dev2-go` before closing out the `dev` merge, label it `needs-go-port`,
+    and name the source commits. That label is the durable signal that a
+    deferred port is intentional, not forgotten.
 - A pull request requires approval from at least one maintainer and successful required CI checks
   before merge.
 - Authors do not approve their own pull requests.
