@@ -156,6 +156,30 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(new Set(picks).size).toBe(3);
   });
 
+  test("an independent native scope does not advance the shared round-robin cursor", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+    });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    updateAccountQuota("c", 10);
+
+    expect(resolveCodexAccountForThread(null, config, now, "shared")).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now: now + 1,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.3-codex-spark",
+    });
+
+    // Spark skips A in its own ring. The next shared request still takes B,
+    // as if the Spark selection had never advanced the shared ring.
+    expect(resolveCodexAccountForThread(null, config, now + 2, "spark")).toBe("b");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThread(null, config, now + 3, "shared")).toBe("b");
+  });
+
   test("affinity still wins over round-robin", () => {
     const config = makeThreeAccountConfig({ accountPoolStrategy: "round-robin" });
     updateAccountQuota("a", 10);
@@ -393,6 +417,38 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
     expect(config.activeCodexAccountId).toBe("a"); // automatic — not persisted as operator selection
     expect(pickAlternateCodexAccount(config, "a")).toBe("b");
+  });
+
+  test("scoped reset 429s retain strategy while excluding only the affected native quota", () => {
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "fill-first",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 50);
+    updateAccountQuota("c", 5);
+    const now = Date.now();
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000);
+
+    recordCodexUpstreamOutcome(config, "b", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.3-codex-spark",
+    });
+
+    // Fill-first would normally advance a → b, but b is unavailable only to Spark.
+    expect(pickAlternateCodexAccount(config, "a", now + 1, "spark")).toBe("c");
+    expect(pickAlternateCodexAccount(config, "a", now + 1, "shared")).toBe("b");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.6-terra",
+      promoteAccountId: "b",
+    });
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
   });
 
   test("RR 429 promotes via ring, not lowest usage", () => {

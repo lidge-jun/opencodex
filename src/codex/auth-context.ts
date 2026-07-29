@@ -9,13 +9,16 @@ import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
 import {
-  getCodexAccountHealthSnapshot,
+  codexQuotaScopeForModel,
+  getCodexQuotaHealthSnapshot,
   releaseCodexQuotaProbeLease,
+  releaseCodexQuotaScopeProbeLease,
   tryAcquireCodexQuotaProbeLease,
+  tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
-import type { CodexCooldownSource } from "./routing";
+import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse } from "../bridge";
 import { getAccountQuota } from "./quota";
@@ -34,8 +37,12 @@ export type CodexAuthContext =
        * Set when this request was admitted through an active quota cooldown as
        * the account's single probe. Must be echoed into the upstream outcome so
        * only this request can clear the cooldown (#433).
-       */
+      */
       probeLeaseId?: string;
+      /** Native model quota group selected for this request, when known. */
+      quotaScope?: CodexQuotaScope;
+      /** Scope that owns `probeLeaseId`, when it is a scoped recovery probe. */
+      probeQuotaScope?: CodexQuotaScope;
     }
   | {
       // Main Codex account participating in rotation: token injected from ~/.codex/auth.json
@@ -46,11 +53,18 @@ export type CodexAuthContext =
       chatgptAccountId: string;
       /** See `pool.probeLeaseId`. */
       probeLeaseId?: string;
+      quotaScope?: CodexQuotaScope;
+      probeQuotaScope?: CodexQuotaScope;
     };
 
 /** Probe lease carried by this context, when it holds one. */
 export function codexProbeLeaseId(ctx: CodexAuthContext | undefined): string | undefined {
   return ctx?.kind === "pool" || ctx?.kind === "main-pool" ? ctx.probeLeaseId : undefined;
+}
+
+/** Scope of a lease carried by this context, when it probes a model-specific quota. */
+export function codexProbeQuotaScope(ctx: CodexAuthContext | undefined): CodexQuotaScope | undefined {
+  return ctx?.kind === "pool" || ctx?.kind === "main-pool" ? ctx.probeQuotaScope : undefined;
 }
 
 /**
@@ -59,7 +73,9 @@ export function codexProbeLeaseId(ctx: CodexAuthContext | undefined): string | u
  */
 export function releaseCodexAuthContextProbeLease(ctx: CodexAuthContext | undefined): void {
   const leaseId = codexProbeLeaseId(ctx);
-  if (ctx && leaseId) releaseCodexQuotaProbeLease(ctx.accountId!, leaseId);
+  if (!ctx || ctx.kind === "main" || !leaseId) return;
+  if (ctx.probeQuotaScope) releaseCodexQuotaScopeProbeLease(ctx.accountId!, ctx.probeQuotaScope, leaseId);
+  else releaseCodexQuotaProbeLease(ctx.accountId!, leaseId);
 }
 
 export type OcxRuntimeProviderConfig = OcxProviderConfig & {
@@ -99,13 +115,20 @@ export class CodexAccountCooldownError extends Error {
   accountId: string;
   cooldownUntil: number;
   cooldownSource?: CodexCooldownSource;
+  quotaScope?: CodexQuotaScope;
 
-  constructor(accountId: string, cooldownUntil: number, cooldownSource?: CodexCooldownSource) {
+  constructor(
+    accountId: string,
+    cooldownUntil: number,
+    cooldownSource?: CodexCooldownSource,
+    quotaScope?: CodexQuotaScope,
+  ) {
     super("Selected Codex account is cooling down");
     this.name = "CodexAccountCooldownError";
     this.accountId = accountId;
     this.cooldownUntil = cooldownUntil;
     this.cooldownSource = cooldownSource;
+    this.quotaScope = quotaScope;
   }
 }
 
@@ -127,7 +150,12 @@ export function cooldownAccountLabel(accountId: string): string {
  */
 export function cooldownErrorMessage(err: CodexAccountCooldownError): string {
   const until = new Date(err.cooldownUntil).toISOString();
-  return `Selected Codex account (${cooldownAccountLabel(err.accountId)}) is cooling down until ${until}`
+  const scope = err.quotaScope === "spark"
+    ? "Spark quota"
+    : err.quotaScope === "shared"
+      ? "shared native quota"
+      : null;
+  return `Selected Codex account (${cooldownAccountLabel(err.accountId)})${scope ? ` ${scope} is` : " is"} cooling down until ${until}`
     + ` (source: ${err.cooldownSource ?? "default"}).`
     + ` Run 'ocx account list openai' to find the id, then`
     + ` 'ocx account clear-cooldown openai <id>' to lift it, or switch accounts with 'ocx account use openai <id>'.`;
@@ -157,6 +185,8 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 
 export interface ResolveCodexAuthContextOptions {
   excludeAccountId?: string;
+  /** Final native model selected for this request, used to select its quota group. */
+  modelId?: string;
 }
 
 export async function resolveCodexAuthContext(
@@ -171,16 +201,17 @@ export async function resolveCodexAuthContext(
   }
   reconcileMainCodexAccountRuntimeState();
   const threadId = headers.get("x-codex-parent-thread-id");
+  const quotaScope = codexQuotaScopeForModel(options.modelId);
   const resolution = options.excludeAccountId
     ? (() => {
-        const accountId = pickAlternateCodexAccount(config, options.excludeAccountId!);
+        const accountId = pickAlternateCodexAccount(config, options.excludeAccountId!, Date.now(), quotaScope);
         return accountId
           ? { status: "selected" as const, accountId }
           : { status: "none" as const };
       })()
-    : resolveCodexAccountForThreadDetailed(threadId, config);
+    : resolveCodexAccountForThreadDetailed(threadId, config, Date.now(), quotaScope);
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
-  const accountId = resolution.status === "selected" ? resolution.accountId : null;
+  let accountId = resolution.status === "selected" ? resolution.accountId : null;
   if (!accountId) throw new CodexPoolAuthenticationError();
   // Lazy prime: if the selected account has no quota yet, the pool is likely
   // unprimed (dashboard never opened, or startup prime was blocked). Kick a
@@ -194,15 +225,21 @@ export async function resolveCodexAuthContext(
   }
   // Snapshot (not just the deadline) so a refused request can report WHY it is cooled:
   // a literal Retry-After reads very differently to a user than a reset-derived guess.
-  const cooldown = getCodexAccountHealthSnapshot(accountId);
+  const cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
   const cooldownUntil = cooldown?.cooldownUntil;
   // A cooled-down account never sends traffic, so upstream recovery can never be
   // observed and the cooldown outlives the real limit. Admit one probe per
   // interval; its outcome decides whether the cooldown ends (#433).
   let probeLeaseId: string | undefined;
+  let probeQuotaScope: CodexQuotaScope | undefined;
   if (cooldownUntil) {
-    probeLeaseId = tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
-    if (!probeLeaseId) throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource);
+    probeQuotaScope = cooldown?.quotaScope;
+    probeLeaseId = probeQuotaScope
+      ? tryAcquireCodexQuotaScopeProbeLease(accountId, probeQuotaScope) ?? undefined
+      : tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
+    if (!probeLeaseId) {
+      throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
+    }
   }
 
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
@@ -210,7 +247,8 @@ export async function resolveCodexAuthContext(
     const token = getMainAccountToken();
     if (!token) {
       // Nothing will reach upstream, so give the probe back instead of burning it.
-      if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
+      if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
+      else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
       throw new CodexPoolAuthenticationError();
     }
     return {
@@ -218,7 +256,9 @@ export async function resolveCodexAuthContext(
       accountId,
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
+      ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
+      ...(probeQuotaScope ? { probeQuotaScope } : {}),
     };
   }
 
@@ -230,10 +270,13 @@ export async function resolveCodexAuthContext(
       generation: token.generation,
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
+      ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
+      ...(probeQuotaScope ? { probeQuotaScope } : {}),
     };
   } catch (cause) {
-    if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
+    if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
+    else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
     if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
       markAccountNeedsReauth(accountId);
     }
@@ -245,9 +288,9 @@ export function assertCodexAuthContextNotCooled(ctx: CodexAuthContext | undefine
   if (ctx?.kind !== "pool" && ctx?.kind !== "main-pool") return;
   // A context holding the probe lease was deliberately admitted through the cooldown.
   if (ctx.probeLeaseId) return;
-  const cooldown = getCodexAccountHealthSnapshot(ctx.accountId);
+  const cooldown = getCodexQuotaHealthSnapshot(ctx.accountId, ctx.quotaScope);
   if (cooldown?.cooldownUntil) {
-    throw new CodexAccountCooldownError(ctx.accountId, cooldown.cooldownUntil, cooldown.cooldownSource);
+    throw new CodexAccountCooldownError(ctx.accountId, cooldown.cooldownUntil, cooldown.cooldownSource, cooldown.quotaScope);
   }
 }
 

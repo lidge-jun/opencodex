@@ -16,6 +16,8 @@ import {
   clearThreadAccountMapForAccount,
   computeCodexUsageScore,
   getCodexAccountCooldownUntil,
+  getEffectiveActiveCodexAccountId,
+  getCodexQuotaHealthSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
   isCodexAccountInCooldown,
@@ -314,6 +316,47 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("quota-next", config)).toBe("b");
   });
 
+  test("shared native reset cooldown clears affinity and rotates the active account", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.6-terra",
+    });
+
+    expect(config.activeCodexAccountId).toBe("b");
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now + 1)).toBe("b");
+  });
+
+  test("independent native quota scopes keep separate thread affinities", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+
+    // A known shared-model request binds A for this thread.
+    expect(resolveCodexAccountForThread("scoped-thread", config, now, "shared")).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now: now + 1,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.3-codex-spark",
+    });
+
+    // Spark sees its scoped cooldown and binds B without moving the global
+    // active account or the same thread's shared-scope affinity.
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 2, "spark")).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 3, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "spark")).toBe("b");
+  });
+
   test("2xx responses clear transient failures without clearing an unexpired cooldown", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -467,6 +510,28 @@ describe("codex routing", () => {
     // Clearing says "the quota window moved", not "this account is healthy":
     // failover must keep what it learned from the 429.
     expect(health?.lastFailureStatus).toBe(429);
+  });
+
+  test("clearCodexAccountCooldown lifts every live native-model cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.3-codex-spark",
+    });
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.6-terra",
+    });
+
+    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).not.toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).not.toBeNull();
+    expect(clearCodexAccountCooldown("a", now + 1)).toBe(true);
+    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).toBeNull();
   });
 
   test("clearing is a no-op without a live cooldown", () => {
@@ -769,6 +834,27 @@ describe("codex routing", () => {
 
     expect(resolveCodexAccountForThread("lru-1", config, now + CODEX_THREAD_AFFINITY_MAX_ENTRIES + 1)).toBe("a");
     expect(resolveCodexAccountForThread("lru-0", config, now + CODEX_THREAD_AFFINITY_MAX_ENTRIES + 2)).toBe("b");
+  });
+
+  test("thread affinity LRU cap includes legacy and native quota scopes", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const threads = Math.floor(CODEX_THREAD_AFFINITY_MAX_ENTRIES / 3) + 1;
+
+    for (let i = 0; i < threads; i++) {
+      const threadId = `scoped-lru-${i}`;
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 1, "shared")).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 2, "spark")).toBe("a");
+    }
+
+    // The oldest legacy entry was evicted, while the same thread's later
+    // shared and Spark entries remain independently affined to A.
+    config.activeCodexAccountId = "b";
+    const after = now + threads * 3;
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 1, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 2)).toBe("b");
   });
 
   test("generation mismatch invalidates a mapped thread before reuse", () => {

@@ -67,6 +67,7 @@ import {
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   codexProbeLeaseId,
+  codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
   type CodexAuthContext,
@@ -320,7 +321,7 @@ async function retryCodexPoolOnAlternateAccount(
       req.headers,
       config,
       "pool",
-      { excludeAccountId: firstAuthCtx.accountId },
+      { excludeAccountId: firstAuthCtx.accountId, modelId: route.modelId },
     );
   } catch (error) {
     if (
@@ -342,7 +343,9 @@ async function retryCodexPoolOnAlternateAccount(
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
       ...quotaMeta,
       threadId: req.headers.get("x-codex-parent-thread-id"),
+      modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
       // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
       ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
     });
@@ -403,6 +406,7 @@ export function codexForwardTerminalOutcomeRecorder(
   config: OcxConfig,
   authCtx: CodexAuthContext,
   provider: OcxProviderConfig,
+  modelId?: string,
   logCtx?: RequestLogContext,
   threadId?: string | null,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
@@ -414,7 +418,9 @@ export function codexForwardTerminalOutcomeRecorder(
       // prior soft-avoid so a healthy account isn't stuck avoided.
       recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
         threadId,
+        modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
+        probeQuotaScope: codexProbeQuotaScope(authCtx),
       });
       return;
     }
@@ -432,7 +438,9 @@ export function codexForwardTerminalOutcomeRecorder(
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
+      modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
+      probeQuotaScope: codexProbeQuotaScope(authCtx),
     });
   };
 }
@@ -668,7 +676,7 @@ async function resolveResponsesCodexAuth(
     if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
     let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, { modelId: route.modelId });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       authCtx = { kind: "main", accountId: null };
@@ -1428,7 +1436,9 @@ export async function handleResponses(
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
+          probeQuotaScope: codexProbeQuotaScope(authCtx),
         });
       }
       const msg = outcome === "timeout"
@@ -1514,6 +1524,7 @@ export async function handleResponses(
       config,
       authCtx,
       route.provider,
+      route.modelId,
       logCtx,
       req.headers.get("x-codex-parent-thread-id"),
     );
@@ -1553,7 +1564,9 @@ export async function handleResponses(
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
           ...quotaMeta,
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
+          probeQuotaScope: codexProbeQuotaScope(authCtx),
         });
       }
     }
