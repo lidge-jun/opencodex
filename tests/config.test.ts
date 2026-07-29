@@ -251,7 +251,6 @@ describe("opencodex config defaults", () => {
       },
       defaultProvider: "openai",
     };
-
     writeConfig({
       ...base,
       injectionModel: "gpt-5.6-terra",
@@ -329,6 +328,29 @@ describe("opencodex config defaults", () => {
     expect(normalized.error).toBeNull();
     expect(normalized.config.syncCodexSubagentDefaults).toBeUndefined();
     expect(loadConfig().syncCodexSubagentDefaults).toBeUndefined();
+  });
+
+  test("paused Codex account ids persist and reject malformed values", () => {
+    const base = {
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+    };
+    writeConfig({ ...base, pausedCodexAccountIds: ["__main__", "pool-a"] });
+    expect(loadConfig().pausedCodexAccountIds).toEqual(["__main__", "pool-a"]);
+
+    for (const invalid of ["pool-a", ["bad/account"], [1]]) {
+      writeConfig({ ...base, pausedCodexAccountIds: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("fallback");
+      expect(diagnostics.error).toContain("pausedCodexAccountIds");
+    }
   });
 
   test("loads valid config from OPENCODEX_HOME", () => {

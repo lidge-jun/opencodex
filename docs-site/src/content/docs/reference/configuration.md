@@ -57,6 +57,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore a previously installed Codex shim when a completed external Codex update replaces it. Set `false`, or set `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from every future Pool selection until resumed in Codex Auth. Includes the main `__main__` account when paused. |
 | `codexAccountNamespaces?` | `Record<string,string>` | — | Optional public model-selector namespace → stored Codex account target map. This foundation layer validates and persists the map but does not add picker rows or change routing. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
@@ -115,6 +116,14 @@ credential store. Existing thread ids keep account affinity, while new sessions 
 `accountPoolStrategy`, quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool
 account is retried once on an eligible alternate account in the same request (so Codex CLI does not
 stall on a depleted primary while another account still has quota).
+Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
+retry/failover selection, cooldown recovery probes, and manual activation. Pausing also clears that
+account's thread-affinity map: in-flight requests keep their captured credentials, but subsequent
+turns are re-routed and cannot reuse the paused account. The exclusion survives
+restarts; if every account is paused, Pool routing fails instead of silently selecting one.
+**Pause exhausted** first refreshes eligible accounts that have credentials available and pauses
+only those whose relevant quota window is freshly confirmed at 100%; accounts without credentials
+and unknown or failed quota refreshes are left unchanged.
 :::
 
 **Rotation strategies** (new sessions only; bound threads are unchanged):

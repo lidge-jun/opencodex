@@ -21,7 +21,8 @@ describe("Codex callback aggregate path", () => {
 
   test("shared Codex controller derives activeNeedsReauth from health as well", async () => {
     const hook = await Bun.file(new URL("../src/hooks/useCodexAccountPool.ts", import.meta.url)).text();
-    expect(hook).toContain("accountNeedsReauth(activePoolAccount ?? mainAccount)");
+    expect(hook).toContain("const activeAccount = activePoolAccount ?? mainAccount");
+    expect(hook).toContain("!activeAccount?.paused && accountNeedsReauth(activeAccount)");
     expect(hook).not.toMatch(/activePoolAccount\s*\?\s*Boolean\(activePoolAccount\.needsReauth\)/);
   });
 

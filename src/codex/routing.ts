@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
+import { isCodexAccountPaused } from "./account-pause";
 import { isCodexAccountUsable } from "./account-usability";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
@@ -589,7 +590,8 @@ function isCodexAccountSelectable(
   now: number,
   quotaScope?: CodexQuotaScope,
 ): boolean {
-  return getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
+  return !isCodexAccountPaused(config, accountId)
+    && getCodexQuotaHealthSnapshot(accountId, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(accountId, now)
     && isCodexAccountUsable(config, accountId);
 }
@@ -695,6 +697,7 @@ function getEligiblePoolAccounts(
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
       && account.id !== excludeId
+      && !isCodexAccountPaused(config, account.id)
       && !isAccountNeedsReauth(account.id))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
@@ -704,6 +707,7 @@ function getEligiblePoolAccounts(
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
+    && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
@@ -948,6 +952,29 @@ function promoteActiveCodexAccount(config: OcxConfig, accountId: string): void {
   rememberActiveCodexAccount(config, accountId);
 }
 
+/**
+ * Reconcile the effective active account after an administrative exclusion such as pause.
+ * The operator's persisted selection is cleared when it names the excluded account; quota
+ * keeps its historical persisted promotion, while rotating strategies retain the replacement
+ * only in the process-local cursor.
+ */
+export function reconcileCodexActiveAfterExclusion(
+  config: OcxConfig,
+  excludedAccountId: string,
+  now = Date.now(),
+): string | null {
+  const wasEffective = (getEffectiveActiveCodexAccountId(config) ?? MAIN_CODEX_ACCOUNT_ID) === excludedAccountId;
+  if (config.activeCodexAccountId === excludedAccountId) {
+    config.activeCodexAccountId = undefined;
+  }
+  if (!wasEffective) return getEffectiveActiveCodexAccountId(config) ?? null;
+
+  runtimeActiveCodexAccountId = undefined;
+  const fallback = pickAlternateCodexAccount(config, excludedAccountId, now);
+  if (fallback) promoteActiveCodexAccount(config, fallback);
+  return fallback;
+}
+
 function isUnknownUsage(usage: number): boolean {
   return usage >= CODEX_UNKNOWN_USAGE_SCORE;
 }
@@ -1056,7 +1083,7 @@ export function previewCodexAccountForRequest(
   if (!isCodexAccountSelectable(config, active, now, quotaScope)) {
     const fallback = pickLowestUsageCodexAccount(config, active, now, quotaScope);
     if (fallback) active = fallback;
-    else if (hasConfiguredPoolAccount(config, active)) return active;
+    else if (hasConfiguredPoolAccount(config, active) && !isCodexAccountPaused(config, active)) return active;
     else return null;
   }
 
@@ -1074,6 +1101,7 @@ export function previewCodexAccountForRequest(
   if (!isCodexAccountUsable(config, active)) {
     return hasConfiguredPoolAccount(config, active) ? active : null;
   }
+  if (isCodexAccountPaused(config, active)) return null;
   if (getCodexQuotaHealthSnapshot(active, quotaScope, now)) {
     return hasConfiguredPoolAccount(config, active) ? active : null;
   }
@@ -1150,7 +1178,7 @@ export function resolveCodexAccountForThreadDetailed(
     if (fallback) {
       if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, fallback);
       active = fallback;
-    } else if (hasConfiguredPoolAccount(config, active)) {
+    } else if (hasConfiguredPoolAccount(config, active) && !isCodexAccountPaused(config, active)) {
       return { status: "selected", accountId: active };
     } else {
       return { status: "none" };
@@ -1161,6 +1189,7 @@ export function resolveCodexAccountForThreadDetailed(
   if (!isCodexAccountUsable(config, active)) {
     return hasConfiguredPoolAccount(config, active) ? { status: "selected", accountId: active } : { status: "none" };
   }
+  if (isCodexAccountPaused(config, active)) return { status: "none" };
   if (getCodexQuotaHealthSnapshot(active, quotaScope, now)) {
     return hasConfiguredPoolAccount(config, active) ? { status: "selected", accountId: active } : { status: "none" };
   }
