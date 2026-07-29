@@ -22,6 +22,7 @@ const account: CodexAccountEntry = {
   id: "pool-1",
   email: "pool@example.test",
   isMain: false,
+  paused: false,
   hasCredential: true,
   quota: { resetCredits: 2, updatedAt: 1 },
 };
@@ -29,7 +30,7 @@ const account: CodexAccountEntry = {
 function makeController(overrides: Partial<CodexAccountPoolController> = {}): CodexAccountPoolController {
   return {
     accounts: [
-      { id: "main", email: "main@example.test", isMain: true, hasCredential: true, quota: null },
+      { id: "main", email: "main@example.test", isMain: true, paused: false, hasCredential: true, quota: null },
       account,
     ],
     activeId: null,

@@ -125,6 +125,7 @@ export function CodexAccountPoolPageHead({
   embedded,
   refreshingQuota,
   pausingExhausted,
+  pauseBusy,
   onRefresh,
   onPauseExhausted,
 }: {
@@ -132,6 +133,7 @@ export function CodexAccountPoolPageHead({
   embedded: boolean;
   refreshingQuota: boolean;
   pausingExhausted: boolean;
+  pauseBusy?: boolean;
   onRefresh: () => void;
   onPauseExhausted: () => void;
 }) {
@@ -146,7 +148,7 @@ export function CodexAccountPoolPageHead({
           type="button"
           className="btn btn-sm btn-ghost"
           onClick={onPauseExhausted}
-          disabled={refreshingQuota || pausingExhausted}
+          disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
         >
           <IconPause width={14} /> {pausingExhausted ? t("codexAuth.pausingExhausted") : t("codexAuth.pauseExhausted")}
         </button>
@@ -154,7 +156,7 @@ export function CodexAccountPoolPageHead({
           type="button"
           className="btn btn-sm btn-ghost"
           onClick={onRefresh}
-          disabled={refreshingQuota || pausingExhausted}
+          disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
         >
           <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
         </button>

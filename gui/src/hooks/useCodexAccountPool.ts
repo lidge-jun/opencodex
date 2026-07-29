@@ -250,7 +250,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         body: JSON.stringify({ id, paused }),
       });
       if (!response.ok) return { ok: false, reason: "request" } as const;
-      const result = await response.json() as { activeCodexAccountId?: string | null };
+      const result = await response.json().catch(() => ({})) as { activeCodexAccountId?: string | null };
       setAccounts(current => current.map(account => (
         account.id === id || (id === "__main__" && account.isMain)
           ? { ...account, paused }
@@ -276,7 +276,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     try {
       const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause-exhausted`, { method: "PUT" });
       if (!response.ok) return { ok: false, reason: "request" } as const;
-      const result = await response.json() as {
+      const result = await response.json().catch(() => ({})) as {
         pausedAccountIds?: string[];
         pausedCount?: number;
         activeCodexAccountId?: string | null;

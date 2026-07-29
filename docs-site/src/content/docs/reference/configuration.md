@@ -117,7 +117,9 @@ credential store. Existing thread ids keep account affinity, while new sessions 
 account is retried once on an eligible alternate account in the same request (so Codex CLI does not
 stall on a depleted primary while another account still has quota).
 Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
-retry/failover selection, cooldown recovery probes, and manual activation. The exclusion survives
+retry/failover selection, cooldown recovery probes, and manual activation. Pausing also clears that
+account's thread-affinity map: in-flight requests keep their captured credentials, but subsequent
+turns are re-routed and cannot reuse the paused account. The exclusion survives
 restarts; if every account is paused, Pool routing fails instead of silently selecting one.
 **Pause exhausted** first refreshes every account and pauses only those whose relevant quota window
 is freshly confirmed at 100%; unknown quota and failed refreshes are left unchanged.

@@ -252,6 +252,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         embedded={embedded}
         refreshingQuota={refreshingQuota}
         pausingExhausted={pausingExhausted}
+        pauseBusy={pauseUpdatingId !== null || pausingExhausted}
         onRefresh={() => { void refreshQuotas(); }}
         onPauseExhausted={() => { void pauseExhausted(); }}
       />
