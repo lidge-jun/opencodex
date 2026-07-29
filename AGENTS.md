@@ -67,8 +67,8 @@ A merge into `dev` does not finish the task. The merging maintainer also
 rebases that work onto `dev2-go`, ports whatever needs a Go counterpart under
 `go/`, and merges the port. The item is done only when both lines carry the
 change. If a change has no Go counterpart, say so in the merge or tracking
-issue; if the port has to wait, open a tracking issue against `dev2-go` naming
-the source commits before closing out the `dev` merge.
+issue; if the port has to wait, open a `needs-go-port` tracking issue against
+`dev2-go` naming the source commits before closing out the `dev` merge.
 [`MAINTAINERS.md`](./MAINTAINERS.md) holds the authoritative wording.
 
 The Claude Desktop integration formerly carried on the `claudedesktop` branch is
