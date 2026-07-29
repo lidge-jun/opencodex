@@ -60,6 +60,51 @@ func TestBuildRequestAnthropicMessagesShape(t *testing.T) {
 	}
 }
 
+func TestBuildRequestReordersInterleavedTextBeforeToolUse(t *testing.T) {
+	adapter := &Adapter{BaseURL: "https://provider.test/v1", APIKey: "secret"}
+	req := &types.NormalizedRequest{
+		ModelID: "claude-test", Stream: true,
+		Context: types.RequestContext{
+			Messages: []types.Message{
+				{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"start"}]`)},
+				{Role: "assistant", Content: json.RawMessage(`[
+					{"type":"text","text":"before"},
+					{"type":"toolCall","id":"call_a","name":"first_tool","arguments":{}},
+					{"type":"text","text":"between steps"},
+					{"type":"toolCall","id":"call_b","name":"second_tool","arguments":{}}
+				]`)},
+				{Role: "toolResult", ToolCallID: "call_a", ToolName: "first_tool", Content: json.RawMessage(`"one"`)},
+				{Role: "toolResult", ToolCallID: "call_b", ToolName: "second_tool", Content: json.RawMessage(`"two"`)},
+			},
+		},
+	}
+	httpReq, err := adapter.BuildRequest(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(httpReq.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	messages := body["messages"].([]any)
+	assistant := messages[1].(map[string]any)["content"].([]any)
+	typesSeen := make([]string, 0, len(assistant))
+	for _, block := range assistant {
+		typesSeen = append(typesSeen, block.(map[string]any)["type"].(string))
+	}
+	if got, want := strings.Join(typesSeen, ","), "text,text,tool_use,tool_use"; got != want {
+		t.Fatalf("assistant block types = %q, want %q", got, want)
+	}
+	user := messages[2].(map[string]any)["content"].([]any)
+	ids := []string{
+		user[0].(map[string]any)["tool_use_id"].(string),
+		user[1].(map[string]any)["tool_use_id"].(string),
+	}
+	if ids[0] != "call_a" || ids[1] != "call_b" {
+		t.Fatalf("tool_result ids = %#v", ids)
+	}
+}
+
 func TestParseStreamAndUnary(t *testing.T) {
 	stream := strings.Join([]string{
 		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":3,"cache_read_input_tokens":2}}}`, "",

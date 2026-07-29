@@ -314,22 +314,23 @@ func assistantContent(raw json.RawMessage, names toolNameTransforms) ([]any, []s
 		}
 		return nil, nil, nil
 	}
-	out := make([]any, 0, len(parts))
+	preface := make([]any, 0, len(parts))
+	toolUses := make([]any, 0)
 	toolIDs := make([]string, 0)
 	for _, rawPart := range parts {
 		part, _ := rawPart.(map[string]any)
 		switch part["type"] {
 		case "text", "output_text":
 			if text := firstString(part, "text", "output_text"); text != "" {
-				out = append(out, map[string]any{"type": "text", "text": text})
+				preface = append(preface, map[string]any{"type": "text", "text": text})
 			}
 		case "thinking", "reasoning":
 			for _, data := range stringItems(part["redacted"]) {
-				out = append(out, map[string]any{"type": "redacted_thinking", "data": data})
+				preface = append(preface, map[string]any{"type": "redacted_thinking", "data": data})
 			}
 			if thinking := firstString(part, "thinking", "reasoning", "text"); thinking != "" {
 				if signature, _ := part["signature"].(string); isLikelyRealAnthropicThinkingSignature(signature) {
-					out = append(out, map[string]any{"type": "thinking", "thinking": thinking, "signature": signature})
+					preface = append(preface, map[string]any{"type": "thinking", "thinking": thinking, "signature": signature})
 				}
 			}
 		case "toolCall", "tool_call":
@@ -339,10 +340,13 @@ func assistantContent(raw json.RawMessage, names toolNameTransforms) ([]any, []s
 			if input == nil {
 				input = map[string]any{}
 			}
-			out = append(out, map[string]any{"type": "tool_use", "id": id, "name": names.toWire(name), "input": input})
+			toolUses = append(toolUses, map[string]any{"type": "tool_use", "id": id, "name": names.toWire(name), "input": input})
 			toolIDs = append(toolIDs, id)
 		}
 	}
+	// Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
+	// earlier tool_use ids look unpaired (#620 / common multi-step history shape).
+	out := append(preface, toolUses...)
 	return out, toolIDs, nil
 }
 
