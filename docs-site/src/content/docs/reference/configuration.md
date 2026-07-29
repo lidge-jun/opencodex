@@ -474,14 +474,14 @@ example above, select `openrouter/anthropic-claude-sonnet-5` in Codex; OpenCodex
 Some providers expose very large or slow live model catalogs. Set `liveModels` to `false` when you
 want Codex to see only the models pinned in `models`:
 
+When `liveModels` is `false` and `models` is empty or omitted, opencodex exposes no routed models
+for that provider.
+
 Live discovery rejects a response before caching when it exceeds 4 MiB or 2,000 raw model rows.
 Built-in presets may lower either limit and filter mixed catalogs to chat-eligible rows. An
 oversized or malformed response follows the normal stale/configured fallback path, while
 ineligible rows are excluded. A valid result with zero eligible rows remains an authoritative
 empty catalog; OpenCodex never silently truncates an over-limit response.
-
-When `liveModels` is `false` and `models` is empty or omitted, opencodex exposes no routed models
-for that provider.
 
 Use `selectedModels` for a different purpose: discovery still runs, but only the selected ids are
 published to Codex's catalog and `/v1/models`. The dashboard's full model list remains available so

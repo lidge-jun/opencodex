@@ -81,4 +81,7 @@ config. A response is rejected before caching when it exceeds 4 MiB, contains mo
 rows, has a malformed OpenAI list envelope, or includes an invalid model id. Tests use fixtures and
 must never depend on live provider endpoints. Newly promoted fixed key presets opt into
 `preserveCustomDestination`, so an older same-named custom provider keeps its configured adapter,
-destination, and key boundary instead of being silently canonicalized onto the new host.
+destination, and key boundary instead of being silently canonicalized onto the new host. Fixed
+OAuth presets resolve discovery against the same canonical registry transport as normal routing
+before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
+OAuth bearer token.

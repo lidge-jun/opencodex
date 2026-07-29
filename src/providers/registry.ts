@@ -45,15 +45,7 @@ export interface ProviderModelDiscoveryFilter {
   noneOf?: readonly ProviderModelDiscoveryPredicate[];
 }
 
-/**
- * Trusted live-model discovery policy. This metadata is registry-only: it must never be copied
- * into config.json, where a same-named custom provider could otherwise redirect a stored key.
- */
-export interface ProviderModelDiscoverySpec {
-  /** Registry-owned absolute endpoint. Mutually exclusive with `path`. */
-  url?: string;
-  /** Resource path relative to baseUrl; a leading slash resolves from the origin. */
-  path?: string;
+interface ProviderModelDiscoverySharedSpec {
   /** Query parameters applied to the resolved discovery URL. */
   query?: Readonly<Record<string, string>>;
   /** Declarative eligibility rules evaluated against each untrusted model row. */
@@ -63,6 +55,29 @@ export interface ProviderModelDiscoverySpec {
   /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */
   maxModels?: number;
 }
+
+type ProviderModelDiscoveryLocation =
+  | {
+      /** Registry-owned absolute endpoint. Mutually exclusive with `path`. */
+      url: string;
+      path?: never;
+    }
+  | {
+      /** Resource path relative to baseUrl; query strings and fragments are disallowed. */
+      path: string;
+      url?: never;
+    }
+  | {
+      /** Keep the adapter-derived default discovery endpoint. */
+      url?: never;
+      path?: never;
+    };
+
+/**
+ * Trusted live-model discovery policy. This metadata is registry-only: it must never be copied
+ * into config.json, where a same-named custom provider could otherwise redirect a stored key.
+ */
+export type ProviderModelDiscoverySpec = ProviderModelDiscoverySharedSpec & ProviderModelDiscoveryLocation;
 
 export interface ProviderRegistryEntry {
   id: string;

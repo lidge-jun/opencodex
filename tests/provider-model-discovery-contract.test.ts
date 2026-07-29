@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gatherRoutedModels } from "../src/codex/catalog";
+import { catalogHintsFromModelsApiItem } from "../src/codex/catalog/provider-fetch";
 import { clearModelCache } from "../src/codex/model-cache";
 import { buildModelsRequest } from "../src/oauth";
 import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../src/oauth/key-providers";
@@ -50,6 +51,23 @@ async function withTogetherDiscovery<T>(
   }
 }
 
+async function withRegistryDiscovery<T>(
+  providerId: string,
+  spec: ProviderModelDiscoverySpec,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const entry = PROVIDER_REGISTRY.find(row => row.id === providerId);
+  if (!entry) throw new Error(`missing ${providerId} registry entry`);
+  const original = entry.modelDiscovery;
+  entry.modelDiscovery = spec;
+  try {
+    return await run();
+  } finally {
+    if (original === undefined) delete entry.modelDiscovery;
+    else entry.modelDiscovery = original;
+  }
+}
+
 function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
     port: 10100,
@@ -76,6 +94,11 @@ describe("registry-owned provider model discovery", () => {
       .toContain("https");
     expect(providerModelDiscoverySpecError({ path: "models?unbounded=true" }))
       .toContain("query-free");
+    expect(providerModelDiscoverySpecError({
+      url: "https://api.example.test/models",
+      path: "models",
+    } as unknown as ProviderModelDiscoverySpec)).toContain("mutually exclusive");
+    expect(providerModelDiscoverySpecError({ maxModels: 25 })).toBeNull();
   });
 
   test("limits collision preservation to fixed API-key destinations", () => {
@@ -122,6 +145,36 @@ describe("registry-owned provider model discovery", () => {
     });
   });
 
+  test("pins fixed OAuth discovery before resolving relative and default endpoints", async () => {
+    const staleConfig: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://untrusted.example/v9",
+      authMode: "oauth",
+    };
+
+    await withRegistryDiscovery("anthropic", { path: "catalog" }, () => {
+      const relative = buildModelsRequest(staleConfig, "oauth-token", "anthropic");
+      expect(relative.url).toBe("https://api.anthropic.com/catalog");
+      expect(relative.headers.Authorization).toBe("Bearer oauth-token");
+    });
+
+    await withRegistryDiscovery("anthropic", { maxModels: 25 }, () => {
+      const defaultEndpoint = buildModelsRequest(staleConfig, "oauth-token", "anthropic");
+      expect(defaultEndpoint.url).toBe("https://api.anthropic.com/v1/models?limit=1000");
+    });
+  });
+
+  test("keeps adapter-specific OAuth transport resolution after registry pinning", async () => {
+    await withRegistryDiscovery("xai", { path: "catalog" }, () => {
+      const request = buildModelsRequest({
+        adapter: "openai-chat",
+        baseUrl: "https://untrusted.example/v9",
+        authMode: "oauth",
+      }, "oauth-token", "xai");
+      expect(request.url).toBe("https://cli-chat-proxy.grok.com/v1/catalog");
+    });
+  });
+
   test("does not persist trusted discovery or collision policy into provider config", async () => {
     await withTogetherDiscovery({ path: "catalog", query: { capability: "chat" } }, () => {
       const entry = togetherEntry();
@@ -157,6 +210,37 @@ describe("registry-owned provider model discovery", () => {
         inputModalities: ["text", "image"],
         capabilities: ["tools", "reasoning"],
       });
+    });
+  });
+
+  test("accepts only positive safe-integer token limits from live metadata", () => {
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "fractional",
+      context_size: 1_000,
+      max_input_tokens: 0.5,
+    })).toEqual({ contextWindow: 1_000 });
+
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "unsafe",
+      context_size: Number.MAX_SAFE_INTEGER + 1,
+      max_input_tokens: Number.MAX_SAFE_INTEGER + 1,
+    })).toEqual({});
+  });
+
+  test("drops untrusted metadata tokens containing control characters", () => {
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "controlled",
+      capabilities: {
+        "to\u0000ols": true,
+        "\u001b[31mreasoning": true,
+        vision: true,
+      },
+      input_modalities: ["te\u0000xt"],
+      reasoning_efforts: ["h\u2028igh", "low"],
+    })).toEqual({
+      reasoningEfforts: ["low"],
+      inputModalities: ["text", "image"],
+      capabilities: ["vision"],
     });
   });
 

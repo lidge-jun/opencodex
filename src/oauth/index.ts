@@ -14,7 +14,7 @@ import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
-import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -462,6 +462,22 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
   return resolveEnvValue(prov.apiKey);
 }
 
+function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConfig): OcxProviderConfig {
+  const entry = getProviderRegistryEntry(providerName);
+  if (
+    prov.authMode !== "oauth"
+    || entry?.authKind !== "oauth"
+    || entry.allowBaseUrlOverride === true
+    || /\{[^}]*\}/.test(entry.baseUrl)
+    || !providerMatchesRegistryTransport(providerName, prov)
+  ) {
+    return prov;
+  }
+  // Normal routing pins fixed OAuth presets before adapter-specific transport resolution.
+  // Discovery must do the same so a stale or modified config baseUrl never receives a token.
+  return { ...prov, adapter: entry.adapter, baseUrl: entry.baseUrl };
+}
+
 /**
  * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
  * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
@@ -474,9 +490,10 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
  * response.
  */
 export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | undefined, providerName = ""): { url: string; headers: Record<string, string> } {
+  const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
   const effectiveProvider = resolveProviderTransport(
     providerName,
-    prov,
+    transportSeed,
     undefined,
     providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
   );

@@ -28,6 +28,7 @@ import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
+  extractProviderModelItems,
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
@@ -340,6 +341,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
+      const destinationError = await providerDestinationResolvedError(name, {
+        baseUrl: modelsUrl,
+        allowPrivateNetwork: prov.allowPrivateNetwork,
+      });
+      if (destinationError) {
+        return jsonResponse({
+          ok: false,
+          latencyMs: Date.now() - started,
+          error: `upstream /models blocked by destination policy: ${destinationError}`,
+        });
+      }
       const res = await fetch(modelsUrl, {
         headers,
         redirect: "error",
@@ -347,6 +359,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       });
       const latencyMs = Date.now() - started;
       if (!res.ok) {
+        try {
+          void res.body?.cancel().catch(() => undefined);
+        } catch {
+          // Best-effort release for non-conforming response streams.
+        }
         return jsonResponse({ ok: false, latencyMs, error: `upstream /models returned ${res.status}` });
       }
       const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
@@ -359,19 +376,25 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             : "upstream /models returned invalid JSON",
         });
       }
-      // OpenAI-style lists use { data: [...] }; Google's /v1beta/models (the other shape
-      // buildModelsRequest can produce) returns { models: [...] }.
-      const envelope = extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["data", "models"]);
-      if (!envelope.ok) {
+      // OpenAI-style lists must use the same validation, dedupe, and registry eligibility filter
+      // as catalog discovery. Google's /v1beta/models uses a different `models[].name` shape and
+      // remains a connectivity-only count because it is not an authoritative catalog source.
+      const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
+        ? bounded.value as Record<string, unknown>
+        : undefined;
+      const extracted = Array.isArray(record?.data)
+        ? extractProviderModelItems(bounded.value, discovery)
+        : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
+      if (!extracted.ok) {
         return jsonResponse({
           ok: false,
           latencyMs,
-          error: envelope.reason === "too_many_models"
+          error: extracted.reason === "too_many_models"
             ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
             : "upstream /models returned an unexpected shape",
         });
       }
-      const models = envelope.rows.length;
+      const models = "items" in extracted ? extracted.items.length : extracted.rows.length;
       return jsonResponse({
         ok: true,
         latencyMs,

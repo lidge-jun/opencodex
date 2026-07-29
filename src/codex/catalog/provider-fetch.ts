@@ -185,8 +185,16 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function positiveFiniteNumber(...values: unknown[]): number | undefined {
-  return values.find(value => typeof value === "number" && Number.isFinite(value) && value > 0) as number | undefined;
+const MODEL_DISCOVERY_METADATA_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+function positiveSafeInteger(...values: unknown[]): number | undefined {
+  return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value > 0) as number | undefined;
+}
+
+function normalizedMetadataString(raw: string, maxLength: number): string | undefined {
+  if (raw.length > maxLength * 4 || MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(raw)) return undefined;
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, maxLength);
+  return normalized || undefined;
 }
 
 function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): string[] | undefined {
@@ -196,8 +204,7 @@ function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): st
   for (let i = 0; i < value.length && i < maxInspectedItems; i += 1) {
     const raw = value[i];
     if (typeof raw !== "string") continue;
-    if (raw.length > maxLength * 4) continue;
-    const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, maxLength);
+    const normalized = normalizedMetadataString(raw, maxLength);
     if (normalized && !out.includes(normalized)) out.push(normalized);
     if (out.length >= maxItems) break;
   }
@@ -218,8 +225,9 @@ function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
     if (!Object.hasOwn(capabilityFields, key)) continue;
     inspectedCapabilityFields += 1;
     if (inspectedCapabilityFields > 256 || out.size >= 32) break;
-    if (key.length <= 256 && capabilityFields[key] === true) {
-      out.add(key.trim().toLowerCase().replace(/\s+/g, "-").slice(0, 64));
+    if (capabilityFields[key] === true) {
+      const normalized = normalizedMetadataString(key, 64);
+      if (normalized) out.add(normalized);
     }
   }
   for (const field of ["supports_tools", "supports_tool_calling", "supports_function_calling"] as const) {
@@ -258,14 +266,14 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
   const limits = plainRecord(metadata?.limits);
   const contextWindow =
-    positiveFiniteNumber(
+    positiveSafeInteger(
       limits?.max_context_length,
       item.context_length,
       item.context_size,
       item.max_model_len,
       item.max_context_length,
     );
-  const maxInputTokens = positiveFiniteNumber(limits?.max_input_tokens, item.max_input_tokens);
+  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
   const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
   const reasoningEfforts = listedReasoningEfforts
@@ -290,7 +298,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
 
 function boundedOwnedBy(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0 || value.length > 256) return undefined;
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(value)) return undefined;
+  if (MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(value)) return undefined;
   return value;
 }
 
