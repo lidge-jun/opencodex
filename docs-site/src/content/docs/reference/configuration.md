@@ -57,6 +57,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore a previously installed Codex shim when a completed external Codex update replaces it. Set `false`, or set `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from every future Pool selection until resumed in Codex Auth. Includes the main `__main__` account when paused. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy for the Codex pool. Applies to **new sessions only**; existing thread ids keep affinity. `quota` — today's default: pick the lowest known usage when the active account crosses `autoSwitchThreshold`. `round-robin` — even spread across eligible accounts via smooth weighted selection. `fill-first` — keep the active account until it cools down, becomes unusable, or crosses `autoSwitchThreshold` when set (unknown usage does not force a switch), then advance to the next eligible account in stable sorted order. |
@@ -105,6 +106,11 @@ credential store. Existing thread ids keep account affinity, while new sessions 
 `accountPoolStrategy`, quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool
 account is retried once on an eligible alternate account in the same request (so Codex CLI does not
 stall on a depleted primary while another account still has quota).
+Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
+retry/failover selection, cooldown recovery probes, and manual activation. The exclusion survives
+restarts; if every account is paused, Pool routing fails instead of silently selecting one.
+**Pause exhausted** first refreshes every account and pauses only those whose relevant quota window
+is freshly confirmed at 100%; unknown quota and failed refreshes are left unchanged.
 :::
 
 **Rotation strategies** (new sessions only; bound threads are unchanged):

@@ -23,6 +23,13 @@ An explicit `Retry-After` or an unclassified quota 429 is account-wide. A reset-
 the shared native group (including GPT-5.6 Terra/Luna). This allows a same-account combo to test an
 independent quota without allowing fallbacks that share the exhausted quota.
 
+`pausedCodexAccountIds` is a persisted Pool eligibility boundary. A paused added account or the
+stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
+affinity, quota rotation, cooldown probes, transient failover, and manual activation. In-flight
+requests keep their captured credential. An all-paused pool fails closed.
+The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
+plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
+
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
 openai-apikey/gpt-5.6-sol           # OpenAI API key

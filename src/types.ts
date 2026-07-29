@@ -680,6 +680,8 @@ export interface OcxConfig {
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */
   codexAccounts?: CodexAccount[];
+  /** Account ids administratively excluded from future pool selection until resumed. */
+  pausedCodexAccountIds?: string[];
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

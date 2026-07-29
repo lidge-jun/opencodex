@@ -39,7 +39,7 @@ import {
   parseUsageQuota,
   updateAccountQuota,
 } from "../src/codex/auth-api";
-import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex/quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/quota";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
 import { consumeForInspection } from "../src/server/relay";
@@ -129,6 +129,16 @@ describe("codex routing", () => {
     expect(computeCodexUsageScore({})).toBe(CODEX_UNKNOWN_USAGE_SCORE);
   });
 
+  test("bulk pause exhaustion requires an explicit 100% relevant window", () => {
+    expect(isCodexQuotaExhausted(null, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({}, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 99.9 }, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 100 }, "plus")).toBe(true);
+    expect(isCodexQuotaExhausted({ monthlyPercent: 100 }, "plus")).toBe(true);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 100, monthlyPercent: 20 }, "free")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 20, monthlyPercent: 100 }, "go")).toBe(true);
+  });
+
   test("weekly threshold breach switches new threads", () => {
     const config = makeConfig();
     updateAccountQuota("a", 85);
@@ -162,6 +172,21 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("after-success", config)).toBe("a");
   });
 
+  test("paused main account is excluded even when it is the active and lowest-usage candidate", () => {
+    writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-chatgpt-id" },
+    }));
+    const config = makeConfig({
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false }],
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID],
+    });
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 1);
+    updateAccountQuota("a", 20);
+
+    expect(resolveCodexAccountForThread("paused-main", config)).toBe("a");
+  });
+
   test("go plan pool switching ignores the weekly window", () => {
     const config = makeConfig({
       codexAccounts: [
@@ -192,6 +217,25 @@ describe("codex routing", () => {
     saveTestCredential("c");
     updateAccountQuota("b", 25);
     expect(pickLowestUsageCodexAccount(config)).toBe("b");
+  });
+
+  test("paused accounts are excluded from new selection and existing affinity reuse", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("paused-affinity", config)).toBe("a");
+
+    config.pausedCodexAccountIds = ["a"];
+
+    expect(pickLowestUsageCodexAccount(config)).toBe("b");
+    expect(resolveCodexAccountForThread("paused-affinity", config)).toBe("b");
+  });
+
+  test("all paused accounts fail closed instead of falling back to a configured account", () => {
+    const config = makeConfig({ pausedCodexAccountIds: ["a", "b"] });
+
+    expect(pickLowestUsageCodexAccount(config)).toBeNull();
+    expect(resolveCodexAccountForThread("all-paused", config)).toBeNull();
   });
 
   test("upstream outcome classifier separates caller, credential, and transient failures", () => {
@@ -355,6 +399,26 @@ describe("codex routing", () => {
     expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
     expect(resolveCodexAccountForThread("scoped-thread", config, now + 3, "shared")).toBe("a");
     expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "spark")).toBe("b");
+  });
+
+  test("429 fallback skips paused candidates", () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "a", email: "a@test", isMain: false },
+        { id: "b", email: "b@test", isMain: false },
+        { id: "c", email: "c@test", isMain: false },
+      ],
+      pausedCodexAccountIds: ["b"],
+    });
+    saveTestCredential("c");
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 1);
+    updateAccountQuota("c", 30);
+
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "60" });
+
+    expect(config.activeCodexAccountId).toBe("c");
+    expect(resolveCodexAccountForThread("quota-skip-paused", config)).toBe("c");
   });
 
   test("2xx responses clear transient failures without clearing an unexpired cooldown", () => {

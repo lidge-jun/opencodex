@@ -167,6 +167,37 @@ describe("Codex auth context", () => {
     )).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
   });
 
+  test("pause excludes new auth selection without invalidating an in-flight context", async () => {
+    const cfg = config();
+    cfg.codexAccounts?.push({
+      id: "pool-b",
+      email: "pool-b@example.test",
+      isMain: false,
+      chatgptAccountId: "pool_b_acc",
+    });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+
+    const captured = await resolveCodexAuthContext(new Headers(), cfg, "pool");
+    expect(captured).toMatchObject({ kind: "pool", accountId: "pool-a" });
+
+    cfg.pausedCodexAccountIds = ["pool-a"];
+
+    expect(isCodexAuthContextUsable(captured, cfg)).toBe(true);
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+  });
+
   test("selected pool headers replace inbound main auth", () => {
     const headers = headersForCodexAuthContext(
       new Headers({ authorization: "Bearer main_token", "chatgpt-account-id": "main_acc", "openai-beta": "responses=experimental" }),
