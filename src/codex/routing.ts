@@ -171,6 +171,8 @@ export type CodexUpstreamOutcomeMeta = {
   modelId?: string;
   /** When set, clears affinity for this thread immediately on transient failure. */
   threadId?: string | null;
+  /** Suppress Pool selection and affinity mutations for an account-qualified request. */
+  fixedAccount?: boolean;
   /**
    * Probe lease held by this request, when it was admitted through an active
    * quota cooldown. Only the outcome carrying the current lease may clear the
@@ -1276,7 +1278,7 @@ export function recordCodexUpstreamOutcome(
     });
     quotaScopedHealth.delete(accountId);
     markAccountNeedsReauth(accountId);
-    clearThreadAccountMapForAccount(accountId);
+    if (!meta.fixedAccount) clearThreadAccountMapForAccount(accountId);
     return;
   }
 
@@ -1309,7 +1311,7 @@ export function recordCodexUpstreamOutcome(
       // The shared native scope is the existing account-wide native behavior:
       // threads must leave it and new requests should prefer an eligible account.
       // Spark remains isolated so a same-account Terra/Luna combo fallback can run.
-      if (quotaScope === "shared") {
+      if (quotaScope === "shared" && !meta.fixedAccount) {
         clearThreadAccountMapForAccount(accountId);
         notePoolRotationFailure(POOL_KEY_CODEX, accountId);
         if (getEffectiveActiveCodexAccountId(config) === accountId) {
@@ -1354,17 +1356,19 @@ export function recordCodexUpstreamOutcome(
           ...(prior?.lastProbeAt !== undefined ? { lastProbeAt: prior.lastProbeAt } : {}),
         }),
     });
-    clearThreadAccountMapForAccount(accountId);
-    notePoolRotationFailure(POOL_KEY_CODEX, accountId);
-    const effectiveActive = getEffectiveActiveCodexAccountId(config);
-    if (effectiveActive === accountId) {
-      // Same-request 429 retry already picked via excludeAccountId — reuse it so
-      // round-robin does not advance the ring a second time.
-      const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
-        ? meta.promoteAccountId
-        : null;
-      const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now);
-      if (fallback) promoteActiveCodexAccount(config, fallback);
+    if (!meta.fixedAccount) {
+      clearThreadAccountMapForAccount(accountId);
+      notePoolRotationFailure(POOL_KEY_CODEX, accountId);
+      const effectiveActive = getEffectiveActiveCodexAccountId(config);
+      if (effectiveActive === accountId) {
+        // Same-request 429 retry already picked via excludeAccountId — reuse it so
+        // round-robin does not advance the ring a second time.
+        const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
+          ? meta.promoteAccountId
+          : null;
+        const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now);
+        if (fallback) promoteActiveCodexAccount(config, fallback);
+      }
     }
     return;
   }
@@ -1409,15 +1413,17 @@ export function recordCodexUpstreamOutcome(
   // thread is still pinned to the FAILING account — a late failure from account A
   // must not delete a newer healthy binding to account B (race: T→A, A fails,
   // T→B, late A failure must not delete B's mapping).
-  if (failoverReady && meta.threadId) {
+  if (!meta.fixedAccount && failoverReady && meta.threadId) {
     deleteThreadAffinitiesForAccount(meta.threadId, accountId);
   }
   // Once the account is past the failover streak, clear every thread still pinned
   // to it — matching 429 affinity behavior so "continue" cannot stay on a bad peer.
-  if (shouldFailover(config, accountId, now)) {
+  if (!meta.fixedAccount && shouldFailover(config, accountId, now)) {
     clearThreadAccountMapForAccount(accountId);
   }
-  if (getEffectiveActiveCodexAccountId(config) === accountId) applyFailureFailover(config, accountId, now);
+  if (!meta.fixedAccount && getEffectiveActiveCodexAccountId(config) === accountId) {
+    applyFailureFailover(config, accountId, now);
+  }
 }
 
 export function formatCodexProviderForLog(providerName: string, accountId: string | null, config: OcxConfig): string {

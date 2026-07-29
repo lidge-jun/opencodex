@@ -58,7 +58,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from every future Pool selection until resumed in Codex Auth. Includes the main `__main__` account when paused. |
-| `codexAccountNamespaces?` | `Record<string,string>` | — | Optional public model-selector namespace → stored Codex account target map. This foundation layer validates and persists the map but does not add picker rows or change routing. |
+| `codexAccountNamespaces?` | `Record<string,string>` | — | Optional public model-selector namespace → stored Codex account target map. `<selector>/<native-openai-model>` routes using exactly the mapped account; this setting does not add model-picker rows. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy for the Codex pool. Applies to **new sessions only**; existing thread ids keep affinity. `quota` — today's default: pick the lowest known usage when the active account crosses `autoSwitchThreshold`. `round-robin` — even spread across eligible accounts via smooth weighted selection. `fill-first` — keep the active account until it cools down, becomes unusable, or crosses `autoSwitchThreshold` when set (unknown usage does not force a switch), then advance to the next eligible account in stable sorted order. |
@@ -78,8 +78,11 @@ names are rejected. Each value is either a valid pool-account id (never the inte
 `"@main"` for the Codex Desktop account. Provider and reserved `openai` / `combo` collisions are
 checked case-insensitively; a namespaced combo alias cannot reuse a selector as its namespace prefix,
 and configured pool ids or selector targets also cannot reuse a selector. Keep raw
-account ids and emails private—the selector is the public name. In this foundation layer the map is
-inert: it does not create model-picker entries, pin sessions, or alter Pool or Direct routing.
+account ids and emails private—the selector is the public name. A request such as
+`side/gpt-5.6-sol` uses only the account mapped by `side`, even when `openai` is in Direct mode, and
+sends `gpt-5.6-sol` upstream. It fails closed instead of switching accounts and does not change the
+active Pool account. Bare native models retain normal Pool/Direct routing. The map itself does not
+create model-picker entries.
 
 `maxConcurrentThreadsPerSession` is the camel-case field used by `PUT /api/v2`, not a
 `config.json` key. `ocx v2 threads <n>` persists the corresponding

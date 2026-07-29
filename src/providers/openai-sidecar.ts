@@ -29,6 +29,16 @@ export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandid
   recordOutcome?: (outcome: CodexUpstreamOutcome) => void;
 }
 
+/**
+ * Server-resolved exact account selection for a standalone ChatGPT sidecar call.
+ * Callers must derive this from a validated account-qualified model route; request
+ * headers are never trusted as account ids.
+ */
+export interface ExactOpenAiSidecarAccount {
+  accountId: string;
+  modelId: string;
+}
+
 export interface OpenAiImagesProviderSelection {
   forwardCandidates: OpenAiForwardSidecarCandidate[];
   keyed?: {
@@ -41,11 +51,18 @@ export interface OpenAiImagesProviderSelection {
 
 export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiForwardSidecarCandidate[] {
   const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
-  if (!provider || provider.disabled === true || !isCanonicalOpenAiForwardProvider(provider)) return [];
+  if (!provider || provider.disabled === true) return [];
+  // The built-in registry defaults an omitted authMode to forward. Normalize only that
+  // missing field before the strict adapter/destination check; explicit key mode and
+  // noncanonical destinations remain ineligible for ChatGPT credential injection.
+  const canonicalProvider = provider.authMode === undefined
+    ? { ...provider, authMode: "forward" as const }
+    : provider;
+  if (!isCanonicalOpenAiForwardProvider(canonicalProvider)) return [];
   return [{
     providerName: OPENAI_CODEX_PROVIDER_ID,
-    provider,
-    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, provider) ?? "pool",
+    provider: canonicalProvider,
+    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, canonicalProvider) ?? "pool",
   }];
 }
 
@@ -70,6 +87,7 @@ export async function resolveFirstUsableOpenAiSidecar(
   candidates: readonly OpenAiForwardSidecarCandidate[],
   incomingHeaders: Headers,
   config: OcxConfig,
+  exactAccount?: ExactOpenAiSidecarAccount,
 ): Promise<ResolvedOpenAiForwardSidecar | undefined> {
   let callerBearerMayBeForwarded = true;
   try {
@@ -79,6 +97,33 @@ export async function resolveFirstUsableOpenAiSidecar(
     callerBearerMayBeForwarded = false;
   }
   for (const candidate of candidates) {
+    if (exactAccount) {
+      // An account-qualified model is an explicit user choice. Resolve the stored
+      // credential directly even when the provider is globally Direct, and never
+      // consult Pool active state, affinity, probes, or alternates.
+      const authContext = await resolveCodexAuthContext(incomingHeaders, config, "pool", {
+        accountId: exactAccount.accountId,
+        modelId: exactAccount.modelId,
+      });
+      if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
+        || !isCodexAuthContextUsable(authContext, config)) return undefined;
+      return {
+        ...candidate,
+        authContext,
+        headers: headersForCodexAuthContext(incomingHeaders, authContext),
+        recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(
+          config,
+          authContext.accountId,
+          outcome,
+          {
+            modelId: exactAccount.modelId,
+            fixedAccount: true,
+            probeLeaseId: authContext.probeLeaseId,
+            probeQuotaScope: authContext.probeQuotaScope,
+          },
+        ),
+      };
+    }
     if (candidate.accountMode === "direct") {
       if (!callerBearerMayBeForwarded || !hasCallerCodexBearer(incomingHeaders)) continue;
       const headers = directSidecarHeaders(incomingHeaders);

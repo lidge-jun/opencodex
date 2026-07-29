@@ -118,6 +118,38 @@ describe("codex routing", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 15 })).toBe(15);
   });
 
+  test("exact-account failures record health without rotating the active Pool account", () => {
+    const transient = makeConfig({ upstreamFailoverThreshold: 1, activeCodexAccountId: "a" });
+    const transientThread = "fixed-transient-thread";
+    expect(resolveCodexAccountForThread(transientThread, transient)).toBe("a");
+    recordCodexUpstreamOutcome(transient, "a", 503, {
+      fixedAccount: true,
+      threadId: transientThread,
+      modelId: "gpt-5.6-sol",
+    });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1 });
+    expect(transient.activeCodexAccountId).toBe("a");
+    transient.activeCodexAccountId = "b";
+    clearCodexUpstreamHealthForAccount("a");
+    expect(resolveCodexAccountForThread(transientThread, transient)).toBe("a");
+
+    clearCodexUpstreamHealth();
+    const quota = makeConfig({ activeCodexAccountId: "a" });
+    const quotaThread = "fixed-quota-thread";
+    expect(resolveCodexAccountForThread(quotaThread, quota)).toBe("a");
+    recordCodexUpstreamOutcome(quota, "a", 429, {
+      fixedAccount: true,
+      threadId: quotaThread,
+      retryAfter: "60",
+      modelId: "gpt-5.6-sol",
+    });
+    expect(getCodexAccountCooldownUntil("a")).toBeNumber();
+    expect(quota.activeCodexAccountId).toBe("a");
+    quota.activeCodexAccountId = "b";
+    clearCodexUpstreamHealthForAccount("a");
+    expect(resolveCodexAccountForThread(quotaThread, quota)).toBe("a");
+  });
+
   test("go and free plans use only the 30d quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12 }, "go")).toBe(12);
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 13 }, "free")).toBe(13);

@@ -52,7 +52,7 @@ namespaced selected id を bare id に変えます。
 | `syncResumeHistory?` | `boolean` | `true` | 戻せる Codex App 履歴互換モード。opencodex は元の Codex thread metadata をバックアップし、旧 OpenAI interactive row を `opencodex` に再マッピングし、opencodex が作成した `exec` row を App に見えるソースとして一時的に昇格します。`ocx stop` / `ocx restore` はバックアップした OpenAI row を復元し、残った opencodex user thread を OpenAI に戻し、ネイティブ Codex が `config.toml` からプロキシを削除した後でも開き続けられるようにします。オフにするには `false` に設定します。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth ダッシュボードが管理する ChatGPT/Codex pool アカウント metadata。secret は `codex-accounts.json` に別途置きます。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Codex Auth で再開するまで、今後のすべての Pool 選択から除外するアカウント ID。メインを一時停止した場合は `__main__` も含みます。 |
-| `codexAccountNamespaces?` | `Record<string,string>` | — | 公開 model selector namespace から保存済み Codex アカウント target への任意 map。この foundation layer は map を検証・保存しますが、picker row の追加や routing の変更は行いません。 |
+| `codexAccountNamespaces?` | `Record<string,string>` | — | 公開 model selector namespace から保存済み Codex アカウント target への任意 map。`<selector>/<native OpenAI model>` は対応するアカウントだけに routing され、この設定自体は model picker row を追加しません。 |
 | `activeCodexAccountId?` | `string` | — | 手動選択した pool アカウント。既存 thread affinity を消去して次のリクエストから適用し、処理中のリクエストは現在のアカウントを維持します。 |
 | `autoSwitchThreshold?` | `number` | `80` | 新しいセッション自動切替用の使用量百分率 threshold。既知の 5 時間、週次、30 日 quota window のうち最も高いスコアを使います。`0` なら quota 自動切替をオフにします。`quota` 戦略と `fill-first` の drain threshold にも使います。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool の新しいセッション rotation 戦略。**新しいセッションのみ**に適用され、既存 thread id は affinity を維持します。`quota`（既定）— アクティブアカウントが `autoSwitchThreshold` を超えたら既知 usage 最小を選択。`round-robin` — 適格アカウント間を smooth weighted で均等分散。`fill-first` — cooldown、使用不可、または（設定時）`autoSwitchThreshold` までアクティブアカウントを使い切り（未知 usage は強制切替しない）、安定ソート順で次へ。 |
@@ -71,8 +71,11 @@ namespaced selected id を bare id に変えます。
 `"@main"` です。provider と予約済み `openai` / `combo` との衝突は大文字小文字を区別せず検査され、
 namespace 付き combo alias はその namespace prefix に selector を再利用できません。設定済み pool id
 や他の selector target も selector と再利用できません。raw account id と email は
-非公開のままにし、selector を公開名として使ってください。この foundation layer では map は inert で、
-model picker entry の作成、session の固定、Pool / Direct routing の変更は行いません。
+非公開のままにし、selector を公開名として使ってください。`side/gpt-5.6-sol` のような request は、
+`openai` が Direct mode の場合でも `side` に対応するアカウントだけを使用し、上流には
+`gpt-5.6-sol` を送信します。target を利用できない場合は別のアカウントへ切り替えず fail closed し、
+active Pool account も変更しません。bare native model は通常の Pool / Direct routing を維持します。
+この map 自体は model picker entry を作成しません。
 
 `maxConcurrentThreadsPerSession` は `config.json` キーではなく `PUT /api/v2` で使う camel-case
 フィールドです。`ocx v2 threads <n>` は対応する `max_concurrent_threads_per_session` 値を Codex の

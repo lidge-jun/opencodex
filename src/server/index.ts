@@ -32,6 +32,7 @@ import {
   CodexAccountCooldownError,
   cooldownErrorMessage,
 } from "../codex/auth-context";
+import { codexAccountNamespaceForModel } from "../codex/account-namespace-match";
 export {
   clearThreadAccountMap,
   formatCodexProviderForLog,
@@ -881,9 +882,12 @@ export function startServer(port?: number) {
                 finalizeLog(429);
                 // Codex Desktop rides this WS transport, so it must carry the same
                 // actionable text as HTTP; a frame has no headers, hence message-only.
+                const accountSelector = typeof payload.model === "string"
+                  ? codexAccountNamespaceForModel(config.codexAccountNamespaces, payload.model)
+                  : undefined;
                 sendJsonFrame(ws, buildWsErrorFrame(429, {
                   type: "rate_limit_error",
-                  message: cooldownErrorMessage(err),
+                  message: cooldownErrorMessage(err, accountSelector),
                 }));
                 return;
               }

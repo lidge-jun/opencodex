@@ -167,7 +167,9 @@ export function sidecarOutcomeRecorder(
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"
     ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
+      fixedAccount: authCtx.fixedAccount,
       probeLeaseId: authCtx.probeLeaseId,
+      probeQuotaScope: authCtx.probeQuotaScope,
     })
     : undefined;
 }
@@ -189,6 +191,11 @@ export function isShadowSourceModel(modelId: string, configured?: unknown): bool
 
 export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
+}
+
+function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {
+  return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
+    && authCtx.fixedAccount === true;
 }
 
 
@@ -316,6 +323,9 @@ async function retryCodexPoolOnAlternateAccount(
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
   } = args;
+  // Defense in depth: exact account selectors must never reach alternate-account resolution,
+  // even if a future caller forgets to guard this helper.
+  if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   let retryAuthCtx: CodexAuthContext | undefined;
   try {
     retryAuthCtx = await resolveCodexAuthContext(
@@ -356,7 +366,6 @@ async function retryCodexPoolOnAlternateAccount(
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
-    "pool",
   );
   const retryAdapter = resolveAdapter(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider),
@@ -419,6 +428,7 @@ export function codexForwardTerminalOutcomeRecorder(
       // prior soft-avoid so a healthy account isn't stuck avoided.
       recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
         threadId,
+        fixedAccount: authCtx.fixedAccount,
         modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
         probeQuotaScope: codexProbeQuotaScope(authCtx),
@@ -439,6 +449,7 @@ export function codexForwardTerminalOutcomeRecorder(
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
+      fixedAccount: authCtx.fixedAccount,
       modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
       probeQuotaScope: codexProbeQuotaScope(authCtx),
@@ -677,7 +688,10 @@ async function resolveResponsesCodexAuth(
     if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
     let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, { modelId: route.modelId });
+      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+        accountId: route.codexAccountId,
+        modelId: route.modelId,
+      });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       authCtx = { kind: "main", accountId: null };
@@ -697,7 +711,7 @@ async function resolveResponsesCodexAuth(
     };
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
-      return { ok: false, response: cooldownErrorResponse(err) };
+      return { ok: false, response: cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace) };
     }
     if (err instanceof CodexThreadAffinityExpiredError) {
       return {
@@ -706,7 +720,9 @@ async function resolveResponsesCodexAuth(
       };
     }
     if (err instanceof CodexAuthContextError) {
-      const safeAccountLabel = formatCodexProviderForLog(route.providerName, err.accountId, config);
+      const safeAccountLabel = route.codexAccountNamespace
+        ? `${route.providerName}-${route.codexAccountNamespace}`
+        : formatCodexProviderForLog(route.providerName, err.accountId, config);
       console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return {
         ok: false,
@@ -1144,10 +1160,6 @@ export async function handleResponses(
   }
   if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
 
-  if (isThreadSpawnRequest(req.headers)) {
-    await maybePrimeSubagentQuota(config);
-  }
-
   let route: RouteResult;
   try {
     route = routeModel(config, parsed.modelId);
@@ -1156,6 +1168,12 @@ export async function handleResponses(
       return comboUnavailableResponse(err.message);
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+  }
+
+  // Exact account selectors are intentionally isolated from Pool-wide quota work. A child request
+  // must not inspect or warm every account before its fixed credential is resolved.
+  if (isThreadSpawnRequest(req.headers) && route.codexAccountId === undefined) {
+    await maybePrimeSubagentQuota(config);
   }
 
   let authCtx: CodexAuthContext = { kind: "main", accountId: null };
@@ -1167,7 +1185,7 @@ export async function handleResponses(
   // normalization (virtual models, effort caps, service tier, wire protocol).
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
   // tokens — auth is resolved only after the final route is selected.
-  if (isThreadSpawnRequest(req.headers) && !options.comboAttempt) {
+  if (isThreadSpawnRequest(req.headers) && !options.comboAttempt && route.codexAccountId === undefined) {
     const threadId = req.headers.get("x-codex-parent-thread-id");
     const previewAccountId = previewCodexAccountForRequest(threadId, config);
     subagentFallbackAccountId = previewAccountId ?? config.activeCodexAccountId ?? null;
@@ -1207,6 +1225,11 @@ export async function handleResponses(
   }
 
   await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx });
+  // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
+  // the normal post-resolution provider label is assigned.
+  if (route.codexAccountNamespace) {
+    logCtx.provider = `${route.providerName}-${route.codexAccountNamespace}`;
+  }
 
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
@@ -1215,8 +1238,10 @@ export async function handleResponses(
     selectedForwardHeaders = finalAuth.headers;
   }
 
-  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
-  logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
+  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx);
+  logCtx.provider = route.codexAccountNamespace
+    ? `${route.providerName}-${route.codexAccountNamespace}`
+    : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
   // Prefer Codex pool account as the Cursor thread namespace when present. Cursor routes without
   // codexAccountMode still get a credential-derived scope inside the Cursor adapter.
   const identityScope = codexLogAccountId(authCtx);
@@ -1437,6 +1462,7 @@ export async function handleResponses(
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          fixedAccount: authCtx.fixedAccount,
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
           probeQuotaScope: codexProbeQuotaScope(authCtx),
@@ -1466,7 +1492,7 @@ export async function handleResponses(
       return transportFailureResponse(err);
     }
 
-    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+    if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
       let poolRetryOutcome: number | undefined;
       if (await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
@@ -1546,7 +1572,7 @@ export async function handleResponses(
               || logCtx.terminalHttpStatus === 402
               ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
               : undefined;
-            if (quotaFailureMessage !== undefined) {
+            if (!isFixedCodexAccount(authCtx) && quotaFailureMessage !== undefined) {
               recordSubagentQuotaFailureForThreadSpawn(
                 req.headers,
                 subagentQuotaFailureModel,
@@ -1565,6 +1591,7 @@ export async function handleResponses(
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
           ...quotaMeta,
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          fixedAccount: authCtx.fixedAccount,
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
           probeQuotaScope: codexProbeQuotaScope(authCtx),
@@ -1617,7 +1644,7 @@ export async function handleResponses(
                 || logCtx.terminalHttpStatus === 402
                 ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
                 : undefined;
-              if (quotaFailureMessage !== undefined) {
+              if (!isFixedCodexAccount(authCtx) && quotaFailureMessage !== undefined) {
                 recordSubagentQuotaFailureForThreadSpawn(
                   req.headers,
                   subagentQuotaFailureModel,
@@ -1679,7 +1706,7 @@ export async function handleResponses(
               || logCtx.terminalHttpStatus === 402
               ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
               : undefined;
-            if (quotaFailureMessage !== undefined) {
+            if (!isFixedCodexAccount(authCtx) && quotaFailureMessage !== undefined) {
               recordSubagentQuotaFailureForThreadSpawn(
                 req.headers,
                 subagentQuotaFailureModel,
@@ -2269,15 +2296,17 @@ export async function handleResponses(
       }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
       cleanupUpstreamAbort();
-      recordSubagentQuotaFailureForThreadSpawn(
-        req.headers,
-        subagentQuotaFailureModel,
-        upstreamResponse.status === 429 || upstreamResponse.status === 402
-          ? upstreamResponse.status
-          : `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`,
-        config,
-        subagentFallbackAccountId,
-      );
+      if (!isFixedCodexAccount(authCtx)) {
+        recordSubagentQuotaFailureForThreadSpawn(
+          req.headers,
+          subagentQuotaFailureModel,
+          upstreamResponse.status === 429 || upstreamResponse.status === 402
+            ? upstreamResponse.status
+            : `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`,
+          config,
+          subagentFallbackAccountId,
+        );
+      }
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const message = `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`;

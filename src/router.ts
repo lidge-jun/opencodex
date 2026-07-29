@@ -4,15 +4,26 @@ import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
-import { LEGACY_CHATGPT_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import {
+  isCanonicalOpenAiForwardProvider,
+  LEGACY_CHATGPT_PROVIDER_ID,
+  LEGACY_OPENAI_MULTI_PROVIDER_ID,
+  OPENAI_API_PROVIDER_ID,
+  OPENAI_CODEX_PROVIDER_ID,
+} from "./providers/openai-tiers";
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
+import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 
 export interface RouteResult {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
   codexAccountMode?: CodexAccountMode;
+  /** Exact account selected by an account-qualified native model. */
+  codexAccountId?: string;
+  /** Public namespace used by the account-qualified selector. */
+  codexAccountNamespace?: string;
   combo?: ComboPick;
 }
 
@@ -318,6 +329,39 @@ function routeResult(providerName: string, provider: OcxProviderConfig, modelId:
 }
 
 function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: boolean): RouteResult {
+  const slash = modelId.indexOf("/");
+  if (slash > 0) {
+    const namespace = modelId.slice(0, slash);
+    const binding = codexAccountNamespaceEntries(config)
+      .find(([candidate]) => candidate === namespace);
+    if (binding) {
+      const nativeModelId = modelId.slice(slash + 1);
+      if (!isBareOpenAiFamilyModel(nativeModelId)) {
+        throw new Error(`Codex account namespace ${namespace} only supports native OpenAI model ids`);
+      }
+      const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
+      if (!provider || provider.disabled === true) {
+        throw new NoEnabledOpenAiProviderError(nativeModelId);
+      }
+      // Registry routing backfills an omitted authMode on the built-in OpenAI row to forward.
+      // Mirror only that default here; explicit non-forward modes still fail closed.
+      const providerForCanonicalCheck = provider.authMode === undefined
+        ? { ...provider, authMode: "forward" as const }
+        : provider;
+      if (!isCanonicalOpenAiForwardProvider(providerForCanonicalCheck)) {
+        throw new NoEnabledOpenAiProviderError(nativeModelId);
+      }
+      return {
+        ...routeResult(OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId),
+        // Exact account injection uses the pool credential machinery even when the canonical
+        // provider is globally Direct. The fixed id bypasses pool selection entirely.
+        codexAccountMode: "pool",
+        codexAccountId: binding[1],
+        codexAccountNamespace: namespace,
+      };
+    }
+  }
+
   if (!bypassCombos && !preservesPhysicalComboProvider(config)) {
     const combo = tryPickComboModel(config, modelId);
     if (combo) {
@@ -333,7 +377,6 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
   //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when
   //    no such provider exists.
-  const slash = modelId.indexOf("/");
   if (slash > 0) {
     const provName = modelId.slice(0, slash);
     if (provName === LEGACY_CHATGPT_PROVIDER_ID || provName === LEGACY_OPENAI_MULTI_PROVIDER_ID) {

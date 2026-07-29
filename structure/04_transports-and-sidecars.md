@@ -59,6 +59,21 @@ The two-shape contract is mirror-commented in `src/server/index.ts` and
 source-invariant-tested by `tests/passthrough-abort.test.ts`; keep both in
 lockstep with any `core.ts` passthrough change.
 
+## Standalone Search and exact account selectors
+
+`POST /v1/alpha/search` retains the selected model in its request body. When that value is an
+account-qualified native selector, the server resolves the public namespace, uses only the mapped
+stored Codex credential, and sends the bare native model upstream. That exact path is fail-closed:
+it does not consult or mutate Pool selection and its outcomes cannot rotate accounts. Ordinary
+search requests keep the normal Direct/Pool sidecar behavior.
+
+Standalone Images and Live requests currently carry neither the account-qualified model selector
+nor a trustworthy thread correlation from the Codex client. They therefore retain normal provider
+routing. Do not infer an exact account from caller-supplied account headers, process-global last
+selection, connection identity, or other ambient state; concurrent threads could cross-route
+credentials. Extending exact routing to those endpoints requires an opaque client correlation that
+can be bound server-side to a previously validated selector.
+
 ## Standalone Images
 
 Codex's local `image_gen.imagegen` tool makes a second Images request after the model calls it:

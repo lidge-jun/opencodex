@@ -46,6 +46,36 @@ function parsedWithWebSearch() {
 }
 
 describe("web-search sidecar planning", () => {
+  test("canonical sidecar discovery defaults only an omitted OpenAI auth mode to forward", () => {
+    const canonicalWithoutAuthMode: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+    };
+    expect(listOpenAiForwardSidecarCandidates(canonicalWithoutAuthMode)).toMatchObject([{
+      providerName: "openai",
+      provider: { authMode: "forward" },
+      accountMode: "direct",
+    }]);
+
+    for (const openai of [
+      { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "key" },
+      { adapter: "openai-chat", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      { adapter: "openai-responses", baseUrl: "https://proxy.example.test/v1" },
+    ] satisfies OcxProviderConfig[]) {
+      expect(listOpenAiForwardSidecarCandidates({
+        ...canonicalWithoutAuthMode,
+        providers: { openai },
+      })).toEqual([]);
+    }
+  });
+
   test("central Direct sidecar selection never treats a proxy admission bearer as Codex auth", async () => {
     const cfg: OcxConfig = {
       port: 10100,

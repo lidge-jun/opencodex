@@ -16,11 +16,17 @@ import {
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
+import { codexAccountNamespaceForModel } from "../codex/account-namespace-match";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
-import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../providers/openai-sidecar";
+import {
+  listOpenAiForwardSidecarCandidates,
+  resolveFirstUsableOpenAiSidecar,
+  type ExactOpenAiSidecarAccount,
+} from "../providers/openai-sidecar";
+import { routeModel } from "../router";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
@@ -55,6 +61,31 @@ export async function handleSearch(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
+  let exactAccount: ExactOpenAiSidecarAccount | undefined;
+  let relayBody = body;
+  const accountNamespace = typeof model === "string"
+    ? codexAccountNamespaceForModel(config.codexAccountNamespaces, model)
+    : undefined;
+  if (accountNamespace && typeof model === "string") {
+    try {
+      const route = routeModel(config, model);
+      if (!route.codexAccountId || route.codexAccountNamespace !== accountNamespace) {
+        return formatErrorResponse(400, "invalid_request_error", "Invalid Codex account-qualified search model");
+      }
+      exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
+      logCtx.provider = `${route.providerName}-${accountNamespace}`;
+      // The ChatGPT search endpoint only understands the native model slug. The
+      // account namespace is proxy routing syntax and must not cross the wire.
+      relayBody = { ...(body as Record<string, unknown>), model: route.modelId };
+    } catch (err) {
+      return formatErrorResponse(
+        400,
+        "invalid_request_error",
+        err instanceof Error ? err.message : "Invalid Codex account-qualified search model",
+      );
+    }
+  }
+
   const candidates = listOpenAiForwardSidecarCandidates(config);
   if (candidates.length === 0) {
     return formatErrorResponse(
@@ -67,7 +98,7 @@ export async function handleSearch(
 
   let upstream: Awaited<ReturnType<typeof resolveFirstUsableOpenAiSidecar>>;
   try {
-    upstream = await resolveFirstUsableOpenAiSidecar(candidates, req.headers, config);
+    upstream = await resolveFirstUsableOpenAiSidecar(candidates, req.headers, config, exactAccount);
     if (!upstream) {
       return formatErrorResponse(
         401,
@@ -75,16 +106,20 @@ export async function handleSearch(
         "web search relay needs ChatGPT auth (Authorization header)",
       );
     }
-    logCtx.provider = formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
+    logCtx.provider = accountNamespace
+      ? `${upstream.providerName}-${accountNamespace}`
+      : formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
-      return cooldownErrorResponse(err);
+      return cooldownErrorResponse(err, Date.now(), accountNamespace);
     }
     if (err instanceof CodexThreadAffinityExpiredError) {
       return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
     }
     if (err instanceof CodexAuthContextError) {
-      const safeAccountLabel = formatCodexProviderForLog("openai", err.accountId, config);
+      const safeAccountLabel = accountNamespace
+        ? `openai-${accountNamespace}`
+        : formatCodexProviderForLog("openai", err.accountId, config);
       console.error(`[search] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
     }
@@ -103,7 +138,7 @@ export async function handleSearch(
     const upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(relayBody),
       signal: linkedSignal.signal,
     });
     const payload = await upstreamResponse.arrayBuffer();
