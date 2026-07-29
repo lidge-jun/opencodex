@@ -8,7 +8,7 @@ type RawModel = {
   id?: string;
   contextWindow?: number;
   maxTokens?: number;
-  input?: ("text" | "image")[];
+  input?: ("text" | "image" | "video")[];
   reasoning?: boolean;
   wireModelId?: string;
   cost?: {
@@ -60,7 +60,7 @@ lines.push("  provider: string;");
 lines.push("  id: string;");
 lines.push("  contextWindow?: number;");
 lines.push("  maxTokens?: number;");
-lines.push("  input?: (\"text\" | \"image\")[];");
+lines.push("  input?: (\"text\" | \"image\" | \"video\")[];");
 lines.push("  reasoning?: boolean;");
 lines.push("  wireModelId?: string;");
 lines.push("  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };");
@@ -136,7 +136,7 @@ lines.push("  return {");
 lines.push("    provider, id,");
 lines.push("    ...(contextWindow != null ? { contextWindow } : {}),");
 lines.push("    ...(maxTokens != null ? { maxTokens } : {}),");
-lines.push("    ...(input ? { input: input.split(\",\") as (\"text\" | \"image\")[] } : {}),");
+lines.push("    ...(input ? { input: input.split(\",\") as (\"text\" | \"image\" | \"video\")[] } : {}),");
 lines.push("    ...(reasoning != null ? { reasoning: reasoning === 1 } : {}),");
 lines.push("    ...(wireModelId != null ? { wireModelId } : {}),");
 lines.push("    ...(hasCost ? { cost: { input: costInput, output: costOutput, cacheRead: costCacheRead, cacheWrite: costCacheWrite } } : {}),");
