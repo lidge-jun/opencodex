@@ -509,6 +509,9 @@ The public docs — install, providers, routing, sidecars, Codex integration, Co
 Maintainer source-of-truth notes live under [`structure/`](./structure). Historical investigations remain under [`docs/`](./docs).
 Contributor setup lives in [`CONTRIBUTING.md`](./CONTRIBUTING.md), and security reporting guidance
 lives in [`SECURITY.md`](./SECURITY.md).
+Report undisclosed vulnerabilities privately through
+[GitHub private vulnerability reporting](https://github.com/lidge-jun/opencodex/security/advisories/new),
+not a public issue.
 
 ## Development
 

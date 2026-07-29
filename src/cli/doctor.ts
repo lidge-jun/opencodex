@@ -14,7 +14,8 @@ import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntim
 import { findLiveProxy } from "../server/proxy-liveness";
 import { gracefulStopHost } from "../lib/process-control";
 import { maskAccountId } from "../lib/privacy";
-import { loadServiceTokenFromFile } from "../lib/service-secrets";
+import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
+import { configuredAdminToken } from "../lib/admin-secrets";
 import { readCodexTokens } from "../codex/auth-collision";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
@@ -286,17 +287,15 @@ export function collectWslDualInstall(deps: WslDualInstallDeps = {}): WslDualIns
   };
 }
 
-const PROXY_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] as const;
-
 export type ProxyEnvRow = { key: string; present: boolean };
 export type EnvMap = Record<string, string | undefined>;
 
 /** Report only presence/absence of proxy env vars - never the value (it may
  * embed credentials). Checks both upper- and lower-case forms. */
 export function collectProxyEnv(env: EnvMap = process.env): ProxyEnvRow[] {
-  return PROXY_KEYS.map(key => ({
+  return PROXY_ENV_KEYS.map(key => ({
     key,
-    present: !!(env[key]?.trim() || env[key.toLowerCase()]?.trim()),
+    present: proxyEnvPresent(key, env),
   }));
 }
 
@@ -572,7 +571,7 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   const lines: string[] = [];
   lines.push(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
   if (report.status === "unauthorized") {
-    lines.push("  --     proxy reachable but rejected the request — set OPENCODEX_API_AUTH_TOKEN to match the service");
+    lines.push("  --     proxy reachable but rejected the request — set OPENCODEX_ADMIN_AUTH_TOKEN to match the service");
     return lines;
   }
   if (report.status === "unreachable") {
@@ -762,7 +761,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       console.log(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
       console.log("  --     no running ocx proxy found (no live pid/runtime record)");
     } else {
-      const token = process.env.OPENCODEX_API_AUTH_TOKEN ?? loadServiceTokenFromFile(process.env);
+      const token = configuredAdminToken();
       const report = await fetchServiceMemory(gracefulStopHost(runtime.hostname), runtime.port, token);
       for (const line of formatServiceMemoryLines(report)) console.log(line);
     }

@@ -23,6 +23,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -346,23 +347,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
-      const destinationError = await providerDestinationResolvedError(name, {
-        baseUrl: modelsUrl,
-        allowPrivateNetwork: prov.allowPrivateNetwork,
-      });
-      if (destinationError) {
-        return jsonResponse({
-          ok: false,
-          latencyMs: Date.now() - started,
-          error: `upstream /models blocked by destination policy: ${destinationError}`,
-        });
-      }
-      const res = await fetch(modelsUrl, {
+      const res = await providerOutboundGet(name, prov, modelsUrl, {
         headers,
-        redirect: "error",
         signal: AbortSignal.timeout(8000),
       });
       const latencyMs = Date.now() - started;
+      const redirectError = await providerRedirectError(res, modelsUrl);
+      if (redirectError) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: redirectError,
+        });
+      }
       if (!res.ok) {
         try {
           void res.body?.cancel().catch(() => undefined);
@@ -410,7 +407,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({
         ok: false,
         latencyMs: Date.now() - started,
-        error: err instanceof Error ? err.message : "Connection test failed",
+        error: err instanceof ProviderOutboundPolicyError
+          ? `upstream /models blocked by destination policy: ${err.message}`
+          : err instanceof Error ? err.message : "Connection test failed",
       });
     }
   }

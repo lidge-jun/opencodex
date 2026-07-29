@@ -843,3 +843,4 @@ describe("supported disabled-provider activation", () => {
     });
   }, 10_000);
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

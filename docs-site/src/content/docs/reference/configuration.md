@@ -86,6 +86,33 @@ inert: it does not create model-picker entries, pin sessions, or alter Pool or D
 `max_concurrent_threads_per_session` value under `[features.multi_agent_v2]` in Codex's
 `$CODEX_HOME/config.toml`; enable v2 first so that table exists.
 
+## Provider diagnostic outbound safety
+
+The dashboard provider connection test and live model discovery use a bounded GET-only outbound
+transport. Without an outbound proxy, opencodex resolves the provider hostname once and connects
+only to that validated address. HTTPS keeps the original hostname for Host, SNI, and certificate
+verification; certificate verification cannot be disabled by provider config.
+
+When `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` applies, these two operations keep Bun's native fetch
+so existing proxy behavior is not silently bypassed. URL/literal checks still run. Successful local DNS answers
+are classified, but a local DNS failure is allowed through because proxy-only networks commonly
+delegate name resolution to the proxy. The proxy chooses the final route, DNS answer, and peer, so
+opencodex logs that this path cannot pin or verify the proxy-selected peer. This is an explicit
+security limitation, not equivalent protection against DNS rebinding.
+
+Private/local provider destinations require both `allowPrivateNetwork: true` and a matching
+`NO_PROXY` entry whenever an outbound proxy is configured. Loopback entries are added to `NO_PROXY`
+automatically. A LAN provider such as `192.168.1.50` must be added explicitly; otherwise connection
+tests and model discovery reject it with an actionable message instead of sending it to the proxy.
+Metadata and link-local destinations remain blocked even when `allowPrivateNetwork` is enabled.
+The safety guard accepts exact hosts, domain suffixes, optional ports, bracketed IPv6, and `*` in
+`NO_PROXY`; it does not interpret CIDR entries, so list each private provider host or address explicitly.
+
+Both direct and proxied diagnostic paths reject redirects and report a credential-stripped target;
+configure the final provider URL directly. Ordinary provider requests, streaming responses, and
+retry paths are not migrated in this phase. Their redirect handling and per-hop destination review
+remain deferred, so this phase does not close the main-request redirect finding.
+
 ## Combos (`config.combos`)
 
 Failover / round-robin aliases live under `combos.<id>` with `targets` (provider + model), optional
@@ -179,6 +206,7 @@ body-occupancy guard):
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Native passthrough cumulative body byte cap (streamed SSE and buffered non-stream). Exactly `0` disables. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | unset (auto) | How `ANTHROPIC_AUTH_TOKEN` is handled at launch. Unset means auto: opencodex detects Claude auth on every launch and picks subscription when it finds any, proxy when it finds none, and subscription with a warning when it cannot tell. An explicit value is never overridden by detection. See [Claude Code](/guides/claude-code/#auth-mode). |
 | `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time marker. Written once when an upgrade pins a pre-`auto` config to `subscription`, so a deliberate subscriber is not silently moved onto the proxy. Do not set by hand. |
+| `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | unset (inherit) | Effort written to every generated `~/.claude/agents/ocx-*.md` definition. Unset lets each subagent inherit the parent Claude Code session effort. This controls Claude Code custom-agent frontmatter; it is separate from Codex `injectionEffort` guidance and proxy-side effort caps. Regenerate the definitions by starting through `ocx claude` after changing it. |
 
 ### Managed record shapes
 

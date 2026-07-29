@@ -279,7 +279,7 @@ test("canceling the token prompt once does not reopen it for the rest of the 401
   expect([...new Set(statuses)]).toEqual([401]);
 });
 
-test("cross-origin /v1/* requests do not receive the API key or token prompt", async () => {
+test("data-plane requests never receive the management token or prompt", async () => {
   let promptCalls = 0;
   let phase: "seed" | "cross" = "seed";
   const seenHeaders: Array<string | null> = [];
@@ -298,8 +298,9 @@ test("cross-origin /v1/* requests do not receive the API key or token prompt", a
   };
   await installMockAuthFetch(stateful);
 
-  expect((await fetch("/v1/models")).status).toBe(200);
-  expect(promptCalls).toBe(1);
+  expect((await fetch("/v1/models")).status).toBe(401);
+  expect(seenHeaders).toEqual([null]);
+  expect(promptCalls).toBe(0);
 
   phase = "cross";
   const beforeCrossPrompts = promptCalls;

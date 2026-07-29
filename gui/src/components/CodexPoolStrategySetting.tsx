@@ -122,6 +122,7 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
           disabled={saving}
           strategySelectId="codex-pool-strategy"
           stickyInputId="codex-pool-sticky-limit"
+          strategyLabelHidden
           onStrategyChange={(next) => {
             if (next === strategy) return;
             void save({ strategy: next });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { managementFetch as fetch } from "./helpers/management-auth";
 import { createHash } from "node:crypto";
 import {
   chmodSync,

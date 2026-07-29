@@ -130,3 +130,4 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(sub.available).toContain("gpt-5.6-terra");
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

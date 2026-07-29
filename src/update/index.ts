@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 
 /**
@@ -50,19 +51,24 @@ export function updateTag(current: string): Channel {
   return defaultUpdateTag(current);
 }
 
-/**
- * npm is `npm.cmd` on Windows, and Node/Bun refuse shell-less .cmd spawns
- * (CVE-2024-27980 hardening) — route Windows npm invocations through the shell.
- */
-function npmSpawnTarget(bin: string): { bin: string; shell: boolean } {
-  if (process.platform !== "win32" || bin !== "npm") return { bin, shell: false };
-  return { bin: "npm.cmd", shell: true };
+function npmSpawnTarget(args: readonly string[]): { bin: string; args: string[]; options: { windowsVerbatimArguments?: boolean } } | null {
+  const invocation = npmInvocation(args);
+  if (!invocation) return null;
+  return { bin: invocation.file, args: invocation.args, options: invocation.options };
+}
+
+function updateSpawnTarget(bin: string, args: readonly string[]): { bin: string; args: string[]; options: { windowsVerbatimArguments?: boolean } } | null {
+  if (bin === "npm") return npmSpawnTarget(args);
+  if (process.platform === "win32" && bin === "bun") {
+    return { bin: process.execPath, args: [...args], options: {} };
+  }
+  return { bin, args: [...args], options: {} };
 }
 
 /**
  * The GUI update worker sets OCX_SERVICE=1 and has stdio ignored — inheriting that for
- * `npm.cmd` (shell:true) opens stacked visible consoles on Windows. Pipe instead and
- * relay bounded output after the child exits. (Ported from PR #167.)
+ * Background package-manager children can open stacked visible consoles on Windows.
+ * Pipe instead and relay bounded output after the child exits. (Ported from PR #167.)
  */
 function updateChildStdio(): "inherit" | "pipe" {
   if (process.env.OCX_SERVICE === "1") return "pipe";
@@ -79,8 +85,14 @@ function logSpawnOutput(label: string, result: { stdout?: string | Buffer | null
 
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
 export function latestVersion(tag: string): string | null {
-  const npm = npmSpawnTarget("npm");
-  const r = spawnSync(npm.bin, ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell });
+  const npm = npmSpawnTarget(["view", `${PKG}@${tag}`, "version"]);
+  if (!npm) return null;
+  const r = spawnSync(npm.bin, npm.args, {
+    encoding: "utf8",
+    timeout: 12000,
+    windowsHide: true,
+    ...npm.options,
+  });
   return r.status === 0 ? (r.stdout.trim() || null) : null;
 }
 
@@ -116,11 +128,12 @@ export function checkUpdatePackageIntegrity(
   spawn: typeof spawnSync = spawnSync,
 ): { ok: true; integrity: string } | { ok: false; reason: string } | { ok: "skipped"; reason: string } {
   if (!version) return { ok: "skipped", reason: "no resolved version (registry unavailable)" };
-  const npm = npmSpawnTarget("npm");
+  const npm = npmSpawnTarget(["view", `${PKG}@${version}`, "dist.integrity"]);
+  if (!npm) return { ok: "skipped", reason: "npm executable was not found on a trusted PATH entry" };
   const r = spawn(
     npm.bin,
-    ["view", `${PKG}@${version}`, "dist.integrity"],
-    { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell },
+    npm.args,
+    { encoding: "utf8", timeout: 12000, windowsHide: true, ...npm.options },
   );
   // status !== 0 covers nonzero exits AND timeouts (status === null).
   if (r.status !== 0) return { ok: "skipped", reason: `registry integrity query failed (status ${r.status ?? "timeout"})` };
@@ -162,6 +175,13 @@ export async function runUpdate(): Promise<void> {
     console.warn(`⚠️  Integrity pre-flight skipped: ${integrity.reason}. Proceeding best-effort.`);
   } else {
     console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
+  }
+
+  const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);
+  const target = updateSpawnTarget(bin, cmdArgs);
+  if (!target) {
+    console.error("⚠️  Could not resolve npm from a trusted absolute PATH entry; aborting before stopping the proxy.");
+    process.exit(1);
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
@@ -240,17 +260,15 @@ export async function runUpdate(): Promise<void> {
     }
   }
 
-  const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
 
-  const target = npmSpawnTarget(bin);
   const installStdio = updateChildStdio();
-  const r = spawnSync(target.bin, cmdArgs, {
+  const r = spawnSync(target.bin, target.args, {
     stdio: installStdio,
     encoding: installStdio === "pipe" ? "utf8" : undefined,
     timeout: 180000,
     windowsHide: true,
-    shell: target.shell,
+    ...target.options,
   });
   if (installStdio === "pipe") logSpawnOutput("", r);
   if (r.status === 0) {

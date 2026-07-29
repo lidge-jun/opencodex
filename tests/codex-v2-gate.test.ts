@@ -588,3 +588,4 @@ describe("3-state multi-agent mode", () => {
     expect(native.multi_agent_version).toBeUndefined();
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Notice } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
-import { modelLabel } from "../model-display";
 import { readJsonOrThrow } from "../fetch-json";
+import { backgroundHelperOptions } from "./claude-code-helper-options";
 import { reconcileAutoConnectState } from "./claude-autoconnect";
 import { buildManualEnv } from "./claude-manual-env";
 import {
@@ -68,10 +68,10 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timeout);
   }, [load]);
 
-  const modelOptions = useMemo(() => {
-    const options = (state?.available ?? []).map(m => ({ value: m, label: modelLabel(m) }));
-    return [{ value: "", label: t("claude.smallFastModelUnsetOption") }, ...options];
-  }, [state?.available, t]);
+  const modelOptions = useMemo(
+    () => backgroundHelperOptions(state?.available, t("claude.smallFastModelUnsetOption")),
+    [state?.available, t],
+  );
 
   // Auto-compact window presets (devlog 020 + user request): dropdown like the model
   // pickers. "" = 350k default; a saved off-ladder value is surfaced as its own option.

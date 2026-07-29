@@ -16,6 +16,7 @@ import {
 import { PROVIDER_REGISTRY, type ProviderModelDiscoverySpec } from "../src/providers/registry";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 
 const FIXTURE = readFileSync(join(import.meta.dir, "fixtures/provider-model-discovery.json"), "utf8");
 const originalFetch = globalThis.fetch;
@@ -69,7 +70,7 @@ async function withRegistryDiscovery<T>(
 }
 
 function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
-  return {
+  const config: OcxConfig = {
     port: 10100,
     defaultProvider: "together",
     providers: {
@@ -82,6 +83,7 @@ function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
       },
     },
   };
+  return withStubbedProviderFetch(config);
 }
 
 describe("registry-owned provider model discovery", () => {
@@ -192,7 +194,7 @@ describe("registry-owned provider model discovery", () => {
       },
     }, async () => {
       globalThis.fetch = (async (_input, init) => {
-        expect(init?.redirect).toBe("error");
+        expect(init?.redirect).toBe("manual");
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer together-test-key");
         return new Response(FIXTURE, {
           status: 200,

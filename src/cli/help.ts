@@ -30,12 +30,18 @@ const helpEntries: Record<string, HelpEntry> = {
   uninstall: {
     usage: "ocx uninstall",
     summary: "Remove service/shim/config and restore native Codex.",
-    details: ["Alias: ocx remove"],
+    details: [
+      "Alias: ocx remove",
+      "Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories are left in place.",
+    ],
   },
   remove: {
     usage: "ocx remove",
     summary: "Remove service/shim/config and restore native Codex.",
-    details: ["Alias of: ocx uninstall"],
+    details: [
+      "Alias of: ocx uninstall",
+      "Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories are left in place.",
+    ],
   },
   service: {
     usage: "ocx service [install|start|stop|status|uninstall|remove]",

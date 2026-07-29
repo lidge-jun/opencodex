@@ -170,7 +170,9 @@ export function updateExecutionCommand(
     return { bin, args, display: formatCommand(bin, args) };
   }
   if (installer === "bun") {
-    const { bin, args } = updateCommand(installer, channel, resolvedVersion);
+    const command = updateCommand(installer, channel, resolvedVersion);
+    const bin = process.platform === "win32" ? process.execPath : command.bin;
+    const { args } = command;
     return { bin, args, display: updateCommandStr(installer, channel, resolvedVersion) };
   }
   return { bin: "sh", args: ["-lc", manualSourceCommand()], display: manualSourceCommand() };

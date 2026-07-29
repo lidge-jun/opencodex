@@ -204,6 +204,10 @@ export interface UrlDestinationAssessment {
   detail: string;
 }
 
+export class DestinationDnsResolutionError extends Error {
+  override readonly name = "DestinationDnsResolutionError";
+}
+
 /**
  * Synchronous literal URL destination assessment — classifies the hostname
  * without DNS resolution. Returns null for unparseable URLs.
@@ -213,31 +217,46 @@ export function assessUrlDestination(url: string): UrlDestinationAssessment | nu
 }
 
 /**
- * Async DNS-resolved URL safety check. Resolves A/AAAA records and rejects
- * if any address is loopback, private, link-local, unspecified, or metadata.
- * Throws on unsafe destination; returns the validated public addresses on success
- * so callers can pin the connect peer and avoid a second, rebindable resolution.
- * DNS resolution failures are treated as unsafe (fail-closed).
+ * Async DNS-resolved URL safety check. By default, rejects every non-public
+ * address. Provider diagnostics may explicitly admit loopback/private answers;
+ * metadata, link-local, and unspecified addresses remain unconditionally denied.
+ * Returns the validated addresses so direct callers can pin the connect peer and
+ * avoid a second, rebindable resolution. DNS failures remain fail-closed here;
+ * the provider proxy wrapper alone may recognize that typed failure and degrade.
  */
-export async function resolvePublicAddresses(url: string, noun: string = "image"): Promise<{
+export async function resolvePublicAddresses(
+  url: string,
+  options?: string | { context?: string; allowPrivateNetwork?: boolean },
+): Promise<{
   hostname: string;
   addresses: { address: string; family: number }[];
+  privateNetwork: boolean;
 }> {
+  const context = typeof options === "string"
+    ? `${options.trim() || "image"} URL`
+    : options?.context?.trim() || "image URL";
+  const privateNetworkAllowed = typeof options === "object" && options?.allowPrivateNetwork === true;
   let hostname: string;
   try {
     hostname = normalizeHostname(new URL(url.trim()).hostname);
   } catch {
-    throw new Error(`${noun} URL is not a valid URL`);
+    throw new Error(`${context} is not a valid URL`);
   }
-  if (!hostname) throw new Error(`${noun} URL has no hostname`);
+  if (!hostname) throw new Error(`${context} has no hostname`);
   const literalAssessment = assessDestination(url);
+  let privateNetwork = false;
   if (literalAssessment && literalAssessment.kind !== "public" && literalAssessment.kind !== "hostname") {
-    throw new Error(`${noun} URL targets ${literalAssessment.detail}`);
+    const allowedPrivateLiteral = privateNetworkAllowed
+      && (literalAssessment.kind === "localhost"
+        || literalAssessment.kind === "loopback"
+        || literalAssessment.kind === "private");
+    if (!allowedPrivateLiteral) throw new Error(`${context} targets ${literalAssessment.detail}`);
+    privateNetwork = true;
   }
   // Literal public IPs: no DNS round-trip; pin the literal itself.
   const literalKind = isIP(hostname);
   if (literalKind !== 0) {
-    return { hostname, addresses: [{ address: hostname, family: literalKind }] };
+    return { hostname, addresses: [{ address: hostname, family: literalKind }], privateNetwork };
   }
   let addresses: { address: string; family: number }[];
   try {
@@ -245,23 +264,29 @@ export async function resolvePublicAddresses(url: string, noun: string = "image"
   } catch {
     // If DNS fails, we can't verify — fail-closed (unlike provider config-time validation,
     // this is a runtime fetch to an untrusted URL, so be conservative).
-    throw new Error(`${noun} URL hostname ${hostname} could not be resolved`);
+    throw new DestinationDnsResolutionError(`${context} hostname ${hostname} could not be resolved`);
   }
   if (addresses.length === 0) {
-    throw new Error(`${noun} URL hostname ${hostname} could not be resolved`);
+    throw new DestinationDnsResolutionError(`${context} hostname ${hostname} could not be resolved`);
   }
-  const publicAddresses: { address: string; family: number }[] = [];
+  const validatedAddresses: { address: string; family: number }[] = [];
   for (const { address, family } of addresses) {
     // Prefer classifying from the address string itself — do not trust a mislabeled
     // resolver `family` that could skip IPv4/IPv6 private checks.
     const ipKind = isIP(address) || (family === 4 || family === 6 ? family : 0);
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind !== "public") {
-      throw new Error(`${noun} URL hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
+      const allowedPrivateAddress = privateNetworkAllowed
+        && assessment
+        && (assessment.kind === "loopback" || assessment.kind === "private");
+      if (!allowedPrivateAddress) {
+        throw new Error(`${context} hostname ${hostname} resolves to ${assessment?.detail ?? "an unsafe address"} (${address})`);
+      }
+      privateNetwork = true;
     }
-    publicAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
+    validatedAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
   }
-  return { hostname, addresses: publicAddresses };
+  return { hostname, addresses: validatedAddresses, privateNetwork };
 }
 
 /**

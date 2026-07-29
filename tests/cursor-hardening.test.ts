@@ -346,3 +346,4 @@ describe("Cursor live transport unexpected EOF", () => {
     });
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

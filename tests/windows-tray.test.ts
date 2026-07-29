@@ -275,3 +275,4 @@ describe("Windows tray packaging and command safety", () => {
     }
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

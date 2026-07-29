@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { getTrackedCodexWebSocketCountForAccount } from "../src/codex/websocket-registry";
@@ -30,6 +31,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { configuredAdminToken } from "../src/lib/admin-secrets";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -52,6 +54,14 @@ function config(hostname?: string): OcxConfig {
       },
     },
   };
+}
+
+function managementHeaders(initial?: HeadersInit): Headers {
+  const token = configuredAdminToken();
+  if (!token) throw new Error("management token was not initialized");
+  const headers = new Headers(initial);
+  headers.set("x-opencodex-api-key", token);
+  return headers;
 }
 
 const canonicalDirect = {
@@ -507,13 +517,13 @@ describe("server local API auth", () => {
     const server = startServer(0);
     try {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/config`, {
-        headers: { "x-opencodex-api-key": "local-secret", origin: "https://attacker.test" },
+        headers: managementHeaders({ origin: "https://attacker.test" }),
       });
       expect(response.status).toBe(403);
       expect(await response.json()).toMatchObject({ error: "cross-origin request blocked" });
 
       const ok = await fetch(`http://127.0.0.1:${server.port}/api/config`, {
-        headers: { "x-opencodex-api-key": "local-secret", origin: `http://127.0.0.1:${server.port}` },
+        headers: managementHeaders({ origin: `http://127.0.0.1:${server.port}` }),
       });
       expect(ok.status).toBe(200);
     } finally {
@@ -537,7 +547,7 @@ describe("server local API auth", () => {
       expect(missing.status).toBe(401);
 
       const ok = await fetch(`http://127.0.0.1:${server.port}/api/system/memory`, {
-        headers: { "x-opencodex-api-key": "local-secret" },
+        headers: managementHeaders(),
       });
       expect(ok.status).toBe(200);
       const body = await ok.json() as { rss?: number; bunVersion?: string };
@@ -600,6 +610,7 @@ describe("server local API auth", () => {
         headers: {
           host: `attacker.test:${server.port}`,
           origin: attackerOrigin,
+          "x-opencodex-api-key": configuredAdminToken() ?? "missing-admin-token",
         },
       });
       expect(response.status).toBe(403);
@@ -619,14 +630,14 @@ describe("server local API auth", () => {
     const origin = `http://127.0.0.1:${server.port}`;
     try {
       const settings = await fetch(new URL("/api/settings", server.url), {
-        headers: { origin },
+        headers: managementHeaders({ origin }),
       });
       expect(settings.status).toBe(200);
       expect(settings.headers.get("access-control-allow-origin")).toBe(origin);
       expect(settings.headers.get("vary")).toContain("Origin");
 
       const active = await fetch(new URL("/api/codex-auth/active", server.url), {
-        headers: { origin },
+        headers: managementHeaders({ origin }),
       });
       expect(active.status).toBe(200);
       expect(active.headers.get("access-control-allow-origin")).toBe(origin);
@@ -657,11 +668,10 @@ describe("server local API auth", () => {
       expect(missing.status).toBe(401);
 
       const ok = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-        headers: {
+        headers: managementHeaders({
           host: `lan.example.test:${server.port}`,
           origin,
-          "x-opencodex-api-key": "local-secret",
-        },
+        }),
       });
       expect(ok.status).toBe(200);
       expect(ok.headers.get("access-control-allow-origin")).toBe(origin);
@@ -683,18 +693,43 @@ describe("server local API auth", () => {
 
     const server = startServer(0);
     try {
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "GET",
-        headers: {
-          authorization: "Bearer inbound-main-token",
-          connection: "Upgrade",
-          upgrade: "websocket",
-          origin: "https://attacker.test",
-          "x-opencodex-api-key": "local-secret",
-        },
+      const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = httpRequest({
+          hostname: "127.0.0.1",
+          port: server.port,
+          path: "/v1/responses",
+          method: "GET",
+          headers: {
+            authorization: "Bearer inbound-main-token",
+            connection: "Upgrade",
+            upgrade: "websocket",
+            origin: "https://attacker.test",
+            "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "sec-websocket-version": "13",
+            "x-opencodex-api-key": "local-secret",
+          },
+        }, incoming => {
+          let body = "";
+          incoming.setEncoding("utf8");
+          incoming.on("data", chunk => {
+            body += chunk;
+          });
+          incoming.on("end", () => {
+            resolve({ status: incoming.statusCode ?? 0, body });
+          });
+        });
+        req.setTimeout(5_000, () => {
+          req.destroy(new Error("hostile websocket handshake timed out"));
+        });
+        req.on("upgrade", (incoming, socket) => {
+          socket.destroy();
+          resolve({ status: incoming.statusCode ?? 0, body: "" });
+        });
+        req.on("error", reject);
+        req.end();
       });
       expect(response.status).toBe(403);
-      expect(await response.json()).toMatchObject({
+      expect(JSON.parse(response.body)).toMatchObject({
         error: { code: "origin_rejected" },
       });
     } finally {
@@ -1225,7 +1260,7 @@ describe("server local API auth", () => {
 
         const switched = await fetch(new URL("/api/codex-auth/active", sequential.url), {
           method: "PUT",
-          headers: { "content-type": "application/json", "x-opencodex-api-key": "local-secret" },
+          headers: managementHeaders({ "content-type": "application/json" }),
           body: JSON.stringify({ accountId: "pool-b" }),
         });
         expect(switched.status).toBe(200);
@@ -1575,7 +1610,7 @@ describe("server local API auth", () => {
       ws.close();
 
       expect(seenAuth).toEqual(["Bearer old-access-token", "Bearer new-access-token"]);
-      const logs = await fetch(new URL("/api/logs?tail=2", server.url)).then(r => r.json()) as Array<{ status: number }>;
+      const logs = await fetch(new URL("/api/logs?tail=2", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{ status: number }>;
       expect(logs.map(entry => entry.status)).toEqual([200, 200]);
     } finally {
       Date.now = originalNow;
@@ -1647,7 +1682,7 @@ describe("server local API auth", () => {
       await waitForTerminal();
       ws.close();
 
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{
+      const logs = await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{
         status: number;
         terminalStatus?: string;
         closeReason?: string;
@@ -2165,7 +2200,7 @@ describe("server local API auth", () => {
         consecutiveFailures: 3,
         lastFailureStatus: 502,
       });
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{ status: number; errorCode?: string; terminalStatus?: string; closeReason?: string }>;
+      const logs = await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{ status: number; errorCode?: string; terminalStatus?: string; closeReason?: string }>;
       expect(logs.at(-1)).toMatchObject({
         status: 502,
         errorCode: "upstream_server_error",
@@ -2221,7 +2256,7 @@ describe("server local API auth", () => {
 
       expect(response.status).toBe(200);
       await response.text();
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url)).then(r => r.json()) as Array<{
+      const logs = await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{
         status: number;
         terminalStatus?: string;
         closeReason?: string;
@@ -2243,7 +2278,7 @@ describe("server local API auth", () => {
         },
       });
 
-      const usage = await fetch(new URL("/api/usage?range=all&surface=codex", server.url)).then(r => r.json()) as {
+      const usage = await fetch(new URL("/api/usage?range=all&surface=codex", server.url), { headers: managementHeaders() }).then(r => r.json()) as {
         surface: string;
         summary: { requests: number; reportedRequests: number; totalTokens: number };
         models: Array<{ provider: string; model: string; reportedRequests: number; totalTokens: number }>;
@@ -2257,7 +2292,7 @@ describe("server local API auth", () => {
         totalTokens: 18,
       });
 
-      const claudeUsage = await fetch(new URL("/api/usage?range=all&surface=claude", server.url)).then(r => r.json()) as {
+      const claudeUsage = await fetch(new URL("/api/usage?range=all&surface=claude", server.url), { headers: managementHeaders() }).then(r => r.json()) as {
         surface: string;
         summary: { requests: number };
       };

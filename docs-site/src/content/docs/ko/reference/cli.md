@@ -379,6 +379,14 @@ ocx service status
 ocx service uninstall
 ```
 
+Windows에서 작업 스케줄러 항목을 만들려면 권한 상승이 필요합니다. 인식 가능한 현지화 권한 거부
+문자열은 기존 안내 경로를 그대로 사용합니다. 문자열을 읽을 수 없을 때는 명령 모양이
+`/create /tn opencodex-proxy /xml <비어 있지 않은 경로> /f`와 정확히 일치하고, 종료 상태가 1이며,
+현재 토큰이 권한 상승되지 않았음이 확인돼야만 언어 독립 fallback이 작동합니다. 이때 대시보드의
+Startup Safety 작업이 UAC를 자동 요청할 수 있습니다. fallback에서 토큰 상태를 확인할 수 없으면 원래
+스케줄러 오류를 유지합니다. 다른 작업과 동작은 자동 권한 상승 marker를 만들 수 없습니다. 대시보드의
+UAC를 승인하거나 관리자 PowerShell에서 `ocx service install`을 다시 실행하세요.
+
 ### `ocx codex-shim <subcommand>`
 
 PATH에 있는 스크립트 기반 `codex` 런처를 가벼운 자동 시작 스크립트로 감쌉니다. 실제 `codex.exe`

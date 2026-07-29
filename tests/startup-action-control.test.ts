@@ -46,3 +46,4 @@ describe("startup install actions", () => {
     expect(called).toBe(false);
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

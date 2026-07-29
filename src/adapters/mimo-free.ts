@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { OcxProviderConfig, OcxParsedRequest } from "../types";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import type { ProviderAdapter, AdapterRequest } from "./base";
@@ -59,6 +60,7 @@ export function getMimoClientId(): string {
   } catch { /* fall through to regenerate */ }
   const fresh = randomUUID();
   try {
+    recordOwnedConfigPath(dir, file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(file, `${fresh}\n`, "utf8");
   } catch { /* persist best-effort; still usable for this process */ }

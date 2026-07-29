@@ -442,6 +442,11 @@ export interface OcxClaudeCodeConfig {
    * free. Only ocx-*.md files are owned/pruned. Default: enabled.
    */
   injectAgents?: boolean;
+  /**
+   * Optional Claude Code effort pinned in every generated ocx-* subagent
+   * definition. Unset inherits the parent session effort.
+   */
+  subagentEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
   webSearchSidecar?: { backend?: "openai" | "anthropic"; model?: string };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */

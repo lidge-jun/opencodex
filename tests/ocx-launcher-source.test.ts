@@ -9,16 +9,16 @@ import { join } from "node:path";
 const source = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
 
 describe("ocx.mjs npm launcher (source invariants)", () => {
-  test("npm spawns go through a shell on Windows (Node ≥18.20 EINVALs shell-less .cmd spawns)", () => {
-    const spawnSites = source.match(/spawnSync\(npm,[\s\S]*?\}\)/g) ?? [];
-    expect(spawnSites.length).toBe(2);
-    for (const site of spawnSites) {
-      expect(site).toContain("shell: winShell");
-    }
-    expect(source).toContain('const winShell = process.platform === "win32";');
+  test("Windows npm spawns use the trusted absolute invocation without shell lookup", () => {
+    expect(source).toContain("const latestInvocation = npmInvocation(");
+    expect(source).toContain("const installInvocation = npmInvocation(");
+    expect(source).toContain("spawnSync(latestInvocation.file, latestInvocation.args");
+    expect(source).toContain("spawnSync(installInvocation.file, installInvocation.args");
+    expect(source).not.toContain("shell: true");
+    expect(source).not.toContain('"npm.cmd"');
   });
 
-  test("--tag is allowlisted before reaching shell-joined spawn args", () => {
+  test("--tag is allowlisted before reaching package-manager arguments", () => {
     expect(source).toContain('if (explicit === "preview" || explicit === "latest") return explicit;');
     expect(source).not.toMatch(/if \(tagIndex !== -1 && process\.argv\[tagIndex \+ 1\]\) return process\.argv/);
   });

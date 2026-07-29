@@ -11,6 +11,7 @@ import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
+import { speedLabel } from "./logs-speed-label";
 
 interface UsageBreakdown {
   inputTokens: number;
@@ -93,7 +94,7 @@ interface LogAttempt {
   displayMetrics?: LogDisplayMetrics;
 }
 
-interface LogEntry {
+export interface LogEntry {
   requestId?: string;
   timestamp: number;
   model: string;
@@ -164,12 +165,6 @@ function cacheSplit(log: LogEntry): { read?: number; write?: number } {
       ? Math.max(0, u.cachedInputTokens - write)
       : u.cachedInputTokens;
   return { read, write };
-}
-
-function speedLabel(log: LogEntry): string | undefined {
-  if (log.requestedSpeedLabel) return log.requestedSpeedLabel;
-  if (log.modelSupportsServiceTier && log.configuredSpeedLabel) return log.configuredSpeedLabel;
-  return undefined;
 }
 
 interface ReasoningLogFields {

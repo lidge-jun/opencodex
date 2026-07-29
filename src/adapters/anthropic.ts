@@ -403,29 +403,33 @@ function messagesToAnthropicFormat(
       }
       case "assistant": {
         const aMsg = msg as OcxAssistantMessage;
-        const content: unknown[] = [];
+        const preface: unknown[] = [];
+        const toolUses: unknown[] = [];
         const toolUseIds: string[] = [];
         for (const part of aMsg.content) {
           if (part.type === "text") {
             const text = (part as OcxTextContent).text;
-            if (text) content.push({ type: "text", text });
+            if (text) preface.push({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
-              content.push({ type: "redacted_thinking", data });
+              preface.push({ type: "redacted_thinking", data });
             }
             if (isLikelyRealAnthropicThinkingSignature(t.signature)) {
-              content.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
+              preface.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
             }
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
             const flatName = namespacedToolName(tc.namespace, tc.name);
             toolUseIds.push(tc.id);
-            content.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
+            toolUses.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
           }
         }
+        // Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
+        // earlier tool_use ids look unpaired (#620 / common multi-step history shape).
+        const content = [...preface, ...toolUses];
         if (content.length === 0) break;
         messages.push({ role: "assistant", content });
         if (toolUseIds.length > 0) {

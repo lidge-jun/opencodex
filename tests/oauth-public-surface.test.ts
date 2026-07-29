@@ -534,3 +534,4 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     }
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

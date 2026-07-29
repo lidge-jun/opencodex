@@ -73,6 +73,18 @@ test("an unrelated save does not clobber the hand edit", () => {
   expect(diskConfig().disabledModels).toEqual(["test/one"]);
 });
 
+test("an unrelated save does not resurrect an invalid persisted subagent effort", () => {
+  writeDiskConfig({ claudeCode: { authMode: "subscription", subagentEffort: "ultra" } });
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+
+  live.disabledModels = ["test/one"];
+  saveConfigPreservingClaudeCode(live);
+
+  expect(live.claudeCode).toEqual({ authMode: "subscription" });
+  expect(diskConfig().claudeCode).toEqual({ authMode: "subscription" });
+});
+
 // R3-2: arming must be eager. A lazy "arm on first save" loses exactly this edit.
 test("an edit made before the first save still survives", () => {
   const live = loadConfig();

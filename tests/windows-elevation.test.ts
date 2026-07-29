@@ -16,6 +16,7 @@ import {
   schtasksOperationFromArgs,
   setTrustedWindowsElevationExecutablesForTests,
   setTrustedWindowsSystemDirectoryResolverForTests,
+  setWindowsElevationProbeForTests,
   toWindowsSchtasksError,
   windowsCmdQuote,
 } from "../src/lib/windows-elevation";
@@ -43,9 +44,16 @@ describe("windows elevation helpers", () => {
       stdout: "",
       status: 1,
     });
-    const message = formatWindowsSchtasksError(error, ["/create", "/tn", "opencodex-proxy"]);
+    const message = formatWindowsSchtasksError(error, [
+      "/create",
+      "/tn",
+      "opencodex-proxy",
+      "/xml",
+      "task.xml",
+      "/f",
+    ]);
     expect(message).toContain("Windows access denied while running Task Scheduler.");
-    expect(message).toContain("schtasks /create /tn opencodex-proxy");
+    expect(message).toContain("schtasks /create /tn opencodex-proxy /xml task.xml /f");
     expect(message).toContain("UAC prompt");
     expect(message).toContain(WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER);
     expect(isWindowsSchtasksCreateAccessDenied(message)).toBe(true);
@@ -70,12 +78,101 @@ describe("windows elevation helpers", () => {
 
   test("toWindowsSchtasksError preserves operation and reason", () => {
     const error = Object.assign(new Error("Command failed"), { stderr: "Access is denied." });
-    const structured = toWindowsSchtasksError(error, ["/create", "/xml", "task.xml", "/f"]);
+    const structured = toWindowsSchtasksError(error, [
+      "/create",
+      "/tn",
+      "opencodex-proxy",
+      "/xml",
+      "task.xml",
+      "/f",
+    ]);
     expect(structured).toBeInstanceOf(WindowsSchtasksError);
     expect(structured.operation).toBe("create");
     expect(structured.reason).toBe("access-denied");
     expect(structured.machineMarker).toBe(WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER);
     expect(schtasksOperationFromArgs(["/delete", "/tn", "x"])).toBe("delete");
+  });
+
+  test("classifies an owned scheduler create failure without localized text", () => {
+    setWindowsElevationProbeForTests(() => false);
+    try {
+      const error = Object.assign(new Error("Command failed"), {
+        // A real non-English Windows install can arrive as mojibake here.
+        stderr: "����: �ܾ����ʡ�\r\n",
+        stdout: "",
+        status: 1,
+      });
+      const structured = toWindowsSchtasksError(error, [
+        "/create",
+        "/tn",
+        "opencodex-proxy",
+        "/xml",
+        "C:\\Users\\tester\\.opencodex\\opencodex-service-task.xml",
+        "/f",
+      ]);
+      expect(structured.reason).toBe("access-denied");
+      expect(structured.message).toContain("Windows access denied while running Task Scheduler.");
+      expect(structured.machineMarker).toBe(WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER);
+    } finally {
+      setWindowsElevationProbeForTests(null);
+    }
+  });
+
+  test("locale-independent elevation fallback is scoped and fails closed", () => {
+    const error = Object.assign(new Error("Command failed"), {
+      stderr: "unrecognized localized output",
+      status: 1,
+    });
+    setWindowsElevationProbeForTests(() => false);
+    try {
+      expect(toWindowsSchtasksError(error, ["/query", "/tn", "opencodex-proxy"]).reason).toBe("other");
+      expect(toWindowsSchtasksError(error, [
+        "/create",
+        "/tn",
+        "someone-elses-task",
+        "/xml",
+        "task.xml",
+        "/f",
+      ]).reason).toBe("other");
+
+      const foreignDenied = toWindowsSchtasksError(
+        Object.assign(new Error("Command failed"), { stderr: "Access is denied.", status: 1 }),
+        ["/create", "/tn", "someone-elses-task", "/xml", "task.xml", "/f"],
+      );
+      expect(foreignDenied.reason).toBe("other");
+      expect(foreignDenied.message).toContain("Windows access denied while running Task Scheduler.");
+      expect(foreignDenied.machineMarker).toBeNull();
+    } finally {
+      setWindowsElevationProbeForTests(null);
+    }
+
+    setWindowsElevationProbeForTests(() => null);
+    try {
+      expect(toWindowsSchtasksError(error, [
+        "/create",
+        "/tn",
+        "opencodex-proxy",
+        "/xml",
+        "task.xml",
+        "/f",
+      ]).reason).toBe("other");
+    } finally {
+      setWindowsElevationProbeForTests(null);
+    }
+
+    setWindowsElevationProbeForTests(() => true);
+    try {
+      expect(toWindowsSchtasksError(error, [
+        "/create",
+        "/tn",
+        "opencodex-proxy",
+        "/xml",
+        "task.xml",
+        "/f",
+      ]).reason).toBe("other");
+    } finally {
+      setWindowsElevationProbeForTests(null);
+    }
   });
 
   test("builds one Win32-quoted argument list for spaced paths", () => {
