@@ -324,6 +324,23 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("Never tell the user that shell or read access is blocked");
   });
 
+  test("adds host-shell-neutral PowerShell and one-retry-stop guidance (#604)", () => {
+    const note = buildCursorToolGuidanceSystemNote([{ name: "shell_command", description: "Run", parameters: {} }]);
+    expect(note).toBeDefined();
+    if (!note) throw new Error("Expected Cursor tool guidance note");
+
+    expect(note).toContain("Windows PowerShell 5.1");
+    expect(note).toContain("cd /d");
+    expect(note).toContain("<<EOF");
+    expect(note).toContain("if ($?)");
+    expect(note).toContain("`&&`/`||` are unsupported parser errors");
+    expect(note).toContain("do not treat `;` as a substitute for `&&`");
+    expect(note).toContain("at most one corrected bridge attempt");
+    expect(note).toContain("Get-Content");
+    expect(note).toContain("`cat`/`ls`/`rg`");
+    expect(note).toContain("Codex client host");
+  });
+
   test("adds codex-native edit guidance only when apply_patch is advertised", () => {
     const tools: OcxTool[] = [
       { name: "exec_command", description: "Run", parameters: {} },

@@ -160,6 +160,8 @@ export interface OcxTool {
   webSearch?: boolean;
   /** Synthetic image_gen tool: the model's call is executed by the xAI image bridge sidecar, not relayed to Codex. */
   imageGeneration?: boolean;
+  /** Synthetic video_gen tool: executed by the xAI video bridge sidecar. */
+  videoGeneration?: boolean;
 }
 
 /**
@@ -678,6 +680,14 @@ export interface OcxConfig {
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */
   codexAccounts?: CodexAccount[];
+  /** Account ids administratively excluded from future pool selection until resumed. */
+  pausedCodexAccountIds?: string[];
+  /**
+   * Public model-selector namespaces bound to one Codex account. Values are stored account ids;
+   * `"@main"` selects the Codex Desktop/main auth.json account. Account display aliases
+   * are intentionally separate from these selectors.
+   */
+  codexAccountNamespaces?: Record<string, string>;
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
@@ -782,6 +792,14 @@ export interface OcxImagesConfig {
   maxRounds?: number;
   /** Max files retained under artifacts/. Oldest deleted when exceeded. Default 200. */
   artifactsKeepCount?: number;
+  /** Master switch for the video bridge. Default false — must be explicitly opted in. */
+  videoBridgeEnabled?: boolean;
+  /** Model for xAI video generation. Default "grok-imagine-video". */
+  videoBridgeModel?: string;
+  /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
+  videoMaxRounds?: number;
+  /** Per-video generation timeout (ms) including polling. Default 300000 (5 min). */
+  videoTimeoutMs?: number;
 }
 
 export interface OcxSearchConfig {

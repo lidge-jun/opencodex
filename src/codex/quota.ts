@@ -33,6 +33,21 @@ const MONTHLY_WINDOW_MIN_MINUTES = MONTHLY_WINDOW_MIN_SECONDS / 60;
 const accountQuota = new Map<string, StoredAccountQuota>();
 
 export const CODEX_UNKNOWN_USAGE_SCORE = 100;
+export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
+
+export function isCodexQuotaExhausted(
+  quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent"> | null,
+  plan?: string | null,
+): boolean {
+  if (!quota) return false;
+  const normalizedPlan = plan?.trim().toLowerCase();
+  const values = normalizedPlan === "go" || normalizedPlan === "free"
+    ? [quota.monthlyPercent]
+    : [quota.weeklyPercent, quota.monthlyPercent];
+  return values.some(value => typeof value === "number"
+    && Number.isFinite(value)
+    && value >= CODEX_EXHAUSTED_USAGE_PERCENT);
+}
 
 export function normalizeUsagePercent(value: unknown): number | undefined {
   const numeric = typeof value === "number"

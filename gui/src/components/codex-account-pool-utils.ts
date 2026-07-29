@@ -1,7 +1,14 @@
-import { formatCreditDate as formatCreditDateIntl } from "../intl-formatters";
+import {
+  formatCreditDate as formatCreditDateIntl,
+  formatCreditDateTime as formatCreditDateTimeIntl,
+} from "../intl-formatters";
 
-export function formatCreditDate(iso: string): string {
-  return formatCreditDateIntl(iso);
+export function formatCreditDate(iso: string, locale?: string): string {
+  return formatCreditDateIntl(iso, locale);
+}
+
+export function formatCreditDateTime(iso: string, locale?: string): string {
+  return formatCreditDateTimeIntl(iso, locale);
 }
 
 export function daysUntil(iso: string): number {

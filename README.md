@@ -240,11 +240,15 @@ next Codex session. opencodex keeps these behaviors:
 
 - **Existing sessions keep affinity.** A thread id is bound to the selected account and reused on
   later turns, so a long request or a mobile/SSH-attached session keeps using the same account.
+  Pausing an account clears its affinity map: in-flight requests keep captured credentials, but
+  subsequent turns are re-routed and cannot reuse the paused account.
 - **New sessions can auto-route.** When auto-switch is enabled, opencodex compares the hottest known
   quota window across 5h, weekly, and 30d usage, then picks a lower-usage eligible account for new
   sessions once the active account crosses the threshold.
 - **Quota lookup is built in.** The dashboard can refresh all account quotas in one click, and the
-  request log labels pool traffic with non-PII account ordinals.
+  request log labels pool traffic with non-PII account ordinals. **Pause exhausted** refreshes
+  eligible accounts that have credentials and pauses only those whose relevant quota window is
+  freshly confirmed at 100%; accounts without credentials and unknown or failed refreshes stay unchanged.
 - **Failures fail closed.** Token failures mark reauthentication instead of falling back to another
   credential silently; 429 quota responses put the account in cooldown and can fail over future work
   to another eligible pool account.

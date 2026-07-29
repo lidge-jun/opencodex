@@ -98,6 +98,12 @@ bun run release:watch               # watch the newest Release workflow run
   `dev`; do not open feature pull requests against it.
 - `preview` — the prerelease train.
 
+While the project moves its primary runtime to the Go native port, `dev2-go`
+has to keep receiving everything that lands on `dev`. Nothing changes for you:
+keep opening pull requests against `dev`. After a merge, a maintainer rebases
+the work onto `dev2-go` and ports whatever needs a Go counterpart under `go/`,
+and the item counts as finished only once both lines carry it.
+
 Porting and rebase pull requests are welcome. Carrying a fix from one
 integration line to another, or rebasing a stale branch onto the current head,
 is normal contribution rather than noise — note the source commits in the
