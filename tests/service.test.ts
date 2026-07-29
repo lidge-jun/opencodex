@@ -276,6 +276,24 @@ describe("Windows service task", () => {
     });
   });
 
+  test("accepts scheduler-exported literal quotes in launcher arguments", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\a&b\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    // Task Scheduler exports quotation marks literally in element text while
+    // retaining required XML escaping for characters such as ampersands.
+    const exported = xml.replaceAll("&quot;", '"');
+
+    expect(exported).toContain('<Arguments>/b /nologo "C:\\Users\\a&amp;b\\.opencodex\\service-launcher.vbs"</Arguments>');
+    expect(windowsTaskRegistrationHealthy(exported, wscript, launcher)).toBe(true);
+    expect(windowsTaskRegistrationHealthy(
+      exported.replace("service-launcher.vbs", "foreign.vbs"),
+      wscript,
+      launcher,
+    )).toBe(false);
+  });
+
   test("rejects explicit unsafe values even though defaults may be omitted", () => {
     const wscript = "C:\\Windows\\System32\\wscript.exe";
     const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
@@ -283,429 +301,9 @@ describe("Windows service task", () => {
       .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
 
     // Trigger disabled explicitly.
-    expect(windowsTaskRegistrationHealthy(
-      xml.replace("<LogonTrigger>\n      <Enabled>true</Enabled>", "<LogonTrigger>\n      <Enabled>false</Enabled>"),
-      wscript,
-      launcher,
-    )).toBe(false);
-    // Settings disabled explicitly.
-    const settingsDisabled = xml.replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>");
-    expect(windowsTaskRegistrationHealthy(settingsDisabled, wscript, launcher)).toBe(false);
-    expect(readWindowsSchedulerXmlState(settingsDisabled, wscript, launcher).enabled).toBe(false);
-  });
-
-  test("a decoy trigger outside Triggers does not satisfy the logon requirement", () => {
-    const wscript = "C:\\Windows\\System32\\wscript.exe";
-    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
-    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
-      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
-    const bootOnly = xml.replace("<LogonTrigger>\n      <Enabled>true</Enabled>\n    </LogonTrigger>", "<BootTrigger />");
-
-    // The schema allows arbitrary XML under Task/Data, and comments could smuggle a
-    // decoy too â€” neither may stand in for a real logon trigger.
-    for (const decoyed of [
-      bootOnly.replace("<Triggers>", "<Data><LogonTrigger /></Data>\n  <Triggers>"),
-      bootOnly.replace("<Triggers>", "<!-- <LogonTrigger /> -->\n  <Triggers>"),
-    ]) expect(windowsTaskRegistrationHealthy(decoyed, wscript, launcher)).toBe(false);
-  });
-
-  test("namespace-prefixed values are not mistaken for omissions", () => {
-    const wscript = "C:\\Windows\\System32\\wscript.exe";
-    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
-    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
-      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
-
-    // A prefixed element carries a real value; reading it as "absent, use the
-    // default" would turn an explicitly disabled or elevated task into a healthy one.
-    for (const prefixed of [
-      xml.replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <t:Enabled>false</t:Enabled>\n    <Hidden>"),
-      xml.replace("<RunLevel>LeastPrivilege</RunLevel>", "<t:RunLevel>HighestAvailable</t:RunLevel>"),
-    ]) expect(windowsTaskRegistrationHealthy(prefixed, wscript, launcher)).toBe(false);
-  });
-
-  test("a Data block disqualifies the registration", () => {
-    const wscript = "C:\\Windows\\System32\\wscript.exe";
-    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
-    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
-      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
-    // taskXmlSection() takes the first match, so a Data block placed ahead of the
-    // real sections could shadow them. We never emit Data, prefixed or not.
-    const shadowedSettings = xml
-      .replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>")
-      .replace("<Triggers>", "<Data><Settings><Enabled>true</Enabled></Settings></Data>\n  <Triggers>");
-    const shadowedPrincipal = xml
-      .replace("LeastPrivilege", "HighestAvailable")
-      .replace("<Triggers>", "<Data><Principal><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Data>\n  <Triggers>");
-    const prefixedData = xml
-      .replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>")
-      .replace("<Triggers>", "<t:Data><Settings><Enabled>true</Enabled></Settings></t:Data>\n  <Triggers>");
-
-    for (const shadowed of [shadowedSettings, shadowedPrincipal, prefixedData]) {
-      expect(windowsTaskRegistrationHealthy(shadowed, wscript, launcher)).toBe(false);
-      expect(readWindowsSchedulerXmlState(shadowed, wscript, launcher).enabled).toBe(false);
-    }
-  });
-
-  test("duplicate elements are not trusted", () => {
-    const wscript = "C:\\Windows\\System32\\wscript.exe";
-    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
-    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
-      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
-    const duplicated = xml.replace(
-      "    <Enabled>true</Enabled>\n    <Hidden>",
-      "    <Enabled>true</Enabled>\n    <Enabled>false</Enabled>\n    <Hidden>",
-    );
-    expect(windowsTaskRegistrationHealthy(duplicated, wscript, launcher)).toBe(false);
-  });
-
-  test("hidden launcher VBS stays resident and escapes quotes in the wrapper path", () => {
-    const vbs = buildWindowsLauncherVbs('C:\\Users\\quo"te\\.opencodex\\opencodex-service.cmd');
-
-    // windowStyle 0 (hidden) + bWaitOnReturn True (resident, so IgnoreNew and /end keep working).
-    expect(vbs).toContain(", 0, True");
-    expect(vbs).toContain('shell.Run """C:\\Users\\quo""te\\.opencodex\\opencodex-service.cmd""", 0, True');
-    expect(vbs).toContain('CreateObject("WScript.Shell")');
-  });
-
-  test("hidden launcher VBS carries non-ASCII profile paths verbatim", () => {
-    const vbs = buildWindowsLauncherVbs("C:\\Users\\í•œê¸€ì‚¬ìš©ìž\\.opencodex\\opencodex-service.cmd");
-
-    expect(vbs).toContain("C:\\Users\\í•œê¸€ì‚¬ìš©ìž\\.opencodex\\opencodex-service.cmd");
-  });
-
-  test("writes the launcher VBS with a UTF-16 BOM so non-ASCII paths survive WSH decoding", async () => {
-    const service = await Bun.file(new URL("../src/service.ts", import.meta.url)).text();
-
-    expect(service).toContain('writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le")');
-    // Uninstall must clean the launcher asset alongside the script and task XML.
-    expect(service).toContain("if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());");
-  });
-
-  test("writes Task Scheduler XML with a UTF-16 BOM for schtasks", async () => {
-    const service = await Bun.file(new URL("../src/service.ts", import.meta.url)).text();
-
-    expect(service).toContain('writeServiceAssetWithRetry(windowsTaskXmlPath(), `\\uFEFF${buildWindowsTaskXml(script)}`, "utf16le")');
-  });
-
-  test("escapes environment values that would break out of set quotes", () => {
-    const oldPath = process.env.PATH;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-    try {
-      process.env.PATH = 'C:\\safe" & echo PWNED & rem "';
-      process.env.OPENCODEX_HOME = 'C:\\ocx" & del C:\\important & rem "';
-      process.env.OPENCODEX_API_AUTH_TOKEN = 'token" & echo LEAK & rem "';
-      const script = buildWindowsServiceScript();
-      expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
-      expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
-      expect(script).toContain('set "OCX_API_TOKEN_FILE=');
-      expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
-      expect(script).not.toContain('set "PATH=C:\\safe" & echo PWNED');
-      expect(script).not.toContain('set "OPENCODEX_HOME=C:\\ocx" & del');
-      expect(script).not.toContain("token & echo LEAK");
-    } finally {
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-      if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-      else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
-    }
-  });
-
-  test("escapes service executable paths through variables", () => {
-    const script = buildWindowsServiceScript({
-      bun: "C:\\Bun&Dir\\100%bun^\\bun.exe",
-      cli: "C:\\OpenCodex&Dir\\cli.ts",
-    });
-
-    expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
-    expect(script).toContain('set "OCX_CLI=C:\\OpenCodex&Dir\\cli.ts"');
-    expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start --port');
-    expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
-  });
-
-  test("switches the wrapper console to UTF-8 and sleeps via ping (timeout dies without console stdin)", () => {
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
-
-    expect(script).toContain("chcp 65001 >nul");
-    expect(script.indexOf("chcp 65001 >nul")).toBeLessThan(script.indexOf('set "OCX_SERVICE=1"'));
-    expect(script).toContain("ping -n 6 127.0.0.1 >nul");
-    expect(script).not.toContain("timeout /t");
-  });
-
-  test("rewrites profile-relative paths to env indirection so non-ASCII usernames survive OEM-codepage batch parsing", () => {
-    const oldUserProfile = process.env.USERPROFILE;
-    const oldAppData = process.env.APPDATA;
-    try {
-      process.env.USERPROFILE = "C:\\Users\\í•œê¸€ì‚¬ìš©ìž";
-      process.env.APPDATA = "C:\\Users\\í•œê¸€ì‚¬ìš©ìž\\AppData\\Roaming";
-      const script = buildWindowsServiceScript({
-        bun: "C:\\Users\\í•œê¸€ì‚¬ìš©ìž\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
-        cli: "C:\\Users\\í•œê¸€ì‚¬ìš©ìž\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
-      });
-
-      expect(script).toContain('set "OCX_BUN=%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"');
-      expect(script).toContain('set "OCX_CLI=%APPDATA%\\npm\\node_modules\\opencodex\\src\\cli.ts"');
-      expect(script).not.toContain('set "OCX_BUN=C:\\Users\\í•œê¸€ì‚¬ìš©ìž');
-    } finally {
-      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = oldUserProfile;
-      if (oldAppData === undefined) delete process.env.APPDATA;
-      else process.env.APPDATA = oldAppData;
-    }
-  });
-
-  test("writes token-safe startup identity and child output to the service log", () => {
-    const oldCodexHome = process.env.CODEX_HOME;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-    try {
-      process.env.CODEX_HOME = "C:\\codex-home";
-      process.env.OPENCODEX_HOME = TEST_DIR;
-      process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-      const script = buildWindowsServiceScript({
-        bun: "C:\\OpenCodex\\bun.exe",
-        cli: "C:\\OpenCodex\\cli.ts",
-      });
-
-      expectTextToContainPath(script, serviceLogPath());
-      expect(script).toContain('set "OCX_SERVICE_LOG=');
-      expect(script).toContain("opencodex service wrapper start");
-      expect(script).toContain('echo bun="%OCX_BUN%"');
-      expect(script).toContain('echo bun_source="');
-      expect(script).toContain('echo cli="%OCX_CLI%"');
-      expect(script).toContain('echo opencodex_home="%OPENCODEX_HOME%"');
-      expect(script).toContain('echo codex_home="%CODEX_HOME%"');
-      expect(script).toContain('echo token_file="%OCX_API_TOKEN_FILE%"');
-      expect(script).toMatch(/"%OCX_BUN%" "%OCX_CLI%" start --port \d+ >>"%OCX_SERVICE_LOG%" 2>&1/);
-      expect(script).toContain("child exited with code %ERRORLEVEL%");
-      expect(script).not.toContain("local-secret");
-      expect(script).not.toContain('set "OPENCODEX_API_AUTH_TOKEN=');
-    } finally {
-      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-      if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-      else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
-    }
-  });
-});
-
-describe("launchd service plist", () => {
-  test("preserves custom Codex and OpenCodex homes", () => {
-    const oldCodexHome = process.env.CODEX_HOME;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-    try {
-      process.env.CODEX_HOME = "/tmp/codex-home";
-      process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
-      process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-      const plist = buildPlist();
-      expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
-      expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
-      expectTextToContainPath(plist, serviceApiTokenFilePath());
-      expect(plist).not.toContain("local-secret");
-      expect(plist).not.toContain("<key>OPENCODEX_API_AUTH_TOKEN</key>");
-    } finally {
-      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = oldCodexHome;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-      if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-      else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
-    }
-  });
-});
-
-describe("service lifecycle cleanup ordering", () => {
-  test("direct service stop kills the tracked proxy before restoring native Codex", async () => {
-    const service = await readText("src/service.ts");
-    const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
-
-    expect(stopCase).toContain("ops.stop();");
-    expect(stopCase).toContain("await stopTrackedProxyForServiceCommand();");
-    expect(stopCase).toContain("restoreNativeCodex();");
-    expect(stopCase.indexOf("ops.stop();")).toBeLessThan(stopCase.indexOf("stopTrackedProxyForServiceCommand();"));
-    expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodex();"));
-  });
-
-  test("direct service uninstall kills the tracked proxy before deleting service assets", async () => {
-    const service = await readText("src/service.ts");
-    const uninstallCase = service.slice(service.indexOf('case "uninstall":'), service.indexOf("default:"));
-
-    expect(uninstallCase).toContain("ops.stop();");
-    expect(uninstallCase).toContain("await stopTrackedProxyForServiceCommand();");
-    expect(uninstallCase).toContain("ops.uninstall();");
-    expect(uninstallCase).toContain("restoreNativeCodex();");
-    expect(uninstallCase.indexOf("ops.stop();")).toBeLessThan(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();"));
-    expect(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(uninstallCase.indexOf("ops.uninstall();"));
-    expect(uninstallCase.indexOf("ops.uninstall();")).toBeLessThan(uninstallCase.indexOf("restoreNativeCodex();"));
-  });
-
-  test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
-    const service = await readText("src/service.ts");
-    const installWindows = service.slice(service.indexOf("function installWindows()"), service.indexOf("function startWindows()"));
-
-    const stopAt = installWindows.indexOf("stopWindows();");
-    const scriptWriteAt = installWindows.indexOf("writeServiceAssetWithRetry(script");
-    const xmlWriteAt = installWindows.indexOf("writeServiceAssetWithRetry(windowsTaskXmlPath()");
-    expect(stopAt).toBeGreaterThan(-1);
-    expect(scriptWriteAt).toBeGreaterThan(-1);
-    expect(xmlWriteAt).toBeGreaterThan(-1);
-    expect(stopAt).toBeLessThan(scriptWriteAt);
-    expect(scriptWriteAt).toBeLessThan(xmlWriteAt);
-    expect(installWindows).not.toContain("writeFileSync(script");
-    // Retry helper tolerates transient Windows file locks from the just-ended task.
-    expect(service).toContain('code !== "EBUSY" && code !== "EPERM" && code !== "EACCES"');
-  });
-
-  test("Windows service uninstall removes generated task XML", async () => {
-    const service = await readText("src/service.ts");
-    const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"), service.indexOf("function serviceDiagnosticsSummary()"));
-
-    expect(uninstallWindows).toContain("windowsServiceScriptPath()");
-    expect(uninstallWindows).toContain("windowsTaskXmlPath()");
-    expect(uninstallWindows).toContain("unlinkSync(windowsTaskXmlPath())");
-  });
-
-  test("service cleanup stops gracefully first via the shared stopper and clears the pid file", async () => {
-    const service = await readText("src/service.ts");
-
-    expect(service).toContain('import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";');
-    expect(service).toContain("removeRuntimePort(pid);");
-    expect(service).toContain('import { isProcessAlive, stopProxy } from "./lib/process-control";');
-    expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
-    expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
-    expect(service).toContain('if (!pid) return "none";');
-    expect(service).toContain("if (!isProcessAlive(pid))");
-    expect(service).toContain('return "stale";');
-    expect(service).toContain("await stopProxy(pid);");
-    expect(service).toContain("removePid(pid);");
-    expect(service).toContain('return "stopped";');
-  });
-
-  test("service command cleanup logs kill failures without skipping restore/delete", async () => {
-    const service = await readText("src/service.ts");
-
-    expect(service).toContain("async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult>");
-    expect(service).toContain("catch (err)");
-    expect(service).toContain("Failed to stop proxy");
-    expect(service).toContain('return "none";');
-  });
-});
-
-describe("service diagnostics", () => {
-  // deriveWindowsServiceDiagnostic now reads the registration XML itself, so these
-  // helpers express the old boolean fixtures as the documents that produce them.
-  // buildWindowsTaskXml() emits exactly the Command/Arguments the validator expects
-  // when both use the same defaults, so the fixture leaves the launcher default alone.
-  const healthyTaskXml = () => buildWindowsTaskXml();
-  /** Registered but reporting an explicitly disabled task. */
-  const disabledTaskXml = () => healthyTaskXml()
-    .replace("<Enabled>true</Enabled>\n    <Hidden>", "<Enabled>false</Enabled>\n    <Hidden>");
-
-  const base = {
-    schedulerXml: "",
-    schedulerAssetsPresent: true,
-    nativeStatus: "nonexistent" as const,
-    recordedBackend: null,
-    staleBakedPaths: false,
-    nativeRepairAssetsOnly: false,
-    diagnostics: "logs: test",
-  };
-  const installedEnabled = { schedulerXml: healthyTaskXml() };
-  const installedDisabled = { schedulerXml: disabledTaskXml() };
-
-  test("fails closed for disabled, stale, conflicting, stopped, and ghost Windows services", () => {
-    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, recordedBackend: "scheduler" })).toMatchObject({ viable: true, backend: "scheduler" });
-    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedDisabled })).toMatchObject({ viable: false, enabled: false });
-    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, staleBakedPaths: true })).toMatchObject({ viable: false, stale: true });
-    expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, nativeStatus: "started" })).toMatchObject({ viable: false, conflict: true });
-    expect(deriveWindowsServiceDiagnostic({ ...base, nativeStatus: "stopped" })).toMatchObject({ installed: true, viable: false, startable: false, stale: true, running: false });
-    expect(deriveWindowsServiceDiagnostic({ ...base, nativeRepairAssetsOnly: true })).toMatchObject({ installed: false, viable: false, stale: true });
-  });
-
-  test("a stopped healthy WinSW service remains startable from the tray", () => {
-    const stoppedNative = deriveWindowsServiceDiagnostic({ ...base, nativeStatus: "stopped", recordedBackend: "native" });
-    expect(serviceStartableFromTray(stoppedNative)).toBe(true);
-    expect(serviceStartableFromTray({ ...stoppedNative, stale: true })).toBe(false);
-    expect(serviceStartableFromTray({ ...stoppedNative, conflict: true })).toBe(false);
-    expect(serviceStartableFromTray(deriveWindowsServiceDiagnostic({ ...base, nativeStatus: "unknown" }))).toBe(false);
-    const disabledScheduler = deriveWindowsServiceDiagnostic({ ...base, ...installedDisabled });
-    expect(serviceStartableFromTray(disabledScheduler)).toBe(false);
-    const mismatchedScheduler = deriveWindowsServiceDiagnostic({
-      ...base,
-      ...installedEnabled,
-      recordedBackend: "native",
-    });
-    expect(mismatchedScheduler).toMatchObject({ backend: "scheduler", stale: true, viable: false, startable: false });
-  });
-
-  test("rejects malformed service backend state instead of defaulting it to scheduler", () => {
-    const valid = {
-      version: 2,
-      codexHome: "C:\\codex",
-      opencodexHome: "C:\\opencodex",
-      backend: "scheduler",
-    };
-    expect(parseServiceInstallState(valid)?.backend).toBe("scheduler");
-    expect(parseServiceInstallState({ ...valid, backend: "garbage" })).toBeNull();
-    expect(parseServiceInstallState({ ...valid, backend: undefined })).toBeNull();
-    expect(parseServiceInstallState({ ...valid, version: 1, backend: "scheduler" })).toBeNull();
-    expect(parseServiceInstallState({ ...valid, version: 1, backend: undefined })?.version).toBe(1);
-  });
-
-  test("status summary exposes the service log path", () => {
-    const summary = serviceStatusSummary();
-
-    expectTextToContainPath(summary, serviceLogPath());
-  });
-
-  test("flags stale baked service paths recorded at install time", () => {
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const stateDir = join(TEST_DIR, "baked-paths-home");
-    try {
-      process.env.OPENCODEX_HOME = stateDir;
-      mkdirSync(stateDir, { recursive: true });
-      const statePath = join(stateDir, "service-state.json");
-
-      const missing = join(stateDir, "gone", "bun");
-      writeFileSync(statePath, JSON.stringify({
-        version: 1,
-        codexHome: stateDir,
-        opencodexHome: stateDir,
-        bunPath: missing,
-        cliPath: join(import.meta.dir, "service.test.ts"),
-      }), "utf8");
-      const diagnostic = bakedServicePathsDiagnostic();
-      expect(diagnostic).toContain("STALE baked paths");
-      expect(diagnostic).toContain(missing);
-
-      writeFileSync(statePath, JSON.stringify({
-        version: 1,
-        codexHome: stateDir,
-        opencodexHome: stateDir,
-        bunPath: join(import.meta.dir, "service.test.ts"),
-        cliPath: join(import.meta.dir, "service.test.ts"),
-      }), "utf8");
-      expect(bakedServicePathsDiagnostic()).toBeNull();
-
-      // Pre-loop-3 state files without baked paths stay silent.
-      writeFileSync(statePath, JSON.stringify({ version: 1, codexHome: stateDir, opencodexHome: stateDir }), "utf8");
-      expect(bakedServicePathsDiagnostic()).toBeNull();
-    } finally {
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-    }
-  });
-
-  test("direct service status prints the diagnostics line", async () => {
-    const service = await readText("src/service.ts");
-    const statusCase = service.slice(service.indexOf('case "status":'), service.indexOf('case "uninstall":'));
-
-    expect(statusCase).toContain("Diagnostics:");
-    expect(statusCase).toContain("serviceDiagnosticsSummary()");
-  });
-});
+Û¾x¶‰žËkºwµçM±¤¹ÑÌˆô¤ì((€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ ‰¡À€ØÔÀÀÄ€ù¹Õ°ˆ¤ì(€€€•áÁ•Ð¡ÍÉ¥ÁÐ¹¥¹‘•á=˜ ‰¡À€ØÔÀÀÄ€ù¹Õ°ˆ¤¤¹Ñ½	•1•ÍÍQ¡…¸¡ÍÉ¥ÁÐ¹¥¹‘•á=˜ Í•Ð€‰=a}MIY%ôÄˆœ¤¤ì(€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ ‰Á¥¹œ€µ¸€Ø€ÄÈÜ¸À¸À¸Ä€ù¹Õ°ˆ¤ì(€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ ‰Ñ¥µ•½ÕÐ€½Ðˆ¤ì(€ô¤ì((€Ñ•ÍÐ ‰É•ÝÉ¥Ñ•ÌÁÉ½™¥±”µÉ•±…Ñ¥Ù”Á…Ñ¡ÌÑ¼•¹Ø¥¹‘¥É•Ñ¥½¸Í¼¹½¸µM%$ÕÍ•É¹…µ•ÌÍÕÉÙ¥Ù”=4µ½‘•Á…”‰…Ñ Á…ÉÍ¥¹œˆ°€ ¤€ôøì(€€€½¹ÍÐ½±‘UÍ•ÉAÉ½™¥±”€ôÁÉ½•ÍÌ¹•¹Ø¹UMIAI=%1ì(€€€½¹ÍÐ½±‘ÁÁ…Ñ„€ôÁÉ½•ÍÌ¹•¹Ø¹AAQì(€€€ÑÉäì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹UMIAI=%1€ô€‰éqqUÍ•ÉÍqs¶Vsªâ²
+³²j§²z@ˆì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹AAQ€ô€‰éqqUÍ•ÉÍqs¶Vsªâ²
+³²j§²zAqqÁÁ…Ñ…qqI½…µ¥¹œˆì(€€€€€½¹ÍÐÍÉ¥ÁÐ€ô‰Õ¥±‘]¥¹‘½ÝÍM•ÉÙ¥•MÉ¥ÁÐ¡ì(€€€€€€€‰Õ¸è€‰éqqUÍ•ÉÍqs¶Vsªâ²
+³²j§²zAqqÁÁ…Ñ…qqI½…µ¥¹qq¹Áµqq¹½‘•}µ½‘Õ±•Íqq‰Õ¹qq‰¥¹qq‰Õ¸¹•á”ˆ°(€€€€€€€±¤è€‰éqqUÍ•ÉÍqs¶Vsªâ²
+³²j§²zAqqÁÁ…Ñ…qqI½…µ¥¹qq¹Áµqq¹½‘•}µ½‘Õ±•Íqq½Á•¹½‘•áqqÍÉqq±¤¹ÑÌˆ°(€€€€€ô¤ì((€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ Í•Ð€‰=a}	U8ô•AAQ•qq¹Áµqq¹½‘•}µ½‘Õ±•Íqq‰Õ¹qq‰¥¹qq‰Õ¸¹•á”ˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ Í•Ð€‰=a}1$ô•AAQ•qq¹Áµqq¹½‘•}µ½‘Õ±•Íqq½Á•¹½‘•áqqÍÉqq±¤¹ÑÌˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ Í•Ð€‰=a}	U8õéqqUÍ•ÉÍqs¶Vsªâ²
+³²j§²z@œ¤ì(€€€ô™¥¹…±±äì(€€€€€¥˜€¡½±‘UÍ•ÉAÉ½™¥±”€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹UMIAI=%1ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹UMIAI=%1€ô½±‘UÍ•ÉAÉ½™¥±”ì(€€€€€¥˜€¡½±‘ÁÁ…Ñ„€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹AAQì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹AAQ€ô½±‘ÁÁ…Ñ„ì(€€€ô(€ô¤ì((€Ñ•ÍÐ ‰ÝÉ¥Ñ•ÌÑ½­•¸µÍ…™”ÍÑ…ÉÑÕÀ¥‘•¹Ñ¥Ñä…¹¡¥±½ÕÑÁÕÐÑ¼Ñ¡”Í•ÉÙ¥”±½œˆ°€ ¤€ôøì(€€€½¹ÍÐ½±‘½‘•á!½µ”€ôÁÉ½•ÍÌ¹•¹Ø¹=a}!=5ì(€€€½¹ÍÐ½±‘=Á•¹½‘•á!½µ”€ôÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5ì(€€€½¹ÍÐ½±‘Á¥ÕÑ¡Q½­•¸€ôÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8ì(€€€ÑÉäì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=a}!=5€ô€‰éqq½‘•àµ¡½µ”ˆì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5€ôQMQ}%Hì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8€ô€‰±½…°µÍ•É•Ðˆì(€€€€€½¹ÍÐÍÉ¥ÁÐ€ô‰Õ¥±‘]¥¹‘½ÝÍM•ÉÙ¥•MÉ¥ÁÐ¡ì(€€€€€€€‰Õ¸è€‰éqq=Á•¹½‘•áqq‰Õ¸¹•á”ˆ°(€€€€€€€±¤è€‰éqq=Á•¹½‘•áqq±¤¹ÑÌˆ°(€€€€€ô¤ì((€€€€€•áÁ•ÑQ•áÑQ½½¹Ñ…¥¹A…Ñ ¡ÍÉ¥ÁÐ°Í•ÉÙ¥•1½A…Ñ  ¤¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ Í•Ð€‰=a}MIY%}1=ôœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ ‰½Á•¹½‘•àÍ•ÉÙ¥”ÝÉ…ÁÁ•ÈÍÑ…ÉÐˆ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ •¡¼‰Õ¸ôˆ•=a}	U8”ˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ •¡¼‰Õ¹}Í½ÕÉ”ôˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ •¡¼±¤ôˆ•=a}1$”ˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ •¡¼½Á•¹½‘•á}¡½µ”ôˆ•=A9=a}!=5”ˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ •¡¼½‘•á}¡½µ”ôˆ•=a}!=5”ˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ •¡¼Ñ½­•¹}™¥±”ôˆ•=a}A%}Q=-9}%1”ˆœ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½5…Ñ  ¼ˆ•=a}	U8”ˆ€ˆ•=a}1$”ˆÍÑ…ÉÐ€´µÁ½ÉÐq¬€øøˆ•=a}MIY%}1=”ˆ€Èø˜Ä¼¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹Ñ½½¹Ñ…¥¸ ‰¡¥±•á¥Ñ•Ý¥Ñ ½‘”€•II=I1Y0”ˆ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ ‰±½…°µÍ•É•Ðˆ¤ì(€€€€€•áÁ•Ð¡ÍÉ¥ÁÐ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ Í•Ð€‰=A9=a}A%}UQ!}Q=-8ôœ¤ì(€€€ô™¥¹…±±äì(€€€€€¥˜€¡½±‘½‘•á!½µ”€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=a}!=5ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=a}!=5€ô½±‘½‘•á!½µ”ì(€€€€€¥˜€¡½±‘=Á•¹½‘•á!½µ”€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5€ô½±‘=Á•¹½‘•á!½µ”ì(€€€€€¥˜€¡½±‘Á¥ÕÑ¡Q½­•¸€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8€ô½±‘Á¥ÕÑ¡Q½­•¸ì(€€€ô(€ô¤ì)ô¤ì()‘•ÍÉ¥‰” ‰±…Õ¹¡Í•ÉÙ¥”Á±¥ÍÐˆ°€ ¤€ôøì(€Ñ•ÍÐ ‰ÁÉ•Í•ÉÙ•ÌÕÍÑ½´½‘•à…¹=Á•¹½‘•à¡½µ•Ìˆ°€ ¤€ôøì(€€€½¹ÍÐ½±‘½‘•á!½µ”€ôÁÉ½•ÍÌ¹•¹Ø¹=a}!=5ì(€€€½¹ÍÐ½±‘=Á•¹½‘•á!½µ”€ôÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5ì(€€€½¹ÍÐ½±‘Á¥ÕÑ¡Q½­•¸€ôÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8ì(€€€ÑÉäì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=a}!=5€ô€ˆ½ÑµÀ½½‘•àµ¡½µ”ˆì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5€ô€ˆ½ÑµÀ½½Á•¹½‘•àµ¡½µ”ˆì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8€ô€‰±½…°µÍ•É•Ðˆì(€€€€€½¹ÍÐÁ±¥ÍÐ€ô‰Õ¥±‘A±¥ÍÐ ¤ì(€€€€€•áÁ•Ð¡Á±¥ÍÐ¤¹Ñ½½¹Ñ…¥¸ ˆñ­•äù=a}!=5ð½­•äøñÍÑÉ¥¹œø½ÑµÀ½½‘•àµ¡½µ”ð½ÍÑÉ¥¹œøˆ¤ì(€€€€€•áÁ•Ð¡Á±¥ÍÐ¤¹Ñ½½¹Ñ…¥¸ ˆñ­•äù=A9=a}!=5ð½­•äøñÍÑÉ¥¹œø½ÑµÀ½½Á•¹½‘•àµ¡½µ”ð½ÍÑÉ¥¹œøˆ¤ì(€€€€€•áÁ•ÑQ•áÑQ½½¹Ñ…¥¹A…Ñ ¡Á±¥ÍÐ°Í•ÉÙ¥•Á¥Q½­•¹¥±•A…Ñ  ¤¤ì(€€€€€•áÁ•Ð¡Á±¥ÍÐ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ ‰±½…°µÍ•É•Ðˆ¤ì(€€€€€•áÁ•Ð¡Á±¥ÍÐ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ ˆñ­•äù=A9=a}A%}UQ!}Q=-8ð½­•äøˆ¤ì(€€€ô™¥¹…±±äì(€€€€€¥˜€¡½±‘½‘•á!½µ”€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=a}!=5ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=a}!=5€ô½±‘½‘•á!½µ”ì(€€€€€¥˜€¡½±‘=Á•¹½‘•á!½µ”€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5€ô½±‘=Á•¹½‘•á!½µ”ì(€€€€€¥˜€¡½±‘Á¥ÕÑ¡Q½­•¸€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}A%}UQ!}Q=-8€ô½±‘Á¥ÕÑ¡Q½­•¸ì(€€€ô(€ô¤ì)ô¤ì()‘•ÍÉ¥‰” ‰Í•ÉÙ¥”±¥™•å±”±•…¹ÕÀ½É‘•É¥¹œˆ°€ ¤€ôøì(€Ñ•ÍÐ ‰‘¥É•ÐÍ•ÉÙ¥”ÍÑ½À­¥±±ÌÑ¡”ÑÉ…­•ÁÉ½áä‰•™½É”É•ÍÑ½É¥¹œ¹…Ñ¥Ù”½‘•àˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì(€€€½¹ÍÐÍÑ½Á…Í”€ôÍ•ÉÙ¥”¹Í±¥”¡Í•ÉÙ¥”¹¥¹‘•á=˜ …Í”€‰ÍÑ½Àˆèœ¤°Í•ÉÙ¥”¹¥¹‘•á=˜ …Í”€‰ÍÑ…ÑÕÌˆèœ¤¤ì((€€€•áÁ•Ð¡ÍÑ½Á…Í”¤¹Ñ½½¹Ñ…¥¸ ‰½ÁÌ¹ÍÑ½À ¤ìˆ¤ì(€€€•áÁ•Ð¡ÍÑ½Á…Í”¤¹Ñ½½¹Ñ…¥¸ ‰…Ý…¥ÐÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤ìˆ¤ì(€€€•áÁ•Ð¡ÍÑ½Á…Í”¤¹Ñ½½¹Ñ…¥¸ ‰É•ÍÑ½É•9…Ñ¥Ù•½‘•à ¤ìˆ¤ì(€€€•áÁ•Ð¡ÍÑ½Á…Í”¹¥¹‘•á=˜ ‰½ÁÌ¹ÍÑ½À ¤ìˆ¤¤¹Ñ½	•1•ÍÍQ¡…¸¡ÍÑ½Á…Í”¹¥¹‘•á=˜ ‰ÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤ìˆ¤¤ì(€€€•áÁ•Ð¡ÍÑ½Á…Í”¹¥¹‘•á=˜ ‰ÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤ìˆ¤¤¹Ñ½	•1•ÍÍQ¡…¸¡ÍÑ½Á…Í”¹¥¹‘•á=˜ ‰É•ÍÑ½É•9…Ñ¥Ù•½‘•à ¤ìˆ¤¤ì(€ô¤ì((€Ñ•ÍÐ ‰‘¥É•ÐÍ•ÉÙ¥”Õ¹¥¹ÍÑ…±°­¥±±ÌÑ¡”ÑÉ…­•ÁÉ½áä‰•™½É”‘•±•Ñ¥¹œÍ•ÉÙ¥”…ÍÍ•ÑÌˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì(€€€½¹ÍÐÕ¹¥¹ÍÑ…±±…Í”€ôÍ•ÉÙ¥”¹Í±¥”¡Í•ÉÙ¥”¹¥¹‘•á=˜ …Í”€‰Õ¹¥¹ÍÑ…±°ˆèœ¤°Í•ÉÙ¥”¹¥¹‘•á=˜ ‰‘•™…Õ±Ðèˆ¤¤ì((€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¤¹Ñ½½¹Ñ…¥¸ ‰½ÁÌ¹ÍÑ½À ¤ìˆ¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¤¹Ñ½½¹Ñ…¥¸ ‰…Ý…¥ÐÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤ìˆ¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¤¹Ñ½½¹Ñ…¥¸ ‰½ÁÌ¹Õ¹¥¹ÍÑ…±° ¤ìˆ¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¤¹Ñ½½¹Ñ…¥¸ ‰É•ÍÑ½É•9…Ñ¥Ù•½‘•à ¤ìˆ¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¹¥¹‘•á=˜ ‰½ÁÌ¹ÍÑ½À ¤ìˆ¤¤¹Ñ½	•1•ÍÍQ¡…¸¡Õ¹¥¹ÍÑ…±±…Í”¹¥¹‘•á=˜ ‰ÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤ìˆ¤¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¹¥¹‘•á=˜ ‰ÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤ìˆ¤¤¹Ñ½	•1•ÍÍQ¡…¸¡Õ¹¥¹ÍÑ…±±…Í”¹¥¹‘•á=˜ ‰½ÁÌ¹Õ¹¥¹ÍÑ…±° ¤ìˆ¤¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±…Í”¹¥¹‘•á=˜ ‰½ÁÌ¹Õ¹¥¹ÍÑ…±° ¤ìˆ¤¤¹Ñ½	•1•ÍÍQ¡…¸¡Õ¹¥¹ÍÑ…±±…Í”¹¥¹‘•á=˜ ‰É•ÍÑ½É•9…Ñ¥Ù•½‘•à ¤ìˆ¤¤ì(€ô¤ì((€Ñ•ÍÐ ‰]¥¹‘½ÝÌÍ•ÉÙ¥”¥¹ÍÑ…±°•¹‘ÌÑ¡”ÉÕ¹¹¥¹œÑ…Í¬‰•™½É”É•ÝÉ¥Ñ¥¹œ¥ÑÌ…ÍÍ•ÑÌ°Ý¥Ñ ÝÉ¥Ñ”É•ÑÉäˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì(€€€½¹ÍÐ¥¹ÍÑ…±±]¥¹‘½ÝÌ€ôÍ•ÉÙ¥”¹Í±¥”¡Í•ÉÙ¥”¹¥¹‘•á=˜ ‰™Õ¹Ñ¥½¸¥¹ÍÑ…±±]¥¹‘½ÝÌ ¤ˆ¤°Í•ÉÙ¥”¹¥¹‘•á=˜ ‰™Õ¹Ñ¥½¸ÍÑ…ÉÑ]¥¹‘½ÝÌ ¤ˆ¤¤ì((€€€½¹ÍÐÍÑ½ÁÐ€ô¥¹ÍÑ…±±]¥¹‘½ÝÌ¹¥¹‘•á=˜ ‰ÍÑ½Á]¥¹‘½ÝÌ ¤ìˆ¤ì(€€€½¹ÍÐÍÉ¥ÁÑ]É¥Ñ•Ð€ô¥¹ÍÑ…±±]¥¹‘½ÝÌ¹¥¹‘•á=˜ ‰ÝÉ¥Ñ•M•ÉÙ¥•ÍÍ•Ñ]¥Ñ¡I•ÑÉä¡ÍÉ¥ÁÐˆ¤ì(€€€½¹ÍÐáµ±]É¥Ñ•Ð€ô¥¹ÍÑ…±±]¥¹‘½ÝÌ¹¥¹‘•á=˜ ‰ÝÉ¥Ñ•M•ÉÙ¥•ÍÍ•Ñ]¥Ñ¡I•ÑÉä¡Ý¥¹‘½ÝÍQ…Í­aµ±A…Ñ  ¤ˆ¤ì(€€€•áÁ•Ð¡ÍÑ½ÁÐ¤¹Ñ½	•É•…Ñ•ÉQ¡…¸ ´Ä¤ì(€€€•áÁ•Ð¡ÍÉ¥ÁÑ]É¥Ñ•Ð¤¹Ñ½	•É•…Ñ•ÉQ¡…¸ ´Ä¤ì(€€€•áÁ•Ð¡áµ±]É¥Ñ•Ð¤¹Ñ½	•É•…Ñ•ÉQ¡…¸ ´Ä¤ì(€€€•áÁ•Ð¡ÍÑ½ÁÐ¤¹Ñ½	•1•ÍÍQ¡…¸¡ÍÉ¥ÁÑ]É¥Ñ•Ð¤ì(€€€•áÁ•Ð¡ÍÉ¥ÁÑ]É¥Ñ•Ð¤¹Ñ½	•1•ÍÍQ¡…¸¡áµ±]É¥Ñ•Ð¤ì(€€€•áÁ•Ð¡¥¹ÍÑ…±±]¥¹‘½ÝÌ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ ‰ÝÉ¥Ñ•¥±•Må¹Œ¡ÍÉ¥ÁÐˆ¤ì(€€€€¼¼I•ÑÉä¡•±Á•ÈÑ½±•É…Ñ•ÌÑÉ…¹Í¥•¹Ð]¥¹‘½ÝÌ™¥±”±½­Ì™É½´Ñ¡”©ÕÍÐµ•¹‘•Ñ…Í¬¸(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ½‘”€„ôô€‰	UMdˆ€˜˜½‘”€„ôô€‰AI4ˆ€˜˜½‘”€„ôô€‰Lˆœ¤ì(€ô¤ì((€Ñ•ÍÐ ‰]¥¹‘½ÝÌÍ•ÉÙ¥”Õ¹¥¹ÍÑ…±°É•µ½Ù•Ì•¹•É…Ñ•Ñ…Í¬a50ˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì(€€€½¹ÍÐÕ¹¥¹ÍÑ…±±]¥¹‘½ÝÌ€ôÍ•ÉÙ¥”¹Í±¥”¡Í•ÉÙ¥”¹¥¹‘•á=˜ ‰™Õ¹Ñ¥½¸Õ¹¥¹ÍÑ…±±]¥¹‘½ÝÌ ¤ˆ¤°Í•ÉÙ¥”¹¥¹‘•á=˜ ‰™Õ¹Ñ¥½¸Í•ÉÙ¥•¥…¹½ÍÑ¥ÍMÕµµ…Éä ¤ˆ¤¤ì((€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±]¥¹‘½ÝÌ¤¹Ñ½½¹Ñ…¥¸ ‰Ý¥¹‘½ÝÍM•ÉÙ¥•MÉ¥ÁÑA…Ñ  ¤ˆ¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±]¥¹‘½ÝÌ¤¹Ñ½½¹Ñ…¥¸ ‰Ý¥¹‘½ÝÍQ…Í­aµ±A…Ñ  ¤ˆ¤ì(€€€•áÁ•Ð¡Õ¹¥¹ÍÑ…±±]¥¹‘½ÝÌ¤¹Ñ½½¹Ñ…¥¸ ‰Õ¹±¥¹­Må¹Œ¡Ý¥¹‘½ÝÍQ…Í­aµ±A…Ñ  ¤¤ˆ¤ì(€ô¤ì((€Ñ•ÍÐ ‰Í•ÉÙ¥”±•…¹ÕÀÍÑ½ÁÌÉ…•™Õ±±ä™¥ÉÍÐÙ¥„Ñ¡”Í¡…É•ÍÑ½ÁÁ•È…¹±•…ÉÌÑ¡”Á¥™¥±”ˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì((€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ¥µÁ½ÉÐì•áÁ…¹‘UÍ•ÉA…Ñ °•Ñ½¹™¥¥È°É•…‘A¥°É•µ½Ù•A¥°É•µ½Ù•IÕ¹Ñ¥µ•A½ÉÐô™É½´€ˆ¸½½¹™¥œˆìœ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰É•µ½Ù•IÕ¹Ñ¥µ•A½ÉÐ¡Á¥¤ìˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ¥µÁ½ÉÐì¥ÍAÉ½•ÍÍ±¥Ù”°ÍÑ½ÁAÉ½áäô™É½´€ˆ¸½±¥ˆ½ÁÉ½•ÍÌµ½¹ÑÉ½°ˆìœ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ÑåÁ”QÉ…­•‘AÉ½áå±•…¹ÕÁI•ÍÕ±Ð€ô€‰¹½¹”ˆð€‰ÍÑ…±”ˆð€‰ÍÑ½ÁÁ•ˆìœ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰…Íå¹Œ™Õ¹Ñ¥½¸ÍÑ½ÁQÉ…­•‘AÉ½áå%™IÕ¹¹¥¹œ ¤èAÉ½µ¥Í”ñQÉ…­•‘AÉ½áå±•…¹ÕÁI•ÍÕ±Ðøˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ¥˜€ …Á¥¤É•ÑÕÉ¸€‰¹½¹”ˆìœ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰¥˜€ …¥ÍAÉ½•ÍÍ±¥Ù”¡Á¥¤¤ˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ É•ÑÕÉ¸€‰ÍÑ…±”ˆìœ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰…Ý…¥ÐÍÑ½ÁAÉ½áä¡Á¥¤ìˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰É•µ½Ù•A¥¡Á¥¤ìˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ É•ÑÕÉ¸€‰ÍÑ½ÁÁ•ˆìœ¤ì(€ô¤ì((€Ñ•ÍÐ ‰Í•ÉÙ¥”½µµ…¹±•…¹ÕÀ±½Ì­¥±°™…¥±ÕÉ•ÌÝ¥Ñ¡½ÕÐÍ­¥ÁÁ¥¹œÉ•ÍÑ½É”½‘•±•Ñ”ˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì((€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰…Íå¹Œ™Õ¹Ñ¥½¸ÍÑ½ÁQÉ…­•‘AÉ½áå½ÉM•ÉÙ¥•½µµ…¹ ¤èAÉ½µ¥Í”ñQÉ…­•‘AÉ½áå±•…¹ÕÁI•ÍÕ±Ðøˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰…Ñ €¡•ÉÈ¤ˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ ‰…¥±•Ñ¼ÍÑ½ÀÁÉ½áäˆ¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥”¤¹Ñ½½¹Ñ…¥¸ É•ÑÕÉ¸€‰¹½¹”ˆìœ¤ì(€ô¤ì)ô¤ì()‘•ÍÉ¥‰” ‰Í•ÉÙ¥”‘¥…¹½ÍÑ¥Ìˆ°€ ¤€ôøì(€€¼¼‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¹½ÜÉ•…‘ÌÑ¡”É•¥ÍÑÉ…Ñ¥½¸a50¥ÑÍ•±˜°Í¼Ñ¡•Í”(€€¼¼¡•±Á•ÉÌ•áÁÉ•ÍÌÑ¡”½±‰½½±•…¸™¥áÑÕÉ•Ì…ÌÑ¡”‘½Õµ•¹ÑÌÑ¡…ÐÁÉ½‘Õ”Ñ¡•´¸(€€¼¼‰Õ¥±‘]¥¹‘½ÝÍQ…Í­aµ° ¤•µ¥ÑÌ•á…Ñ±äÑ¡”½µµ…¹½ÉÕµ•¹ÑÌÑ¡”Ù…±¥‘…Ñ½È•áÁ•ÑÌ(€€¼¼Ý¡•¸‰½Ñ ÕÍ”Ñ¡”Í…µ”‘•™…Õ±ÑÌ°Í¼Ñ¡”™¥áÑÕÉ”±•…Ù•ÌÑ¡”±…Õ¹¡•È‘•™…Õ±Ð…±½¹”¸(€½¹ÍÐ¡•…±Ñ¡åQ…Í­aµ°€ô€ ¤€ôø‰Õ¥±‘]¥¹‘½ÝÍQ…Í­aµ° ¤ì(€€¼¨¨I•¥ÍÑ•É•‰ÕÐÉ•Á½ÉÑ¥¹œ…¸•áÁ±¥¥Ñ±ä‘¥Í…‰±•Ñ…Í¬¸€¨¼(€½¹ÍÐ‘¥Í…‰±•‘Q…Í­aµ°€ô€ ¤€ôø¡•…±Ñ¡åQ…Í­aµ° ¤(€€€€¹É•Á±…” ˆñ¹…‰±•ùÑÉÕ”ð½¹…‰±•ùq¸€€€€ñ!¥‘‘•¸øˆ°€ˆñ¹…‰±•ù™…±Í”ð½¹…‰±•ùq¸€€€€ñ!¥‘‘•¸øˆ¤ì((€½¹ÍÐ‰…Í”€ôì(€€€Í¡•‘Õ±•Éaµ°è€ˆˆ°(€€€Í¡•‘Õ±•ÉÍÍ•ÑÍAÉ•Í•¹ÐèÑÉÕ”°(€€€¹…Ñ¥Ù•MÑ…ÑÕÌè€‰¹½¹•á¥ÍÑ•¹Ðˆ…Ì½¹ÍÐ°(€€€É•½É‘•‘	…­•¹è¹Õ±°°(€€€ÍÑ…±•	…­•‘A…Ñ¡Ìè™…±Í”°(€€€¹…Ñ¥Ù•I•Á…¥ÉÍÍ•ÑÍ=¹±äè™…±Í”°(€€€‘¥…¹½ÍÑ¥Ìè€‰±½ÌèÑ•ÍÐˆ°(€ôì(€½¹ÍÐ¥¹ÍÑ…±±•‘¹…‰±•€ôìÍ¡•‘Õ±•Éaµ°è¡•…±Ñ¡åQ…Í­aµ° ¤ôì(€½¹ÍÐ¥¹ÍÑ…±±•‘¥Í…‰±•€ôìÍ¡•‘Õ±•Éaµ°è‘¥Í…‰±•‘Q…Í­aµ° ¤ôì((€Ñ•ÍÐ ‰™…¥±Ì±½Í•™½È‘¥Í…‰±•°ÍÑ…±”°½¹™±¥Ñ¥¹œ°ÍÑ½ÁÁ•°…¹¡½ÍÐ]¥¹‘½ÝÌÍ•ÉÙ¥•Ìˆ°€ ¤€ôøì(€€€•áÁ•Ð¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°€¸¸¹¥¹ÍÑ…±±•‘¹…‰±•°É•½É‘•‘	…­•¹è€‰Í¡•‘Õ±•Èˆô¤¤¹Ñ½5…Ñ¡=‰©•Ð¡ìÙ¥…‰±”èÑÉÕ”°‰…­•¹è€‰Í¡•‘Õ±•Èˆô¤ì(€€€•áÁ•Ð¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°€¸¸¹¥¹ÍÑ…±±•‘¥Í…‰±•ô¤¤¹Ñ½5…Ñ¡=‰©•Ð¡ìÙ¥…‰±”è™…±Í”°•¹…‰±•è™…±Í”ô¤ì(€€€•áÁ•Ð¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°€¸¸¹¥¹ÍÑ…±±•‘¹…‰±•°ÍÑ…±•	…­•‘A…Ñ¡ÌèÑÉÕ”ô¤¤¹Ñ½5…Ñ¡=‰©•Ð¡ìÙ¥…‰±”è™…±Í”°ÍÑ…±”èÑÉÕ”ô¤ì(€€€•áÁ•Ð¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°€¸¸¹¥¹ÍÑ…±±•‘¹…‰±•°¹…Ñ¥Ù•MÑ…ÑÕÌè€‰ÍÑ…ÉÑ•ˆô¤¤¹Ñ½5…Ñ¡=‰©•Ð¡ìÙ¥…‰±”è™…±Í”°½¹™±¥ÐèÑÉÕ”ô¤ì(€€€•áÁ•Ð¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°¹…Ñ¥Ù•MÑ…ÑÕÌè€‰ÍÑ½ÁÁ•ˆô¤¤¹Ñ½5…Ñ¡=‰©•Ð¡ì¥¹ÍÑ…±±•èÑÉÕ”°Ù¥…‰±”è™…±Í”°ÍÑ…ÉÑ…‰±”è™…±Í”°ÍÑ…±”èÑÉÕ”°ÉÕ¹¹¥¹œè™…±Í”ô¤ì(€€€•áÁ•Ð¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°¹…Ñ¥Ù•I•Á…¥ÉÍÍ•ÑÍ=¹±äèÑÉÕ”ô¤¤¹Ñ½5…Ñ¡=‰©•Ð¡ì¥¹ÍÑ…±±•è™…±Í”°Ù¥…‰±”è™…±Í”°ÍÑ…±”èÑÉÕ”ô¤ì(€ô¤ì((€Ñ•ÍÐ ‰„ÍÑ½ÁÁ•¡•…±Ñ¡ä]¥¹M\Í•ÉÙ¥”É•µ…¥¹ÌÍÑ…ÉÑ…‰±”™É½´Ñ¡”ÑÉ…äˆ°€ ¤€ôøì(€€€½¹ÍÐÍÑ½ÁÁ•‘9…Ñ¥Ù”€ô‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°¹…Ñ¥Ù•MÑ…ÑÕÌè€‰ÍÑ½ÁÁ•ˆ°É•½É‘•‘	…­•¹è€‰¹…Ñ¥Ù”ˆô¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥•MÑ…ÉÑ…‰±•É½µQÉ…ä¡ÍÑ½ÁÁ•‘9…Ñ¥Ù”¤¤¹Ñ½	”¡ÑÉÕ”¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥•MÑ…ÉÑ…‰±•É½µQÉ…ä¡ì€¸¸¹ÍÑ½ÁÁ•‘9…Ñ¥Ù”°ÍÑ…±”èÑÉÕ”ô¤¤¹Ñ½	”¡™…±Í”¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥•MÑ…ÉÑ…‰±•É½µQÉ…ä¡ì€¸¸¹ÍÑ½ÁÁ•‘9…Ñ¥Ù”°½¹™±¥ÐèÑÉÕ”ô¤¤¹Ñ½	”¡™…±Í”¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥•MÑ…ÉÑ…‰±•É½µQÉ…ä¡‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°¹…Ñ¥Ù•MÑ…ÑÕÌè€‰Õ¹­¹½Ý¸ˆô¤¤¤¹Ñ½	”¡™…±Í”¤ì(€€€½¹ÍÐ‘¥Í…‰±•‘M¡•‘Õ±•È€ô‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì€¸¸¹‰…Í”°€¸¸¹¥¹ÍÑ…±±•‘¥Í…‰±•ô¤ì(€€€•áÁ•Ð¡Í•ÉÙ¥•MÑ…ÉÑ…‰±•É½µQÉ…ä¡‘¥Í…‰±•‘M¡•‘Õ±•È¤¤¹Ñ½	”¡™…±Í”¤ì(€€€½¹ÍÐµ¥Íµ…Ñ¡•‘M¡•‘Õ±•È€ô‘•É¥Ù•]¥¹‘½ÝÍM•ÉÙ¥•¥…¹½ÍÑ¥Œ¡ì(€€€€€€¸¸¹‰…Í”°(€€€€€€¸¸¹¥¹ÍÑ…±±•‘¹…‰±•°(€€€€€É•½É‘•‘	…­•¹è€‰¹…Ñ¥Ù”ˆ°(€€€ô¤ì(€€€•áÁ•Ð¡µ¥Íµ…Ñ¡•‘M¡•‘Õ±•È¤¹Ñ½5…Ñ¡=‰©•Ð¡ì‰…­•¹è€‰Í¡•‘Õ±•Èˆ°ÍÑ…±”èÑÉÕ”°Ù¥…‰±”è™…±Í”°ÍÑ…ÉÑ…‰±”è™…±Í”ô¤ì(€ô¤ì((€Ñ•ÍÐ ‰É•©•ÑÌµ…±™½Éµ•Í•ÉÙ¥”‰…­•¹ÍÑ…Ñ”¥¹ÍÑ•…½˜‘•™…Õ±Ñ¥¹œ¥ÐÑ¼Í¡•‘Õ±•Èˆ°€ ¤€ôøì(€€€½¹ÍÐÙ…±¥€ôì(€€€€€Ù•ÉÍ¥½¸è€È°(€€€€€½‘•á!½µ”è€‰éqq½‘•àˆ°(€€€€€½Á•¹½‘•á!½µ”è€‰éqq½Á•¹½‘•àˆ°(€€€€€‰…­•¹è€‰Í¡•‘Õ±•Èˆ°(€€€ôì(€€€•áÁ•Ð¡Á…ÉÍ•M•ÉÙ¥•%¹ÍÑ…±±MÑ…Ñ”¡Ù…±¥¤ü¹‰…­•¹¤¹Ñ½	” ‰Í¡•‘Õ±•Èˆ¤ì(€€€•áÁ•Ð¡Á…ÉÍ•M•ÉÙ¥•%¹ÍÑ…±±MÑ…Ñ”¡ì€¸¸¹Ù…±¥°‰…­•¹è€‰…É‰…”ˆô¤¤¹Ñ½	•9Õ±° ¤ì(€€€•áÁ•Ð¡Á…ÉÍ•M•ÉÙ¥•%¹ÍÑ…±±MÑ…Ñ”¡ì€¸¸¹Ù…±¥°‰…­•¹èÕ¹‘•™¥¹•ô¤¤¹Ñ½	•9Õ±° ¤ì(€€€•áÁ•Ð¡Á…ÉÍ•M•ÉÙ¥•%¹ÍÑ…±±MÑ…Ñ”¡ì€¸¸¹Ù…±¥°Ù•ÉÍ¥½¸è€Ä°‰…­•¹è€‰Í¡•‘Õ±•Èˆô¤¤¹Ñ½	•9Õ±° ¤ì(€€€•áÁ•Ð¡Á…ÉÍ•M•ÉÙ¥•%¹ÍÑ…±±MÑ…Ñ”¡ì€¸¸¹Ù…±¥°Ù•ÉÍ¥½¸è€Ä°‰…­•¹èÕ¹‘•™¥¹•ô¤ü¹Ù•ÉÍ¥½¸¤¹Ñ½	” Ä¤ì(€ô¤ì((€Ñ•ÍÐ ‰ÍÑ…ÑÕÌÍÕµµ…Éä•áÁ½Í•ÌÑ¡”Í•ÉÙ¥”±½œÁ…Ñ ˆ°€ ¤€ôøì(€€€½¹ÍÐÍÕµµ…Éä€ôÍ•ÉÙ¥•MÑ…ÑÕÍMÕµµ…Éä ¤ì((€€€•áÁ•ÑQ•áÑQ½½¹Ñ…¥¹A…Ñ ¡ÍÕµµ…Éä°Í•ÉÙ¥•1½A…Ñ  ¤¤ì(€ô¤ì((€Ñ•ÍÐ ‰™±…ÌÍÑ…±”‰…­•Í•ÉÙ¥”Á…Ñ¡ÌÉ•½É‘•…Ð¥¹ÍÑ…±°Ñ¥µ”ˆ°€ ¤€ôøì(€€€½¹ÍÐ½±‘=Á•¹½‘•á!½µ”€ôÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5ì(€€€½¹ÍÐÍÑ…Ñ•¥È€ô©½¥¸¡QMQ}%H°€‰‰…­•µÁ…Ñ¡Ìµ¡½µ”ˆ¤ì(€€€ÑÉäì(€€€€€ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5€ôÍÑ…Ñ•¥Èì(€€€€€µ­‘¥ÉMå¹Œ¡ÍÑ…Ñ•¥È°ìÉ•ÕÉÍ¥Ù”èÑÉÕ”ô¤ì(€€€€€½¹ÍÐÍÑ…Ñ•A…Ñ €ô©½¥¸¡ÍÑ…Ñ•¥È°€‰Í•ÉÙ¥”µÍÑ…Ñ”¹©Í½¸ˆ¤ì((€€€€€½¹ÍÐµ¥ÍÍ¥¹œ€ô©½¥¸¡ÍÑ…Ñ•¥È°€‰½¹”ˆ°€‰‰Õ¸ˆ¤ì(€€€€€ÝÉ¥Ñ•¥±•Må¹Œ¡ÍÑ…Ñ•A…Ñ °)M=8¹ÍÑÉ¥¹¥™ä¡ì(€€€€€€€Ù•ÉÍ¥½¸è€Ä°(€€€€€€€½‘•á!½µ”èÍÑ…Ñ•¥È°(€€€€€€€½Á•¹½‘•á!½µ”èÍÑ…Ñ•¥È°(€€€€€€€‰Õ¹A…Ñ èµ¥ÍÍ¥¹œ°(€€€€€€€±¥A…Ñ è©½¥¸¡¥µÁ½ÉÐ¹µ•Ñ„¹‘¥È°€‰Í•ÉÙ¥”¹Ñ•ÍÐ¹ÑÌˆ¤°(€€€€€ô¤°€‰ÕÑ˜àˆ¤ì(€€€€€½¹ÍÐ‘¥…¹½ÍÑ¥Œ€ô‰…­•‘M•ÉÙ¥•A…Ñ¡Í¥…¹½ÍÑ¥Œ ¤ì(€€€€€•áÁ•Ð¡‘¥…¹½ÍÑ¥Œ¤¹Ñ½½¹Ñ…¥¸ ‰MQ1‰…­•Á…Ñ¡Ìˆ¤ì(€€€€€•áÁ•Ð¡‘¥…¹½ÍÑ¥Œ¤¹Ñ½½¹Ñ…¥¸¡µ¥ÍÍ¥¹œ¤ì((€€€€€ÝÉ¥Ñ•¥±•Må¹Œ¡ÍÑ…Ñ•A…Ñ °)M=8¹ÍÑÉ¥¹¥™ä¡ì(€€€€€€€Ù•ÉÍ¥½¸è€Ä°(€€€€€€€½‘•á!½µ”èÍÑ…Ñ•¥È°(€€€€€€€½Á•¹½‘•á!½µ”èÍÑ…Ñ•¥È°(€€€€€€€‰Õ¹A…Ñ è©½¥¸¡¥µÁ½ÉÐ¹µ•Ñ„¹‘¥È°€‰Í•ÉÙ¥”¹Ñ•ÍÐ¹ÑÌˆ¤°(€€€€€€€±¥A…Ñ è©½¥¸¡¥µÁ½ÉÐ¹µ•Ñ„¹‘¥È°€‰Í•ÉÙ¥”¹Ñ•ÍÐ¹ÑÌˆ¤°(€€€€€ô¤°€‰ÕÑ˜àˆ¤ì(€€€€€•áÁ•Ð¡‰…­•‘M•ÉÙ¥•A…Ñ¡Í¥…¹½ÍÑ¥Œ ¤¤¹Ñ½	•9Õ±° ¤ì((€€€€€€¼¼AÉ”µ±½½À´ÌÍÑ…Ñ”™¥±•ÌÝ¥Ñ¡½ÕÐ‰…­•Á…Ñ¡ÌÍÑ…äÍ¥±•¹Ð¸(€€€€€ÝÉ¥Ñ•¥±•Må¹Œ¡ÍÑ…Ñ•A…Ñ °)M=8¹ÍÑÉ¥¹¥™ä¡ìÙ•ÉÍ¥½¸è€Ä°½‘•á!½µ”èÍÑ…Ñ•¥È°½Á•¹½‘•á!½µ”èÍÑ…Ñ•¥Èô¤°€‰ÕÑ˜àˆ¤ì(€€€€€•áÁ•Ð¡‰…­•‘M•ÉÙ¥•A…Ñ¡Í¥…¹½ÍÑ¥Œ ¤¤¹Ñ½	•9Õ±° ¤ì(€€€ô™¥¹…±±äì(€€€€€¥˜€¡½±‘=Á•¹½‘•á!½µ”€ôôôÕ¹‘•™¥¹•¤‘•±•Ñ”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5ì(€€€€€•±Í”ÁÉ½•ÍÌ¹•¹Ø¹=A9=a}!=5€ô½±‘=Á•¹½‘•á!½µ”ì(€€€ô(€ô¤ì((€Ñ•ÍÐ ‰‘¥É•ÐÍ•ÉÙ¥”ÍÑ…ÑÕÌÁÉ¥¹ÑÌÑ¡”‘¥…¹½ÍÑ¥Ì±¥¹”ˆ°…Íå¹Œ€ ¤€ôøì(€€€½¹ÍÐÍ•ÉÙ¥”€ô…Ý…¥ÐÉ•…‘Q•áÐ ‰ÍÉŒ½Í•ÉÙ¥”¹ÑÌˆ¤ì(€€€½¹ÍÐÍÑ…ÑÕÍ…Í”€ôÍ•ÉÙ¥”¹Í±¥”¡Í•ÉÙ¥”¹¥¹‘•á=˜ …Í”€‰ÍÑ…ÑÕÌˆèœ¤°Í•ÉÙ¥”¹¥¹‘•á=˜ …Í”€‰Õ¹¥¹ÍÑ…±°ˆèœ¤¤ì((€€€•áÁ•Ð¡ÍÑ…ÑÕÍ…Í”¤¹Ñ½½¹Ñ…¥¸ ‰¥…¹½ÍÑ¥Ìèˆ¤ì(€€€•áÁ•Ð¡ÍÑ…ÑÕÍ…Í”¤¹Ñ½½¹Ñ…¥¸ ‰Í•ÉÙ¥•¥…¹½ÍÑ¥ÍMÕµµ…Éä ¤ˆ¤ì(€ô¤ì)ô¤ì
