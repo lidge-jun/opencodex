@@ -12,6 +12,7 @@ import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
+import { buildWorkBuddyRequestHeaders, loginWorkBuddy, readWorkBuddyCredential, readWorkBuddySession, refreshWorkBuddyToken } from "./workbuddy";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
@@ -46,6 +47,8 @@ export interface OAuthAccessSnapshot {
   accountId: string;
   generation: string;
   accessToken: string;
+  /** Provider-scoped, non-secret headers derived from the same credential generation. */
+  requestHeaders?: Record<string, string>;
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
@@ -145,6 +148,14 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     // Unofficial Copilot bridge — keep proactive traffic lazy-only (no background guardian spam).
     defaultRefreshPolicy: "lazy-only",
   },
+  workbuddy: {
+    login: (ctrl) => loginWorkBuddy(ctrl),
+    refresh: (rt, signal) => refreshWorkBuddyToken(rt, signal),
+    providerConfig: oauthConfig("workbuddy"),
+    defaultModel: oauthDefaultModel("workbuddy"),
+    // WorkBuddy owns refresh rotation; OpenCodex only re-imports its desktop session.
+    defaultRefreshPolicy: "disabled",
+  },
   chatgpt: {
     login: loginChatGPT,
     refresh: (rt) => refreshChatGPTToken(rt),
@@ -206,7 +217,20 @@ export class OAuthLoginRequiredError extends Error {
   }
 }
 
-function accessSnapshot(provider: string, accountId: string, cred: OAuthCredentials): OAuthAccessSnapshot {
+function workBuddyRequestHeadersForCredential(cred: OAuthCredentials): Record<string, string> {
+  const session = readWorkBuddySession();
+  if (session.accessToken !== cred.access || session.userId !== cred.accountId) {
+    throw new Error("The WorkBuddy desktop login changed while preparing the request. Retry the request.");
+  }
+  return buildWorkBuddyRequestHeaders(session);
+}
+
+function accessSnapshot(
+  provider: string,
+  accountId: string,
+  cred: OAuthCredentials,
+  includeRequestHeaders = true,
+): OAuthAccessSnapshot {
   const storedKiroRouting = {
     ...(cred.kiro?.profileArn ? { profileArn: cred.kiro.profileArn } : {}),
     ...(cred.kiro?.apiRegion ? { apiRegion: cred.kiro.apiRegion } : {}),
@@ -217,6 +241,9 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    ...(provider === "workbuddy" && includeRequestHeaders
+      ? { requestHeaders: workBuddyRequestHeadersForCredential(cred) }
+      : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -238,8 +265,10 @@ async function resolveAccessSnapshotForAccount(
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const cred = getAccountCredential(provider, accountId);
   if (!cred) throw new OAuthLoginRequiredError(provider);
-  const current = accessSnapshot(provider, accountId, cred);
-  if (rejectedGeneration !== undefined && current.generation !== rejectedGeneration) return current;
+  const current = accessSnapshot(provider, accountId, cred, rejectedGeneration === undefined);
+  if (rejectedGeneration !== undefined && current.generation !== rejectedGeneration) {
+    return accessSnapshot(provider, accountId, cred);
+  }
   if (rejectedGeneration === undefined && cred.expires > Date.now() + REFRESH_SKEW_MS) return current;
 
   const key = `${provider}\u0000${accountId}`;
@@ -265,13 +294,20 @@ async function resolveAccessSnapshotForAccount(
 }
 
 export async function getValidAccessTokenSnapshot(provider: string): Promise<OAuthAccessSnapshot> {
+  if (provider === "workbuddy") {
+    const disk = readWorkBuddyCredential();
+    const stored = getCredential(provider);
+    if (!stored || credentialGeneration(stored) !== credentialGeneration(disk)) {
+      await saveCredential(provider, disk);
+    }
+  }
   const set = getAccountSet(provider);
   if (!set) throw new OAuthLoginRequiredError(provider);
   return resolveAccessSnapshotForAccount(provider, set.activeAccountId);
 }
 
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
-const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro"]);
+const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro", "workbuddy"]);
 
 export async function forceRefreshOAuthAccessSnapshot(
   rejected: OAuthAccessSnapshot,

@@ -37,7 +37,7 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 | --- | --- | --- |
 | `key` | Sends your API key (`Authorization: Bearer …`, or `x-api-key` / `api-key` per adapter). The key may be a literal or an `${ENV_VAR}` reference. | Most providers. |
 | `forward` | Relays **your incoming Codex auth headers** verbatim to the provider — no key stored. This is the ChatGPT-login passthrough. | OpenAI (`openai-responses` adapter). |
-| `oauth` | Resolves a stored OAuth access token (auto-refreshed before expiry) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot. |
+| `oauth` | Resolves a stored access token (refreshed or re-imported according to provider policy) and uses it as the bearer key. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot, WorkBuddy. |
 
 ## 1. ChatGPT login (forward / passthrough)
 
@@ -63,9 +63,9 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
-Six provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
-device-flow bridge. opencodex stores their credentials in
-`~/.opencodex/auth.json` and refreshes them automatically. `chatgpt` is also accepted by the login
+Eight provider presets use account login. GitHub Copilot uses an experimental unofficial
+device-flow bridge, while WorkBuddy imports its signed-in desktop session. opencodex stores their credentials in
+`~/.opencodex/auth.json` and follows each provider's refresh policy. `chatgpt` is also accepted by the login
 CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
 
 ```bash
@@ -76,6 +76,7 @@ ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
+ocx login workbuddy    # import the current WorkBuddy desktop session (macOS)
 ocx login chatgpt      # standalone ChatGPT OAuth login
 ocx logout <provider>
 ```
@@ -89,6 +90,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
+| `workbuddy` | `openai-chat` | `https://copilot.tencent.com/v2` | Experimental. Imports the current WorkBuddy desktop session and sends WorkBuddy's required client headers. |
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
@@ -105,7 +107,8 @@ OAuth providers whose credentials include a stable account id or email can keep 
 login. The Providers page shows those accounts in a dropdown, lets you add another, and switches the
 active account without logging the others out. Only identity-less Kimi credentials replace the
 active slot; Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
-pool accounts have a separate ledger.
+pool accounts have a separate ledger. WorkBuddy is also single-slot because its current desktop
+session is the credential authority.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
 ### OAuth reliability
@@ -183,10 +186,22 @@ from the live CLI store, or when an existing primary CLI database has no recogni
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
 
+### WorkBuddy desktop session import
+
+Open WorkBuddy and sign in before running `ocx login workbuddy`. On macOS, opencodex reads
+`~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`; set
+`WORKBUDDY_AUTH_FILE` when the session file is stored elsewhere.
+
+The import reads only the current access token, expiry, account id, and domain. WorkBuddy keeps
+ownership of refresh rotation: opencodex stores an external-session sentinel instead of copying the
+desktop refresh token, and re-imports the current access token before routed requests and after an
+upstream `401`. The integration is unofficial and may require updates when WorkBuddy changes its
+desktop session or request format.
+
 ## 3. API-key catalog
 
-opencodex ships 53 built-in presets: 42 key-based, seven OAuth, three local, and the default
-ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
+opencodex ships a built-in catalog of key-based, OAuth, local, and default ChatGPT-forward presets.
+The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it. Notable entries:
 
 | Provider | Base URL |

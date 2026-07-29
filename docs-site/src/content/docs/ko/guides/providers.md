@@ -33,7 +33,7 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 | --- | --- | --- |
 | `key` | API 키를 전송합니다(`Authorization: Bearer …`, 또는 어댑터에 따라 `x-api-key` / `api-key`). 키는 리터럴이거나 `${ENV_VAR}` 참조일 수 있습니다. | 대부분의 프로바이더. |
 | `forward` | **수신된 Codex 인증 헤더를** 프로바이더에 그대로 중계합니다 — 키를 저장하지 않습니다. ChatGPT 로그인 패스스루입니다. | OpenAI (`openai-responses` 어댑터). |
-| `oauth` | 저장된 OAuth 액세스 토큰을 불러와 bearer 키로 사용하며, 만료 전에 자동 갱신합니다. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor. |
+| `oauth` | 저장된 액세스 토큰을 불러와 프로바이더 정책에 따라 갱신하거나 다시 가져온 뒤 bearer 키로 사용합니다. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, GitHub Copilot, WorkBuddy. |
 
 ## 1. ChatGPT 로그인 (forward / 패스스루)
 
@@ -60,8 +60,8 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 
 ## 2. 계정 로그인 (OAuth)
 
-OAuth 로그인을 사용하는 프로바이더 프리셋은 여섯 개입니다. 자격 증명은
-`~/.opencodex/auth.json`에 저장되고 자동으로 갱신됩니다. 로그인 CLI는 `chatgpt`도 받습니다.
+계정 로그인을 사용하는 프로바이더 프리셋은 여덟 개입니다. 자격 증명은
+`~/.opencodex/auth.json`에 저장되고 각 프로바이더의 갱신 정책을 따릅니다. 로그인 CLI는 `chatgpt`도 받습니다.
 이 명령은 ChatGPT 자격 증명을 발급받고 `forward` 모드 프로바이더 항목을 만듭니다.
 
 ```bash
@@ -71,6 +71,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # kiro-cli 자격 증명 가져오기(토큰 폴백 지원)
 ocx login google-antigravity
 ocx login cursor       # Cursor 전용 PKCE 로그인
+ocx login github-copilot  # GitHub device flow → Copilot 토큰
+ocx login workbuddy    # 현재 WorkBuddy 데스크톱 세션 가져오기 (macOS)
 ocx login chatgpt      # 별도 ChatGPT OAuth 로그인
 ocx logout <provider>
 ```
@@ -83,6 +85,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 Kiro CLI를 설치(`curl -fsSL https://cli.kiro.dev/install | bash`)하고 `kiro-cli login`으로 로그인한 기존 세션을 가져옵니다. **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적인 비공식 device-flow 브리지입니다. |
+| `workbuddy` | `openai-chat` | `https://copilot.tencent.com/v2` | 실험적입니다. 현재 WorkBuddy 데스크톱 세션을 가져와 필요한 클라이언트 헤더를 전송합니다. |
 
 정식 Kimi Coding Plan 프리셋(`kimi` 계정 로그인과 `kimi-code` API key)의 경우, opencodex는
 호출자가 제공한 안정적인 `prompt_cache_key`만 Chat Completions 요청으로 전달하며 직접 생성하지
@@ -98,7 +102,7 @@ deny-by-default 상태로 유지됩니다.
 자격 증명에 고정된 계정 id나 이메일이 있는 OAuth 프로바이더는 로그인을 여러 개 보관할 수 있습니다.
 Providers 페이지에서 계정을 추가하고, 다른 계정을 로그아웃하지 않은 채 활성 계정만 바꿀 수 있습니다.
 계정 식별 정보가 없는 Kimi 자격 증명만 활성 슬롯을 교체하며, Kiro 계정은 프로필 ARN을 키로 저장됩니다.
-`chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. 토큰은 `~/.opencodex/auth.json`에 저장되고,
+`chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. WorkBuddy도 현재 데스크톱 세션을 기준으로 단일 슬롯을 사용합니다. 토큰은 `~/.opencodex/auth.json`에 저장되고,
 `/api/oauth/accounts`는 마스킹된 메타데이터만 반환합니다.
 
 ### Kiro 자격 증명 가져오기
@@ -114,10 +118,18 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. `curl -fsSL https://cli.kiro.d
 
 롤백은 스냅샷이 있을 때만 가능하므로, 세션 저장소가 존재하지만 캡처할 수 없는 경우(파일을 읽을 수 없음, 스키마 불일치, 토큰 선택 모호), `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE`이 실제 CLI 저장소와 다른 가져오기 경로를 가리키는 경우, 또는 기본 CLI 데이터베이스에 인식 가능한 토큰 행이 없는 경우 **계정 추가**는 `kiro-cli` 로그아웃을 거부합니다. 일반 `kiro-cli` 데이터 경로의 손상된 데이터베이스를 수리하거나 제거하고, 가져오기 전용 선택자가 설정돼 있으면 해제한 뒤 다시 시도하세요. 기존 `kiro-cli` 세션이 아예 없는 환경에서는 영향이 없습니다.
 
+### WorkBuddy 데스크톱 세션 가져오기
+
+`ocx login workbuddy`를 실행하기 전에 WorkBuddy를 열고 로그인하세요. macOS에서는
+`~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`를 읽습니다.
+파일 위치가 다르면 `WORKBUDDY_AUTH_FILE`을 설정하세요. 액세스 토큰, 만료 시각, 계정 ID, 도메인만
+읽으며 데스크톱 refresh token은 복사하지 않습니다. 이 비공식 연동은 WorkBuddy의 세션 또는 요청
+형식이 바뀌면 업데이트가 필요할 수 있습니다.
+
 ## 3. API 키 카탈로그
 
-opencodex v2.7.1에는 빌트인 프리셋이 50개 들어 있습니다. 키 방식 40개, OAuth 6개, 로컬 3개,
-기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
+opencodex에는 키 방식, OAuth, 로컬, 기본 ChatGPT 포워드 프리셋의 빌트인 카탈로그가 있습니다.
+대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다. 주요 항목은 다음과 같습니다:
 
 | 프로바이더 | 베이스 URL |

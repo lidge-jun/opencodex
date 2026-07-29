@@ -32,7 +32,7 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 | --- | --- | --- |
 | `key` | 发送你的 API 密钥（`Authorization: Bearer …`，或按 adapter 使用 `x-api-key` / `api-key`）。密钥可以是字面值，也可以是 `${ENV_VAR}` 引用。 | 大多数提供商。 |
 | `forward` | 将**你传入的 Codex 认证请求头**原样转发给提供商——不存储任何密钥。这就是 ChatGPT 登录的透传方式。 | OpenAI（`openai-responses` adapter）。 |
-| `oauth` | 读取已存储的 OAuth 访问令牌（过期前自动刷新），并将其用作 bearer 密钥。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 读取已存储的访问令牌，按提供商策略刷新或重新导入，并将其用作 bearer 密钥。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、GitHub Copilot、WorkBuddy。 |
 
 ## 1. ChatGPT 登录（forward / 透传）
 
@@ -55,7 +55,7 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 账号登录（OAuth）
 
-有六个提供商预设使用 OAuth 登录。opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。
+有八个提供商预设使用账号登录。GitHub Copilot 使用实验性的非官方设备流桥接，WorkBuddy 则导入已登录的桌面会话。opencodex 会把凭据存入 `~/.opencodex/auth.json`，并遵循各提供商的刷新策略。
 登录 CLI 也接受 `chatgpt`：它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
 ```bash
@@ -65,6 +65,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
 ocx login google-antigravity
 ocx login cursor       # 独立的 Cursor PKCE 登录
+ocx login github-copilot  # GitHub 设备流 → Copilot 令牌
+ocx login workbuddy    # 导入当前 WorkBuddy 桌面会话（macOS）
 ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
 ocx logout <provider>
 ```
@@ -77,6 +79,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装，然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、HTTP/2 传输和按账号筛选的模型发现。 |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性的非官方设备流桥接。 |
+| `workbuddy` | `openai-chat` | `https://copilot.tencent.com/v2` | 实验性。导入当前 WorkBuddy 桌面会话并发送必需的客户端请求头。 |
 
 对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），opencodex
 只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求，绝不自行生成。Kimi
@@ -90,7 +94,7 @@ provider 仍保持 deny-by-default。
 
 OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登录。Providers 页面会在下拉列表中显示这些
 账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。只有没有身份信息的 Kimi 凭据会替换
-当前 active slot；Kiro 账户以配置文件 ARN 为键。`chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
+当前 active slot；Kiro 账户以配置文件 ARN 为键。`chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。WorkBuddy 也只有一个 slot，以当前桌面会话为准。令牌仍保存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
 
 ### Kiro 凭据导入
@@ -106,10 +110,18 @@ Kiro 登录需要 Kiro CLI：使用 `curl -fsSL https://cli.kiro.dev/install | b
 
 由于回滚依赖快照，当会话存储已存在但无法捕获时（文件不可读、架构不匹配、令牌选择有歧义），当 `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` 将导入路径指向与活动 CLI 存储不同的位置时，或当主 CLI 数据库没有可识别的令牌行时，**添加账户**会拒绝将 `kiro-cli` 登出。请修复或删除常规 `kiro-cli` 数据路径下的损坏数据库，并取消仅用于导入的选择器后重试。对于完全没有现有 `kiro-cli` 会话的机器，不受影响。
 
+### WorkBuddy 桌面会话导入
+
+运行 `ocx login workbuddy` 前，请先打开 WorkBuddy 并登录。macOS 上默认读取
+`~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`；
+若文件位于其他位置，可设置 `WORKBUDDY_AUTH_FILE`。导入过程只读取访问令牌、过期时间、账号 ID
+和域名，不会复制桌面端的 refresh token。这是一项非官方集成；如果 WorkBuddy 更改会话或请求格式，
+可能需要同步更新。
+
 ## 3. API 密钥目录
 
-opencodex v2.7.1 内置 50 个预设：40 个密钥预设、6 个 OAuth 预设、3 个本地预设，以及默认的
-ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
+opencodex 内置了密钥、OAuth、本地以及默认 ChatGPT 转发预设目录。仪表盘的 **Add provider**
+选择器会打开密钥提供商的控制台，验证并保存密钥。
 主要条目包括：
 
 | 提供商 | 基础 URL |

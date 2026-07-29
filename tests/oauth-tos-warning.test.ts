@@ -16,6 +16,7 @@ describe("oauth ToS risk map", () => {
   test("flags elevated unofficial bridges", () => {
     expect(oauthTosRisk("github-copilot")).toBe("elevated");
     expect(oauthTosRisk("cursor")).toBe("elevated");
+    expect(oauthTosRisk("workbuddy")).toBe("elevated");
   });
 
   test("leaves lower-risk OAuth providers unmarked", () => {
@@ -47,6 +48,7 @@ describe("oauth ToS warning UI seam", () => {
     expect(risk).toContain('"anthropic"');
     expect(risk).toContain('"google-antigravity"');
     expect(risk).toContain('"github-copilot"');
+    expect(risk).toContain('"workbuddy"');
     expect(providersSeam).toContain("OAuthTosWarningModal");
     expect(providersSeam).toContain("requestLoginOAuth");
     expect(providersSeam).toContain("oauthTosRisk(provider)");

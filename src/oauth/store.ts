@@ -25,7 +25,7 @@ import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, Provider
 type AuthStore = Record<string, ProviderAccountSet>;
 
 /** Providers whose account set is pinned to a single slot (see module doc). */
-const SINGLE_SLOT_PROVIDERS = new Set(["chatgpt"]);
+const SINGLE_SLOT_PROVIDERS = new Set(["chatgpt", "workbuddy"]);
 
 export function getAuthStorePath(): string {
   return join(getConfigDir(), "auth.json");

@@ -33,7 +33,7 @@ max input 922,000 で `*-pro` virtual ID は公開状態を維持し、wire で�
  --- | --- | --- |
 | `key` | API キーを送信します(`Authorization: Bearer …`、またはアダプターにより `x-api-key` / `api-key`)。キーはリテラルまたは `${ENV_VAR}` 参照です。 | 大半のプロバイダー。 |
 | `forward` | **受け取った Codex 認証ヘッダーを**プロバイダーにそのまま中継します — キーを保存しません。ChatGPT ログインのパススルーです。 | OpenAI(`openai-responses` アダプター)。 |
-| `oauth` | 保存された OAuth アクセストークンを読み込み bearer キーとして使い、期限切れ前に自動更新します。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 保存されたアクセストークンを読み込み、プロバイダーのポリシーに従って更新または再取り込みし、bearer キーとして使います。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、GitHub Copilot、WorkBuddy。 |
 
 ## 1. ChatGPT ログイン(forward / パススルー)
 
@@ -60,8 +60,8 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 6 つです。認証情報は
-`~/.opencodex/auth.json` に保存され、自動更新されます。ログイン CLI は `chatgpt` も受け付けます。
+アカウントログインを使うプロバイダープリセットは 8 つです。認証情報は
+`~/.opencodex/auth.json` に保存され、各プロバイダーの更新ポリシーに従います。ログイン CLI は `chatgpt` も受け付けます。
 このコマンドは ChatGPT 認証情報を発行し `forward` モードのプロバイダーエントリを作成します。
 
 ```bash
@@ -71,6 +71,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # kiro-cli 認証情報の取り込み(トークンフォールバック対応)
 ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
+ocx login github-copilot  # GitHub device flow → Copilot トークン
+ocx login workbuddy    # 現在の WorkBuddy デスクトップセッションを取り込む (macOS)
 ocx login chatgpt      # 別途 ChatGPT OAuth ログイン
 ocx logout <provider>
 ```
@@ -83,6 +85,8 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは Kiro CLI をインストール（`curl -fsSL https://cli.kiro.dev/install | bash`）し、`kiro-cli login` でサインインした既存セッションを取り込みます。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的な非公式 device-flow ブリッジ。 |
+| `workbuddy` | `openai-chat` | `https://copilot.tencent.com/v2` | 実験的。現在の WorkBuddy デスクトップセッションを取り込み、必要なクライアントヘッダーを送信します。 |
 
 正規の Kimi Coding Plan プリセット（`kimi` アカウントログインと `kimi-code` API key）では、
 opencodex は呼び出し元が指定した安定した `prompt_cache_key` だけを Chat Completions リクエストへ
@@ -98,7 +102,7 @@ opt-in した上流がこのフィールドを拒否しても、opencodex はフ
 認証情報に固定アカウント ID やメールがある OAuth プロバイダーはログインを複数保持できます。
 Providers ページでアカウントを追加し、別アカウントをログアウトせずにアクティブアカウントだけを切り替えられます。
 アカウント識別情報がない Kimi 認証情報だけがアクティブスロットを差し替え、Kiro アカウントはプロファイル ARN をキーに保存されます。
-`chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
+`chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。WorkBuddy も現在のデスクトップセッションを正として単一スロットを使います。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
 
 ### Kiro 認証情報の取り込み
@@ -114,10 +118,18 @@ Kiro のログインには Kiro CLI が必要です。`curl -fsSL https://cli.ki
 
 ロールバックはスナップショットがある場合にのみ可能なため、セッションストアが存在するのに取得できない場合（ファイルが読めない、スキーマの不一致、トークン選択があいまい）、`KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` が実際の CLI ストアと異なるインポート先を指す場合、またはプライマリ CLI データベースに認識できるトークン行がない場合、**アカウントを追加**は `kiro-cli` のログアウトを拒否します。通常の `kiro-cli` データパス上の壊れたデータベースを修復または削除し、インポート専用セレクタが設定されていれば解除してから再試行してください。既存の `kiro-cli` セッションがまったくない環境には影響しません。
 
+### WorkBuddy デスクトップセッションの取り込み
+
+`ocx login workbuddy` の前に WorkBuddy を開いてサインインしてください。macOS では
+`~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info` を読みます。
+別の場所にある場合は `WORKBUDDY_AUTH_FILE` を設定します。アクセストークン、有効期限、アカウント ID、
+ドメインだけを読み取り、デスクトップのリフレッシュトークンはコピーしません。この非公式連携は
+WorkBuddy のセッション形式やリクエスト形式が変わると更新が必要になる場合があります。
+
 ## 3. API キーカタログ
 
-opencodex v2.7.1 には組み込みプリセットが 50 個含まれています。キー方式 40、OAuth 6、ローカル 3、
-デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
+opencodex にはキー方式、OAuth、ローカル、デフォルト ChatGPT 転送の組み込みカタログがあります。
+ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します。主な項目は以下のとおりです:
 
 | プロバイダー | ベース URL |

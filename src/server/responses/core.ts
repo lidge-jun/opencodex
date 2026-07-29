@@ -1226,7 +1226,7 @@ export async function handleResponses(
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
-  const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro")
+  const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro" || route.providerName === "workbuddy")
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   let anthropicPoolAccountId: string | null = null;
@@ -1266,6 +1266,12 @@ export async function handleResponses(
         const resolved = await getValidAccessTokenSnapshot(route.providerName);
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
+        if (route.providerName === "workbuddy") {
+          route.provider = {
+            ...route.provider,
+            headers: { ...route.provider.headers, ...resolved.requestHeaders },
+          };
+        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
@@ -2169,9 +2175,16 @@ export async function handleResponses(
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
         }
+        const replayProvider = route.providerName === "workbuddy"
+          ? {
+              ...route.provider,
+              apiKey: refreshed.accessToken,
+              headers: { ...route.provider.headers, ...refreshed.requestHeaders },
+            }
+          : { ...route.provider, apiKey: refreshed.accessToken };
         const refreshedProvider = resolveProviderTransport(
           route.providerName,
-          { ...route.provider, apiKey: refreshed.accessToken },
+          replayProvider,
           parsed.options.promptCacheKey,
           route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
         );
