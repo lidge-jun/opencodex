@@ -11,7 +11,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
-import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
+import { hardenSecretDir, hardenSecretPath, hardenSecretPathAsync } from "./lib/windows-secret-acl";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import {
@@ -129,6 +129,90 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
     if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
     if (!removed && !hardened) {
       try { io.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
+    }
+    if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
+    throw cause;
+  }
+}
+
+/** Async atomic-write I/O: harden may await icacls without blocking the event loop (#612). */
+export interface AtomicWriteAsyncIO {
+  write: (path: string, content: string) => void | Promise<void>;
+  harden: (path: string) => void | Promise<void>;
+  rename: (source: string, destination: string) => void | Promise<void>;
+  truncate: (path: string) => void | Promise<void>;
+  unlink: (path: string) => void | Promise<void>;
+}
+
+async function renameAtomicFileAsync(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(source, destination);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const transientWindowsError = process.platform === "win32"
+        && (code === "EBUSY" || code === "EPERM" || code === "EACCES");
+      if (!transientWindowsError || attempt >= 2) throw error;
+      await Bun.sleep(25 * (attempt + 1));
+    }
+  }
+}
+
+/**
+ * Async atomic write (#612): same temp+harden+rename and residual-temp policy as
+ * atomicWriteFile, but Windows ACL harden yields the event loop. Timeout memo is keyed
+ * by the final destination path (not the unique temp, not the parent directory).
+ */
+export async function atomicWriteFileAsync(
+  path: string,
+  content: string,
+  io?: AtomicWriteAsyncIO,
+): Promise<void> {
+  const effective: AtomicWriteAsyncIO = io ?? {
+    write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
+    harden: async target => {
+      try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
+      if (process.platform === "win32") {
+        await hardenSecretPathAsync(target, { required: true, timeoutMemoKey: path });
+      }
+    },
+    rename: renameAtomicFileAsync,
+    truncate: target => truncateSync(target, 0),
+    unlink: unlinkSync,
+  };
+  const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  let hardened = false;
+  try {
+    await effective.write(tmp, content);
+    await effective.harden(tmp);
+    hardened = true;
+    await effective.rename(tmp, path);
+  } catch (cause) {
+    let scrubbed = false;
+    try {
+      await effective.truncate(tmp);
+      scrubbed = true;
+    } catch (error) {
+      if (isMissingPathError(error)) scrubbed = true;
+      else {
+        try { await effective.write(tmp, ""); scrubbed = true; } catch { /* removal may still succeed */ }
+      }
+    }
+    let removed = false;
+    try {
+      await effective.unlink(tmp);
+      removed = true;
+    } catch (error) {
+      if (isMissingPathError(error)) removed = true;
+      else {
+        try { await effective.unlink(tmp); removed = true; }
+        catch (retryError) { if (isMissingPathError(retryError)) removed = true; }
+      }
+    }
+    if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
+    if (!removed && !hardened) {
+      try { await effective.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
     }
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;

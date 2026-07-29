@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFile, getConfigDir } from "../config";
+import { atomicWriteFileAsync, getConfigDir } from "../config";
 import type { OcxProviderContinuationState } from "../types";
 
 const MAX_STORED_RESPONSES = 1_000;
@@ -83,6 +83,8 @@ const replayedInputPrefixLengths = new WeakMap<object, number>();
 let loaded = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPersistPath: string | null = null;
+/** Single-flight gate: overlapping response-state writes serialize (#612). */
+let persistGate: Promise<void> = Promise.resolve();
 
 function now(): number {
   return Date.now();
@@ -247,12 +249,18 @@ function ensureLoaded(): void {
   }
 }
 
-function persistNow(path: string): void {
+async function persistNow(path: string): Promise<void> {
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
   pendingPersistPath = null;
+
+  // Serialize writers so concurrent flush + debounce cannot race on temps / ACL (#612).
+  const previous = persistGate;
+  let release!: () => void;
+  persistGate = new Promise<void>(resolve => { release = resolve; });
+  await previous;
   try {
     const entries: [string, StoredResponseState][] = [];
     let total = 0;
@@ -273,9 +281,11 @@ function persistNow(path: string): void {
     // mkdirSync's mode only applies on creation — re-harden an existing config dir so the
     // conversation-content snapshot never lands in a group/world-readable directory.
     try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
-    atomicWriteFile(path, JSON.stringify({ version: 2, states: entries }));
+    await atomicWriteFileAsync(path, JSON.stringify({ version: 2, states: entries }));
   } catch {
     /* best-effort: disk trouble must never affect request handling */
+  } finally {
+    release();
   }
 }
 
@@ -285,15 +295,18 @@ function schedulePersist(): void {
   // debounce fires, and a late write must land in the home that owned the recorded state.
   pendingPersistPath = snapshotPath();
   const path = pendingPersistPath;
-  persistTimer = setTimeout(() => persistNow(path), SNAPSHOT_DEBOUNCE_MS);
+  persistTimer = setTimeout(() => { void persistNow(path); }, SNAPSHOT_DEBOUNCE_MS);
   (persistTimer as { unref?: () => void }).unref?.();
 }
 
 /** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
-export function flushResponseState(): void {
-  if (!persistTimer) return;
-  // Use the path captured when the write was scheduled — OPENCODEX_HOME may have moved since.
-  persistNow(pendingPersistPath ?? snapshotPath());
+export async function flushResponseState(): Promise<void> {
+  if (persistTimer) {
+    await persistNow(pendingPersistPath ?? snapshotPath());
+    return;
+  }
+  // No pending timer: still await any in-flight write so shutdown does not race (#612).
+  await persistGate;
 }
 
 function inputItems(input: unknown): unknown[] {
@@ -448,6 +461,7 @@ export function clearResponseStateMemoryForTests(): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  pendingPersistPath = null;
   states.clear();
   storedResponseBytes = 0;
   loaded = false;
