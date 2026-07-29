@@ -250,15 +250,18 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         body: JSON.stringify({ id, paused }),
       });
       if (!response.ok) return { ok: false, reason: "request" } as const;
-      const result = await response.json().catch(() => ({})) as { activeCodexAccountId?: string | null };
+      const raw = await response.json().catch(() => ({}));
+      const result = (raw && typeof raw === "object" ? raw : {}) as { activeCodexAccountId?: string | null };
       setAccounts(current => current.map(account => (
         account.id === id || (id === "__main__" && account.isMain)
           ? { ...account, paused }
           : account
       )));
-      const nextActiveId = result.activeCodexAccountId ?? null;
-      pendingActiveIdRef.current = { id: nextActiveId };
-      setActiveId(nextActiveId);
+      if (Object.prototype.hasOwnProperty.call(result, "activeCodexAccountId")) {
+        const nextActiveId = result.activeCodexAccountId ?? null;
+        pendingActiveIdRef.current = { id: nextActiveId };
+        setActiveId(nextActiveId);
+      }
       void load();
       return { ok: true } as const;
     } catch {
@@ -276,7 +279,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     try {
       const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause-exhausted`, { method: "PUT" });
       if (!response.ok) return { ok: false, reason: "request" } as const;
-      const result = await response.json().catch(() => ({})) as {
+      const raw = await response.json().catch(() => ({}));
+      const result = (raw && typeof raw === "object" ? raw : {}) as {
         pausedAccountIds?: string[];
         pausedCount?: number;
         activeCodexAccountId?: string | null;
@@ -287,9 +291,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
           ? { ...account, paused: true }
           : account
       )));
-      const nextActiveId = result.activeCodexAccountId ?? null;
-      pendingActiveIdRef.current = { id: nextActiveId };
-      setActiveId(nextActiveId);
+      if (Object.prototype.hasOwnProperty.call(result, "activeCodexAccountId")) {
+        const nextActiveId = result.activeCodexAccountId ?? null;
+        pendingActiveIdRef.current = { id: nextActiveId };
+        setActiveId(nextActiveId);
+      }
       void load();
       return { ok: true, pausedCount: result.pausedCount ?? pausedIds.size } as const;
     } catch {

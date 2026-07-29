@@ -91,7 +91,7 @@ cooldown, health에 따라 자동 라우팅됩니다.
 일시 중지된 계정과 quota metadata는 계속 표시되지만 자동 전환, 재시도/failover 선택, cooldown 복구 probe, 수동 활성화에서는 제외됩니다.
 일시 중지는 해당 계정의 thread affinity map도 지웁니다. 진행 중인 요청은 이미 확보한 credential을 유지하지만, 이후 턴은 다시 라우팅되며 일시 중지된 계정은 재사용할 수 없습니다.
 상태는 재시작 후에도 유지되며, 모든 계정이 일시 중지되면 Pool 라우팅은 계정을 몰래 선택하지 않고 실패합니다.
-**한도 도달 계정 일시 중지**는 먼저 모든 계정을 새로고친 뒤 관련 quota window가 이번 응답에서 100%로 확인된 계정만 일시 중지합니다. quota가 없거나 새로고침에 실패한 계정은 변경하지 않습니다.
+**한도 도달 계정 일시 중지**는 credential이 있는 적격 계정만 먼저 새로고친 뒤 관련 quota window가 이번 응답에서 100%로 확인된 계정만 일시 중지합니다. credential이 없는 계정과 quota가 없거나 새로고침에 실패한 계정은 변경하지 않습니다.
 
 **rotation 전략**(새 세션만; bound thread는 변경 없음): `quota`(기본) — `autoSwitchThreshold` 초과 시
 최저 usage 선택; `round-robin` — 균등 분배, `accountPoolStickyLimit`(기본 `1`, 1–100)로 한 선택당

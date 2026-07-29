@@ -121,8 +121,9 @@ retry/failover selection, cooldown recovery probes, and manual activation. Pausi
 account's thread-affinity map: in-flight requests keep their captured credentials, but subsequent
 turns are re-routed and cannot reuse the paused account. The exclusion survives
 restarts; if every account is paused, Pool routing fails instead of silently selecting one.
-**Pause exhausted** first refreshes every account and pauses only those whose relevant quota window
-is freshly confirmed at 100%; unknown quota and failed refreshes are left unchanged.
+**Pause exhausted** first refreshes eligible accounts that have credentials available and pauses
+only those whose relevant quota window is freshly confirmed at 100%; accounts without credentials
+and unknown or failed quota refreshes are left unchanged.
 :::
 
 **Rotation strategies** (new sessions only; bound threads are unchanged):

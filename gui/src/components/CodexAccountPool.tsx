@@ -103,7 +103,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const activePoolAccount = activeId && activeId !== "__main__"
     ? accounts.find(a => a.id === activeId)
     : null;
-  const activePoolNeedsReauth = accountNeedsReauth(activePoolAccount);
+  const activePoolNeedsReauth = !activePoolAccount?.paused && accountNeedsReauth(activePoolAccount);
 
   useEffect(() => {
     onActiveNeedsReauthChange?.(activePoolNeedsReauth);

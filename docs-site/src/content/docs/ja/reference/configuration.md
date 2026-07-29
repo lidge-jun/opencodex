@@ -89,7 +89,7 @@ pool アカウントの追加と quota 更新はダッシュボードの **Codex
 一時停止したアカウントと quota metadata は表示されたままですが、自動切り替え、再試行/failover 選択、cooldown 復旧プローブ、手動有効化の対象外です。
 一時停止するとそのアカウントの thread affinity map も消去されます。処理中のリクエストは取得済み credential を維持しますが、以降のターンは再ルーティングされ、一時停止中のアカウントは再利用できません。
 状態は再起動後も保持され、すべてのアカウントが一時停止中なら Pool ルーティングは別のアカウントを暗黙に選ばず失敗します。
-**上限到達を一括停止** は全アカウントを先に更新し、関連する quota window が今回 100% と確認できたアカウントだけを停止します。quota が不明、または更新に失敗したアカウントは変更しません。
+**上限到達を一括停止** は credential がある適格アカウントだけを先に更新し、関連する quota window が今回 100% と確認できたアカウントだけを停止します。credential がないアカウントや、quota が不明、または更新に失敗したアカウントは変更しません。
 
 **rotation 戦略**（新しいセッションのみ；bound thread は不変）：`quota`（既定）— `autoSwitchThreshold` 超過時に最小 usage を選択；`round-robin` — 均等分散、`accountPoolStickyLimit`（既定 `1`、1–100）で 1 選択あたりの成功 bind 数；`fill-first` — アクティブアカウントを cooldown、再認証、または threshold まで使い切り（未知 usage は強制切替しない）後、安定ソート順で次へ。rotation は provider enforcement を回避しません — 複数アカウント利用は ToS 違反の可能性があります。
 :::
