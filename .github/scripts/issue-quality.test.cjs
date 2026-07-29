@@ -16,6 +16,7 @@ const {
   isPlaceholderOnlyValue,
   isPlaceholder,
   isRawPlaceholder,
+  isUnusableVersion,
   countWords,
   hasConcreteDetail,
   rejectsWorkflowDispatchPullRequest,
@@ -693,6 +694,162 @@ describe("validateIssue - bug", () => {
     assert.equal(result.valid, false);
     assert.ok(result.reasons.some((r) => r.includes("Version")));
   });
+
+  it("rejects unknown / don't-know Version values (#624)", () => {
+    const versions = [
+      "Unknown",
+      "Uknown",
+      "unkown",
+      "Don't know",
+      "dont know",
+      "idk",
+      "모름",
+      "잘 모름",
+      "?",
+      "???",
+    ];
+    for (const version of versions) {
+      const body = [
+        "### Client or integration",
+        "Codex CLI",
+        "### Area",
+        "CLI",
+        "### Summary",
+        "The OpenCodex proxy keeps dropping the Codex CLI connection mid-request.",
+        "### Reproduction",
+        "1. ocx start --port 10100",
+        "2. Send any Codex CLI request through the proxy",
+        "3. Observe the connection drop",
+        "### Version",
+        version,
+        "### Operating system",
+        "Windows 11",
+      ].join("\n");
+      const result = validateIssue({
+        title: "Unexpected interruption continues to occur",
+        body,
+        labels: ["bug"],
+      });
+      assert.equal(result.kind, "bug");
+      assert.equal(
+        result.valid,
+        false,
+        `Expected unusable Version "${version}" to be invalid, got: ${result.reasons.join("; ")}`,
+      );
+      assert.ok(
+        result.reasons.some((r) => /Version/i.test(r) && /unknown|missing/i.test(r)),
+        `Expected Version unknown/missing reason for "${version}", got: ${result.reasons.join("; ")}`,
+      );
+    }
+  });
+
+  it("rejects issue #624-style low-effort new-form bug", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "CLI로 확인해봤는데 오픈코덱스 프록시가 중간에 자꾸 연결이 끊어져서 그런거라고 합니다.",
+      "",
+      "수정 바랍니다.",
+      "### Reproduction",
+      "예기치않게중단됨",
+      "### Version",
+      "모름",
+      "### Operating system",
+      "윈11",
+      "### Provider and model",
+      "_No response_",
+      "### Logs or error output",
+      "```shell",
+      "",
+      "```",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Unexpected interruption continues to occur",
+      body,
+      labels: ["bug"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Version/i.test(r)));
+    assert.ok(result.reasons.some((r) => /Reproduction/i.test(r) && /vague|empty/i.test(r)));
+  });
+
+  it("rejects a new-form bug with a usable Version but placeholder OS", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "Proxy returns 502 when streaming is enabled on Windows.",
+      "### Reproduction",
+      "1. ocx start",
+      "2. Send a streaming /v1/responses request",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "No response",
+    ].join("\n");
+    const result = validateIssue({ title: "Streaming 502", body, labels: ["bug"] });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Operating system/i.test(r)));
+  });
+
+  it("rejects a new-form bug whose Reproduction is only a vague phrase", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "The OpenCodex proxy keeps dropping the Codex CLI connection mid-request.",
+      "### Reproduction",
+      "Unexpected interruption",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "Windows 11",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Unexpected interruption continues to occur",
+      body,
+      labels: ["bug"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Reproduction/i.test(r) && /vague/i.test(r)));
+  });
+
+  it("rejects unknown Operating system stand-ins on the new bug form", () => {
+    const body = [
+      "### Client or integration",
+      "Codex CLI",
+      "### Area",
+      "CLI",
+      "### Summary",
+      "The OpenCodex proxy keeps dropping the Codex CLI connection mid-request.",
+      "### Reproduction",
+      "1. ocx start --port 10100",
+      "2. Send any Codex CLI request through the proxy",
+      "3. Observe the connection drop",
+      "### Version",
+      "2.7.42",
+      "### Operating system",
+      "Unknown",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Unexpected interruption continues to occur",
+      body,
+      labels: ["bug"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.some((r) => /Operating system/i.test(r)));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -837,6 +994,16 @@ describe("normalisation", () => {
     assert.equal(clean("not applicable"), "");
     assert.equal(clean("Not applicable."), "");
     assert.equal(clean("Not available!"), "");
+  });
+
+  it("detects unusable Version stand-ins without treating them as generic placeholders", () => {
+    for (const value of ["Unknown", "Uknown", "모름", "idk", "don't know"]) {
+      assert.equal(isUnusableVersion(value), true, value);
+      assert.equal(isPlaceholderOnlyValue(value), false, value);
+    }
+    for (const value of ["2.7.42", "N/A", "No response", "main@abc1234"]) {
+      assert.equal(isUnusableVersion(value), false, value);
+    }
   });
 
   it("does not treat sentences containing placeholder phrases as empty", () => {
