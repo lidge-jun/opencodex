@@ -256,8 +256,8 @@ describe("collectPrQualityFailures", () => {
         "- Confirm the listener and launcher use the same workspace root",
       ].join("\n"),
       behindMain: 0,
-      behindBase: 0,
-      aheadMain: 0,
+      behindBase: 44,
+      aheadMain: 1,
       authorPermission: "read",
       stackedBase: true,
     });

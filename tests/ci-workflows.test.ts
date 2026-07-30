@@ -1043,6 +1043,49 @@ describe("GitHub Actions hardening", () => {
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
     });
 
+    test("a stacked parent found on open-PR page two is still exempt", async () => {
+      const parentHead = "feature/parent-page-two";
+      const filler = Array.from({ length: 100 }, (_, i) => ({
+        number: 1000 + i,
+        head: {
+          ref: `feature/filler-${i}`,
+          repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+        },
+      }));
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: parentHead,
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Stacked child beyond page one",
+          draft: false,
+        },
+        openPullPages: [
+          filler,
+          [
+            {
+              number: 41,
+              head: {
+                ref: parentHead,
+                repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+              },
+            },
+          ],
+        ],
+      });
+
+      const listPages = callsTo(result, "pulls.list").map(
+        (args) => Number((args as { page?: number }).page ?? 1),
+      );
+      expect(listPages).toEqual([1, 2]);
+      expect(methodsOf(result).filter((m) => m === "pulls.list")).toHaveLength(2);
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(result.logs.join(" ")).toContain("treating as stacked");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+    });
+
     test("a non-dev base with no open parent PR is still wrong-base", async () => {
       const result = await run({
         pr: { base: { ref: "feature/orphan" }, title: "Orphan stack", draft: false },

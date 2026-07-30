@@ -233,6 +233,12 @@ export type TakeoverCreditLookup = {
 /**
  * Rewrite generate-notes lines so maintainer-takeover PRs also credit the
  * original PR creator: `by @Original (takeover by @Landing) in …/pull/P`.
+ *
+ * Prefer the takeover marker already present in the notes-line title (cheap,
+ * no landing lookup). Fall back to `resolveLanding` only when the title
+ * mentions "takeover" but does not match a known `#N` form, so body text can
+ * still supply the source. Ordinary non-takeover lines never call either
+ * resolver.
  */
 export async function rewriteTakeoverCredits(
   notesBody: string,
@@ -249,15 +255,25 @@ export async function rewriteTakeoverCredits(
     }
     const landingPr = Number(match.groups.pr);
     const landingAuthor = match.groups.author!;
-    const landing = await resolveLanding(landingPr);
-    if (!landing) {
-      out.push(line);
-      continue;
-    }
-    const sourcePr = parseTakeoverSourcePr(landing.title, landing.body);
+    const titleHint = match.groups.prefix
+      .replace(/^\* /, "")
+      .replace(/ by @$/, "");
+    let sourcePr = parseTakeoverSourcePr(titleHint);
     if (sourcePr == null) {
-      out.push(line);
-      continue;
+      if (!/\btakeover\b/i.test(titleHint)) {
+        out.push(line);
+        continue;
+      }
+      const landing = await resolveLanding(landingPr);
+      if (!landing) {
+        out.push(line);
+        continue;
+      }
+      sourcePr = parseTakeoverSourcePr(landing.title, landing.body);
+      if (sourcePr == null) {
+        out.push(line);
+        continue;
+      }
     }
     const original = await resolveOriginalAuthor(sourcePr);
     if (!original || original.toLowerCase() === landingAuthor.toLowerCase()) {
@@ -451,7 +467,10 @@ async function main(argv: string[]): Promise<void> {
     const rewritten = await rewriteTakeoverCredits(
       body,
       async (prNumber) => {
-        const data = await ghJson(`repos/${owner}/${name}/pulls/${prNumber}`);
+        const data = await ghJson(`repos/${owner}/${name}/pulls/${prNumber}`, {
+          allowNotFound: true,
+        });
+        if (data === null) return null;
         if (!data || typeof data !== "object") {
           console.error(`Landing PR #${prNumber} lookup returned no object`);
           process.exit(1);
@@ -468,7 +487,7 @@ async function main(argv: string[]): Promise<void> {
         };
       },
       async (sourcePrNumber) => {
-        // Missing source PRs leave the line unchanged; other lookup failures abort.
+        // Missing landing/source PRs leave the line unchanged; other lookup failures abort.
         const data = await ghJson(`repos/${owner}/${name}/pulls/${sourcePrNumber}`, {
           allowNotFound: true,
         });

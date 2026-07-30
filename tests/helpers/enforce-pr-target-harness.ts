@@ -91,9 +91,12 @@ export type RunOptions = {
   compareByBasehead?: Record<string, { ahead_by: number; behind_by: number }>;
   /**
    * Open PRs returned by `pulls.list` (page 1). Used for stacked-base detection
-   * when this PR's base is another PR's head ref.
+   * when this PR's base is another PR's head ref. Prefer `openPullPages` when
+   * the test needs pagination beyond the first page.
    */
   openPulls?: unknown[];
+  /** Page-keyed open PR fixtures for `pulls.list` (1-based via array index). */
+  openPullPages?: unknown[][];
 };
 
 /**
@@ -483,7 +486,10 @@ export async function runEnforcePrTarget(
     user: { ...DEFAULT_PR.user, ...(source.user ?? {}) },
   };
   const pages: Comment[][] = options.commentPages ?? [options.comments ?? []];
-  const openPulls = options.openPulls ?? [];
+  const openPullPages: unknown[][] =
+    options.openPullPages ??
+    (options.openPulls && options.openPulls.length > 0 ? [options.openPulls] : []);
+  const paginatePageCount = Math.max(pages.length, openPullPages.length, 1);
 
   /**
    * Record the call, then either reject or return a plausible payload. Every
@@ -552,10 +558,10 @@ export async function runEnforcePrTarget(
     pulls: {
       get: (args: unknown) => respond("pulls.get", args, pr),
       update: (args: unknown) => respond("pulls.update", args, { ...pr }),
-      // Page 1 returns openPulls; later pages empty so paginate does not duplicate.
+      // Page-specific open-PR fixtures; missing pages are empty so paginate ends.
       list: (args: unknown) => {
         const page = Number((args as { page?: number })?.page ?? 1);
-        return respond("pulls.list", args, page === 1 ? openPulls : []);
+        return respond("pulls.list", args, openPullPages[page - 1] ?? []);
       },
     },
     issues: {
@@ -600,12 +606,13 @@ export async function runEnforcePrTarget(
       respond("request", { route, params });
     /**
      * `github.paginate(fn, params)` — walk every page and concatenate, the way
-     * Octokit does. A one-page fake would make dropping pagination invisible.
+     * Octokit does. Page count covers both comment and open-PR fixtures so a
+     * stacked parent on page two is still visible.
      */
     paginate = Object.assign(
       async (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => {
         const collected: unknown[] = [];
-        for (let page = 1; page <= pages.length; page += 1) {
+        for (let page = 1; page <= paginatePageCount; page += 1) {
           const response = await fn({ ...(params as object), page });
           collected.push(...response.data);
         }
@@ -620,7 +627,7 @@ export async function runEnforcePrTarget(
          */
         iterator: (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => ({
           async *[Symbol.asyncIterator]() {
-            for (let page = 1; page <= pages.length; page += 1) {
+            for (let page = 1; page <= paginatePageCount; page += 1) {
               yield await fn({ ...(params as object), page });
             }
           },

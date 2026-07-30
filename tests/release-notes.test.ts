@@ -273,39 +273,63 @@ describe("rewriteTakeoverCredits", () => {
     const body = [
       "## What's Changed",
       "### New Features",
-      "* feat(images): Grok image bridge by @Wibias in https://github.com/lidge-jun/opencodex/pull/577",
+      "* feat(images): Grok image bridge (maintainer takeover of #424) by @Wibias in https://github.com/lidge-jun/opencodex/pull/577",
       "* feat(other): normal change by @Alice in https://github.com/lidge-jun/opencodex/pull/100",
     ].join("\n");
 
+    const landingCalls: number[] = [];
     const rewritten = await rewriteTakeoverCredits(
       body,
       async (pr) => {
-        if (pr === 577) {
-          return {
-            title: "feat(images): Grok image bridge (maintainer takeover of #424)",
-            body: "Credit: original feature work by @tizerluo on #424.",
-            authorLogin: "Wibias",
-          };
-        }
-        if (pr === 100) {
-          return { title: "feat(other): normal change", body: "", authorLogin: "Alice" };
-        }
+        landingCalls.push(pr);
         return null;
       },
       async (source) => (source === 424 ? "tizerluo" : null),
     );
 
+    expect(landingCalls).toEqual([]);
     expect(rewritten).toContain(
-      "* feat(images): Grok image bridge by @tizerluo (takeover by @Wibias) in https://github.com/lidge-jun/opencodex/pull/577",
+      "* feat(images): Grok image bridge (maintainer takeover of #424) by @tizerluo (takeover by @Wibias) in https://github.com/lidge-jun/opencodex/pull/577",
     );
     expect(rewritten).toContain(
       "* feat(other): normal change by @Alice in https://github.com/lidge-jun/opencodex/pull/100",
     );
   });
 
+  test("falls back to landing lookup when title says takeover without #N", async () => {
+    const line =
+      "* feat x (takeover) by @Wibias in https://github.com/lidge-jun/opencodex/pull/577";
+    const rewritten = await rewriteTakeoverCredits(
+      line,
+      async (pr) => {
+        if (pr !== 577) return null;
+        return {
+          title: "feat x (takeover)",
+          body: "Maintainer takeover of #424.",
+          authorLogin: "Wibias",
+        };
+      },
+      async (source) => (source === 424 ? "tizerluo" : null),
+    );
+    expect(rewritten).toContain(
+      "* feat x (takeover) by @tizerluo (takeover by @Wibias) in https://github.com/lidge-jun/opencodex/pull/577",
+    );
+  });
+
+  test("leaves line unchanged when landing lookup returns null", async () => {
+    const line =
+      "* feat x (takeover) by @Wibias in https://github.com/lidge-jun/opencodex/pull/577";
+    const rewritten = await rewriteTakeoverCredits(
+      line,
+      async () => null,
+      async () => "tizerluo",
+    );
+    expect(rewritten).toBe(line);
+  });
+
   test("leaves line unchanged when original author matches landing author", async () => {
     const line =
-      "* feat x by @Wibias in https://github.com/lidge-jun/opencodex/pull/10";
+      "* feat x (takeover #9) by @Wibias in https://github.com/lidge-jun/opencodex/pull/10";
     const rewritten = await rewriteTakeoverCredits(
       line,
       async () => ({
