@@ -70,6 +70,31 @@ test("import rejects invalid profiles without replacing saved state", async () =
   }
 });
 
+test("desktopNativeModels:false omits native/* from show and exported profile", async () => {
+  saveConfig({
+    port: 10100,
+    defaultProvider: "mock",
+    providers: {
+      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, models: ["test-model"] },
+    },
+    claudeCode: { desktopNativeModels: false },
+  } as OcxConfig);
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["show", "--json"])).toBe(0);
+    const state = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(state.models.every((model: { route: string }) => !model.route.startsWith("native/"))).toBe(true);
+    expect(Object.keys(state.profile.assignments).every((route: string) => !route.startsWith("native/"))).toBe(true);
+
+    const target = join(dir, "desktop-profile.json");
+    expect(await handleClaudeDesktopCommand(["export", target])).toBe(0);
+    const exported = JSON.parse(readFileSync(target, "utf8"));
+    expect(Object.keys(exported.assignments).every((route: string) => !route.startsWith("native/"))).toBe(true);
+  } finally {
+    log.mockRestore();
+  }
+});
+
 test("no-arg and legacy mode flags apply Desktop config", async () => {
   const log = spyOn(console, "log").mockImplementation(() => {});
   const error = spyOn(console, "error").mockImplementation(() => {});
