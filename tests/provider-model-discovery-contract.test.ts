@@ -17,6 +17,7 @@ import { PROVIDER_REGISTRY, type ProviderModelDiscoverySpec } from "../src/provi
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
+import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
 
 const FIXTURE = readFileSync(join(import.meta.dir, "fixtures/provider-model-discovery.json"), "utf8");
 const originalFetch = globalThis.fetch;
@@ -36,37 +37,7 @@ async function withTogetherDiscovery<T>(
   spec: ProviderModelDiscoverySpec,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  const entry = togetherEntry();
-  const original = entry.modelDiscovery;
-  const originalPreserveCustomDestination = entry.preserveCustomDestination;
-  entry.modelDiscovery = spec;
-  entry.preserveCustomDestination = true;
-  try {
-    return await run();
-  } finally {
-    if (original === undefined) delete entry.modelDiscovery;
-    else entry.modelDiscovery = original;
-    if (originalPreserveCustomDestination === undefined) delete entry.preserveCustomDestination;
-    else entry.preserveCustomDestination = originalPreserveCustomDestination;
-    clearModelCache("together");
-  }
-}
-
-async function withRegistryDiscovery<T>(
-  providerId: string,
-  spec: ProviderModelDiscoverySpec,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const entry = PROVIDER_REGISTRY.find(row => row.id === providerId);
-  if (!entry) throw new Error(`missing ${providerId} registry entry`);
-  const original = entry.modelDiscovery;
-  entry.modelDiscovery = spec;
-  try {
-    return await run();
-  } finally {
-    if (original === undefined) delete entry.modelDiscovery;
-    else entry.modelDiscovery = original;
-  }
+  return withRegistryDiscovery("together", spec, run, { preserveCustomDestination: true });
 }
 
 function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
@@ -96,6 +67,11 @@ describe("registry-owned provider model discovery", () => {
       .toContain("https");
     expect(providerModelDiscoverySpecError({ path: "models?unbounded=true" }))
       .toContain("query-free");
+    expect(providerModelDiscoverySpecError({ path: "../../internal/models" }))
+      .toContain("parent-directory");
+    expect(providerModelDiscoverySpecError({ path: "models/../internal" }))
+      .toContain("parent-directory");
+    expect(providerModelDiscoverySpecError({ path: "models/model..variant" })).toBeNull();
     expect(providerModelDiscoverySpecError({
       url: "https://api.example.test/models",
       path: "models",

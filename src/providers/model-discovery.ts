@@ -90,6 +90,7 @@ export function providerModelDiscoverySpecError(spec: ProviderModelDiscoverySpec
     if (/^[a-z][a-z\d+.-]*:/i.test(path) || path.startsWith("//") || path.includes("?") || path.includes("#")) {
       return "discovery path must be a query-free relative/origin path";
     }
+    if (path.split("/").includes("..")) return "discovery path must not contain parent-directory segments";
   }
   const queryEntries = Object.entries(spec.query ?? {});
   if (queryEntries.length > 32) return "discovery query may contain at most 32 entries";
