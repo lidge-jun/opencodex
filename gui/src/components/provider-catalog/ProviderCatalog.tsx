@@ -62,13 +62,19 @@ export default function ProviderCatalog({
 
   const catalog = useMemo(() => presets.filter(p => p.id !== "custom"), [presets]);
 
-  /** Usage-ranked order: requests desc, then label (050a sortPresets is the no-usage fallback). */
-  const ranked = useMemo(() => catalog.toSorted((a, b) => {
-    const ra = usageRank[a.id] ?? 0;
-    const rb = usageRank[b.id] ?? 0;
-    if (rb !== ra) return rb - ra;
-    return a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
-  }), [catalog, usageRank]);
+  /** Usage-ranked order only after usage arrives; until then keep stable label order
+   * so a slow /api/usage (~5s cold) cannot flash a catalog resort. */
+  const ranked = useMemo(() => {
+    const hasUsage = Object.keys(usageRank).length > 0;
+    return catalog.toSorted((a, b) => {
+      if (hasUsage) {
+        const ra = usageRank[a.id] ?? 0;
+        const rb = usageRank[b.id] ?? 0;
+        if (rb !== ra) return rb - ra;
+      }
+      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
+    });
+  }, [catalog, usageRank]);
 
   const buckets = useMemo(() => bucketPresets(ranked), [ranked]);
   const tierList = buckets[tier];

@@ -101,33 +101,18 @@ non-trivial change. CI runs these on Linux, Windows, and macOS.
   from `dev` (releases, docs deploys). Do not open feature PRs against `main`.
 - `preview` — prerelease train (`x.y.z-preview.*` versions).
 
-### The retired `dev2-go` line
+Bun-native TypeScript on `dev` is the only runtime line. If native code
+returns, the expectation is an incremental module (for example Rust via N-API)
+landing on `dev`, not a second full-runtime branch.
 
-The project previously ran a parallel `dev2-go` integration line that was
-rebuilding the runtime as a Go native port, and every merge into `dev` had to be
-carried onto it. That dual-track policy is over: maintaining two integration
-lines cost more than the port returned, and dogfooding the Go runtime kept
-surfacing new defects.
+Stacked child pull requests that target another **open** PR's head branch are
+an intentional review workflow, not an alternate integration line. The
+**`enforce-target`** check skips the wrong-base gate for those children; after
+the parent lands or closes, retarget the child to `dev`.
 
-`dev2-go` has been deleted, along with the `codex/260728-go-port-*` and
-`tmp/dev2-go-source-export` side branches. The full history lives in
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)
-and the final tip is tagged `archive/dev2-go` in this repository. There is no
-carry or port obligation attached to a `dev` merge any more, and the
-`needs-go-port` label is gone.
-
-Bun-native TypeScript is the only runtime line. If native code returns, the
-expectation is an incremental module (for example Rust via N-API) landing on
-`dev`, not a second full-runtime branch.
-
-The Claude Desktop integration formerly carried on the `claudedesktop` branch is
-now fully merged into `dev`, and that branch has been retired. Desktop work
-continues as normal pull requests against `dev`.
-
-Porting and rebase pull requests are welcome. Forward-porting a fix from one
-integration line to another, or rebasing a stale branch onto the current head,
-is ordinary maintenance rather than noise — open it as a normal pull request
-and name the source commits in the description.
+Rebase pull requests are welcome. Bringing a stale branch onto the current head
+is ordinary maintenance — open it as a normal pull request and name the source
+commits in the description.
 
 The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects

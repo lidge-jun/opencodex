@@ -249,7 +249,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
       </div>
 
       <div className="dash-sidecar-grid">
-        <div className="panel dash-sidecar-card">
+        <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
           <div className="dash-sidecar-card__row">
             <div className="font-semibold">{t("dash.webSearchSidecar")}</div>
             <Select
@@ -263,7 +263,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
           <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
         </div>
 
-        <div className="panel dash-sidecar-card">
+        <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
           <div className="dash-sidecar-card__row">
             <div className="font-semibold">{t("dash.visionSidecar")}</div>
             <Select
@@ -278,7 +278,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
         </div>
       </div>
 
-      <div className="panel">
+      <div className="panel" aria-busy={!shadowCall || undefined}>
         <div className="spread" style={{ alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className="font-semibold">{t("dash.shadowCallIntercept")}</span>

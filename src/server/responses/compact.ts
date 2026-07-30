@@ -225,7 +225,7 @@ export async function handleResponsesCompact(
           modelId: selectedModelId,
         });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
-        compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx);
+        compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
           const value = selected.get(name);
           if (value) headers.set(name, value);

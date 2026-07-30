@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import Storage from "../src/pages/Storage";
 
-const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 const originalFetch = globalThis.fetch;
@@ -24,6 +24,22 @@ const REPORT_B = {
   buckets: [{ key: "other", label: "Other", bytes: 20, fileCount: 2 }],
 };
 
+const DEFAULT_POLICY = {
+  enabled: false,
+  trigger: { archivedBytesOver: 5 * 1024 ** 3 },
+  target: { removeOldestPercent: 25 },
+  schedule: "manual",
+  mode: "quarantine",
+};
+
+/** Side-panel APIs resolve immediately so race tests only gate the storage report. */
+function storageSideResponse(url: string): Response | null {
+  if (url.includes("/api/storage/cleanup-policy")) return Response.json(DEFAULT_POLICY);
+  if (url.includes("/api/storage/trash")) return Response.json({ entries: [] });
+  if (url.includes("/api/storage/cleanup")) return Response.json({ ok: true });
+  return null;
+}
+
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
@@ -32,8 +48,10 @@ beforeEach(() => {
     window: { configurable: true, value: testWindow },
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    sessionStorage: { configurable: true, value: testWindow.sessionStorage },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  testWindow.sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -63,6 +81,8 @@ test("an aborted Storage fetch must not clear loading while its replacement is i
   const gates: Gate[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
+    const side = storageSideResponse(url);
+    if (side) return side;
     if (!url.includes("/api/storage")) return new Response(null, { status: 404 });
     const body = await new Promise<unknown>(resolve => {
       gates.push({ resolve });
@@ -166,6 +186,8 @@ test("effect cleanup invalidates generation before abort so loading stays owned 
   const gates: Gate[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    const side = storageSideResponse(url);
+    if (side) return side;
     if (!url.includes("/api/storage")) return new Response(null, { status: 404 });
     const signal = init?.signal;
     const body = await new Promise<unknown>((resolve, reject) => {
@@ -198,9 +220,10 @@ test("effect cleanup invalidates generation before abort so loading stays owned 
       root = createRoot(container);
       root.render(<Harness />);
     });
+    // Report schedules a delay-0 load; cleanup-policy mounts only after a report paints.
     expect(deferredZero.length).toBe(1);
     await act(async () => {
-      deferredZero.shift()!.run();
+      while (deferredZero.length > 0) deferredZero.shift()!.run();
     });
     await waitFor(() => gates.length === 1);
 
@@ -222,7 +245,7 @@ test("effect cleanup invalidates generation before abort so loading stays owned 
     expect(refresh?.disabled).toBe(true);
 
     await act(async () => {
-      deferredZero.shift()!.run();
+      while (deferredZero.length > 0) deferredZero.shift()!.run();
     });
     await waitFor(() => gates.length === 2);
 

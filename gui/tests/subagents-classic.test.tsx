@@ -6,10 +6,8 @@ import Subagents from "../src/pages/Subagents";
 import { LanguageProvider } from "../src/i18n/provider";
 
 /**
- * WP1 behavioural contract (010_subagents_single.md).
- * Source-substring checks live in subagents-classic.test.ts; this file proves the
- * rendered behaviour: one render path regardless of viewMode, the five-slot cap,
- * and the exact save request.
+ * Behavioural contract for the denser Subagents workspace: five-slot cap,
+ * add/remove via the rail, and the exact save request.
  */
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -65,12 +63,12 @@ afterEach(async () => {
   }
 });
 
-async function mount(viewMode?: "classic" | "workspace") {
+async function mount() {
   await act(async () => {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <Subagents apiBase="" viewMode={viewMode} />
+        <Subagents apiBase="" />
       </LanguageProvider>,
     );
   });
@@ -78,35 +76,24 @@ async function mount(viewMode?: "classic" | "workspace") {
   await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
 }
 
-/** Model-list rows are toggle buttons keyed by aria-pressed, labelled by their model id. */
-function modelRow(id: string): HTMLButtonElement {
+/** Rail add/remove toggles are labelled from sub.workspace.addToFeatured / removeFromFeatured. */
+function addToggle(id: string): HTMLButtonElement {
   const row = Array.from(container.querySelectorAll("button"))
-    .find((b) => b.hasAttribute("aria-pressed") && (b.textContent ?? "").includes(id));
-  if (!row) throw new Error(`model row not found: ${id}`);
+    .find((b) => (b.getAttribute("aria-label") ?? "").includes(`Add ${id} to featured`));
+  if (!row) throw new Error(`add toggle not found: ${id}`);
   return row as unknown as HTMLButtonElement;
 }
 
-/** Featured slots expose a remove control labelled from sub.removeAria ("Remove {m}"). */
+/** Featured-list remove only (rail also has "Remove … from featured"). */
 function removeButtons(): HTMLButtonElement[] {
-  return Array.from(container.querySelectorAll("button")).filter((b) =>
+  return Array.from(container.querySelectorAll(".swi-featured-actions button")).filter((b) =>
     /^Remove /.test(b.getAttribute("aria-label") ?? "")) as unknown as HTMLButtonElement[];
 }
 
-test("renders the same single surface for classic and workspace preferences", async () => {
-  await mount("classic");
-  const classicHtml = container.innerHTML;
-
-  const current = root!;
-  await act(async () => { current.unmount(); });
-  root = null;
-  container.innerHTML = "";
-
-  await mount("workspace");
-  const workspaceHtml = container.innerHTML;
-
-  // One implementation: the global preference must not change what Subagents renders.
-  expect(workspaceHtml).toBe(classicHtml);
-  expect(classicHtml).not.toContain("subagents-workspace");
+test("renders the denser workspace shell", async () => {
+  await mount();
+  expect(container.querySelector(".subagents-workspace-shell")).toBeTruthy();
+  expect(container.querySelector(".subagents-workspace-rail")).toBeTruthy();
 });
 
 test("caps featured selections at five", async () => {
@@ -114,18 +101,21 @@ test("caps featured selections at five", async () => {
 
   // Six models available, six clicks — only five may land.
   for (const id of available) {
-    await act(async () => { modelRow(id).click(); });
+    const toggle = addToggle(id);
+    if (!toggle.disabled) {
+      await act(async () => { toggle.click(); });
+    }
   }
 
   expect(removeButtons().length).toBe(5);
   expect(container.textContent).toContain("5/5");
-  // The sixth row is disabled rather than silently appended.
-  expect(modelRow(available[5]!).disabled).toBe(true);
+  // The sixth add toggle is disabled rather than silently appended.
+  expect(addToggle(available[5]!).disabled).toBe(true);
 
   // The cap lives in TWO places: the disabled attribute above (presentation) and the
   // state guard in toggle(). Force a click past the disabled attribute so a weakened
   // state guard cannot hide behind the UI check.
-  await act(async () => { modelRow(available[5]!).dispatchEvent(new (globalThis as any).window.MouseEvent("click", { bubbles: true })); });
+  await act(async () => { addToggle(available[5]!).dispatchEvent(new (globalThis as any).window.MouseEvent("click", { bubbles: true })); });
   expect(removeButtons().length).toBe(5);
 
   // And save must never ship more than five.
@@ -139,8 +129,8 @@ test("caps featured selections at five", async () => {
 test("saves the featured order with PUT and the models payload", async () => {
   await mount();
 
-  await act(async () => { modelRow("a-1").click(); });
-  await act(async () => { modelRow("a-2").click(); });
+  await act(async () => { addToggle("a-1").click(); });
+  await act(async () => { addToggle("a-2").click(); });
 
   const save = Array.from(container.querySelectorAll("button"))
     .find((b) => b.textContent?.trim() === "Save") as HTMLButtonElement | undefined;

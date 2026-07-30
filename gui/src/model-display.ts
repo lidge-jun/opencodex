@@ -14,7 +14,7 @@ const MODEL_ICON_MAP: Record<string, IconComponent> = {
   "gpt-5.6-luna": IconMoon,
 };
 
-const ICON_STYLE = { width: 14, height: 14, flexShrink: 0, verticalAlign: "text-bottom" as const, marginRight: 4 };
+const ICON_STYLE = { width: 14, height: 14, flexShrink: 0, verticalAlign: "text-bottom" as const };
 
 /** Resolve the bare slug from a potentially provider-prefixed id. */
 function bareSlug(slug: string): string {
@@ -30,8 +30,8 @@ function resolveIcon(slug: string): IconComponent | null {
 export function modelLabel(slug: string): ReactNode {
   const Icon = resolveIcon(slug);
   if (!Icon) return slug;
-  return createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
-    createElement(Icon, { style: ICON_STYLE }),
+  return createElement("span", { className: "model-label" },
+    createElement(Icon, { style: ICON_STYLE, "aria-hidden": true }),
     slug,
   );
 }

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -245,7 +245,7 @@ describe("Windows service task", () => {
     for (const mutated of [
       xml.replace("<LogonTrigger>", "<BootTrigger>"),
       xml.replace("InteractiveToken", "Password"),
-      xml.replace("LeastPrivilege", "HighestAvailable"),
+      xml.replace("LeastPrivilege", "InvalidLevel"),
       xml.replace("IgnoreNew", "Parallel"),
       xml.replace(wscript, "C:\\Windows\\System32\\cmd.exe"),
       xml.replace(launcher, "C:\\Temp\\foreign.vbs"),
@@ -284,7 +284,7 @@ describe("Windows service task", () => {
     const xml = buildWindowsTaskXml("ignored.cmd", launcher)
       .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
     // We write `&quot;`; Task Scheduler hands the same value back with literal
-    // quotes. Comparing encodings made a healthy task read as stale forever.
+    // quotes. Comparing encodings made a healthy task read as permanently stale.
     const canonical = xml.replace(
       `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
       `<Arguments>/b /nologo "${launcher}"</Arguments>`,
@@ -338,6 +338,19 @@ describe("Windows service task", () => {
     ] as const) {
       expect(windowsTaskRegistrationHealthy(mutated, wscript, launcher), reason).toBe(false);
     }
+  });
+
+  test("accepts elevated-create rewrites (HighestAvailable, path casing, raw quotes)", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher)
+      .replace(/<Command>.*?<\/Command>/, `<Command>C:\\WINDOWS\\System32\\wscript.exe</Command>`)
+      .replace("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel>HighestAvailable</RunLevel>")
+      .replace(
+        `<Arguments>/b /nologo &quot;${launcher}&quot;</Arguments>`,
+        `<Arguments>/b /nologo "${launcher}"</Arguments>`,
+      );
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher)).toBe(true);
   });
 
   test("rejects explicit unsafe values even though defaults may be omitted", () => {
@@ -610,17 +623,23 @@ describe("service lifecycle cleanup ordering", () => {
 
   test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
     const service = await readText("src/service.ts");
-    const installWindows = service.slice(service.indexOf("function installWindows()"), service.indexOf("function startWindows()"));
+    const assetsHelper = service.slice(
+      service.indexOf("function writeWindowsSchedulerAssets()"),
+      service.indexOf("function installWindows()"),
+    );
+    const installWindows = service.slice(service.indexOf("function installWindows()"), service.indexOf("async function installWindowsNative()"));
 
     const stopAt = installWindows.indexOf("stopWindows();");
-    const scriptWriteAt = installWindows.indexOf("writeServiceAssetWithRetry(script");
-    const xmlWriteAt = installWindows.indexOf("writeServiceAssetWithRetry(windowsTaskXmlPath()");
+    const assetsAt = installWindows.indexOf("writeWindowsSchedulerAssets();");
+    const createAt = installWindows.indexOf("buildWindowsSchtasksCreateArgs");
     expect(stopAt).toBeGreaterThan(-1);
-    expect(scriptWriteAt).toBeGreaterThan(-1);
-    expect(xmlWriteAt).toBeGreaterThan(-1);
-    expect(stopAt).toBeLessThan(scriptWriteAt);
-    expect(scriptWriteAt).toBeLessThan(xmlWriteAt);
+    expect(assetsAt).toBeGreaterThan(-1);
+    expect(createAt).toBeGreaterThan(-1);
+    expect(stopAt).toBeLessThan(assetsAt);
+    expect(assetsAt).toBeLessThan(createAt);
     expect(installWindows).not.toContain("writeFileSync(script");
+    expect(assetsHelper).toContain("writeServiceAssetWithRetry(script");
+    expect(assetsHelper).toContain("writeServiceAssetWithRetry(windowsTaskXmlPath()");
     // Retry helper tolerates transient Windows file locks from the just-ended task.
     expect(service).toContain('code !== "EBUSY" && code !== "EPERM" && code !== "EACCES"');
   });
@@ -771,5 +790,72 @@ describe("service diagnostics", () => {
 
     expect(statusCase).toContain("Diagnostics:");
     expect(statusCase).toContain("serviceDiagnosticsSummary()");
+  });
+});
+
+describe("service repair", () => {
+  const baseDiag = {
+    supported: true,
+    installed: true,
+    enabled: true,
+    running: true,
+    viable: false,
+    startable: true,
+    stale: true,
+    conflict: false,
+    backend: "scheduler" as const,
+    summary: "stale",
+  };
+
+  test("scheduler repair rewrites assets and restarts without schtasks create", async () => {
+    const calls: string[] = [];
+    await repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+      repairNative: async () => { calls.push("native"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
+  });
+
+  test("repair rejects when nothing is installed", async () => {
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => ({ ...baseDiag, installed: false, backend: null, summary: "not installed" }),
+      writeSchedulerAssets: () => { throw new Error("should not write"); },
+      repairSystemd: () => { throw new Error("should not install systemd"); },
+    })).rejects.toThrow(/not installed/i);
+  });
+
+  test("repair rejects conflict without touching assets", async () => {
+    let wrote = false;
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => ({ ...baseDiag, conflict: true, summary: "CONFLICT" }),
+      writeSchedulerAssets: () => { wrote = true; },
+      repairSystemd: () => { throw new Error("should not install systemd"); },
+    })).rejects.toThrow(/both present/i);
+    expect(wrote).toBe(false);
+  });
+
+  test("native repair uses the WinSW repair path and refreshes install state", async () => {
+    const calls: string[] = [];
+    await repairService({
+      platform: "win32",
+      diagnose: () => ({ ...baseDiag, backend: "native" }),
+      assertEnv: () => {},
+      assertAuth: () => {},
+      repairNative: async () => { calls.push("native"); },
+      writeNativeState: () => { calls.push("native-state"); },
+      writeSchedulerAssets: () => { calls.push("scheduler"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    expect(calls).toEqual(["native", "native-state"]);
   });
 });

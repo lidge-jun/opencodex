@@ -319,6 +319,39 @@ test("an unavailable exact search account fails closed without dispatching the a
   }
 });
 
+test("an exact search account needing reauthentication fails closed with an actionable error", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeSearchUpstream(captured);
+  const config = exactSearchConfig();
+  saveConfig(config);
+  saveExactSearchCredentials();
+  recordCodexUpstreamOutcome(config, "pool-a", 401, {
+    fixedAccount: true,
+    modelId: "gpt-test",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "search-session", model: "side/gpt-test" }),
+    });
+    expect(response.status).toBe(401);
+    const message = ((await response.json()) as { error: { message: string } }).error.message;
+    expect(message).toBe("Selected Codex account needs reauthentication");
+    for (const privateValue of ["pool-a", "acct-pool-a", "private-a@example.test"]) {
+      expect(message).not.toContain(privateValue);
+    }
+    expect(captured).toHaveLength(0);
+    expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 test("zstd-compressed search request bodies are decoded before the relay", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeSearchUpstream(captured);

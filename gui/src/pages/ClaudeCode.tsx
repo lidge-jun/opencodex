@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Notice } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { backgroundHelperOptions } from "./claude-code-helper-options";
 import { reconcileAutoConnectState } from "./claude-autoconnect";
 import { buildManualEnv } from "./claude-manual-env";
@@ -17,17 +18,27 @@ import { SmallFastModelSetting } from "./claude-code-settings";
 
 export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-settings";
 
+type CachedClaudeCode = { state: ClaudeCodeState; rows: MapRow[] };
+
+function seedClaudeCode(cacheKey: string): CachedClaudeCode | null {
+  return readSessionListCache<CachedClaudeCode>(cacheKey);
+}
+
 export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   const t = useT();
   const { locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang ?? "en";
-  const [state, setState] = useState<ClaudeCodeState | null>(null);
-  const [rows, setRows] = useState<MapRow[]>([]);
+  const cacheKey = `ocx.claude-code.v1:${apiBase}`;
+  const [state, setState] = useState<ClaudeCodeState | null>(() => seedClaudeCode(cacheKey)?.state ?? null);
+  const [rows, setRows] = useState<MapRow[]>(() => seedClaudeCode(cacheKey)?.rows ?? []);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !seedClaudeCode(cacheKey)?.state);
+  const [selectedSection, setSelectedSection] = useState("settings");
+  const hasCacheRef = useRef(Boolean(seedClaudeCode(cacheKey)?.state));
 
   const load = useCallback(async () => {
+    if (!hasCacheRef.current) setLoading(true);
     try {
       const res = await fetch(`${apiBase}/api/claude-code`);
       const r = await readJsonOrThrow<ClaudeCodeState & { modelMap?: Record<string, string> }>(
@@ -39,7 +50,7 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
         setStatus(t("claude.loadFail"));
         return;
       }
-      setState({
+      const nextState: ClaudeCodeState = {
         ...r,
         // No coercion: an absent config key is AUTO, and coercing it to subscription is
         // what silently converted an untouched auto config on every save.
@@ -51,15 +62,21 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
         autoCompactWindow: r.autoCompactWindow ?? null,
         injectAgents: r.injectAgents !== false,
         effectiveModelEnv: r.effectiveModelEnv ?? {},
-      });
-      setRows(Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) })));
+      };
+      const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
+      setState(nextState);
+      setRows(nextRows);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, { state: nextState, rows: nextRows });
     } catch (error) {
-      setOk(false);
-      setStatus(error instanceof Error && error.message ? error.message : t("claude.loadFail"));
+      if (!hasCacheRef.current) {
+        setOk(false);
+        setStatus(error instanceof Error && error.message ? error.message : t("claude.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   useEffect(() => {
     // Deferred initial load (matches Models/Usage): avoids synchronous setState
@@ -124,21 +141,86 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
   if (loading) return <div className="muted" style={{ padding: 8 }}>{t("claude.loading")}</div>;
   if (!state) return <Notice tone="err">{status || t("claude.loadFail")}</Notice>;
 
+  const sections: Array<{ id: string; label: string; body: ReactNode }> = [
+    {
+      id: "settings",
+      label: t("claude.workspace.settings"),
+      body: (
+        <ClaudeCodeSettingsCard
+          state={state}
+          autoCompactOptions={autoCompactOptions}
+          availableModels={state.available ?? []}
+          onStateChange={setState}
+        />
+      ),
+    },
+    {
+      id: "quickstart",
+      label: t("claude.quickstart"),
+      body: <ClaudeCodeQuickstartSection manualEnv={buildManualEnv(state)} />,
+    },
+    {
+      id: "smallFast",
+      label: t("claude.smallFastModel"),
+      body: (
+        <SmallFastModelSetting
+          value={state.smallFastModel}
+          tierHaikuModel={state.tierModels?.haiku}
+          options={modelOptions}
+          onChange={smallFastModel => setState({ ...state, smallFastModel })}
+        />
+      ),
+    },
+    {
+      id: "modelMap",
+      label: t("claude.modelMap"),
+      body: <ClaudeCodeModelMapSection rows={rows} onRowsChange={setRows} />,
+    },
+    {
+      id: "aliases",
+      label: t("claude.aliases"),
+      body: <ClaudeCodeAliasesSection aliases={state.aliases} />,
+    },
+  ];
+  const selected = sections.find(s => s.id === selectedSection) ?? sections[0]!;
+  const sectionEditable = selectedSection === "settings"
+    || selectedSection === "smallFast"
+    || selectedSection === "modelMap";
+
   return (
-    <>
-      <div className="page-head"><h2>{t("claude.pageTitle")}</h2></div>
+    <div className="claudecode-workspace-shell">
+      <div className="page-head">
+        <h2>{t("claude.pageTitle")}</h2>
+        {sectionEditable && (
+          <div className="claudecode-workspace-save">
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => { void save(); }}>
+              {t("common.save")}
+            </button>
+          </div>
+        )}
+      </div>
       <p className="page-sub">{t("claude.subtitle")}</p>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
-      <ClaudeCodeSettingsCard state={state} autoCompactOptions={autoCompactOptions} onStateChange={setState} />
-      <ClaudeCodeQuickstartSection manualEnv={buildManualEnv(state)} />
-      <SmallFastModelSetting
-        value={state.smallFastModel}
-        tierHaikuModel={state.tierModels?.haiku}
-        options={modelOptions}
-        onChange={smallFastModel => setState({ ...state, smallFastModel })}
-      />
-      <ClaudeCodeModelMapSection rows={rows} onRowsChange={setRows} onSave={() => { void save(); }} />
-      <ClaudeCodeAliasesSection aliases={state.aliases} />
-    </>
+      <div className="claudecode-workspace-root">
+        <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
+          <div className="claudecode-workspace-rail-list">
+            {sections.map(s => (
+              <button
+                key={s.id}
+                type="button"
+                className={`claudecode-workspace-rail-row${selectedSection === s.id ? " claudecode-workspace-rail-row--selected" : ""}`}
+                onClick={() => setSelectedSection(s.id)}
+                aria-current={selectedSection === s.id ? "true" : undefined}
+              >
+                <span className="claudecode-workspace-rail-name">{s.label}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+        <section className="claudecode-workspace-main" aria-label={selected.label}>
+          <div className="ccw-body">{selected.body}</div>
+        </section>
+      </div>
+    </div>
   );
 }

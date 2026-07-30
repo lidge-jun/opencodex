@@ -1,5 +1,6 @@
 import { resolveEnvValue } from "../config";
 import {
+  CodexPoolAuthenticationError,
   headersForCodexAuthContext,
   hasCallerCodexBearer,
   isCodexAuthContextUsable,
@@ -106,7 +107,11 @@ export async function resolveFirstUsableOpenAiSidecar(
         modelId: exactAccount.modelId,
       });
       if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
-        || !isCodexAuthContextUsable(authContext, config)) return undefined;
+        || !isCodexAuthContextUsable(authContext, config)) {
+        // Exact selection is fail-closed. A generation/runtime-state race must not fall through
+        // to the caller-bearer error or let a later candidate select another account.
+        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+      }
       return {
         ...candidate,
         authContext,

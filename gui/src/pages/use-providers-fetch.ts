@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { writeSessionListCache } from "../session-list-cache";
 import type { OAuthStatus, ProviderQuotaReport, ProvidersConfig } from "./providers-shared";
 
 export function useProvidersFetch({
@@ -11,6 +12,7 @@ export function useProvidersFetch({
   setOauthStatus,
   setQuotaReports,
   notify,
+  configCacheKey,
 }: {
   apiBase: string;
   t: TFn;
@@ -19,56 +21,33 @@ export function useProvidersFetch({
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
   setQuotaReports: React.Dispatch<React.SetStateAction<Record<string, ProviderQuotaReport>>>;
   notify: (msg: string, ok: boolean) => void;
+  /** Session seed key for instant Providers shell paint (no secrets — hasApiKey flags only). */
+  configCacheKey?: string;
 }) {
   const fetchConfig = useCallback(async () => {
     try {
       const res = await fetch(`${apiBase}/api/config`);
       const data = await readJsonOrThrow<ProvidersConfig>(res);
       setConfig(data ?? null);
+      if (configCacheKey && data) writeSessionListCache(configCacheKey, data);
     } catch {
       notify(t("prov.loadConfigFail"), false);
     }
-  }, [apiBase, notify, setConfig, t]);
+  }, [apiBase, configCacheKey, notify, setConfig, t]);
 
   const fetchOauth = useCallback(async () => {
     try {
+      // Codex openai status is owned by useCodexAccountPool — do not duplicate /accounts.
       const provRes = await fetch(`${apiBase}/api/oauth/providers`);
       const provData = await readJsonOrThrow<{ providers?: string[] }>(provRes);
       const provs: string[] = provData?.providers ?? [];
       setOauthProviders(provs);
-      const [oauthEntries, codexAccounts, codexActive] = await Promise.all([
-        Promise.all(provs.map(async p => {
-          const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${p}`).catch(() => null);
-          const s = sRes ? (await readJsonIfOk<OAuthStatus>(sRes) ?? { loggedIn: false }) : { loggedIn: false };
-          return [p, s] as const;
-        })),
-        fetch(`${apiBase}/api/codex-auth/accounts`)
-          .then(r => readJsonIfOk<{ accounts?: Array<{ id?: string; email?: string; isMain?: boolean; hasCredential?: boolean; needsReauth?: boolean }> }>(r))
-          .catch(() => null),
-        fetch(`${apiBase}/api/codex-auth/active`)
-          .then(r => readJsonIfOk<{ activeCodexAccountId?: string | null }>(r))
-          .catch(() => null),
-      ]);
-      const next: Record<string, OAuthStatus> = Object.fromEntries(oauthEntries);
-      const accounts = codexAccounts?.accounts ?? [];
-      const main = accounts.find(a => a.isMain) ?? accounts[0];
-      const mainIsReal = !!main && !!main.email && main.email !== "Codex App login";
-      const poolLoggedIn = accounts.some(a => !a.isMain && (a.hasCredential || a.email));
-      const codexLoggedIn = mainIsReal || poolLoggedIn;
-      const codexEmail = mainIsReal ? main.email : (accounts.find(a => !a.isMain && a.email)?.email ?? undefined);
-      const activeId = codexActive?.activeCodexAccountId ?? null;
-      const activePoolAccount = activeId && activeId !== "__main__"
-        ? accounts.find(a => a.id === activeId)
-        : null;
-      const codexNeedsReauth = activePoolAccount
-        ? Boolean(activePoolAccount.needsReauth)
-        : Boolean(main?.needsReauth);
-      next.openai = {
-        loggedIn: codexLoggedIn,
-        email: codexEmail,
-        ...(codexNeedsReauth ? { needsReauth: true } : {}),
-      };
-      setOauthStatus(next);
+      const oauthEntries = await Promise.all(provs.map(async p => {
+        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(p)}`).catch(() => null);
+        const s = sRes ? (await readJsonIfOk<OAuthStatus>(sRes) ?? { loggedIn: false }) : { loggedIn: false };
+        return [p, s] as const;
+      }));
+      setOauthStatus(Object.fromEntries(oauthEntries));
     } catch { /* ignore */ }
   }, [apiBase, setOauthProviders, setOauthStatus]);
 

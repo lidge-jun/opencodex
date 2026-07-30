@@ -1,3 +1,5 @@
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { IconCheck, IconPlus, IconX } from "../icons";
 import { useI18n } from "../i18n/shared";
 import {
@@ -11,6 +13,143 @@ import {
   type ApiKeyEntry,
   type ModelTestState,
 } from "./api-keys-utils";
+
+function EndpointUrl({ url }: { url: string }) {
+  return (
+    <CopyOnClickTip
+      text={url}
+      hintKey="api.copyUrlHint"
+      copiedKey="api.urlCopied"
+      className="api-endpoint-url-btn"
+    >
+      <code className="api-code api-code-inline api-endpoint-url">{url}</code>
+    </CopyOnClickTip>
+  );
+}
+
+function CopyOnClickTip({
+  text,
+  hintKey,
+  copiedKey,
+  className,
+  children,
+}: {
+  text: string;
+  hintKey: "api.copyUrlHint" | "api.copyExampleHint";
+  copiedKey: "api.urlCopied" | "api.exampleCopied";
+  className: string;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  const tipId = useId();
+  const anchorRef = useRef<HTMLElement | null>(null);
+  const [hover, setHover] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const copiedTimer = useRef<number | null>(null);
+  const showTip = hover || copied;
+
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    // No reset on close: the portal and aria-describedby are already gated on showTip,
+    // and reopening remeasures in this same layout effect before paint. Clearing here
+    // only forced a second render.
+    if (!showTip) return;
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setCoords({
+        top: Math.max(8, rect.top - 8),
+        left: rect.left + rect.width / 2,
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [showTip]);
+
+  const openTip = () => setHover(true);
+  const closeTip = () => setHover(false);
+
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const tip = showTip && coords
+    ? createPortal(
+      <span
+        id={tipId}
+        className="ocx-tooltip-bubble api-copy-tip-fixed"
+        role="tooltip"
+        style={{ top: coords.top, left: coords.left }}
+      >
+        {copied ? t(copiedKey) : t(hintKey)}
+      </span>,
+      document.body,
+    )
+    : null;
+
+  const shared = {
+    ref: anchorRef as never,
+    className: `ocx-tooltip ${className}`,
+    onMouseEnter: openTip,
+    onMouseLeave: closeTip,
+    onFocus: openTip,
+    onBlur: closeTip,
+    onClick: (event: { currentTarget: EventTarget & Element; target: EventTarget | null; clientX: number; clientY: number }) => {
+      if (typeof window !== "undefined" && window.getSelection()?.toString()) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target !== event.currentTarget) {
+        const rect = target.getBoundingClientRect();
+        if (target.scrollHeight > target.clientHeight + 1 && event.clientX >= rect.right - 16) return;
+        if (target.scrollWidth > target.clientWidth + 1 && event.clientY >= rect.bottom - 16) return;
+      }
+      void copyText();
+    },
+    onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+      if (event.key === "Escape") closeTip();
+    },
+    "aria-label": t(hintKey),
+    "aria-describedby": showTip ? tipId : undefined,
+  };
+
+  return (
+    <>
+      <button type="button" {...shared}>
+        {children}
+      </button>
+      {tip}
+    </>
+  );
+}
+
+function CopyableExample({ text }: { text: string }) {
+  return (
+    <CopyOnClickTip
+      text={text}
+      hintKey="api.copyExampleHint"
+      copiedKey="api.exampleCopied"
+      className="api-example-copy-btn"
+    >
+      <code className="api-code api-example-pre">{text}</code>
+    </CopyOnClickTip>
+  );
+}
 
 export function ApiKeysEndpointsPanel({
   endpoints,
@@ -26,50 +165,47 @@ export function ApiKeysEndpointsPanel({
       <div className="api-endpoints">
         <div>
           <span className="muted small">{t("api.baseUrl")}</span>
-          <code className="api-code api-code-inline">{endpoints.baseUrl}</code>
+          <EndpointUrl url={endpoints.baseUrl} />
         </div>
         <div>
           <span className="muted small">{t("api.responsesEndpoint")}</span>
-          <code className="api-code api-code-inline">{endpoints.responses}</code>
+          <EndpointUrl url={endpoints.responses} />
         </div>
         <div>
           <span className="muted small">{t("api.chatCompletionsEndpoint")}</span>
-          <code className="api-code api-code-inline">{endpoints.chatCompletions}</code>
+          <EndpointUrl url={endpoints.chatCompletions} />
         </div>
         {claudeCodeEnabled && (
           <div>
             <span className="muted small">{t("api.messagesEndpoint")}</span>
-            <code className="api-code api-code-inline">{endpoints.messages}</code>
+            <EndpointUrl url={endpoints.messages} />
           </div>
         )}
         <div>
           <span className="muted small">{t("api.modelsEndpoint")}</span>
-          <code className="api-code api-code-inline">{endpoints.models}</code>
+          <EndpointUrl url={endpoints.models} />
         </div>
       </div>
       <p className="muted small">{t("api.endpointNote")}</p>
-    </div>
-  );
-}
-
-export function ApiKeysAuthPanel({ claudeCodeEnabled }: { claudeCodeEnabled: boolean }) {
-  const { t } = useI18n();
-  return (
-    <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-      <h3 className="panel-title">{t("api.authTitle")}</h3>
-      <ul className="api-auth-list muted small">
-        <li>{t("api.authChatCompletions")}</li>
-        <li>{t("api.authResponses")}</li>
-        {claudeCodeEnabled && <li>{t("api.authMessages")}</li>}
-        <li>{t("api.authLoopback")}</li>
-      </ul>
-      <p className="muted small">{t("api.authBaseUrlNote")}</p>
+      <details className="awi-inline-fold">
+        <summary>{t("api.authTitle")}</summary>
+        <div className="awi-inline-fold-body">
+          <ul className="api-auth-list muted small">
+            <li>{t("api.authChatCompletions")}</li>
+            <li>{t("api.authResponses")}</li>
+            {claudeCodeEnabled && <li>{t("api.authMessages")}</li>}
+            <li>{t("api.authLoopback")}</li>
+          </ul>
+          <p className="muted small">{t("api.authBaseUrlNote")}</p>
+        </div>
+      </details>
     </div>
   );
 }
 
 export function ApiKeysManagePanel({
   keys,
+  keysLoading = false,
   keysLoadFailed,
   newName,
   creating,
@@ -77,6 +213,7 @@ export function ApiKeysManagePanel({
   copied,
   confirmDelete,
   localeTag,
+  showKeyList = true,
   onNewNameChange,
   onCreate,
   onDismissNewKey,
@@ -86,6 +223,7 @@ export function ApiKeysManagePanel({
   onDelete,
 }: {
   keys: ApiKeyEntry[];
+  keysLoading?: boolean;
   keysLoadFailed: boolean;
   newName: string;
   creating: boolean;
@@ -93,6 +231,8 @@ export function ApiKeysManagePanel({
   copied: boolean;
   confirmDelete: string | null;
   localeTag?: string;
+  /** When false, only generate / reveal-new-key UI is shown (workspace rail owns the list). */
+  showKeyList?: boolean;
   onNewNameChange: (value: string) => void;
   onCreate: () => void;
   onDismissNewKey: () => void;
@@ -106,7 +246,7 @@ export function ApiKeysManagePanel({
   return (
     <>
       {newKey && (
-        <div className="panel api-panel panel-accent" style={{ marginTop: "1rem" }}>
+        <div className="panel api-panel panel-accent api-newkey-panel">
           <h3 className="panel-title">{t("api.newKeyTitle")}</h3>
           <p className="muted small">{t("api.newKeyNote")}</p>
           <div className="api-form-row">
@@ -121,7 +261,7 @@ export function ApiKeysManagePanel({
         </div>
       )}
 
-      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+      <div className="panel api-panel api-generate-panel">
         <h3 className="panel-title">{t("api.generateTitle")}</h3>
         <div className="api-form-row">
           <input
@@ -139,41 +279,47 @@ export function ApiKeysManagePanel({
         </div>
       </div>
 
-      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-        <h3 className="panel-title">{t("api.activeKeys", { count: keys.length })}</h3>
-        {keys.length > 0 ? (
-          <div className="tbl-wrap">
-            <table className="tbl">
-              <thead>
-                <tr><th>{t("api.colName")}</th><th>{t("api.colKey")}</th><th>{t("api.colCreated")}</th><th></th></tr>
-              </thead>
-              <tbody>
-                {keys.map(k => (
-                  <tr key={k.id}>
-                    <td>{k.name}</td>
-                    <td><code>{k.prefix}</code></td>
-                    <td>{formatCreatedDate(k.createdAt, localeTag)}</td>
-                    <td>
-                      {confirmDelete === k.id ? (
-                        <span className="api-actions">
-                          <button type="button" className="btn btn-sm btn-danger" onClick={() => onDelete(k.id)}>{t("api.confirm")}</button>
-                          <button type="button" className="btn btn-sm btn-ghost" onClick={onCancelDelete}>{t("common.cancel")}</button>
-                        </span>
-                      ) : (
-                        <button type="button" className="btn btn-sm btn-ghost" aria-label={t("api.deleteAria")} onClick={() => onConfirmDelete(k.id)}><IconX /></button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : keysLoadFailed ? (
-          <p className="muted">{t("api.keysLoadFailed")}</p>
-        ) : (
-          <p className="muted">{t("api.noKeys")}</p>
-        )}
-      </div>
+      {showKeyList && (
+        <div className="panel api-panel" style={{ marginTop: "1rem" }} aria-busy={keysLoading}>
+          <h3 className="panel-title">
+            {keysLoading ? t("api.activeKeysLoading") : t("api.activeKeys", { count: keys.length })}
+          </h3>
+          {keysLoading ? (
+            <div className="api-active-keys-skeleton" role="status" aria-label={t("common.loading")} />
+          ) : keys.length > 0 ? (
+            <div className="tbl-wrap">
+              <table className="tbl">
+                <thead>
+                  <tr><th>{t("api.colName")}</th><th>{t("api.colKey")}</th><th>{t("api.colCreated")}</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {keys.map(k => (
+                    <tr key={k.id}>
+                      <td>{k.name}</td>
+                      <td><code>{k.prefix}</code></td>
+                      <td>{formatCreatedDate(k.createdAt, localeTag)}</td>
+                      <td>
+                        {confirmDelete === k.id ? (
+                          <span className="api-actions">
+                            <button type="button" className="btn btn-sm btn-danger" onClick={() => onDelete(k.id)}>{t("api.confirm")}</button>
+                            <button type="button" className="btn btn-sm btn-ghost" onClick={onCancelDelete}>{t("common.cancel")}</button>
+                          </span>
+                        ) : (
+                          <button type="button" className="btn btn-sm btn-ghost" aria-label={t("api.deleteAria")} onClick={() => onConfirmDelete(k.id)}><IconX /></button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : keysLoadFailed ? (
+            <p className="muted">{t("api.keysLoadFailed")}</p>
+          ) : (
+            <p className="muted">{t("api.noKeys")}</p>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -207,7 +353,7 @@ export function ApiKeysModelsPanel({
 }) {
   const { t } = useI18n();
   return (
-    <div className="panel api-panel" style={{ marginTop: "1rem" }}>
+    <div className="panel api-panel api-models-panel">
       <div className="api-panel-head">
         <h3 className="panel-title">{t("api.modelsTitle")}</h3>
         <span className="muted mono text-label">{t("api.modelsCount", { count: filteredModels.length })}</span>
@@ -228,7 +374,7 @@ export function ApiKeysModelsPanel({
       ) : filteredModels.length === 0 ? (
         <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsEmpty")}</p>
       ) : (
-        <div className="tbl-wrap" style={{ marginTop: "0.75rem" }}>
+        <div className="api-models-scroll">
           <table className="tbl">
             <thead>
               <tr>
@@ -290,43 +436,52 @@ export function ApiKeysUsagePanel({
   const { t } = useI18n();
   const sampleInput = JSON.stringify(t("api.usageSampleInput"));
 
-  return (
-    <>
-      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-        <h3 className="panel-title">{t("api.usageChatTitle")}</h3>
-        <pre className="api-code">{`curl ${endpoints.chatCompletions} \\
+  const chatExample = `curl ${endpoints.chatCompletions} \\
   -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",
     "messages": [{"role": "user", "content": ${sampleInput}}]
-  }'`}</pre>
-      </div>
+  }'`;
 
-      <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-        <h3 className="panel-title">{t("api.usageResponsesTitle")}</h3>
-        <pre className="api-code">{`curl ${endpoints.responses} \\
+  const responsesExample = `curl ${endpoints.responses} \\
   -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "gpt-5.4",
     "input": ${sampleInput}
-  }'`}</pre>
-      </div>
+  }'`;
 
-      {claudeCodeEnabled && (
-        <div className="panel api-panel" style={{ marginTop: "1rem" }}>
-          <h3 className="panel-title">{t("api.usageMessagesTitle")}</h3>
-          <pre className="api-code">{`curl ${endpoints.messages} \\
+  const messagesExample = `curl ${endpoints.messages} \\
   -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "claude-sonnet-4-6",
     "max_tokens": 64,
     "messages": [{"role": "user", "content": ${sampleInput}}]
-  }'`}</pre>
+  }'`;
+
+  return (
+    <details className="awi-usage-fold">
+      <summary>{t("api.workspace.usageExamples")}</summary>
+      <div className="awi-usage-fold-body">
+        <div className="awi-usage-example">
+          <h4 className="awi-usage-example-title">{t("api.usageChatTitle")}</h4>
+          <CopyableExample text={chatExample} />
         </div>
-      )}
-    </>
+
+        <div className="awi-usage-example">
+          <h4 className="awi-usage-example-title">{t("api.usageResponsesTitle")}</h4>
+          <CopyableExample text={responsesExample} />
+        </div>
+
+        {claudeCodeEnabled && (
+          <div className="awi-usage-example">
+            <h4 className="awi-usage-example-title">{t("api.usageMessagesTitle")}</h4>
+            <CopyableExample text={messagesExample} />
+          </div>
+        )}
+      </div>
+    </details>
   );
 }

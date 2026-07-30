@@ -32,10 +32,43 @@ describe("claude discovery aliases", () => {
     expect(aliasForRoute("has--dashes", "m")).toBeNull();
     expect(aliasForRoute("has/slash", "m")).toBeNull();
     expect(aliasForRoute("native", "m")).toBeNull(); // reserved pseudo-provider
-    expect(aliasForRoute("p", "openrouter/meta-llama")).toBeNull(); // slash in model
     expect(aliasForRoute("", "m")).toBeNull();
     expect(aliasForRoute("p", "")).toBeNull();
     expect(aliasForNative("a--b")).toBeNull();
+    expect(aliasForNative("org/model")).toBeNull(); // native ids stay bare
+  });
+
+  test("model ids with '/' encode as '~s' and round-trip (OpenRouter-shaped)", () => {
+    const alias = aliasForRoute("openrouter", "anthropic/claude-opus-4-8");
+    expect(alias).toBe(`${CLAUDE_ALIAS_PREFIX}openrouter--anthropic~sclaude-opus-4-8`);
+    expect(resolveAlias(alias!)).toBe("openrouter/anthropic/claude-opus-4-8");
+    expect(claudeCodeAlias("openrouter", "meta-llama/llama-3.3-70b-instruct:free")).toBe(
+      `${CLAUDE_ALIAS_PREFIX}openrouter--meta-llama~sllama-3.3-70b-instruct:free`,
+    );
+    expect(resolveAlias(claudeCodeAlias("openrouter", "meta-llama/llama-3.3-70b-instruct:free"))).toBe(
+      "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+    );
+  });
+
+  test("literal '~' in model ids encodes as '~t' and legacy bare '~' still resolves", () => {
+    expect(aliasForRoute("demo", "old~model")).toBe(`${CLAUDE_ALIAS_PREFIX}demo--old~tmodel`);
+    expect(resolveAlias(`${CLAUDE_ALIAS_PREFIX}demo--old~tmodel`)).toBe("demo/old~model");
+    // Pre-slash-encoding aliases kept literal tildes in the model portion.
+    expect(resolveAlias(`${CLAUDE_ALIAS_PREFIX}demo--old~model`)).toBe("demo/old~model");
+  });
+
+  test("~s/~t are reserved escapes: round-trip / and ~; legacy ~s decodes as slash", () => {
+    // Intentional encode/decode round-trips for the reserved escape alphabet.
+    expect(aliasForRoute("demo", "a/b")).toBe(`${CLAUDE_ALIAS_PREFIX}demo--a~sb`);
+    expect(resolveAlias(`${CLAUDE_ALIAS_PREFIX}demo--a~sb`)).toBe("demo/a/b");
+    expect(aliasForRoute("demo", "a~b")).toBe(`${CLAUDE_ALIAS_PREFIX}demo--a~tb`);
+    expect(resolveAlias(`${CLAUDE_ALIAS_PREFIX}demo--a~tb`)).toBe("demo/a~b");
+    expect(aliasForRoute("demo", "a~/b")).toBe(`${CLAUDE_ALIAS_PREFIX}demo--a~t~sb`);
+    expect(resolveAlias(`${CLAUDE_ALIAS_PREFIX}demo--a~t~sb`)).toBe("demo/a~/b");
+
+    // Pre-~s-encoding aliases that stored a literal "~s" sequence are not preserved:
+    // decode always treats ~s as "/". Document current behavior only.
+    expect(resolveAlias(`${CLAUDE_ALIAS_PREFIX}demo--old~smodel`)).toBe("demo/old/model");
   });
 
   test("resolveAlias rejects non-aliases and malformed ids", () => {
@@ -49,7 +82,7 @@ describe("claude discovery aliases", () => {
   test("no collisions across a registry-shaped corpus", () => {
     const corpus: [string, string][] = [];
     for (const p of ["a", "b", "a-b", "ab"]) {
-      for (const m of ["x", "y-z", "y--z", "x.1"]) corpus.push([p, m]);
+      for (const m of ["x", "y-z", "y--z", "x.1", "org/model"]) corpus.push([p, m]);
     }
     const aliases = corpus.map(([p, m]) => aliasForRoute(p, m)).filter((a): a is string => a !== null);
     expect(new Set(aliases).size).toBe(aliases.length);
@@ -81,17 +114,27 @@ describe("claudeCodeAlias — readable-or-hash shared helper (devlog 050 / audit
     expect(claudeCodeAlias("anthropic", "claude-fable-5")).toBe("claude-fable-5");
   });
 
+  test("slash-containing model ids stay readable (no desktop-3p hash)", () => {
+    expect(claudeCodeAlias("openrouter", "anthropic/claude-opus-4-8")).toBe(
+      "claude-ocx-openrouter--anthropic~sclaude-opus-4-8",
+    );
+    expect(claudeCodeAlias("mock", "path/model")).toBe("claude-ocx-mock--path~smodel");
+    expect(resolveInboundModel("claude-ocx-openrouter--anthropic~sclaude-opus-4-8", undefined)).toBe(
+      "openrouter/anthropic/claude-opus-4-8",
+    );
+  });
+
   test("unrepresentable shapes fall back to the desktop-3p hash — model never disappears", () => {
-    // provider literally "native", provider with separators, model id with "/",
-    // native slug with "--" (audit 051 #2 null-case coverage).
+    // provider literally "native", provider with separators, native slug with "--".
+    // Model ids with "~" are now representable via ~t encoding.
     for (const id of [
       claudeCodeAlias("native", "gpt-5.6-sol"),
       claudeCodeAlias("weird--provider", "m1"),
       claudeCodeAlias("a/b", "m2"),
-      claudeCodeAlias("mock", "path/model"),
       claudeCodeNativeAlias("slug--with-sep"),
     ]) {
       expect(id).toMatch(/^claude-opus-4-8-[a-z][0-9a-z]{2}$/);
     }
+    expect(claudeCodeAlias("mock", "has~tilde")).toBe("claude-ocx-mock--has~ttilde");
   });
 });

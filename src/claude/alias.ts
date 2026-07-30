@@ -9,7 +9,17 @@
  *
  * Reversibility rules:
  *  - providers containing `--` or `/` are not aliased (split boundary safety);
- *  - model ids containing `/` are not aliased (would be ambiguous on resolve);
+ *  - model ids MAY contain `/` — encoded as `~s` so the alias stays slash-free
+ *    for Claude Code's picker (e.g. openrouter `anthropic/claude-opus-4-8` →
+ *    `claude-ocx-openrouter--anthropic~sclaude-opus-4-8`);
+ *  - model ids MAY contain `~` — encoded as `~t` (so slash encoding cannot
+ *    collide with a literal tilde that older releases already persisted);
+ *  - `~s` / `~t` are reserved escape sequences: decode always treats them as
+ *    `/` and `~` respectively. Model ids that historically contained the literal
+ *    two-char sequences `~s` / `~t` are not preserved (extremely rare; encode would
+ *    write `~ts` / `~tt` for those characters after a literal tilde today);
+ *  - bare `~` not followed by `s`/`t` is left as a literal tilde on decode
+ *    (legacy aliases from before slash encoding);
  *  - model ids MAY contain `--` (resolve splits on the FIRST `--` only);
  *  - native OpenAI slugs use the pseudo-provider `native` and resolve back to
  *    the bare slug; a real provider named "native" is therefore never aliased.
@@ -18,19 +28,53 @@
 import { desktop3pAlias } from "./desktop-3p";
 
 export const CLAUDE_ALIAS_PREFIX = "claude-ocx-";
+/** Encoded `/` inside the model portion of a Claude Code alias. */
+const CLAUDE_ALIAS_SLASH_ENC = "~s";
+/** Encoded literal `~` inside the model portion of a Claude Code alias. */
+const CLAUDE_ALIAS_TILDE_ENC = "~t";
 const NATIVE_PSEUDO_PROVIDER = "native";
+
+function encodeModelId(modelId: string): string {
+  // Escape literal tildes first so slash encoding cannot create ambiguity.
+  return modelId
+    .replaceAll("~", CLAUDE_ALIAS_TILDE_ENC)
+    .replaceAll("/", CLAUDE_ALIAS_SLASH_ENC);
+}
+
+function decodeModelId(encoded: string): string {
+  let out = "";
+  for (let i = 0; i < encoded.length; i++) {
+    if (encoded[i] === "~" && i + 1 < encoded.length) {
+      const next = encoded[i + 1];
+      if (next === "s") {
+        out += "/";
+        i += 1;
+        continue;
+      }
+      if (next === "t") {
+        out += "~";
+        i += 1;
+        continue;
+      }
+    }
+    // Bare `~` (legacy pre-slash-encoding aliases) stays a literal tilde.
+    out += encoded[i];
+  }
+  return out;
+}
 
 /** Alias for a routed "<provider>/<model>" pair; null when not representable. */
 export function aliasForRoute(provider: string, modelId: string): string | null {
   if (!provider || provider.includes("--") || provider.includes("/") || provider === NATIVE_PSEUDO_PROVIDER) return null;
-  if (!modelId || modelId.includes("/")) return null;
-  return `${CLAUDE_ALIAS_PREFIX}${provider}--${modelId}`;
+  if (!modelId) return null;
+  return `${CLAUDE_ALIAS_PREFIX}${provider}--${encodeModelId(modelId)}`;
 }
 
 /** Alias for a native OpenAI slug (bare model id, no provider namespace). */
 export function aliasForNative(slug: string): string | null {
+  // Reject "/" — native ids are bare slugs. Literal `~` is fine via ~t encoding.
   if (!slug || slug.includes("/") || slug.includes("--")) return null;
-  return `${CLAUDE_ALIAS_PREFIX}${NATIVE_PSEUDO_PROVIDER}--${slug}`;
+  return `${CLAUDE_ALIAS_PREFIX}${NATIVE_PSEUDO_PROVIDER}--${encodeModelId(slug)}`;
 }
 
 /**
@@ -43,7 +87,7 @@ export function resolveAlias(id: string): string | null {
   const sep = rest.indexOf("--");
   if (sep <= 0) return null;
   const provider = rest.slice(0, sep);
-  const model = rest.slice(sep + 2);
+  const model = decodeModelId(rest.slice(sep + 2));
   if (!model) return null;
   return provider === NATIVE_PSEUDO_PROVIDER ? model : `${provider}/${model}`;
 }

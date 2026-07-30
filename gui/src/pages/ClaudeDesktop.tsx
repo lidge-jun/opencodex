@@ -6,6 +6,7 @@ import { EmptyState, Notice } from "../ui";
 import { useT, type TFn, type TKey } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { createBoundedFetch } from "../bounded-fetch";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 
 const FAMILIES = ["opus", "fable", "sonnet", "haiku"] as const;
 type Family = typeof FAMILIES[number];
@@ -14,7 +15,7 @@ type Family = typeof FAMILIES[number];
  * Family collapse lives under its own key: the Models page collapses PROVIDERS, and a
  * shared key would make folding "opus" here fold a provider of the same name there.
  */
-const FAMILY_COLLAPSE = makeCollapseStore("ocx.claudeDesktop.collapsedFamilies.v1");
+const FAMILY_COLLAPSE = makeCollapseStore("ocx.claudeDesktop.collapsedFamilies.v2");
 
 interface Assignment {
   family: Family;
@@ -120,14 +121,36 @@ function formatContextWindow(value: number | undefined, t: TFn): string | null {
     : t("claudeDesktop.contextK", { n: Math.round(value / 1_000) });
 }
 
-export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
+type CachedDesktop = { data: DesktopResponse; profile: DesktopProfile };
+
+function readDesktopCache(cacheKey: string): CachedDesktop | null {
+  return readSessionListCache<CachedDesktop>(cacheKey);
+}
+
+function seedDesktop(cacheKey: string) {
+  const cached = readDesktopCache(cacheKey);
+  return {
+    data: cached?.data ?? null,
+    profile: cached?.profile ?? null,
+    savedProfile: cached?.profile ? cloneProfile(cached.profile) : null,
+    destinations: cached?.data
+      ? Object.fromEntries(
+        cached.data.models.map(model => [model.route, cached.profile.assignments[model.route]?.family ?? "opus"]),
+      )
+      : {} as Record<string, Family>,
+    hasCache: Boolean(cached?.data),
+  };
+}
+
+export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
+  const cacheKey = `ocx.claude-desktop.v1:${apiBase}`;
+  const [data, setData] = useState<DesktopResponse | null>(() => seedDesktop(cacheKey).data);
+  const [profile, setProfile] = useState<DesktopProfile | null>(() => seedDesktop(cacheKey).profile);
+  const [savedProfile, setSavedProfile] = useState<DesktopProfile | null>(() => seedDesktop(cacheKey).savedProfile);
+  const [destinations, setDestinations] = useState<Record<string, Family>>(() => seedDesktop(cacheKey).destinations);
   const [status, setStatus] = useState<DesktopStatus | null>(null);
-  const [data, setData] = useState<DesktopResponse | null>(null);
-  const [profile, setProfile] = useState<DesktopProfile | null>(null);
-  const [savedProfile, setSavedProfile] = useState<DesktopProfile | null>(null);
-  const [destinations, setDestinations] = useState<Record<string, Family>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !seedDesktop(cacheKey).hasCache);
   const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -140,15 +163,16 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
   // Collapse is view state too. It is a plain user-owned Set rather than something
   // derived per render: modelsByFamily changes on every move, so deriving would fold a
   // section under the user's cursor the moment they moved the last model out of it.
-  const [collapsedFamilies, setCollapsedFamilies] = useState<Set<string>>(() => FAMILY_COLLAPSE.read() ?? new Set());
+  const [collapsedFamilies, setCollapsedFamilies] = useState<Set<string>>(() => FAMILY_COLLAPSE.read() ?? new Set(FAMILIES));
   // Which rows the user has explicitly opened or closed. Deliberately NOT persisted:
   // a family's fold is a durable preference, but which single model you were inspecting
   // is not, and restoring five open rows on reload would rebuild the wall this removes.
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
   const importRef = useRef<HTMLInputElement>(null);
+  const hasCacheRef = useRef(seedDesktop(cacheKey).hasCache);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasCacheRef.current) setLoading(true);
     setLoadError("");
     try {
       const response = await fetch(`${apiBase}/api/claude-desktop`);
@@ -164,6 +188,8 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
       setProfile(normalized);
       setSavedProfile(cloneProfile(normalized));
       setDestinations(Object.fromEntries(payload.models.map(model => [model.route, normalized.assignments[model.route]?.family ?? "opus"])));
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, { data: payload, profile: normalized });
       // Fold empty families on load, but only while the user has no stored preference.
       // Doing it here rather than per render means a later move or import can never
       // re-fold a section the user opened.
@@ -173,11 +199,13 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
         setCollapsedFamilies(defaultCollapsedFamilies(counts));
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : t("claudeDesktop.loadFail"));
+      if (!hasCacheRef.current) {
+        setLoadError(error instanceof Error ? error.message : t("claudeDesktop.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
@@ -206,16 +234,17 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
     return result;
   }, [modelsByFamily, profile]);
 
-  // Poll Desktop status every 5s for applied-state + health.
+  // Poll Desktop status every 5s for applied-state + health (paused while tab is hidden).
   useEffect(() => {
+    if (!active) return;
     let cancelled = false;
     let inFlight = false;
-    let active: ReturnType<typeof createBoundedFetch> | null = null;
+    let activeFetch: ReturnType<typeof createBoundedFetch> | null = null;
     const poll = () => {
       if (inFlight) return;
       inFlight = true;
       const bounded = createBoundedFetch(10_000);
-      active = bounded;
+      activeFetch = bounded;
       void fetch(`${apiBase}/api/claude-desktop/status`, { signal: bounded.signal })
         .then((response) => readJsonIfOk<DesktopStatus>(response))
         .then((data) => {
@@ -225,7 +254,7 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
         .catch(() => { /* offline / older proxy / aborted */ })
         .finally(() => {
           bounded.clear();
-          if (active === bounded) active = null;
+          if (activeFetch === bounded) activeFetch = null;
           inFlight = false;
         });
     };
@@ -234,10 +263,10 @@ export default function ClaudeDesktop({ apiBase }: { apiBase: string }) {
     return () => {
       cancelled = true;
       clearInterval(timer);
-      active?.controller.abort();
-      active?.clear();
+      activeFetch?.controller.abort();
+      activeFetch?.clear();
     };
-  }, [apiBase]);
+  }, [apiBase, active]);
 
   const moveModel = (route: string, family: Family) => {
     if (!profile || profile.assignments[route]?.family === family) return;

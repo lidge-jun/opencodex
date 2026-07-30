@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { IconLock, IconPause, IconPlay, IconRefresh } from "../icons";
+import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
 import QuotaBars from "./QuotaBars";
-import { CodexTicketBadge } from "./codex-account-pool-helpers";
+import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
@@ -69,7 +69,11 @@ export function CodexAccountPoolMainCard({
         <strong>{t("codexAuth.mainAccount")}</strong>
         <span className="card-badges">
           {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
-          {main?.paused && <span className="badge badge-muted">{t("codexAuth.paused")}</span>}
+          {main?.paused && (
+            <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
+              {t("codexAuth.paused")}
+            </span>
+          )}
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
           )}
@@ -88,19 +92,25 @@ export function CodexAccountPoolMainCard({
           </button>
         )}
         {onCopyDoctor && oauthHealthShowsDoctor(main?.health?.status) && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopyDoctor(mainId)}>
+          <button type="button" className="btn btn-ghost btn-sm codex-auth-action-btn" onClick={() => onCopyDoctor(mainId)}>
             <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopyOutcomeFor?.(mainId))}</span>
           </button>
         )}
         {main && (
           <button
             type="button"
-            className={`btn btn-sm ${main.paused ? "btn-primary" : "btn-ghost"}`}
+            className="btn btn-sm btn-ghost codex-auth-action-btn"
             onClick={() => onTogglePause(mainSwitchEntry)}
             disabled={pauseBusy}
+            title={main.paused ? t("codexAuth.pausedHint") : undefined}
+            aria-label={main.paused ? `${t("codexAuth.resume")}. ${t("codexAuth.pausedHint")}` : t("codexAuth.pause")}
           >
             {main.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
-            {pauseUpdatingId === "__main__" ? t("common.saving") : t(main.paused ? "codexAuth.resume" : "codexAuth.pause")}
+            <CodexPauseToggleLabel
+              t={t}
+              paused={!!main.paused}
+              saving={pauseUpdatingId === "__main__"}
+            />
           </button>
         )}
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
@@ -109,13 +119,20 @@ export function CodexAccountPoolMainCard({
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}
-      {main?.paused && <div className="card-sub faint">{t("codexAuth.pausedHint")}</div>}
       {inCooldown && (
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
-        : !inCooldown && main?.quota && <QuotaBars quota={main.quota} plan={main.plan} threshold={threshold} t={t} />}
+        : !inCooldown && (
+          <QuotaBars
+            quota={main?.quota ?? null}
+            plan={main?.plan}
+            threshold={threshold}
+            t={t}
+            pending={main != null && main.quota == null}
+          />
+        )}
     </div>
   );
 }
@@ -126,6 +143,8 @@ export function CodexAccountPoolPageHead({
   refreshingQuota,
   pausingExhausted,
   pauseBusy,
+  actionFeedback,
+  actionFeedbackTone,
   onRefresh,
   onPauseExhausted,
 }: {
@@ -134,19 +153,28 @@ export function CodexAccountPoolPageHead({
   refreshingQuota: boolean;
   pausingExhausted: boolean;
   pauseBusy?: boolean;
+  actionFeedback?: string | null;
+  actionFeedbackTone?: "ok" | "err" | null;
   onRefresh: () => void;
   onPauseExhausted: () => void;
 }) {
   return (
     <div
-      className={embedded ? "row" : "page-head"}
+      className={embedded ? "row" : "page-head codex-auth-page-head"}
       style={embedded ? { justifyContent: "flex-end", marginBottom: 8 } : undefined}
     >
       {!embedded && <h2 className="page-title">{t("nav.codexAuth")}</h2>}
-      <div className="row">
+      <div className={embedded ? "row" : "codex-auth-page-head__actions"}>
+        <span
+          className={`codex-auth-page-head__feedback${actionFeedbackTone === "ok" ? " is-ok" : ""}${actionFeedbackTone === "err" ? " is-err" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          {actionFeedback ?? ""}
+        </span>
         <button
           type="button"
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm btn-ghost codex-auth-action-btn"
           onClick={onPauseExhausted}
           disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
         >
@@ -154,7 +182,7 @@ export function CodexAccountPoolPageHead({
         </button>
         <button
           type="button"
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm btn-ghost codex-auth-action-btn"
           onClick={onRefresh}
           disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
         >
@@ -176,17 +204,57 @@ export function CodexAccountPoolLoadStates({
   accountsCount: number;
   onRetry: () => void;
 }): ReactNode {
-  return (
-    <>
-      {loadState === "loading" && accountsCount === 0 && (
-        <div className="pwi-auth-state" role="status">{t("pws.accountsLoading")}</div>
-      )}
-      {loadState === "error" && (
-        <div className="pwi-auth-state pwi-auth-state--error" role="alert">
-          <span>{t("codexAuth.loadFailed")}</span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
+  // Cold start with no seeded accounts: mirror the ready layout (main card + pool
+  // section + empty) so Auto-switch / strategy do not jump when real nodes mount.
+  // Caller places this below the stable account-mode banner.
+  if (loadState === "loading" && accountsCount === 0) {
+    return (
+      <div className="codex-auth-load-skeleton" role="status" aria-live="polite" aria-busy="true">
+        {/* Match ready MainCard chrome (badge + pause + app-login) so head height does not jump. */}
+        <div className="card codex-auth-load-skeleton__main" style={{ marginBottom: 12 }} aria-hidden="true">
+          <div className="card-head">
+            <span className="dot dot-muted" />
+            <strong>{t("codexAuth.mainAccount")}</strong>
+            <span className="card-badges">
+              <span className="badge badge-muted codex-ticket-badge-slot" aria-hidden="true">
+                <IconTicket width={12} />0
+              </span>
+              <span className="badge badge-primary">{t("codexAuth.nextSession")}</span>
+            </span>
+            <button type="button" className="btn btn-sm btn-ghost" tabIndex={-1} disabled>
+              <IconPause width={14} /> {t("codexAuth.pause")}
+            </button>
+            <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
+          </div>
+          <div className="card-sub">
+            {/* Strut keeps the sub line-box equal to ready email/plan text; shimmer is visual only. */}
+            <span className="codex-auth-load-skeleton__strut">{t("codexAuth.appLogin")}</span>
+            <span className="codex-auth-load-skeleton__line codex-auth-load-skeleton__line--sub" />
+          </div>
+          <QuotaBars quota={null} threshold={0} t={t} pending />
         </div>
-      )}
-    </>
-  );
+        <div className="section-sep" aria-hidden="true">
+          <span className="section-label">{t("codexAuth.accountPool")}</span>
+          <div className="sep-line" />
+          {/* Same Add control as ready section-sep (inert) so the row height matches. */}
+          <button type="button" className="btn btn-sm btn-ghost" tabIndex={-1} disabled>
+            <IconPlus width={14} /> {t("codexAuth.add")}
+          </button>
+        </div>
+        <div className="empty codex-auth-pool-empty codex-auth-load-skeleton__empty" aria-hidden="true">
+          <div className="title">{t("codexAuth.noPool")}</div>
+        </div>
+        <span className="sr-only">{t("pws.accountsLoading")}</span>
+      </div>
+    );
+  }
+  if (loadState === "error") {
+    return (
+      <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+        <span>{t("codexAuth.loadFailed")}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
+      </div>
+    );
+  }
+  return null;
 }

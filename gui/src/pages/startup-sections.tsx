@@ -77,17 +77,23 @@ export function StartupHeroSection({
 export function StartupDetailsSection({
   data,
   failed,
+  loading = false,
   installBusy,
   installResult,
   onInstall,
 }: {
   data: StartupHealthData;
   failed: boolean;
+  loading?: boolean;
   installBusy: StartupInstallAction | null;
-  installResult: { kind: "success" | "error"; action: StartupInstallAction; detail?: string } | null;
-  onInstall: (action: StartupInstallAction) => void;
+  installResult: { kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null;
+  onInstall: (action: StartupInstallAction, opts?: { repair?: boolean }) => void;
 }) {
   const { t } = useI18n();
+  // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
+  const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
+  const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
+  const actionsDisabled = installBusy !== null || failed || loading;
 
   return (
     <section className="panel startup-details">
@@ -104,8 +110,13 @@ export function StartupDetailsSection({
             no={t(data.serviceConflict ? "startup.conflict" : data.serviceStale ? "startup.stale" : data.serviceInstalled ? "startup.unhealthy" : data.serviceSupported ? "startup.notInstalled" : "startup.unsupported")}
           />
           {data.serviceSupported && !data.serviceInstalled && (
-            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.install")}`} disabled={installBusy !== null || failed} onClick={() => onInstall("install-service")}>
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.install")}`} disabled={actionsDisabled} onClick={() => onInstall("install-service")}>
               {t(installBusy === "install-service" ? "startup.installing" : "startup.install")}
+            </button>
+          )}
+          {serviceNeedsRepair && (
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.service")} - ${t("startup.repair")}`} disabled={actionsDisabled} onClick={() => onInstall("install-service", { repair: true })}>
+              {t(installBusy === "install-service" ? "startup.repairing" : "startup.repair")}
             </button>
           )}
         </div>
@@ -121,8 +132,13 @@ export function StartupDetailsSection({
               : "startup.notInstalled")}
           />
           {!data.shimInstalled && (
-            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.install")}`} disabled={installBusy !== null || failed} onClick={() => onInstall("install-shim")}>
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.install")}`} disabled={actionsDisabled} onClick={() => onInstall("install-shim")}>
               {t(installBusy === "install-shim" ? "startup.installing" : "startup.install")}
+            </button>
+          )}
+          {shimNeedsRepair && (
+            <button type="button" className="btn btn-primary btn-sm" aria-label={`${t("startup.shim")} - ${t("startup.repair")}`} disabled={actionsDisabled} onClick={() => onInstall("install-shim", { repair: true })}>
+              {t(installBusy === "install-shim" ? "startup.repairing" : "startup.repair")}
             </button>
           )}
         </div>
@@ -130,7 +146,9 @@ export function StartupDetailsSection({
       {installResult && (
         <div className={`notice ${installResult.kind === "success" ? "notice-ok" : "notice-warn"} startup-action-notice`} role="status" aria-live="polite">
           {installResult.kind === "success"
-            ? t(installResult.action === "install-service" ? "startup.serviceInstalled" : "startup.shimInstalled")
+            ? installResult.action === "install-service"
+              ? t(installResult.repair ? "startup.serviceRepaired" : "startup.serviceInstalled")
+              : t(installResult.repair ? "startup.shimRepaired" : "startup.shimInstalled")
             : `${t("startup.installFailed")} ${installResult.detail ?? ""}`}
         </div>
       )}
@@ -189,7 +207,9 @@ export function StartupTraySection({
           }}>{t("startup.tray.uninstall")}</button>
         )}
       </div>
-      {(trayError || tray?.stale) && <div className="notice notice-warn" role="alert">{t("startup.tray.error")}</div>}
+      {(trayError || tray?.stale) && (
+        <div className="notice notice-warn startup-tray-error" role="alert">{t("startup.tray.error")}</div>
+      )}
     </section>
   );
 }

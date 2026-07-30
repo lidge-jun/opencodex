@@ -429,6 +429,7 @@ Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
 | `status` | Report whether the service is running. |
+| `repair` | Refresh installed service assets without re-registering (no Task Scheduler UAC). |
 | `uninstall` | Remove the service and restore native Codex. |
 | `remove` | Alias of `uninstall`. |
 
@@ -436,6 +437,7 @@ Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash
 ocx service
 ocx service install
 ocx service status
+ocx service repair
 ocx service uninstall
 ```
 

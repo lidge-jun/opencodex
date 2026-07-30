@@ -26,7 +26,7 @@ import {
   saveCodexAccountCredential,
 } from "../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../src/codex/auth-api";
+import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../src/codex/auth-api";
 import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   CODEX_QUOTA_PROBE_INTERVAL_MS,
@@ -130,7 +130,7 @@ describe("Codex auth context", () => {
       chatgptAccountId: "fixed_pool_acc",
       fixedAccount: true,
     });
-    expect(applyCodexAuthContextToProvider(forwardProvider, exactContext)).toMatchObject({
+    expect(applyCodexAuthContextToProvider(forwardProvider, exactContext, "pool")).toMatchObject({
       _codexAccountRequired: true,
       _codexAccountOverride: { accessToken: "fixed_pool_token", chatgptAccountId: "fixed_pool_acc" },
     });
@@ -258,6 +258,31 @@ describe("Codex auth context", () => {
     expect(cfg.activeCodexAccountId).toBe("pool-a");
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b" });
+  });
+
+  test("exact selection reports reauthentication without falling back to the active Pool account", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = "pool-b";
+    cfg.codexAccounts?.push({ id: "pool-b", email: "pool-b@example.test", isMain: false });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+    markAccountNeedsReauth("pool-a");
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      accountId: "pool-a",
+      modelId: "gpt-5.6-sol",
+    })).rejects.toThrow("Selected Codex account needs reauthentication");
+    expect(cfg.activeCodexAccountId).toBe("pool-b");
   });
 
   test("exact account failure never falls back to another usable account", async () => {
@@ -638,7 +663,7 @@ describe("Codex auth context", () => {
 
   test("runtime provider metadata is applied only to forward provider copies", () => {
     const ctx = { kind: "pool" as const, accountId: "pool-a", generation: 1, accessToken: "pool_token", chatgptAccountId: "pool_acc" };
-    const runtimeForward = applyCodexAuthContextToProvider(forwardProvider, ctx);
+    const runtimeForward = applyCodexAuthContextToProvider(forwardProvider, ctx, "pool");
     expect(runtimeForward).toMatchObject({
       _codexAccountRequired: true,
       _codexAccountOverride: { accessToken: "pool_token", chatgptAccountId: "pool_acc" },
@@ -646,7 +671,8 @@ describe("Codex auth context", () => {
     expect(forwardProvider).not.toHaveProperty("_codexAccountOverride");
 
     const routed = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
-    expect(applyCodexAuthContextToProvider(routed, ctx)).toBe(routed);
+    expect(applyCodexAuthContextToProvider(routed, ctx, "pool")).toBe(routed);
+    expect(applyCodexAuthContextToProvider(forwardProvider, ctx, "direct")).toBe(forwardProvider);
   });
 
   test("runtime provider metadata is stripped before persistence", () => {

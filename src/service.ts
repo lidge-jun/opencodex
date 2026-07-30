@@ -355,8 +355,41 @@ function sh(cmd: string): string {
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
+/**
+ * Decode schtasks stdout. `/query /xml` emits UTF-16LE (often with BOM) because the
+ * registered task document is UTF-16; reading that as UTF-8 makes every health check
+ * fail ("registration present but unhealthy") and rolls back a successful elevated create.
+ */
+export function decodeSchtasksOutput(buffer: Buffer): string {
+  if (buffer.length === 0) return "";
+  const bomUtf16Le = buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe;
+  const bomUtf16Be = buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff;
+  const looksUtf16Le = buffer.length >= 4
+    && buffer[1] === 0x00
+    && buffer[3] === 0x00
+    && buffer[0] !== 0x00;
+  if (bomUtf16Le || looksUtf16Le) {
+    return buffer.toString("utf16le").replace(/^\uFEFF/, "").trim();
+  }
+  if (bomUtf16Be) {
+    // Swap pairs then decode as utf16le.
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let i = 2; i + 1 < buffer.length; i += 2) {
+      swapped[i - 2] = buffer[i + 1]!;
+      swapped[i - 1] = buffer[i]!;
+    }
+    return swapped.toString("utf16le").trim();
+  }
+  return buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+}
+
 function runFile(file: string, args: string[]): string {
-  return execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+  const buffer = execFileSync(file, args, {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  }) as Buffer;
+  return decodeSchtasksOutput(buffer);
 }
 
 function windowsSchtasks(): string {
@@ -487,7 +520,9 @@ export function evaluateWindowsSchedulerInstallVerification(inputs: {
       : !assetsHealthy
         ? "Required scheduler service assets are missing."
         : !registrationHealthy
-          ? "Task Scheduler registration is present but unhealthy."
+          ? (inputs.xml.trim()
+            ? "Task Scheduler registration is present but unhealthy."
+            : "Task Scheduler task is present but its XML could not be read.")
           : nativeStatusUnknown
             ? "The Task Scheduler task was created, but OpenCodex could not verify that the native WinSW service is absent."
             : "ok";
@@ -506,9 +541,18 @@ export function evaluateWindowsSchedulerInstallVerification(inputs: {
 /** Conflict-free postcondition check for an elevated scheduler install. */
 export function verifyWindowsSchedulerInstall(taskName = TASK): WindowsSchedulerInstallVerification {
   const taskInstalled = windowsSchedulerTaskInstalled(taskName);
-  const xml = taskInstalled ? (() => {
-    try { return querySchtasks(["/query", "/tn", taskName, "/xml"]); } catch { return ""; }
-  })() : "";
+  let xml = "";
+  if (taskInstalled) {
+    try { xml = querySchtasks(["/query", "/tn", taskName, "/xml"]); } catch { xml = ""; }
+  }
+  // After elevated create, non-elevated `/query /xml` can fail or return empty while the
+  // task is still listed. Fall back to the on-disk document we registered.
+  if (taskInstalled && !xml.trim()) {
+    const diskPath = windowsTaskXmlPath();
+    if (existsSync(diskPath)) {
+      try { xml = decodeSchtasksOutput(readFileSync(diskPath)); } catch { /* keep empty */ }
+    }
+  }
   return evaluateWindowsSchedulerInstallVerification({
     taskInstalled,
     xml,
@@ -896,6 +940,22 @@ function taskXmlString(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+/**
+ * RunLevel check. Schema default is LeastPrivilege (omitted on export). Elevated
+ * `schtasks /create` often rewrites the registered task to HighestAvailable even when
+ * the source XML asked for LeastPrivilege — still InteractiveToken / same user.
+ * Keep accepting HighestAvailable here: rejecting it would false-fail healthy elevated
+ * installs, and windowsTaskRegistrationHealthy tests encode that contract.
+ */
+function taskXmlRunLevelAcceptable(principal: string): boolean {
+  if (taskXmlHasPrefixedTag(principal, "RunLevel")) return false;
+  const count = taskXmlElementCount(principal, "RunLevel");
+  if (count === 0) return true;
+  if (count > 1) return false;
+  const value = new RegExp(`<RunLevel(?:\\s[^>]*?)?>\\s*([^<]*?)\\s*<\\/RunLevel>`, "i").exec(principal)?.[1]?.trim().toLowerCase();
+  return value === "leastprivilege" || value === "highestavailable";
+}
+
 export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
   const { bun, cli } = entry;
   const bunRuntime = durableBunRuntime();
@@ -1077,7 +1137,7 @@ function taskXmlDecodedValueEquals(xml: string, tag: string, expected: string): 
   // `[^<]*` refuses nested markup, so a decoy inside a child element cannot match.
   const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>([^<]*)<\\/${tag}>`, "i").exec(xml)?.[1];
   if (value === undefined) return false;
-  return taskXmlDecodeEntities(value).trim() === expected.trim();
+  return taskXmlDecodeEntities(value).trim().toLowerCase() === expected.trim().toLowerCase();
 }
 
 function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string): boolean {
@@ -1113,13 +1173,14 @@ export function windowsTaskRegistrationHealthy(
   return taskXmlElementCount(triggers, "LogonTrigger") > 0
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
-    && taskXmlOptionalValueEquals(principal, "RunLevel", "LeastPrivilege")
+    && taskXmlRunLevelAcceptable(principal)
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
     // Compare decoded VALUES, not encodings: Task Scheduler canonicalizes the
     // quotes we wrote as `&quot;` back to literal `"` on export, so an escaped
     // needle never matched and a healthy task read as permanently stale (#608).
+    // Case-insensitive: elevated `schtasks /create` may rewrite System32 casing.
     && taskXmlDecodedValueEquals(action, "Command", wscript)
     && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
 }
@@ -1192,10 +1253,23 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
   }
 }
 
-function installWindows(): void {
-  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
+/**
+ * Rewrite on-disk scheduler assets (script/VBS/XML) without re-registering the task.
+ * Used by fresh install (before schtasks /create) and by repair (no elevation).
+ */
+function writeWindowsSchedulerAssets(): void {
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
+  const script = windowsServiceScriptPath();
+  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
+  // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
+  // paths on some WSH/codepage combinations — same contract as the task XML below.
+  writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
+  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
+}
+
+function installWindows(): void {
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   // Transactional backend switch: installing the scheduler backend removes a native
   // service first — two live managers would both respawn the proxy (conflict).
   if (statusWinswRaw() !== "nonexistent") {
@@ -1212,15 +1286,76 @@ function installWindows(): void {
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
   try { stopWindows(); } catch { /* not running */ }
-  const script = windowsServiceScriptPath();
-  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
-  // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
-  // paths on some WSH/codepage combinations — same contract as the task XML below.
-  writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
-  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
-  schtasks(buildWindowsSchtasksCreateArgs(script));
+  writeWindowsSchedulerAssets();
+  schtasks(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
   schtasks(["/run", "/tn", TASK]);
   writeServiceInstallState("scheduler");
+}
+
+export interface RepairServiceDeps {
+  diagnose?: () => ServiceDiagnostic;
+  assertEnv?: () => void;
+  assertAuth?: () => void;
+  writeSchedulerAssets?: () => void;
+  stopScheduler?: () => void;
+  startScheduler?: () => void;
+  writeSchedulerState?: () => void;
+  writeNativeState?: () => void;
+  repairNative?: () => void | Promise<void>;
+  repairLaunchd?: () => void;
+  repairSystemd?: () => void;
+  /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Repair an already-installed background service without Task Scheduler re-registration.
+ *
+ * Windows scheduler: rewrite assets + stop/start — no `schtasks /create`, no UAC.
+ * Windows native: WinSW asset rewrite + restart (skips `install /p` when present).
+ * macOS/Linux: re-run the user-level install/reload path.
+ */
+export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const diagnose = deps.diagnose ?? diagnoseService;
+  const platform = deps.platform ?? process.platform;
+  const diag = diagnose();
+  if (!diag.supported) {
+    throw new Error(`Background service is unsupported (${diag.summary}).`);
+  }
+  if (diag.conflict) {
+    throw new Error(
+      "Cannot repair while Task Scheduler and native WinSW are both present. "
+        + "Run 'ocx service uninstall' then reinstall one backend with 'ocx service install'.",
+    );
+  }
+  if (!diag.installed) {
+    throw new Error("Background service is not installed. Run 'ocx service install' first.");
+  }
+
+  (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
+  (deps.assertAuth ?? assertServiceAuthEnvironment)();
+
+  if (platform === "win32") {
+    if (diag.backend === "native") {
+      await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(import.meta.dir))))();
+      (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
+      return;
+    }
+    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    (deps.startScheduler ?? startWindows)();
+    (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
+    return;
+  }
+  if (platform === "darwin") {
+    (deps.repairLaunchd ?? installLaunchd)();
+    return;
+  }
+  if (platform === "linux") {
+    (deps.repairSystemd ?? installSystemd)();
+    return;
+  }
+  throw new Error(`Background service repair is unsupported on ${platform}.`);
 }
 
 /**
@@ -1712,6 +1847,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     console.error("--native (WinSW) is Windows-only.");
     process.exit(1);
   }
+  if (command === "repair") {
+    assertServiceEnvironmentMatchesInstall();
+    assertServiceAuthEnvironment();
+    await repairService();
+    console.log("✅ opencodex background service repaired (assets refreshed, no Task Scheduler re-registration).");
+    return;
+  }
   // Non-install subcommands follow the backend recorded at install time (state v2).
   const backend: ServiceBackend = parsed.backend ?? (process.platform === "win32" ? readServiceBackend() : "scheduler");
   const ops = platformOps(backend);
@@ -1789,8 +1931,9 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("Usage: ocx service [install|repair|start|stop|status|uninstall|remove] [--native|--scheduler]");
       console.error("       With no subcommand, installs/updates and starts the background service.");
+      console.error("       repair: refresh assets and restart an already-installed service (no admin re-prompt).");
       console.error("       --native (Windows only): register a real SCM service via WinSW instead of Task Scheduler.");
       process.exit(1);
   }

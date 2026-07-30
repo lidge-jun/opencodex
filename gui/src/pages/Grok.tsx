@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState, Notice, Switch } from "../ui";
 import { IconChevron } from "../icons";
 import { useT, type TKey } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { grokGroupView, type GrokCandidate } from "./grok-groups";
 
@@ -23,13 +24,15 @@ interface GrokStatus {
   excluded: string[];
 }
 
-/** Same collapse store the Desktop page uses; Grok has only two groups, both open. */
-const GROUP_COLLAPSE = makeCollapseStore("ocx.grok.collapsedGroups.v1");
+/** Same collapse store the Desktop page uses; Grok groups start collapsed. */
+const GROUP_COLLAPSE = makeCollapseStore("ocx.grok.collapsedGroups.v2");
 
 const GROUPS = [
   { id: "native", tkey: "grok.groupNative" as TKey },
   { id: "routed", tkey: "grok.groupRouted" as TKey },
 ] as const;
+
+const DEFAULT_COLLAPSED_GROUPS = new Set(GROUPS.map((group) => group.id));
 
 /** Same context formatting the Desktop page uses, so the two surfaces read alike. */
 function formatContext(value: number | undefined, t: TFn): string {
@@ -52,19 +55,22 @@ function formatContext(value: number | undefined, t: TFn): string {
  */
 export default function Grok({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [status, setStatus] = useState<GrokStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `ocx.grok.status.v1:${apiBase}`;
+  const cached = readSessionListCache<GrokStatus>(cacheKey);
+  const [status, setStatus] = useState<GrokStatus | null>(() => cached);
+  const [loading, setLoading] = useState(() => !cached);
   const [error, setError] = useState("");
-  const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const [savedExcluded, setSavedExcluded] = useState<Set<string>>(new Set());
-  // null = no stored preference; both groups start open because Grok has only two.
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => GROUP_COLLAPSE.read() ?? new Set());
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set(cached?.excluded ?? []));
+  const [savedExcluded, setSavedExcluded] = useState<Set<string>>(() => new Set(cached?.excluded ?? []));
+  // null = no stored preference; groups start collapsed so the list opens on demand.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => GROUP_COLLAPSE.read() ?? new Set(DEFAULT_COLLAPSED_GROUPS));
   const [pending, setPending] = useState<"save" | "apply" | null>(null);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const hasCacheRef = useRef(Boolean(cached));
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasCacheRef.current) setLoading(true);
     setError("");
     try {
       const response = await fetch(`${apiBase}/api/grok`);
@@ -72,16 +78,21 @@ export default function Grok({ apiBase }: { apiBase: string }) {
       if (!payload) throw new Error(t("grok.loadFail"));
       // Tolerate an older proxy that predates the selection routes: the page degrades
       // to the read-only fence view instead of crashing on a missing field.
-      setStatus({ ...payload, candidates: payload.candidates ?? [], excluded: payload.excluded ?? [] });
+      const next = { ...payload, candidates: payload.candidates ?? [], excluded: payload.excluded ?? [] };
+      setStatus(next);
       const saved = new Set(payload.excluded ?? []);
       setExcluded(saved);
       setSavedExcluded(saved);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("grok.loadFail"));
+      if (!hasCacheRef.current) {
+        setError(err instanceof Error ? err.message : t("grok.loadFail"));
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   // Deferred like the Desktop page: kicking the fetch off synchronously inside the effect
   // triggers cascading renders (and the react-doctor lint that guards against them).
@@ -102,6 +113,12 @@ export default function Grok({ apiBase }: { apiBase: string }) {
 
   const toggleGroup = (id: string) => {
     const next = toggleInSet(collapsed, id);
+    GROUP_COLLAPSE.write(next);
+    setCollapsed(next);
+  };
+
+  const setAllCollapsed = (nextCollapsed: boolean) => {
+    const next = nextCollapsed ? new Set(GROUPS.map((group) => group.id)) : new Set<string>();
     GROUP_COLLAPSE.write(next);
     setCollapsed(next);
   };
@@ -154,6 +171,9 @@ export default function Grok({ apiBase }: { apiBase: string }) {
       } else {
         setMessage({ tone: "ok", text: t("grok.saved") });
         setAnnouncement(t("grok.saved"));
+        if (status) {
+          writeSessionListCache(cacheKey, { ...status, excluded: [...excluded] });
+        }
       }
     } catch (err) {
       const text = err instanceof Error ? err.message : t("grok.saveFailed");
@@ -219,6 +239,14 @@ export default function Grok({ apiBase }: { apiBase: string }) {
 
       {status && status.candidates.length > 0 && (
         <div className="ocx-group-stack">
+          <div className="row" style={{ gap: 6, margin: "2px 0 10px" }}>
+            <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={pending !== null}>
+              <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(false)} disabled={pending !== null}>
+              <IconChevron width={12} height={12} aria-hidden="true" style={{ transform: "rotate(90deg)" }} /> {t("models.expandAll")}
+            </button>
+          </div>
           {GROUPS.map(group => {
             const view = grokGroupView(status.candidates, aliasById, excluded, group.id);
             if (view.total === 0) return null;

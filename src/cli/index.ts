@@ -38,6 +38,7 @@ import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { maybeShowStarPrompt } from "./star-prompt";
+import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
@@ -190,6 +191,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       server = startServer(port);
+      // Prewarm the live provider model cache as soon as the port is bound so the
+      // first GUI /v1/models (and syncModelsToCodex below) share one discovery flight
+      // instead of racing duplicate upstream /models fetches.
+      scheduleCatalogPrewarm();
       break;
     } catch (err) {
       if (!isAddrInUse(err) || attempt >= 2) throw err;

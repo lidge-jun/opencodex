@@ -110,11 +110,9 @@ export function RailRow({ item, selected, tabbable, modelCount, isDefault, showC
             <span className="pwi-rail-badge pwi-rail-badge--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
           ) : null}
         </span>
-        {secondaryLabel && (
-          <span className="providers-workspace-rail-secondary" title={secondaryLabel}>
-            {secondaryLabel}
-          </span>
-        )}
+        <span className="providers-workspace-rail-secondary" title={secondaryLabel || undefined}>
+          {secondaryLabel || "\u00a0"}
+        </span>
       </span>
       <span className="providers-workspace-rail-trail">
         {isDefault && (

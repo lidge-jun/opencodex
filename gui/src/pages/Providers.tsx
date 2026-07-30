@@ -11,6 +11,8 @@ import { formatProviderDisplayName } from "../provider-icons";
 import { useProviderAccountPools } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
+import { useKeyedClientResource } from "../client-resource";
+import { readSessionListCache } from "../session-list-cache";
 import type { ProvidersConfig } from "./providers-shared";
 import { useProvidersOAuth } from "./use-providers-oauth";
 import { useProvidersCrud } from "./use-providers-crud";
@@ -20,7 +22,10 @@ import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-p
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [config, setConfig] = useState<ProvidersConfig | null>(null);
+  const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
+  const [config, setConfig] = useState<ProvidersConfig | null>(
+    () => readSessionListCache<ProvidersConfig>(configCacheKey),
+  );
   const [adding, setAdding] = useState(false);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
@@ -50,8 +55,35 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
 
+  // Warm the Add Provider catalog cache while the page is open so opening the
+  // modal does not wait on a cold /api/provider-presets round-trip (~same key as
+  // AddProviderModal). Prefetch usage too so the catalog does not paint alpha then
+  // re-rank when the slow usage probe (~5s cold) finally returns.
+  useKeyedClientResource(
+    `add-provider-presets:${apiBase}`,
+    [apiBase],
+    async (signal) => {
+      const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json() as { providers?: unknown[] };
+      return Array.isArray(data.providers) && data.providers.length > 0 ? data.providers : null;
+    },
+  );
+  useKeyedClientResource(
+    `add-provider-usage:${apiBase}`,
+    [apiBase],
+    async (signal) => {
+      const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
+      if (!res.ok) return {} as Record<string, number>;
+      const data = await res.json() as { providers?: Array<{ provider: string; requests: number }> };
+      const rank: Record<string, number> = {};
+      for (const row of data.providers ?? []) rank[row.provider] = row.requests;
+      return rank;
+    },
+  );
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, setQuotaReports, notify,
+    configCacheKey,
   });
 
   // WP3: one Codex account controller for the whole Providers page, shared by the
@@ -62,9 +94,30 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // accounts/active pair this page used to poll on its own 30s timer.
   const codexActiveNeedsReauth = codexPool.activeNeedsReauth;
 
+  // Derive openai login status from the shared Codex controller (no duplicate /accounts).
+  const oauthStatusWithCodex = useMemo(() => {
+    const accounts = codexPool.accounts;
+    if (accounts.length === 0 && codexPool.loadState === "loading") return oauthStatus;
+    const main = accounts.find(a => a.isMain) ?? accounts[0];
+    const mainIsReal = !!main && !!main.email && main.email !== "Codex App login";
+    const poolLoggedIn = accounts.some(a => !a.isMain && (a.hasCredential || a.email));
+    const codexLoggedIn = mainIsReal || poolLoggedIn;
+    const codexEmail = mainIsReal
+      ? main?.email
+      : (accounts.find(a => !a.isMain && a.email)?.email ?? undefined);
+    return {
+      ...oauthStatus,
+      openai: {
+        loggedIn: codexLoggedIn,
+        ...(codexEmail ? { email: codexEmail } : {}),
+        ...(codexActiveNeedsReauth ? { needsReauth: true } : {}),
+      },
+    };
+  }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
+
   const pools = useProviderAccountPools({
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
-    config, oauthStatus, aliveRef,
+    config, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   });
@@ -96,12 +149,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const timeout = window.setTimeout(() => {
       void fetchConfig();
       void fetchOauth();
-      void fetchProviderQuotas();
+      // Quotas: workspace shell owns /api/provider-quotas — do not double-fetch on mount.
     }, 0);
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [fetchConfig, fetchOauth, fetchProviderQuotas]);
+  }, [fetchConfig, fetchOauth]);
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
@@ -133,13 +186,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         </div>
         {status
           ? <Notice tone="err">{status}</Notice>
-          : <div className="muted">{t("prov.loadingConfig")}</div>}
+          : (
+            <div className="providers-workspace providers-workspace--boot" aria-busy="true">
+              <div className="providers-workspace-rail providers-workspace-rail--boot" aria-hidden="true" />
+              <div className="providers-workspace-main">
+                <p className="muted"><span className="spin" aria-hidden="true" /> {t("prov.loadingConfig")}</p>
+              </div>
+            </div>
+          )}
       </>
     );
   }
 
   const addModalAccountRows = buildAddModalAccountRows(config, oauthProviders);
-  const accountLoginStatus = buildAccountLoginStatus(config, oauthStatus);
+  const accountLoginStatus = buildAccountLoginStatus(config, oauthStatusWithCodex);
   const isForwardProvider = (name: string) => config.providers[name]?.authMode === "forward";
 
   const onAccountLogin = async (provider: string) => {

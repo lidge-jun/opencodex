@@ -3,6 +3,7 @@ import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 
 export type OpenAiAccountBannerState = CodexAccountModeState | "invalid" | null;
 
@@ -17,17 +18,33 @@ export function OpenAiAccountModeBanner({
 }) {
   const t = useT();
   return (
-    <div className="panel" style={{ marginBottom: 16 }}>
+    <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
       <div className="row">
         <strong>{t("codexAuth.accountModeTitle")}</strong>
-        {state === "pool" && <span className="badge badge-accent">{t("codexAuth.accountModePool")}</span>}
-        {state === "direct" && <span className="badge badge-green">{t("codexAuth.accountModeDirect")}</span>}
+        {state === null ? (
+          <span className="badge badge-accent openai-account-mode-banner__badge-slot openai-account-mode-banner__badge-slot--pending" aria-hidden="true">
+            {t("codexAuth.accountModePool")}
+          </span>
+        ) : state === "pool" ? (
+          <span className="badge badge-accent openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
+        ) : state === "direct" ? (
+          <span className="badge badge-green openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
+        ) : null}
       </div>
+      {/*
+        Reserve the description line while config is still unknown so the pool
+        section below does not jump when /api/config arrives.
+      */}
+      {state === null && (
+        <p className="card-sub openai-account-mode-banner__desc openai-account-mode-banner__desc--pending" aria-hidden="true">
+          &nbsp;
+        </p>
+      )}
       {state === "pool" && (
-        <p className="card-sub" style={{ margin: "6px 0 0" }}>{t("codexAuth.accountModePoolDesc")}</p>
+        <p className="card-sub openai-account-mode-banner__desc">{t("codexAuth.accountModePoolDesc")}</p>
       )}
       {state === "direct" && (
-        <p className="card-sub" style={{ margin: "6px 0 0" }}>
+        <p className="card-sub openai-account-mode-banner__desc">
           {t("codexAuth.accountModeDirectDesc")} <a href="#providers">{t("codexAuth.openProviders")}</a>
         </p>
       )}
@@ -40,7 +57,7 @@ export function OpenAiAccountModeBanner({
         </div>
       )}
       {state === "invalid" && (
-        <p className="card-sub" style={{ margin: "6px 0 0" }}>
+        <p className="card-sub openai-account-mode-banner__desc">
           {t("codexAuth.openaiMissing")} <a href="#providers">{t("codexAuth.openProviders")}</a>
         </p>
       )}
@@ -68,6 +85,11 @@ function openaiProviderFromConfig(config: unknown): {
   };
 }
 
+type CachedMode = {
+  bannerState: OpenAiAccountBannerState;
+  accountModeState: CodexAccountModeState | null;
+};
+
 /**
  * Codex Auth page — a thin wrapper around CodexAccountPool (WP060 extraction).
  * The page owns the /api/config fetch feeding the account-mode banner and
@@ -75,8 +97,12 @@ function openaiProviderFromConfig(config: unknown): {
  */
 export default function CodexAuth({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(null);
-  const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(null);
+  const configCacheKey = `ocx.codex-auth.config.v1:${apiBase}`;
+  const cached = readSessionListCache<CachedMode>(configCacheKey);
+  const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(() => cached?.bannerState ?? null);
+  const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(
+    () => cached?.accountModeState ?? null,
+  );
   const [enableBusy, setEnableBusy] = useState(false);
   const [enableError, setEnableError] = useState("");
 
@@ -89,17 +115,19 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
       if (providerState === "absent" || providerState === "disabled" || providerState === "invalid") {
         setBannerState(providerState);
         // Non-canonical / missing rows are not a live Codex account mode.
-        setAccountModeState(providerState === "disabled" ? "disabled" : "absent");
+        const mode = providerState === "disabled" ? "disabled" as const : "absent" as const;
+        setAccountModeState(mode);
+        writeSessionListCache(configCacheKey, { bannerState: providerState, accountModeState: mode });
         return;
       }
       const mode = codexAccountModeState(config);
       setBannerState(mode);
       setAccountModeState(mode);
+      writeSessionListCache(configCacheKey, { bannerState: mode, accountModeState: mode });
     } catch {
-      setBannerState(null);
-      setAccountModeState(null);
+      // Keep last-good banner on transient config failures.
     }
-  }, [apiBase]);
+  }, [apiBase, configCacheKey]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void loadMode(); }, 0);

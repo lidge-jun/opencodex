@@ -44,6 +44,7 @@ beforeEach(() => {
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
   });
+  testWindow.localStorage.setItem("ocx.grok.collapsedGroups.v2", JSON.stringify([]));
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
   selectionPuts = [];

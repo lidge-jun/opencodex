@@ -242,8 +242,8 @@ export default function AnthropicAccountPoolSettings({
               });
             }}
             onStickyDraftChange={setStickyDraft}
-            onStickyCommit={() => {
-              const parsed = parseAccountPoolStickyLimitDraft(stickyDraft);
+            onStickyCommit={(nextDraft) => {
+              const parsed = parseAccountPoolStickyLimitDraft(nextDraft ?? stickyDraft);
               if (parsed === null) {
                 setStickyDraft(String(stickyLimit));
                 setError(t("accountPool.stickyLimitInvalid"));

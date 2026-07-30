@@ -4,7 +4,7 @@ import {
   getValidCodexToken,
   isCodexAccountGenerationLive,
 } from "./account-store";
-import { markAccountNeedsReauth } from "./account-runtime-state";
+import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { isCodexAccountPaused } from "./account-pause";
 import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
@@ -34,7 +34,7 @@ export type CodexAuthContext =
       generation: number;
       accessToken: string;
       chatgptAccountId: string;
-      /** Prevent pool selection, affinity, and active-account mutation for an exact selector. */
+      /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
       fixedAccount?: boolean;
       /**
        * Set when this request was admitted through an active quota cooldown as
@@ -54,7 +54,7 @@ export type CodexAuthContext =
       accountId: string;
       accessToken: string;
       chatgptAccountId: string;
-      /** Prevent pool selection, affinity, and active-account mutation for an exact selector. */
+      /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
       fixedAccount?: boolean;
       /** See `pool.probeLeaseId`. */
       probeLeaseId?: string;
@@ -241,9 +241,16 @@ export async function resolveCodexAuthContext(
       fixedAccountId !== undefined ? "Selected Codex account is unavailable" : undefined,
     );
   }
-  if (fixedAccountId !== undefined
-    && (isCodexAccountPaused(config, accountId) || !isCodexAccountUsable(config, accountId))) {
-    throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+  if (fixedAccountId !== undefined) {
+    if (isCodexAccountPaused(config, accountId)) {
+      throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+    }
+    if (isAccountNeedsReauth(accountId)) {
+      throw new CodexPoolAuthenticationError("Selected Codex account needs reauthentication");
+    }
+    if (!isCodexAccountUsable(config, accountId)) {
+      throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+    }
   }
   // Lazy prime: if the selected account has no quota yet, the pool is likely
   // unprimed (dashboard never opened, or startup prime was blocked). Kick a
@@ -338,8 +345,9 @@ export function assertCodexAuthContextNotCooled(ctx: CodexAuthContext | undefine
 export function applyCodexAuthContextToProvider(
   provider: OcxProviderConfig,
   ctx: CodexAuthContext,
+  mode: CodexAccountMode | undefined,
 ): OcxRuntimeProviderConfig {
-  if ((ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
+  if (mode !== "pool" || (ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
   return {
     ...provider,
     _codexAccountOverride: {

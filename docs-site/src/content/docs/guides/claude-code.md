@@ -55,6 +55,14 @@ ocx claude
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | Legacy context override when `maxContextTokens` is set (conditional) |
 Variables you export yourself always win. Extra arguments pass through: `ocx claude -p "hello"`.
 
+One exception is about *where* a variable comes from, not about precedence. The bundled Bun
+runtime auto-loads a project `.env` / `.env.local`, so a stray `ANTHROPIC_API_KEY` in the
+directory you happen to launch from used to look identical to a deliberate export — and it
+silently disabled a healthy claude.ai subscription in favour of API billing. `ocx claude` now
+ignores Anthropic credentials that only a project dotenv introduced. A value you exported in
+your shell still wins, in every auth mode. To use an API key deliberately, export it
+(`export ANTHROPIC_API_KEY=...`) rather than leaving it in a project file.
+
 ## Auth mode
 
 Claude Code needs a token in `ANTHROPIC_AUTH_TOKEN` to talk to a gateway, but setting that
@@ -191,9 +199,12 @@ the alias back to the routed model. On older Claude Code versions the picker sta
 slots via
 `ANTHROPIC_MODEL` or type any routed id with `/model` (Claude Code passes strings through).
 
-**Alias grammar rules:** provider must not contain `/` or `--` or equal `native`; model must not
-contain `/`. Routes the readable form cannot express fall back to the hashed alias. Model ids
-MAY contain `--` (resolution splits on the first `--` only); native slugs containing `--` fall back to the hashed form.
+**Alias grammar rules:** provider must not contain `/` or `--` or equal `native`.
+Model ids may contain `/` — encoded as `~s` in the alias (e.g. `openrouter/anthropic/claude-opus-4-8`
+→ `claude-ocx-openrouter--anthropic~sclaude-opus-4-8`). Literal `~` in a model id is encoded as `~t`.
+Bare `~` not followed by `s`/`t` is treated as a literal tilde so older persisted aliases keep resolving.
+Routes the readable form cannot express fall back to the hashed alias. Model ids MAY contain `--`
+(resolution splits on the first `--` only); native slugs containing `--` fall back to the hashed form.
 
 **Model resolution order:** `[1m]` marker stripped → readable alias decoded → Desktop hashed
 alias decoded → `modelMap` exact match → date-stripped match (`-20250514` removed) → passthrough.

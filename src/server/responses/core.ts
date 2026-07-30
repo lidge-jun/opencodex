@@ -366,6 +366,7 @@ async function retryCodexPoolOnAlternateAccount(
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
+    "pool",
   );
   const retryAdapter = resolveAdapter(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider),
@@ -1170,9 +1171,16 @@ export async function handleResponses(
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
 
-  // Exact account selectors are intentionally isolated from Pool-wide quota work. A child request
-  // must not inspect or warm every account before its fixed credential is resolved.
-  if (isThreadSpawnRequest(req.headers) && route.codexAccountId === undefined) {
+  const hasUnexpandedPreviousResponse = !!parsed.previousResponseId
+    && parsed._previousResponseInputExpanded !== true;
+  // Exact account selectors are isolated from Pool-wide quota work. A canonical replay miss must
+  // also fail closed without polling quota upstream. Cached fallback state can still select a
+  // provider with native continuation support below.
+  if (
+    isThreadSpawnRequest(req.headers)
+    && route.codexAccountId === undefined
+    && !(hasUnexpandedPreviousResponse && isCanonicalOpenAiForwardProvider(route.provider))
+  ) {
     await maybePrimeSubagentQuota(config);
   }
 
@@ -1224,6 +1232,20 @@ export async function handleResponses(
     return unreadableEncryptedAgentTaskResponse();
   }
 
+  // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
+  // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
+  // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
+  if (
+    hasUnexpandedPreviousResponse
+    && isCanonicalOpenAiForwardProvider(route.provider)
+  ) {
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      "OpenAI forward continuation state is unavailable or expired; start a new session instead of reusing this previous_response_id.",
+    );
+  }
+
   await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx });
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -1238,7 +1260,7 @@ export async function handleResponses(
     selectedForwardHeaders = finalAuth.headers;
   }
 
-  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx);
+  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);

@@ -39,6 +39,14 @@ export function autoSwitchThresholdReadDisposition(
   return editing || saving ? "defer" : "apply";
 }
 
+/** Accept bare threshold numbers or a full /active payload. */
+export function extractAutoSwitchThresholdPayload(value: unknown): unknown {
+  if (value && typeof value === "object" && value !== null && "autoSwitchThreshold" in value) {
+    return (value as { autoSwitchThreshold: unknown }).autoSwitchThreshold;
+  }
+  return value;
+}
+
 export interface AutoSwitchTogglePlan {
   threshold: number;
   lastEnabled: number;

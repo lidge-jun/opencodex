@@ -134,15 +134,20 @@ function collectPrQualityFailures({
   authorPermission,
   permissionLookupFailed = false,
   ancestryLookupFailed = false,
+  /** True when baseRef is another open PR's head (stacked child). */
+  stackedBase = false,
 }) {
   const failures = [];
-  const wrongBase = !allowedBases.includes(baseRef);
+  const wrongBase = !allowedBases.includes(baseRef) && !stackedBase;
   if (wrongBase) {
     failures.push({ code: "wrong_base" });
   } else {
     // Permission lookup fails closed (still evaluate ancestry). Compare API
     // failures skip ancestry — zeros would falsely pass the #644 heuristic.
+    // Stacked children skip ancestry against the integration base; their parent
+    // PR is the temporary target.
     const skipAncestry =
+      stackedBase ||
       ancestryLookupFailed ||
       (!permissionLookupFailed && authorHasPushPermission(authorPermission));
     if (

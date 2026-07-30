@@ -99,6 +99,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     localStorage: { configurable: true, value: testWindow.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+  testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
   const provider = "fallback-provider";
   const ids = ["claude-opus", "claude-sonnet", "gemini-pro", "gemini-flash", "gpt-oss"];
   let selected = ["gemini-pro", "gemini-flash"];
@@ -507,6 +508,7 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
     localStorage: { configurable: true, value: testWindow.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+  testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
 
   const provider = "gen-provider";
   const staleIds = ["stale-a", "stale-b"];

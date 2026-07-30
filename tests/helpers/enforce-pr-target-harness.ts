@@ -89,6 +89,14 @@ export type RunOptions = {
   failPermissionLookup?: boolean;
   /** Overrides for `compareCommitsWithBasehead` keyed by `basehead`. */
   compareByBasehead?: Record<string, { ahead_by: number; behind_by: number }>;
+  /**
+   * Open PRs returned by `pulls.list` (page 1). Used for stacked-base detection
+   * when this PR's base is another PR's head ref. Prefer `openPullPages` when
+   * the test needs pagination beyond the first page.
+   */
+  openPulls?: unknown[];
+  /** Page-keyed open PR fixtures for `pulls.list` (1-based via array index). */
+  openPullPages?: unknown[][];
 };
 
 /**
@@ -121,8 +129,18 @@ const DEFAULT_PR = {
   merged: false,
   locked: false,
   html_url: "https://github.com/lidge-jun/opencodex/pull/42",
-  base: { ref: "dev", sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", label: "lidge-jun:dev" },
-  head: { ref: "feature", sha: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b", label: "contributor:feature" },
+  base: {
+    ref: "dev",
+    sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    label: "lidge-jun:dev",
+    repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+  },
+  head: {
+    ref: "feature",
+    sha: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
+    label: "contributor:feature",
+    repo: { name: "opencodex", owner: { login: "contributor" } },
+  },
   user: { login: "contributor", id: 67890, type: "User" },
   labels: [] as unknown[],
 };
@@ -408,7 +426,30 @@ export async function runEnforcePrTarget(
   const pr = {
     ...DEFAULT_PR,
     ...options.pr,
-    base: { ...DEFAULT_PR.base, ...(options.pr.base ?? {}) },
+    base: {
+      ...DEFAULT_PR.base,
+      ...(options.pr.base ?? {}),
+      repo: {
+        ...DEFAULT_PR.base.repo,
+        ...((options.pr.base as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.base.repo.owner,
+          ...((options.pr.base as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
+    head: {
+      ...DEFAULT_PR.head,
+      ...(options.pr.head ?? {}),
+      repo: {
+        ...DEFAULT_PR.head.repo,
+        ...((options.pr.head as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.head.repo.owner,
+          ...((options.pr.head as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
     user: { ...DEFAULT_PR.user, ...(options.pr.user ?? {}) },
   };
   // Deep-independent from `pr`, so nothing the script does to one can reach the
@@ -418,10 +459,37 @@ export async function runEnforcePrTarget(
   const eventPr = {
     ...DEFAULT_PR,
     ...source,
-    base: { ...DEFAULT_PR.base, ...(source.base ?? {}) },
+    base: {
+      ...DEFAULT_PR.base,
+      ...(source.base ?? {}),
+      repo: {
+        ...DEFAULT_PR.base.repo,
+        ...((source.base as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.base.repo.owner,
+          ...((source.base as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
+    head: {
+      ...DEFAULT_PR.head,
+      ...(source.head ?? {}),
+      repo: {
+        ...DEFAULT_PR.head.repo,
+        ...((source.head as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.head.repo.owner,
+          ...((source.head as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
     user: { ...DEFAULT_PR.user, ...(source.user ?? {}) },
   };
   const pages: Comment[][] = options.commentPages ?? [options.comments ?? []];
+  const openPullPages: unknown[][] =
+    options.openPullPages ??
+    (options.openPulls && options.openPulls.length > 0 ? [options.openPulls] : []);
+  const paginatePageCount = Math.max(pages.length, openPullPages.length, 1);
 
   /**
    * Record the call, then either reject or return a plausible payload. Every
@@ -490,6 +558,11 @@ export async function runEnforcePrTarget(
     pulls: {
       get: (args: unknown) => respond("pulls.get", args, pr),
       update: (args: unknown) => respond("pulls.update", args, { ...pr }),
+      // Page-specific open-PR fixtures; missing pages are empty so paginate ends.
+      list: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond("pulls.list", args, openPullPages[page - 1] ?? []);
+      },
     },
     issues: {
       // Honours `page`, so a caller that skips `paginate` sees only page one —
@@ -533,12 +606,13 @@ export async function runEnforcePrTarget(
       respond("request", { route, params });
     /**
      * `github.paginate(fn, params)` — walk every page and concatenate, the way
-     * Octokit does. A one-page fake would make dropping pagination invisible.
+     * Octokit does. Page count covers both comment and open-PR fixtures so a
+     * stacked parent on page two is still visible.
      */
     paginate = Object.assign(
       async (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => {
         const collected: unknown[] = [];
-        for (let page = 1; page <= pages.length; page += 1) {
+        for (let page = 1; page <= paginatePageCount; page += 1) {
           const response = await fn({ ...(params as object), page });
           collected.push(...response.data);
         }
@@ -553,7 +627,7 @@ export async function runEnforcePrTarget(
          */
         iterator: (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => ({
           async *[Symbol.asyncIterator]() {
-            for (let page = 1; page <= pages.length; page += 1) {
+            for (let page = 1; page <= paginatePageCount; page += 1) {
               yield await fn({ ...(params as object), page });
             }
           },

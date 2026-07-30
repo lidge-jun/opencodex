@@ -27,10 +27,12 @@ function authSourceLabel(source: string | undefined, t: TFn): string {
 export function ClaudeCodeSettingsCard({
   state,
   autoCompactOptions,
+  availableModels,
   onStateChange,
 }: {
   state: ClaudeCodeState;
   autoCompactOptions: { value: string; label: string }[];
+  availableModels: string[];
   onStateChange: (next: ClaudeCodeState) => void;
 }) {
   const t = useT();
@@ -50,37 +52,38 @@ export function ClaudeCodeSettingsCard({
           <span className="title">{t("claude.authMode")}</span>
           <span className="desc">{t("claude.authModeHint")}</span>
         </div>
-        <Select
-          value={state.authMode}
-          options={[
-            { value: "auto", label: t("claude.authModeAuto") },
-            { value: "subscription", label: t("claude.authModeSubscription") },
-            { value: "proxy", label: t("claude.authModeProxy") },
-          ]}
-          onChange={v => onStateChange({ ...state, authMode: v as ClaudeCodeState["authMode"] })}
-          label={t("claude.authMode")}
-          style={{ minWidth: 220 }}
-          portal
-        />
+        <div className="setting-controls">
+          <Select
+            value={state.authMode}
+            options={[
+              { value: "auto", label: t("claude.authModeAuto") },
+              { value: "subscription", label: t("claude.authModeSubscription") },
+              { value: "proxy", label: t("claude.authModeProxy") },
+            ]}
+            onChange={v => onStateChange({ ...state, authMode: v as ClaudeCodeState["authMode"] })}
+            label={t("claude.authMode")}
+            style={{ minWidth: 220 }}
+            align="right"
+            portal
+          />
+        </div>
       </div>
 
       {state.authModeOrigin && (
-        <div className="setting-row">
-          <div className="setting-label">
-            <span className="title">{t("claude.effectiveMode.label")}</span>
-            <span className={`desc${state.authModeOrigin === "auto-unknown" ? " warn" : ""}`}>
-              {state.authModeOrigin === "manual"
-                ? t("claude.effectiveMode.manual", {
-                  mode: state.markerMode === "proxy" ? t("claude.authModeProxy") : t("claude.authModeSubscription"),
-                })
-                : state.authModeOrigin === "auto-present"
-                  ? t("claude.effectiveMode.autoPresent", { source: authSourceLabel(state.authFoundBy, t) })
-                  : state.authModeOrigin === "auto-absent"
-                    ? t("claude.effectiveMode.autoAbsent")
-                    : t("claude.effectiveMode.autoUnknown")}
-              {state.admissionKeyActive === true ? ` ${t("claude.effectiveMode.admissionKey")}` : ""}
-            </span>
-          </div>
+        <div className={`claude-effective-auth${state.authModeOrigin === "auto-unknown" ? " warn" : ""}`} role="status">
+          <span className="claude-effective-auth-label">{t("claude.effectiveMode.label")}</span>
+          <span>
+            {state.authModeOrigin === "manual"
+              ? t("claude.effectiveMode.manual", {
+                mode: state.markerMode === "proxy" ? t("claude.authModeProxy") : t("claude.authModeSubscription"),
+              })
+              : state.authModeOrigin === "auto-present"
+                ? t("claude.effectiveMode.autoPresent", { source: authSourceLabel(state.authFoundBy, t) })
+                : state.authModeOrigin === "auto-absent"
+                  ? t("claude.effectiveMode.autoAbsent")
+                  : t("claude.effectiveMode.autoUnknown")}
+            {state.admissionKeyActive === true ? ` ${t("claude.effectiveMode.admissionKey")}` : ""}
+          </span>
         </div>
       )}
 
@@ -95,20 +98,21 @@ export function ClaudeCodeSettingsCard({
           <span className="title">{t("claude.fastMode")}</span>
           <span className="desc">{t("claude.fastModeDesc")}</span>
         </div>
-        <select
-          value={state.fastMode === null ? "auto" : state.fastMode ? "on" : "off"}
-          onChange={e => {
-            const v = e.target.value;
-            onStateChange({ ...state, fastMode: v === "auto" ? null : v === "on" });
-          }}
-          className="text-label font-medium"
-          aria-label={t("claude.fastMode")}
-          style={{ padding: "5px 10px", borderRadius: "var(--radius-xs)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
-        >
-          <option value="auto">{t("claude.fastAuto")}</option>
-          <option value="on">{t("claude.fastOn")}</option>
-          <option value="off">{t("claude.fastOff")}</option>
-        </select>
+        <div className="setting-controls">
+          <Select
+            value={state.fastMode === null ? "auto" : state.fastMode ? "on" : "off"}
+            options={[
+              { value: "auto", label: t("claude.fastAuto") },
+              { value: "on", label: t("claude.fastOn") },
+              { value: "off", label: t("claude.fastOff") },
+            ]}
+            onChange={v => onStateChange({ ...state, fastMode: v === "auto" ? null : v === "on" })}
+            label={t("claude.fastMode")}
+            style={{ minWidth: 140 }}
+            align="right"
+            portal
+          />
+        </div>
       </div>
 
       <div className="setting-row">
@@ -127,14 +131,17 @@ export function ClaudeCodeSettingsCard({
             <span className="desc">{t("claude.autoCompactWindowDesc")}</span>
             {state.autoCompactWindow !== null && <span className="desc" style={{ color: "var(--red)" }}>{t("claude.autoCompactWindowWarn")}</span>}
           </div>
-          <Select
-            value={state.autoCompactWindow === null ? "" : String(state.autoCompactWindow)}
-            options={autoCompactOptions}
-            onChange={v => onStateChange({ ...state, autoCompactWindow: v === "" ? null : Number(v) })}
-            label={t("claude.autoCompactWindow")}
-            style={{ minWidth: 130 }}
-            portal
-          />
+          <div className="setting-controls">
+            <Select
+              value={state.autoCompactWindow === null ? "" : String(state.autoCompactWindow)}
+              options={autoCompactOptions}
+              onChange={v => onStateChange({ ...state, autoCompactWindow: v === "" ? null : Number(v) })}
+              label={t("claude.autoCompactWindow")}
+              style={{ minWidth: 130 }}
+              align="right"
+              portal
+            />
+          </div>
         </div>
       )}
 
@@ -150,6 +157,7 @@ export function ClaudeCodeSettingsCard({
         const override = state[key];
         const titleKey = key === "webSearchSidecar" ? "claude.webSearchSidecar" : "claude.visionSidecar";
         const hintKey = key === "webSearchSidecar" ? "claude.webSearchSidecarHint" : "claude.visionSidecarHint";
+        const listId = `claude-sidecar-models-${key}`;
         return (
           <div className="setting-row" key={key} style={{ alignItems: "flex-start" }}>
             <div className="setting-label setting-copy" style={{ flex: 1 }}>
@@ -187,9 +195,18 @@ export function ClaudeCodeSettingsCard({
                 }}
                 placeholder={t("claude.sidecarModelPlaceholder")}
                 disabled={!override}
+                list={override ? listId : undefined}
                 aria-label={t("dash.sidecarModel")}
                 style={{ minWidth: 210 }}
+                autoComplete="off"
               />
+              {override && (
+                <datalist id={listId}>
+                  {availableModels.map(m => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              )}
             </div>
           </div>
         );
@@ -216,11 +233,9 @@ export function ClaudeCodeQuickstartSection({ manualEnv }: { manualEnv: string }
 export function ClaudeCodeModelMapSection({
   rows,
   onRowsChange,
-  onSave,
 }: {
   rows: MapRow[];
   onRowsChange: (rows: MapRow[]) => void;
-  onSave: () => void;
 }) {
   const t = useT();
   return (
@@ -259,10 +274,6 @@ export function ClaudeCodeModelMapSection({
           <IconPlus /> {t("claude.addMapping")}
         </button>
       </div>
-
-      <div style={{ marginTop: 14 }}>
-        <button type="button" className="btn btn-primary" onClick={onSave}>{t("common.save")}</button>
-      </div>
     </>
   );
 }
@@ -287,28 +298,33 @@ function groupAliasesByProvider(aliases: AliasRow[]): Array<[string, AliasRow[]]
 export function ClaudeCodeAliasesSection({ aliases }: { aliases: AliasRow[] }) {
   const t = useT();
   return (
-    <>
+    <div className="claude-aliases">
       <div className="h-section">{t("claude.aliases")} <span className="count">{aliases.length}</span></div>
-      <p className="muted text-label" style={{ margin: "0 0 8px" }}>{t("claude.aliasesHint")}</p>
+      <p className="muted text-label claude-aliases-hint">{t("claude.aliasesHint")}</p>
       {aliases.length === 0 ? (
         <div className="muted text-label">{t("claude.none")}</div>
       ) : (
-        <div className="stack" style={{ gap: 6, maxHeight: 320, overflowY: "auto" }}>
+        <div className="claude-aliases-scroll">
           {groupAliasesByProvider(aliases).map(([provider, aliasRows]) => (
-            <div key={provider}>
-              <div className="muted text-caption font-semibold" style={{ textTransform: "uppercase", letterSpacing: "var(--tracking-wide)", margin: "6px 2px 4px" }}>{provider === ALIAS_PROVIDER_OTHER ? t("claude.aliasProviderOther") : provider} · {aliasRows.length}</div>
-              <div className="stack" style={{ gap: 4 }}>
+            <div key={provider} className="claude-aliases-group">
+              <div className="claude-aliases-group-label">
+                {provider === ALIAS_PROVIDER_OTHER ? t("claude.aliasProviderOther") : provider}
+                <span className="claude-aliases-group-count">{aliasRows.length}</span>
+              </div>
+              <div className="claude-aliases-chips">
                 {aliasRows.map(a => (
-                  <div key={a.id} className="card row" style={{ padding: "6px 12px", gap: 10 }}>
-                    <code className="mono text-label" style={{ flex: 1 }}>{a.id}</code>
-                    <span className="muted text-label">{a.display_name}</span>
-                  </div>
+                  <span key={a.id} className="claude-aliases-chip">
+                    <code className="claude-aliases-chip-id">{a.id}</code>
+                    {a.display_name ? (
+                      <span className="claude-aliases-chip-name">{a.display_name}</span>
+                    ) : null}
+                  </span>
                 ))}
               </div>
             </div>
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }

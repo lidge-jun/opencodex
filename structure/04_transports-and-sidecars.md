@@ -64,8 +64,11 @@ lockstep with any `core.ts` passthrough change.
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an
 account-qualified native selector, the server resolves the public namespace, uses only the mapped
 stored Codex credential, and sends the bare native model upstream. That exact path is fail-closed:
-it does not consult or mutate Pool selection and its outcomes cannot rotate accounts. Ordinary
-search requests keep the normal Direct/Pool sidecar behavior.
+it does not consult Pool active state or affinity when selecting, and its outcomes cannot rotate
+the active Pool account. An account-wide credential failure still quarantines that credential and
+clears stale ordinary Pool affinities so they cannot reappear after reauthentication. Quota and
+transient outcomes from an exact request leave Pool affinities untouched. Ordinary search requests
+keep the normal Direct/Pool sidecar behavior.
 
 Standalone Images and Live requests currently carry neither the account-qualified model selector
 nor a trustworthy thread correlation from the Codex client. They therefore retain normal provider

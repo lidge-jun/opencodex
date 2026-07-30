@@ -28,6 +28,8 @@
 .dashboard-workspace-main .tbl-wrap {
   max-height: 520px;
   overflow-y: auto;
+  /* Side/bottom inset only — top padding on a sticky scrollport leaks rows above thead. */
+  padding: 0 var(--space-2) var(--space-2);
 }
 
 .dashboard-workspace-main .tbl thead th {

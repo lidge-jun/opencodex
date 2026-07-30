@@ -281,6 +281,39 @@ jobs:
             let ancestryLookupFailed = false;
             const baseAllowed = ALLOWED_BASES.includes(pr.base.ref);
 
+            // Stacked PR exception: base is another open PR's head branch (same
+            // head repo as this PR's base repo). Closed/missing parent stays wrong_base.
+            let stackedBase = false;
+            if (!baseAllowed) {
+              try {
+                const openPrs = await github.paginate(github.rest.pulls.list, {
+                  owner,
+                  repo,
+                  state: "open",
+                  per_page: 100
+                });
+                const baseOwner =
+                  pr.base.repo?.owner?.login ?? owner;
+                const baseName = pr.base.repo?.name ?? repo;
+                stackedBase = openPrs.some(
+                  other =>
+                    other.number !== pull_number &&
+                    other.head?.ref === pr.base.ref &&
+                    (other.head?.repo?.owner?.login ?? owner) === baseOwner &&
+                    (other.head?.repo?.name ?? repo) === baseName
+                );
+                if (stackedBase) {
+                  core.info(
+                    `Base ${pr.base.ref} matches an open PR head; treating as stacked (skip wrong_base).`
+                  );
+                }
+              } catch (error) {
+                core.warning(
+                  `Could not list open PRs for stacked-base check: ${error.message}`
+                );
+              }
+            }
+
             if (baseAllowed) {
               const headSha = pr.head.sha;
               try {
@@ -317,7 +350,8 @@ jobs:
               aheadMain,
               authorPermission,
               permissionLookupFailed,
-              ancestryLookupFailed
+              ancestryLookupFailed,
+              stackedBase
             });
 
             if (failures.length > 0) {

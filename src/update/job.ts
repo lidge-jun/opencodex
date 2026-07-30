@@ -26,7 +26,7 @@ const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/lates
 const UPDATE_JOB_FILENAME = "update-job.json";
 const UPDATE_TIMEOUT_MS = 180_000;
 const RESTART_TIMEOUT_MS = 60_000;
-const RESTART_HEALTH_TIMEOUT_MS = 15_000;
+const RESTART_HEALTH_TIMEOUT_MS = 30_000;
 const RESTART_STABILITY_WINDOW_MS = 15_000;
 /** Legacy active records did not persist a worker PID, so age is their only safe recovery signal. */
 export const UPDATE_JOB_LEGACY_STALE_MS = 10 * 60_000;
@@ -533,7 +533,10 @@ async function awaitRestartedProxyHealthy(
   const hostname = captured.hostname;
   const startDeadline = now() + RESTART_HEALTH_TIMEOUT_MS;
 
-  while (now() < startDeadline) {
+  while (true) {
+    // Always make one identity-aware probe at or after the boundary. A replacement
+    // becoming healthy on the final tick must not be mistaken for a timeout.
+    const finalProbe = now() >= startDeadline;
     if (await probe(port, hostname)) {
       updateJob(job, {}, `Proxy reported healthy on ${hostname}:${port}; confirming it stays up...`);
       const stableUntil = now() + RESTART_STABILITY_WINDOW_MS;
@@ -547,7 +550,8 @@ async function awaitRestartedProxyHealthy(
       updateJob(job, {}, `Proxy stayed healthy for ${Math.trunc(RESTART_STABILITY_WINDOW_MS / 1000)}s after restart.`);
       return { ok: true };
     }
-    await sleep(250);
+    if (finalProbe) break;
+    await sleep(Math.min(250, Math.max(0, startDeadline - now())));
   }
 
   return { ok: false, reason: "timeout" };
@@ -570,7 +574,7 @@ async function confirmRestartedProxy(
   - 검토한 주요 대안: (1) 포트 점유만 확인 — 외부 프로세스/죽기 직전 프로세스를 성공으로 오인할 수 있다. (2) 무기한 /healthz 폴링 — UX가 느려지고 worker 종료 시점이 불명확하다. (3) 짧은 healthy 등장 + 안정성 창 확인 — 실제 복귀를 확인하면서도 대기 시간을 제한할 수 있다.
   - 선택한 방식: identity-aware /healthz probe가 일정 시간 안에 나타나고, 추가 안정성 창 동안 유지되는지 확인한다.
   - 다른 대안 대신 이 방식을 선택한 이유: GUI는 "업데이트가 설치됐지만 재시작은 실패"를 분리해 알려줘야 하며, 이 방식이 가장 적은 오탐으로 그 경계를 만든다.
-  - 장점, 단점 및 영향: 장점은 silent restart failure가 update-job 상태로 드러난다는 점이다. 단점은 성공 판정이 최대 30초 늦어질 수 있다는 점이며, 대신 실제 복귀를 더 정확히 반영한다.
+  - 장점, 단점 및 영향: 장점은 silent restart failure가 update-job 상태로 드러난다는 점이다. 단점은 설정상 성공 판정 창이 30초 도착 + 15초 안정성으로 늘어나고 경계 probe 지연이 추가될 수 있다는 점이며, 대신 실제 복귀를 더 정확히 반영한다.
   */
   const result = await awaitRestartedProxyHealthy(job, captured, io);
   if (result.ok) return true;

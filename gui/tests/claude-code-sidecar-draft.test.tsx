@@ -65,6 +65,7 @@ async function mountSettings(
         <ClaudeCodeSettingsCard
           state={state}
           autoCompactOptions={[{ value: "", label: "Default" }]}
+          availableModels={state.available ?? []}
           onStateChange={setState}
         />
       </LanguageProvider>

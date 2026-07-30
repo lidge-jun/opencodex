@@ -39,8 +39,10 @@ test("main and added account cards expose the same persisted pause control", asy
   expect(pool).toContain("controller.setAccountPaused(account.id, paused)");
   expect(mainCard).toContain("onTogglePause(mainSwitchEntry)");
   expect(addedCards).toContain("onTogglePause(a)");
-  expect(mainCard).toContain('t(main.paused ? "codexAuth.resume" : "codexAuth.pause")');
-  expect(addedCards).toContain('t(a.paused ? "codexAuth.resume" : "codexAuth.pause")');
+  expect(mainCard).toContain("<CodexPauseToggleLabel");
+  expect(addedCards).toContain("<CodexPauseToggleLabel");
+  expect(mainCard).toContain('saving={pauseUpdatingId === "__main__"}');
+  expect(addedCards).toContain("saving={pauseUpdatingId === a.id}");
 });
 
 test("the pool header exposes one bulk action backed by the atomic endpoint", async () => {

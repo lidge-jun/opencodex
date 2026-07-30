@@ -242,4 +242,39 @@ describe("collectPrQualityFailures", () => {
     });
     assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
   });
+
+  it("skips wrong_base when stackedBase is set", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "feature/parent",
+      allowedBases: allowed,
+      body: [
+        "## Summary",
+        "This change updates the Windows tray launcher so it resolves CODEX_HOME through the shared helper instead of a hardcoded path.",
+        "",
+        "## Test plan",
+        "- Launch the tray app after setting CODEX_HOME",
+        "- Confirm the listener and launcher use the same workspace root",
+      ].join("\n"),
+      behindMain: 0,
+      behindBase: 44,
+      aheadMain: 1,
+      authorPermission: "read",
+      stackedBase: true,
+    });
+    assert.ok(!failures.some((f) => f.code === "wrong_base"));
+    assert.ok(!failures.some((f) => f.code === "wrong_ancestry"));
+  });
+
+  it("still flags wrong_base for non-allow-list bases without stackedBase", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "main",
+      allowedBases: allowed,
+      body: "fix stuff",
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+      stackedBase: false,
+    });
+    assert.ok(failures.some((f) => f.code === "wrong_base"));
+  });
 });

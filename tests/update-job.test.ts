@@ -371,6 +371,84 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("stayed healthy for 15s after restart"))).toBe(true);
   });
 
+  test("restart confirmation makes a final health probe at the arrival deadline", async () => {
+    let now = 0;
+    const job: UpdateJobState = {
+      id: "restart-health-deadline",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+
+    const ok = await confirmRestartAfterUpdateForTests(
+      job,
+      { port: 10100, hostname: "127.0.0.1" },
+      {
+        probeProxy: async () => now >= 30_000,
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(now).toBe(45_000);
+  });
+
+  test("npm finish accepts a replacement that becomes healthy after the old cutoff", async () => {
+    let now = 0;
+    let restartCalls = 0;
+    const job: UpdateJobState = {
+      id: "npm-late-self-restart",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      releaseNotesUrl: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+
+    const ok = await finishGuiUpdateRestart(
+      job,
+      { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
+      "npm",
+      {
+        serviceInstalledFn: () => true,
+        probeProxy: async () => now >= 15_250,
+        probeProxyIdentity: async () => (
+          now >= 15_250 ? { pid: 222, version: "2.7.43" } : null
+        ),
+        now: () => now,
+        sleepMs: async (ms) => { now += ms; },
+        restartAfterUpdateFn: async () => { restartCalls += 1; },
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(restartCalls).toBe(0);
+    expect(now).toBe(30_250);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("stayed healthy for 15s after restart"),
+    )).toBe(true);
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("skipping redundant restart") && line.includes("pid changed"),
+    )).toBe(true);
+  });
+
   test("npm finish skips redundant restart when service self-update left a replaced healthy proxy", async () => {
     let now = 0;
     let restartCalls = 0;

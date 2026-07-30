@@ -48,6 +48,27 @@ export function buildClaudeEnv(
   // leaving the child with no token at all (audit R2-1). It is opencodex state, never
   // user auth, so dropping it unconditionally is safe.
   if (env.ANTHROPIC_AUTH_TOKEN === PROXY_MARKER) delete env.ANTHROPIC_AUTH_TOKEN;
+  // Step 1b — drop Anthropic credentials that the bundled Bun runtime synthesized from a
+  // project `.env`/`.env.local` (issue #701). Claude Code disables claude.ai connectors the
+  // moment either token slot is populated, so an ambient project file silently moved a
+  // subscriber onto API billing while their OAuth login stayed healthy. The npm launcher
+  // runs under Node, which does NOT auto-load dotenv, so it records the slots that existed
+  // before Bun started; anything populated now but absent then came from the working
+  // directory, not from the user. A genuine shell export is still honored, which keeps
+  // auto-mode API-key auth working. An ABSENT marker means provenance is unknowable
+  // (a direct `bun src/cli/index.ts` run, a test, or an older launcher), and then we
+  // change nothing rather than guess — an EMPTY marker is different: the launcher ran
+  // and saw no pre-existing slots.
+  const preBunSlots = base.OCX_PRE_BUN_ANTHROPIC_ENV;
+  if (preBunSlots !== undefined) {
+    const exported = new Set(preBunSlots.split(",").filter(name => name.length > 0));
+    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] as const) {
+      const value = env[name];
+      if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
+    }
+  }
+  // Never forward the seam itself to Claude Code.
+  delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
   const setDefault = (name: string, value: string | undefined) => {
     if (value === undefined || value.length === 0) return;
     if (env[name] !== undefined && env[name] !== "") return; // user wins
@@ -76,15 +97,19 @@ export function buildClaudeEnv(
   if ((config.apiKeys?.length ?? 0) > 0) {
     setDefault("ANTHROPIC_AUTH_TOKEN", config.apiKeys![0].key);
   }
-  // Detection reads the SAME base env this launch will use, so the resolver and the
-  // spawned process cannot disagree. Injected deps are spread FIRST and `env` bound
-  // LAST, and the injection type excludes `env`, so a test fake cannot break that.
-  // `ownTokens` is bound last for the same reason: it is config-derived, and a fake
-  // that replaced it could make our own admission key look like user auth.
+  // Detection reads the SANITIZED launch env — the exact object spawned below — so the
+  // resolver and the spawned process cannot disagree. It deliberately does NOT read the
+  // raw base: the provenance strip above already removed dotenv-only credentials, and
+  // letting a value the child never receives decide the marker left an auto-mode user
+  // with neither the credential NOR the proxy marker (#701 audit round 2). Injected deps
+  // are spread FIRST and `env` bound LAST, and the injection type excludes `env`, so a
+  // test fake cannot break that. `ownTokens` is bound last for the same reason: it is
+  // config-derived, and a fake that replaced it could make our own admission key look
+  // like user auth.
   const resolved = resolveClaudeAuthMode(config, detectClaudeAuth({
-    ...defaultAuthDetectDeps(base as NodeJS.ProcessEnv),
+    ...defaultAuthDetectDeps(env as NodeJS.ProcessEnv),
     ...(deps.authDetect ?? {}),
-    env: () => base as NodeJS.ProcessEnv,
+    env: () => env as NodeJS.ProcessEnv,
     ownTokens: ownAdmissionTokens(config),
   }));
   if (!env.ANTHROPIC_AUTH_TOKEN && resolved.markerMode === "proxy") {

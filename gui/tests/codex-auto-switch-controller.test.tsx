@@ -216,6 +216,100 @@ async function mountHarness(): Promise<Harness> {
 }
 
 describe("Codex auto-switch controller interactions", () => {
+  test("blocks writes while /active is still pending", async () => {
+    const active = deferred<Response>();
+    const activeResponses: Array<Promise<Response> | Response> = [active.promise];
+    const putResponses: Array<Promise<Response> | Response> = [];
+    const writes: number[] = [];
+    let refreshCallback: (() => void) | null = null;
+
+    Object.defineProperty(testWindow, "setInterval", {
+      configurable: true,
+      value: (callback: () => void, delay?: number) => {
+        if (delay === 30_000) refreshCallback = callback;
+        return 1;
+      },
+    });
+    Object.defineProperty(testWindow, "clearInterval", {
+      configurable: true,
+      value: () => {},
+    });
+
+    const fetchRouter = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      if (url.endsWith("/api/codex-auth/accounts") && method === "GET") {
+        return Response.json({ accounts: [] });
+      }
+      if (url.endsWith("/api/codex-auth/active") && method === "GET") {
+        const response = activeResponses.shift();
+        if (response) return await response;
+        return Response.json({
+          activeCodexAccountId: null,
+          autoSwitchThreshold: 55,
+          accountPoolStrategy: "quota",
+          accountPoolStickyLimit: 1,
+        });
+      }
+      if (url.endsWith("/api/codex-auth/pool-strategy") && (method === "PUT" || method === "PATCH")) {
+        return Response.json({
+          ok: true,
+          accountPoolStrategy: "quota",
+          accountPoolStickyLimit: 1,
+        });
+      }
+      if (url.endsWith("/api/codex-auth/auto-switch") && method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as { threshold: number };
+        writes.push(body.threshold);
+        const response = putResponses.shift();
+        if (!response) throw new Error("unexpected auto-switch write");
+        return await response;
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`);
+    };
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: fetchRouter });
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container);
+    mountedRoot = root;
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <CodexAccountPool apiBase="http://localhost" />
+        </LanguageProvider>,
+      );
+      await flush();
+    });
+
+    const toggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.disabled).toBe(true);
+
+    await act(async () => {
+      toggle?.click();
+      await flush();
+    });
+    expect(writes).toEqual([]);
+
+    await act(async () => {
+      active.resolve(Response.json({
+        activeCodexAccountId: null,
+        autoSwitchThreshold: 55,
+        accountPoolStrategy: "quota",
+        accountPoolStickyLimit: 1,
+      }));
+      await flush();
+    });
+
+    const readyToggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
+    expect(readyToggle?.disabled).toBe(false);
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Switch threshold, percent"]')?.value).toBe("55");
+    expect(writes).toEqual([]);
+    expect(refreshCallback).not.toBeNull();
+  });
+
   test("Enter then blur issues exactly one write", async () => {
     const harness = await mountHarness();
     const write = deferred<Response>();
@@ -235,7 +329,7 @@ describe("Codex auto-switch controller interactions", () => {
       await flush();
     });
     expect(harness.input.value).toBe("95");
-    expect(harness.container.querySelector('[role="status"]')?.textContent).toContain("updated");
+    expect(harness.container.querySelector("#codex-auto-switch-feedback")?.textContent).toContain("updated");
     expect(harness.writes).toEqual([95]);
   });
 
@@ -298,7 +392,7 @@ describe("Codex auto-switch controller interactions", () => {
 
     expect(harness.input.value).toBe("80");
     expect(harness.writes).toEqual([]);
-    expect(harness.container.querySelector('[role="status"]')).toBeNull();
+    expect(harness.container.querySelector("#codex-auto-switch-feedback")).toBeNull();
   });
 
   test("pointer toggle disables a dirty valid draft before blur can commit it", async () => {

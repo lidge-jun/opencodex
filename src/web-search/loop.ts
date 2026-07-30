@@ -103,23 +103,63 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
  * replaying a bare toolCall 400s ("Expected `thinking` or `redacted_thinking`, but found
  * `tool_use`"). The signature validity gate stays in the anthropic adapter; other adapters
  * ignore or serialize the part harmlessly.
+ *
+ * Each signed block keeps its OWN signature and text, mirroring src/images/loop.ts: a signature
+ * authenticates the exact block it closed, so flattening two blocks under the last signature
+ * 400s on replay just as it does there.
+ *
+ * Raw reasoning (`reasoning_raw_delta`, what OpenAI-compatible providers emit instead of signed
+ * thinking) accumulates into a SEPARATE UNSIGNED part. It must never join a signed block: the
+ * anthropic serializer skips signature-less parts, while openai-chat serializes their text as
+ * `reasoning_content` — which DeepSeek V4 thinking mode requires back alongside the replayed
+ * tool_calls, and whose absence ended the turn as a provider 400 (issue #688).
+ *
+ * This assumes raw reasoning never interleaves INSIDE an unfinished signed block: Anthropic-family
+ * adapters emit thinking_delta/signature and OpenAI-compatible ones emit reasoning_raw_delta, and
+ * the two never share a stream. Honoring a genuinely mixed stream would need per-segment state,
+ * not another accumulator.
  */
-function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent | null {
+function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] {
+  const parts: OcxThinkingContent[] = [];
   let thinking = "";
   let signature: string | undefined;
-  const redacted: string[] = [];
-  for (const e of events) {
-    if (e.type === "thinking_delta") thinking += e.thinking;
-    else if (e.type === "thinking_signature") signature = e.signature;
-    else if (e.type === "redacted_thinking") redacted.push(e.data);
-  }
-  if (!thinking && !signature && redacted.length === 0) return null;
-  return {
-    type: "thinking",
-    thinking,
-    ...(signature ? { signature } : {}),
-    ...(redacted.length > 0 ? { redacted } : {}),
+  let rawReasoning = "";
+
+  const flushVisible = () => {
+    if (!thinking && !signature) return;
+    parts.push({
+      type: "thinking",
+      thinking,
+      ...(signature ? { signature } : {}),
+    });
+    thinking = "";
+    signature = undefined;
   };
+  const flushRaw = () => {
+    if (!rawReasoning) return;
+    parts.push({ type: "thinking", thinking: rawReasoning });
+    rawReasoning = "";
+  };
+
+  for (const e of events) {
+    if (e.type === "thinking_delta") {
+      flushRaw();
+      thinking += e.thinking;
+    } else if (e.type === "reasoning_raw_delta") {
+      flushVisible();
+      rawReasoning += e.text;
+    } else if (e.type === "thinking_signature") {
+      signature = e.signature;
+      flushVisible();
+    } else if (e.type === "redacted_thinking") {
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: "", redacted: [e.data] });
+    }
+  }
+  flushVisible();
+  flushRaw();
+  return parts;
 }
 
 /** Normalize a query for failed-query de-duplication (case/whitespace-insensitive). */
@@ -406,7 +446,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // valid, and surface as ONE search cell carrying every attempted query. A real search (one that
   // hits the sidecar) shows the spinner WHILE the batch runs. Empty/limit/repeat placeholders never
   // emit a cell (matching the prior single-query behavior).
-  async function* runSearchCall(call: WebSearchCall, precedingThinking?: OcxThinkingContent | null): AsyncGenerator<AdapterEvent> {
+  async function* runSearchCall(call: WebSearchCall, precedingThinking: OcxThinkingContent[] = []): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
     if (call.queries.length === 0) {
@@ -465,8 +505,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     messages.push({
       role: "assistant",
       content: [
-        // Signed thinking must precede tool_use on replay (Anthropic extended thinking).
-        ...(precedingThinking ? [precedingThinking] : []),
+        // Signed thinking must precede tool_use on replay (Anthropic extended thinking), and
+        // unsigned raw reasoning has to ride along for providers that require it back (#688).
+        ...precedingThinking,
         { type: "toolCall" as const, id: call.id, name: WEB_SEARCH_TOOL_NAME, arguments: callArgs },
       ],
       timestamp: now,
@@ -559,7 +600,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
           const iterationThinking = extractIterationThinking(split.passthrough);
           for (const [callIndex, call] of split.calls.entries()) {
-            yield* runSearchCall(call, callIndex === 0 ? iterationThinking : null);
+            yield* runSearchCall(call, callIndex === 0 ? iterationThinking : []);
           }
         } catch (e) {
           yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };

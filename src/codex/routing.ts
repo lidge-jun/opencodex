@@ -171,7 +171,11 @@ export type CodexUpstreamOutcomeMeta = {
   modelId?: string;
   /** When set, clears affinity for this thread immediately on transient failure. */
   threadId?: string | null;
-  /** Suppress Pool selection and affinity mutations for an account-qualified request. */
+  /**
+   * Suppress Pool rotation and quota/transient affinity mutations for an account-qualified
+   * request. Credential failures still sweep stale affinities because reauthentication is
+   * account-wide.
+   */
   fixedAccount?: boolean;
   /**
    * Probe lease held by this request, when it was admitted through an active
@@ -1278,7 +1282,7 @@ export function recordCodexUpstreamOutcome(
     });
     quotaScopedHealth.delete(accountId);
     markAccountNeedsReauth(accountId);
-    if (!meta.fixedAccount) clearThreadAccountMapForAccount(accountId);
+    clearThreadAccountMapForAccount(accountId);
     return;
   }
 

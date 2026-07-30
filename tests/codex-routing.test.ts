@@ -150,6 +150,28 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread(quotaThread, quota)).toBe("a");
   });
 
+  test("exact-account credential failure clears stale Pool affinity without rotating active", () => {
+    const config = makeConfig({ activeCodexAccountId: "a" });
+    const threadId = "fixed-credential-thread";
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 401, {
+      fixedAccount: true,
+      threadId,
+      modelId: "gpt-5.6-sol",
+    });
+
+    expect(isAccountNeedsReauth("a")).toBe(true);
+    expect(config.activeCodexAccountId).toBe("a");
+
+    // Simulate successful reauthentication after the user manually selected B. The old ordinary
+    // Pool thread must not resurrect its pre-reauth A affinity.
+    config.activeCodexAccountId = "b";
+    clearAccountNeedsReauth("a");
+    clearCodexUpstreamHealthForAccount("a");
+    expect(resolveCodexAccountForThread(threadId, config)).toBe("b");
+  });
+
   test("go and free plans use only the 30d quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12 }, "go")).toBe(12);
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 13 }, "free")).toBe(13);

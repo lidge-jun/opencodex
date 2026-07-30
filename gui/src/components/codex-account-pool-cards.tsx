@@ -4,7 +4,7 @@ import { displayAccountId } from "../lib/privacy";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
-import { CodexTicketBadge } from "./codex-account-pool-helpers";
+import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -66,7 +66,11 @@ export function CodexAccountPoolCards({
             <strong>{a.alias ?? a.email}</strong>
             <span className="card-badges">
               {a.plan && <span className="badge badge-green">{a.plan}</span>}
-              {a.paused && <span className="badge badge-muted">{t("codexAuth.paused")}</span>}
+              {a.paused && (
+                <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
+                  {t("codexAuth.paused")}
+                </span>
+              )}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
                 <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
@@ -89,18 +93,24 @@ export function CodexAccountPoolCards({
               </button>
             )}
             {onCopyDoctor && oauthHealthShowsDoctor(healthStatus) && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopyDoctor(a.id)}>
+              <button type="button" className="btn btn-ghost btn-sm codex-auth-action-btn" onClick={() => onCopyDoctor(a.id)}>
                 <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopyOutcomeFor?.(a.id))}</span>
               </button>
             )}
             <button
               type="button"
-              className={`btn btn-sm ${a.paused ? "btn-primary" : "btn-ghost"}`}
+              className="btn btn-sm btn-ghost codex-auth-action-btn"
               onClick={() => onTogglePause(a)}
               disabled={pauseBusy}
+              title={a.paused ? t("codexAuth.pausedHint") : undefined}
+              aria-label={a.paused ? `${t("codexAuth.resume")}. ${t("codexAuth.pausedHint")}` : t("codexAuth.pause")}
             >
               {a.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
-              {pauseUpdatingId === a.id ? t("common.saving") : t(a.paused ? "codexAuth.resume" : "codexAuth.pause")}
+              <CodexPauseToggleLabel
+                t={t}
+                paused={a.paused}
+                saving={pauseUpdatingId === a.id}
+              />
             </button>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void onEditAlias(a)}>
               {t("prov.editAlias")}
@@ -119,13 +129,20 @@ export function CodexAccountPoolCards({
           {healthSummary && (
             <div className="card-sub faint">{healthSummary}</div>
           )}
-          {a.paused && <div className="card-sub faint">{t("codexAuth.pausedHint")}</div>}
           {inCooldown && (
             <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
           )}
           {showReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
-            : !inCooldown && <QuotaBars quota={a.quota} plan={a.plan} threshold={threshold} t={t} />}
+            : !inCooldown && (
+              <QuotaBars
+                quota={a.quota}
+                plan={a.plan}
+                threshold={threshold}
+                t={t}
+                pending={a.quota == null}
+              />
+            )}
         </div>
         );
       })}

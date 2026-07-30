@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Locale, TFn } from "../i18n/shared";
 import { useI18n } from "../i18n/shared";
 import { IconAlert } from "../icons";
@@ -133,7 +134,11 @@ export function barWidth(percent: number): number {
   return Math.max(4, Math.round(clamped));
 }
 
-export default function QuotaBars({ quota, plan, threshold, t, className, layout = "compact" }: {
+function barFillStyle(percent: number): CSSProperties {
+  return { ["--bar-scale" as string]: String(barWidth(percent) / 100) };
+}
+
+export default function QuotaBars({ quota, plan, threshold, t, className, layout = "compact", pending = false }: {
   quota: AccountQuota | null;
   plan?: string | null;
   threshold: number;
@@ -141,10 +146,57 @@ export default function QuotaBars({ quota, plan, threshold, t, className, layout
   className?: string;
   /** compact = classic one-line rows; stacked = overview cards with clear reset copy */
   layout?: "compact" | "stacked";
+  /**
+   * When quota is still null (soft /accounts before WHAM), reserve the compact
+   * bar slot so deferred fill does not shove the page down.
+   */
+  pending?: boolean;
 }) {
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
-  if (rows.length === 0) return null;
+  if (rows.length === 0) {
+    if (!pending) return null;
+    if (layout === "stacked") {
+      return (
+        <div className={`quota-stacked quota-stacked--pending${className ? ` ${className}` : ""}`} aria-busy="true" role="status">
+          {Array.from({ length: 2 }, (_, index) => (
+            <div key={index} className="quota-stacked-row quota-stacked-row--skeleton" aria-hidden="true">
+              <div className="quota-stacked-head">
+                <span className="quota-skel quota-skel--label" style={{ width: 72 }} />
+                <span className="quota-skel quota-skel--time" style={{ width: 64 }} />
+              </div>
+              <div className="quota-stacked-bar-row">
+                <span className="quota-skel quota-skel--bar" style={{ height: 6, flex: 1 }} />
+                <span className="quota-skel quota-skel--val" style={{ width: 36 }} />
+              </div>
+            </div>
+          ))}
+          <span className="sr-only">{t("common.loading")}</span>
+        </div>
+      );
+    }
+    // Always reserve two compact rows until real bars paint — plan-based 1-row
+    // skeletons shrink when Plus/Team quotas arrive with weekly+monthly.
+    return (
+      <div
+        className={`codex-account-quota-slot quota-compact quota-compact--pending${className ? ` ${className}` : ""}`}
+        aria-busy="true"
+        role="status"
+      >
+        {Array.from({ length: 2 }, (_, index) => (
+          <div key={index} className="quota-row quota-row--skeleton" aria-hidden="true">
+            <span className="quota-skel quota-skel--label" />
+            <span className="quota-skel quota-skel--reset" />
+            <span className="quota-skel quota-skel--day" />
+            <span className="quota-skel quota-skel--time" />
+            <span className="quota-skel quota-skel--bar" />
+            <span className="quota-skel quota-skel--val" />
+          </div>
+        ))}
+        <span className="sr-only">{t("common.loading")}</span>
+      </div>
+    );
+  }
   if (layout === "stacked") {
     return (
       <div className={`quota-stacked${className ? ` ${className}` : ""}`}>
@@ -155,7 +207,7 @@ export default function QuotaBars({ quota, plan, threshold, t, className, layout
     );
   }
   return (
-    <div className={`quota-compact${className ? ` ${className}` : ""}`}>
+    <div className={`codex-account-quota-slot quota-compact${className ? ` ${className}` : ""}`}>
       {rows.map(row => (
         <QuotaRow
           key={row.label}
@@ -189,7 +241,7 @@ function QuotaRow({ label, percent, resetAt, threshold, t, locale }: {
       <span className="quota-reset-label">{t("codexAuth.resets")}</span>
       <span className="quota-reset-day">{reset.day}</span>
       <span className="quota-reset-time">{reset.time}</span>
-      <div className="bar"><div className={`bar-fill ${color}`} style={{ width: `${barWidth(percent)}%` }} /></div>
+      <div className="bar"><div className={`bar-fill ${color}`} style={barFillStyle(percent)} /></div>
       <span
         className={`quota-val${warn ? " quota-val--warn" : ""}`}
         title={exhausted ? t("quota.limitReached") : undefined}
@@ -220,7 +272,7 @@ function StackedQuotaRow({ row, threshold, t, locale }: {
       </div>
       <div className="quota-stacked-bar-row">
         <div className="bar quota-stacked-bar">
-          <div className={`bar-fill ${color}`} style={{ width: `${barWidth(row.percent)}%` }} />
+          <div className={`bar-fill ${color}`} style={barFillStyle(row.percent)} />
         </div>
         <span className={`quota-stacked-used${warn ? " quota-stacked-used--warn" : ""}`}>
           {t("quota.usedPercent", { pct: Math.round(row.percent) })}

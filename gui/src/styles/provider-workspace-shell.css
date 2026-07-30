@@ -342,6 +342,7 @@
 
 .providers-workspace-rail-secondary {
   min-width: 0;
+  min-height: 1.15em;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -669,7 +670,7 @@
   font-size: 0.85rem;
   color: inherit;
   cursor: pointer;
-  min-height: 48px;
+  min-height: 62px;
   transition: border-color 0.15s;
 }
 
@@ -687,7 +688,7 @@
   color: inherit;
   background: var(--bg);
   resize: vertical;
-  min-height: 48px;
+  min-height: 62px;
 }
 
 .pws-notes-textarea:focus {
