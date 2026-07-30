@@ -11,7 +11,7 @@
  * back to `process.execPath` (which is itself Bun when run via `bun src/cli/index.ts`).
  */
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isRealBunBinary } from "./bun-binary-validator.mjs";
 
 export { isRealBunBinary };
@@ -48,7 +48,8 @@ export function bundledBunPath(): string | null {
 export function overrideBunPath(): string | null {
   const value = process.env[BUN_OVERRIDE_ENV]?.trim();
   if (!value) return null;
-  return isRealBunBinary(value) ? value : null;
+  const resolved = resolve(value);
+  return isRealBunBinary(resolved) ? resolved : null;
 }
 
 export function durableBunRuntime(): DurableBunRuntime {

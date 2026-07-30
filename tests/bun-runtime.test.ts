@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, overrideBunPath } from "../src/lib/bun-runtime";
@@ -58,6 +58,31 @@ describe("bundledBunPath / durableBunPath", () => {
     expect(durableBunPath()).toBe(real);
     if (previousOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
     else process.env.OPENCODEX_BUN_PATH = previousOverride;
+  });
+
+  it("resolves a relative override against the launcher cwd", () => {
+    const launcherCwd = join(tmp, "launcher-cwd");
+    const real = join(launcherCwd, "relative-bun.exe");
+    const previousCwd = process.cwd();
+    const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
+    mkdirSync(launcherCwd, { recursive: true });
+    writeFileSync(real, Buffer.alloc(1_000_000));
+
+    try {
+      process.chdir(launcherCwd);
+      process.env.OPENCODEX_BUN_PATH = "  relative-bun.exe  ";
+      expect(overrideBunPath()).toBe(real);
+      expect(durableBunRuntime()).toEqual({
+        path: real,
+        source: "override",
+        overrideEnv: "OPENCODEX_BUN_PATH",
+      });
+      expect(durableBunPath()).toBe(real);
+    } finally {
+      process.chdir(previousCwd);
+      if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = inheritedOverride;
+    }
   });
 
   it("resolves the installed bundled bun binary (dev has the bun dep)", () => {
