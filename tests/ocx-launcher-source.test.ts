@@ -7,6 +7,11 @@ import { join } from "node:path";
  * cannot be imported by tests. Guard its Windows-critical invariants at the source level.
  */
 const source = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
+const runtimeSource = readFileSync(join(import.meta.dir, "..", "src", "lib", "bun-runtime.ts"), "utf8");
+const validatorSource = readFileSync(
+  join(import.meta.dir, "..", "src", "lib", "bun-binary-validator.mjs"),
+  "utf8",
+);
 
 describe("ocx.mjs npm launcher (source invariants)", () => {
   test("Windows npm spawns use the trusted absolute invocation without shell lookup", () => {
@@ -51,14 +56,16 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
   });
 
   test("invalid Bun overrides warn safely and fall back without throwing", () => {
-    expect(source).toContain("function isRealBunBinary(path) {");
-    expect(source).toMatch(/function isRealBunBinary\(path\) \{[\s\S]*?try \{[\s\S]*?statSync\(path\)[\s\S]*?catch \{[\s\S]*?return false;/);
+    expect(source).toContain('import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";');
     expect(source).toContain("is missing, unreadable, or not a complete Bun binary; falling back to the bundled runtime.");
     expect(source).not.toContain('${override} is missing, unreadable');
   });
 
-  test("documents why the Node launcher keeps a synchronized validator copy", () => {
-    expect(source).toContain("this Node-safe copy aligned with src/lib/bun-runtime.ts");
-    expect(source).toContain("cannot\n// import Bun-native TypeScript until after it has resolved a Bun executable");
+  test("shares the Node-safe Bun binary validator across both runtime paths", () => {
+    expect(source).toContain('import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";');
+    expect(runtimeSource).toContain('import { isRealBunBinary } from "./bun-binary-validator.mjs";');
+    expect(runtimeSource).toContain("export { isRealBunBinary };");
+    expect(validatorSource).toContain("export const REAL_BUN_MIN_BYTES = 1_000_000;");
+    expect(validatorSource).toMatch(/export function isRealBunBinary\(path\) \{[\s\S]*?try \{[\s\S]*?statSync\(path\)[\s\S]*?catch \{[\s\S]*?return false;/);
   });
 });

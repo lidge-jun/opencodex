@@ -10,10 +10,11 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
@@ -287,22 +288,7 @@ function bunBinDir() {
   return dirname(require.resolve("bun/package.json"));
 }
 
-// The `bun` package ships a tiny ASCII placeholder at bin/bun.exe until its
-// postinstall downloads the real ~60MB binary. --ignore-scripts / pnpm leave
-// the ~450-byte stub in place, which is NOT executable (ENOEXEC). A size gate
-// cleanly distinguishes the stub from a real binary on every platform. Keep
-// this Node-safe copy aligned with src/lib/bun-runtime.ts: the launcher cannot
-// import Bun-native TypeScript until after it has resolved a Bun executable.
-const REAL_BUN_MIN_BYTES = 1_000_000;
 const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
-
-function isRealBunBinary(path) {
-  try {
-    return existsSync(path) && statSync(path).size >= REAL_BUN_MIN_BYTES;
-  } catch {
-    return false;
-  }
-}
 
 function findBunBinary(bunDir) {
   // The npm `bun` package ships the binary as bin/bun.exe on every platform;
