@@ -54,6 +54,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { managementAuthAclUnverified } from "../management-auth";
 import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
@@ -116,6 +117,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hostname: config.hostname ?? "127.0.0.1",
       streamMode: config.streamMode ?? "auto",
       startupHealth: await getCachedStartupHealth(config),
+      managementAuthAclUnverified: managementAuthAclUnverified(),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,

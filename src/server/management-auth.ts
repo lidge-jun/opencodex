@@ -166,9 +166,17 @@ function ready(
   };
 }
 
+let lastManagementAuthAclUnverified = false;
+
+/** Whether the current process accepted a file-backed admin token without verified NTFS ACL harden. */
+export function managementAuthAclUnverified(): boolean {
+  return lastManagementAuthAclUnverified;
+}
+
 export function initializeManagementAuthState(config: OcxConfig): ManagementAuthState {
   const environmentToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN?.trim();
   if (environmentToken) {
+    lastManagementAuthAclUnverified = false;
     return ready(environmentToken, "environment", config);
   }
   try {
@@ -181,8 +189,10 @@ export function initializeManagementAuthState(config: OcxConfig): ManagementAuth
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       loaded = createTokenFile(path);
     }
+    lastManagementAuthAclUnverified = loaded.aclUnverified === true;
     return ready(loaded.token, "file", config, { aclUnverified: loaded.aclUnverified });
   } catch (error) {
+    lastManagementAuthAclUnverified = false;
     return fail(error instanceof Error ? error.message : "management token initialization failed");
   }
 }

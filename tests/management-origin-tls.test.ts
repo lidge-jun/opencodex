@@ -34,6 +34,17 @@ describe("management origin behind TLS termination (#760)", () => {
     expect(isAllowedManagementOrigin(req, config())).toBe(false);
   });
 
+  test("still rejects same-scheme cross-port Origins", () => {
+    const req = new Request("http://127.0.0.1:10100/api/config", {
+      method: "GET",
+      headers: {
+        Host: "127.0.0.1:10100",
+        Origin: "http://127.0.0.1:65534",
+      },
+    });
+    expect(isAllowedManagementOrigin(req, config({ hostname: "127.0.0.1" }))).toBe(false);
+  });
+
   test("honours corsAllowOrigins for an explicit external origin", () => {
     const req = new Request("http://127.0.0.1:10100/api/v2", {
       method: "PUT",

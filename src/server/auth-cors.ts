@@ -89,14 +89,17 @@ function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
   });
 }
 
-/** True when Origin and the process-derived origin share a host (TLS terminator scheme skew). */
+/** True when Origin and the process-derived origin share a host across http/https (TLS terminator). */
 function sameManagementHost(origin: string, requestOrigin: string): boolean {
   try {
     const left = new URL(origin);
     const right = new URL(requestOrigin);
     if (left.protocol !== "http:" && left.protocol !== "https:") return false;
     if (right.protocol !== "http:" && right.protocol !== "https:") return false;
-    return left.hostname.toLowerCase() === right.hostname.toLowerCase();
+    if (left.hostname.toLowerCase() !== right.hostname.toLowerCase()) return false;
+    // Same scheme with unequal origins means a port (or rare URL) mismatch — keep fail-closed.
+    // Cross-scheme only: browser https Origin vs process http Host behind a TLS terminator.
+    return left.protocol !== right.protocol;
   } catch {
     return false;
   }
