@@ -27,8 +27,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-opus-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "glm-5.2": ["high", "max"],
-  // GetUsableModels (2026-07-09) lists grok-4.5-{medium,high,xhigh} and grok-4.5-fast-{medium,high,xhigh};
-  // the bare "grok-4.5-fast" id was removed upstream and now returns not_found.
+  // GetUsableModels currently lists grok-4.5-{low,medium,high} and grok-4.5-{low,medium,high}-fast.
+  // Older snapshots used grok-4.5-fast-{medium,high,xhigh}; wire construction prefers the trailing
+  // `-fast` form (see cursorWireModelIdWithEffort). The bare "grok-4.5-fast" id still returns not_found.
   "grok-4.5": ["medium", "high", "xhigh"],
   "grok-4.5-fast": ["medium", "high", "xhigh"],
   "gpt-5.1": ["low", "high"],
@@ -109,4 +110,18 @@ export function cursorModelEffortLadder(baseModelId: string): string[] | undefin
 /** Base models known to carry a reasoning-effort suffix (everything else is sent bare). */
 export function cursorModelHasEffortTiers(baseModelId: string): boolean {
   return (CURSOR_MODEL_EFFORT_TIERS[baseModelId]?.length ?? 0) > 0;
+}
+
+/**
+ * Compose a Cursor wire model id from a Codex-facing base id and an effort tier.
+ *
+ * Fast families encode the mode after the effort (`grok-4.5-high-fast`). Non-fast
+ * reasoning models keep the historical `{base}-{effort}` shape (`claude-opus-4-8-high`).
+ */
+export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
+  if (baseModelId.endsWith("-fast")) {
+    const stem = baseModelId.slice(0, -"-fast".length);
+    return `${stem}-${effortSuffix}-fast`;
+  }
+  return `${baseModelId}-${effortSuffix}`;
 }

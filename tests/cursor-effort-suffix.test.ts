@@ -60,10 +60,12 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/glm-5.2", "max")).toBe("glm-5.2-max");
   });
 
-  test("grok-4.5-fast preserves its explicit code-backed tiers", () => {
-    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-fast-medium");
-    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-fast-high");
-    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-fast-xhigh");
+  test("grok-4.5-fast uses trailing -fast after the effort tier on the wire", () => {
+    // Live GetUsableModels returns grok-4.5-{low,medium,high}-fast, not grok-4.5-fast-{effort}.
+    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-medium-fast");
+    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-high-fast");
+    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-xhigh-fast");
+    expect(modelIdFor("cursor/grok-4.5", "high")).toBe("grok-4.5-high");
   });
 
   test("model ladders are deduped and sorted in canonical Codex order", () => {

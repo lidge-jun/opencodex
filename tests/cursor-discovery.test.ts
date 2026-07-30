@@ -63,6 +63,11 @@ describe("Cursor discovery metadata", () => {
     // Issue #117: Cursor GetUsableModels may return ids with a `cursor-` wire prefix.
     expect(isCursorModelAvailableForAccount("grok-4.5", ["cursor-grok-4.5-high"])).toBe(true);
     expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-fast-medium"])).toBe(true);
+    // Current Cursor wire shape puts `-fast` after the effort tier (`grok-4.5-high-fast`).
+    expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-high-fast"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-medium-fast"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-high"])).toBe(false);
+    expect(isCursorModelAvailableForAccount("grok-4.5", ["cursor-grok-4.5-high-fast"])).toBe(false);
     expect(isCursorModelAvailableForAccount("gpt-5.4", ["cursor-gpt-5.4-high"])).toBe(true);
     // Prefixed sibling rejection: cursor- prefix must not bypass sibling-model checks.
     expect(isCursorModelAvailableForAccount("gpt-5.5", ["cursor-gpt-5.5-extra-high"])).toBe(false);

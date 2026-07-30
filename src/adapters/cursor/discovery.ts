@@ -67,13 +67,28 @@ function stripCursorWirePrefix(id: string): string {
 /**
  * True when a configured Cursor base model should remain exposed after live GetUsableModels filtering.
  * Live ids are full effort-suffixed variants (`claude-4.6-opus-high`); base ids match exactly or by prefix.
+ *
+ * Fast families currently use a trailing mode marker after the effort tier
+ * (`grok-4.5-high-fast`) rather than the older `{base}-fast-{effort}` form
+ * (`grok-4.5-fast-high`). Accept both so live discovery does not drop Fast when
+ * Cursor only returns the trailing-fast wire ids.
  */
 export function isCursorModelAvailableForAccount(modelId: string, liveIds: readonly string[]): boolean {
   return liveIds.some(raw => {
     const id = stripCursorWirePrefix(raw);
     if (id === modelId) return true;
     const effortPrefix = `${modelId}-`;
-    return id.startsWith(effortPrefix) && CANONICAL_EFFORT_SUFFIXES.has(id.slice(effortPrefix.length));
+    if (id.startsWith(effortPrefix) && CANONICAL_EFFORT_SUFFIXES.has(id.slice(effortPrefix.length))) {
+      return true;
+    }
+    // `{stem}-fast` base ↔ `{stem}-{effort}-fast` wire (current Cursor GetUsableModels shape).
+    if (modelId.endsWith("-fast") && id.endsWith("-fast")) {
+      const stem = modelId.slice(0, -"-fast".length);
+      if (!id.startsWith(`${stem}-`)) return false;
+      const middle = id.slice(stem.length + 1, -"-fast".length);
+      return CANONICAL_EFFORT_SUFFIXES.has(middle);
+    }
+    return false;
   });
 }
 
