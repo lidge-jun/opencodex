@@ -18,6 +18,7 @@ import {
   persistKiroCliSessionRecovery,
   readImportedKiroCredential,
   readKiroCliSqliteCredential,
+  resolveKiroCliExecutable,
   restoreKiroCliSession,
   restoreStaleKiroCliSessionRecovery,
   requireKiroRegion,
@@ -25,6 +26,7 @@ import {
   type KiroCliSessionSnapshot,
   type KiroImportDiagnostic,
 } from "./kiro-credentials";
+import { homedir } from "node:os";
 import { getAccountSet, saveAccountCredential } from "./store";
 
 const DEFAULT_REGION = "us-east-1";
@@ -72,9 +74,18 @@ const pendingKiroLoginTransactions = new WeakMap<OAuthCredentials, KiroCliSessio
 /** Forced logins that started with no native CLI DB must logout on persistence failure. */
 const pendingKiroEmptyPriorSessions = new WeakSet<OAuthCredentials>();
 
+
+function resolveRuntimeKiroCliExecutable(): string {
+  return resolveKiroCliExecutable({
+    env: process.env,
+    platform: process.platform,
+    home: process.platform === "win32" ? homedir() : (process.env.HOME || homedir()),
+  });
+}
+
 function logoutKiroCliBestEffort(): void {
   try {
-    Bun.spawnSync(["kiro-cli", "logout"], {
+    Bun.spawnSync([resolveRuntimeKiroCliExecutable(), "logout"], {
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
@@ -128,7 +139,7 @@ async function defaultKiroCliRunner(args: string[], signal?: AbortSignal): Promi
   throwIfKiroLoginCancelled(signal);
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn(["kiro-cli", ...args], {
+    child = Bun.spawn([resolveRuntimeKiroCliExecutable(), ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",
