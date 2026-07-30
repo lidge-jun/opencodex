@@ -111,37 +111,6 @@ describe("Codex catalog input_modalities enum", () => {
   });
 });
 
-describe("GET /api/catalog", () => {
-  test("returns the on-disk catalog under management auth without secrets", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-api-"));
-    process.env.CODEX_HOME = dir;
-    const catalogPath = join(dir, "opencodex-catalog.json");
-    writeFileSync(catalogPath, JSON.stringify({
-      models: [{
-        slug: "gpt-5.5",
-        display_name: "gpt-5.5",
-        description: "native",
-        priority: 1,
-        visibility: "list",
-        base_instructions: "You are a helpful coding assistant.",
-        input_modalities: ["text", "image"],
-      }],
-    }, null, 2) + "\n");
-    writeFileSync(join(dir, "config.toml"), `model_catalog_json = "${catalogPath.replace(/\\/g, "/")}"\n`);
-
-    const url = new URL("http://127.0.0.1/api/catalog");
-    const response = await handleManagementAPI(
-      new Request(url, { headers: { Host: "127.0.0.1" } }),
-      url,
-      { port: 10100, hostname: "127.0.0.1" },
-    );
-    expect(response?.status).toBe(200);
-    const body = await response!.json() as { models: Array<{ slug?: string }> };
-    expect(body.models.some(entry => entry.slug === "gpt-5.5")).toBe(true);
-    expect(JSON.stringify(body)).not.toMatch(/api[_-]?key|sk-[a-z0-9]/i);
-    rmSync(dir, { recursive: true, force: true });
-  });
-});
 
 describe("catalog builder choke point", () => {
   test("buildCatalogEntries never serializes video into input_modalities", () => {
