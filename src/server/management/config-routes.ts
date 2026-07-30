@@ -110,6 +110,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       );
     }
     return jsonResponse({
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       codexAutoStart: codexAutoStartEnabled(config),
       port: config.port,
       hostname: config.hostname ?? "127.0.0.1",
