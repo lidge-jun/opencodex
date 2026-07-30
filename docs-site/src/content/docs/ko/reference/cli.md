@@ -379,6 +379,10 @@ ocx service status
 ocx service uninstall
 ```
 
+Windows에서 `ocx service status`는 작업 스케줄러 등록 상태와 신원이 확인된 OpenCodex 프록시의
+연결 상태를 따로 보고합니다. 로컬화된 `schtasks` 표를 출력하지 않으므로 Windows 코드 페이지와
+관계없이 요약을 읽을 수 있습니다.
+
 Windows에서 작업 스케줄러 항목을 만들려면 권한 상승이 필요합니다. 인식 가능한 현지화 권한 거부
 문자열은 기존 안내 경로를 그대로 사용합니다. 문자열을 읽을 수 없을 때는 명령 모양이
 `/create /tn opencodex-proxy /xml <비어 있지 않은 경로> /f`와 정확히 일치하고, 종료 상태가 1이며,

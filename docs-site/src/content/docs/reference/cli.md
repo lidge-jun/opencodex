@@ -439,6 +439,10 @@ ocx service status
 ocx service uninstall
 ```
 
+On Windows, `ocx service status` reports Task Scheduler registration separately from
+identity-verified OpenCodex proxy reachability. It does not print the localized `schtasks` table,
+so the summary remains readable across Windows code pages.
+
 On Windows, creating the Task Scheduler entry requires elevation. Recognized localized
 access-denied text keeps the existing guidance path. If that text is unreadable, the fallback
 requires the owned command shape `/create /tn opencodex-proxy /xml <non-empty-path> /f`, status 1,

@@ -360,6 +360,10 @@ ocx service status
 ocx service uninstall
 ```
 
+Windows では、`ocx service status` はタスク スケジューラの登録状態と、ID を確認済みの
+OpenCodex プロキシへの到達性を別々に報告します。ローカライズされた `schtasks` の表は出力
+しないため、Windows のコード ページに関係なく概要を読めます。
+
 Windows でタスク スケジューラのエントリを作成するには昇格が必要です。認識できるローカライズ
 済みのアクセス拒否テキストは、既存の案内経路をそのまま使用します。そのテキストが読めない場合、
 コマンド形状が `/create /tn opencodex-proxy /xml <空でないパス> /f` と正確に一致し、終了 status
