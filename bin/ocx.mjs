@@ -292,13 +292,22 @@ function bunBinDir() {
 // the ~450-byte stub in place, which is NOT executable (ENOEXEC). A size gate
 // cleanly distinguishes the stub from a real binary on every platform.
 const REAL_BUN_MIN_BYTES = 1_000_000;
+const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
+
+function isRealBunBinary(path) {
+  try {
+    return existsSync(path) && statSync(path).size >= REAL_BUN_MIN_BYTES;
+  } catch {
+    return false;
+  }
+}
 
 function findBunBinary(bunDir) {
   // The npm `bun` package ships the binary as bin/bun.exe on every platform;
   // probe bin/bun too for forward compatibility.
   for (const name of ["bun.exe", "bun"]) {
     const p = join(bunDir, "bin", name);
-    if (existsSync(p) && statSync(p).size >= REAL_BUN_MIN_BYTES) return p;
+    if (isRealBunBinary(p)) return p;
   }
   return null;
 }
@@ -317,6 +326,11 @@ function fail(msg) {
 }
 
 function resolveBun() {
+  // Keep direct npm-launcher starts aligned with durable service/shim installs:
+  // a valid explicit runtime must win even when the bundled dependency exists.
+  const override = process.env[BUN_OVERRIDE_ENV]?.trim();
+  if (override && isRealBunBinary(override)) return override;
+
   let bunDir;
   try {
     bunDir = bunBinDir();

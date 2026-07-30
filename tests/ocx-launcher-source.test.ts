@@ -34,4 +34,21 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     // The marker must be computed from the launcher's OWN env, before Bun's dotenv load.
     expect(source).toContain("typeof process.env[name] === \"string\" && process.env[name] !== \"\"");
   });
+
+  test("valid Bun overrides are selected before the bundled runtime", () => {
+    expect(source).toContain('const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";');
+    expect(source).toContain("if (override && isRealBunBinary(override)) return override;");
+
+    const resolveStart = source.indexOf("function resolveBun() {");
+    const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
+    const bundledLookup = source.indexOf("bunDir = bunBinDir()", resolveStart);
+    expect(resolveStart).toBeGreaterThanOrEqual(0);
+    expect(overrideCheck).toBeGreaterThan(resolveStart);
+    expect(bundledLookup).toBeGreaterThan(overrideCheck);
+  });
+
+  test("invalid Bun overrides fall back without throwing", () => {
+    expect(source).toContain("function isRealBunBinary(path) {");
+    expect(source).toMatch(/function isRealBunBinary\(path\) \{[\s\S]*?try \{[\s\S]*?statSync\(path\)[\s\S]*?catch \{[\s\S]*?return false;/);
+  });
 });
