@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, win32 } from "node:path";
+import { isAbsolute, join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
 
 const DEFAULT_EXPIRES_MS = 3600_000;
@@ -164,9 +164,9 @@ export function resolveKiroCliNativeSessionEntries(
     return [{ location: "kiro-cli-windows-data", path: win32.join(base, "Kiro-Cli", "data.sqlite3") }];
   }
   if (platform === "darwin") {
-    return [{ location: "kiro-cli-data", path: join(home, "Library", "Application Support", "kiro-cli", "data.sqlite3") }];
+    return [{ location: "kiro-cli-data", path: posix.join(home, "Library", "Application Support", "kiro-cli", "data.sqlite3") }];
   }
-  return [{ location: "kiro-cli-linux-data", path: join(home, ".local", "share", "kiro-cli", "data.sqlite3") }];
+  return [{ location: "kiro-cli-linux-data", path: posix.join(home, ".local", "share", "kiro-cli", "data.sqlite3") }];
 }
 
 function nativeKiroCliSessionEntries(): Array<{ location: KiroCliNativeLocation; path: string }> {

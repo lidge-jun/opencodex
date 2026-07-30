@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { resolveKiroCliNativeSessionEntries } from "../src/oauth/kiro-credentials";
 
@@ -87,5 +88,32 @@ describe("kiro-cli native session store resolution", () => {
     expect(resolveKiroCliNativeSessionEntries({ env: windowsEnv, platform: "linux", home: "/home/u" })).toEqual([
       { location: "kiro-cli-linux-data", path: "/home/u/.local/share/kiro-cli/data.sqlite3" },
     ]);
+  });
+
+  // #718: the darwin/linux branches used the platform-agnostic `join`, so on a Windows HOST they
+  // emitted backslashes and every POSIX expectation in this file failed while macOS CI stayed
+  // green. The separator is a property of the RESOLVED platform, not of the machine running the
+  // suite, so the implementation must pin `posix.join` exactly as the win32 branch pins
+  // `win32.join`.
+  //
+  // Asserting on the returned string cannot catch this from a POSIX host — there `join` and
+  // `posix.join` are the same function, so a reverted fix still passes. The regression is only
+  // observable by reading which joiner the source uses, so that is what this checks.
+  test("darwin and linux branches pin posix.join so a Windows host cannot flip the separator", () => {
+    const source = readFileSync(
+      new URL("../src/oauth/kiro-credentials.ts", import.meta.url),
+      "utf-8",
+    );
+    const resolver = source.slice(source.indexOf("export function resolveKiroCliNativeSessionEntries"));
+    const body = resolver.slice(0, resolver.indexOf("\n}"));
+
+    const darwinLine = body.split("\n").find(line => line.includes("kiro-cli-data"))!;
+    const linuxLine = body.split("\n").find(line => line.includes("kiro-cli-linux-data"))!;
+
+    expect(darwinLine).toContain("posix.join(");
+    expect(linuxLine).toContain("posix.join(");
+    // A bare `join(` on those branches is the #718 defect.
+    expect(/[^.]\bjoin\(/.test(darwinLine.replace("posix.join(", "posix_join("))).toBe(false);
+    expect(/[^.]\bjoin\(/.test(linuxLine.replace("posix.join(", "posix_join("))).toBe(false);
   });
 });
