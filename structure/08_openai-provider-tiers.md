@@ -3,7 +3,7 @@
 This current contract supersedes the provider-identity and account-selection sections of
 `devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
 earlier three-tier implementation. The replacement contract and its verification evidence live in
-`devlog/_plan/260717_openai_single_provider_option` until that unit is archived.
+`devlog/_fin/260717_openai_single_provider_option`.
 
 ## Public provider contract
 
@@ -17,6 +17,18 @@ and mode-less configs. It runs the main-plus-added affinity, quota, cooldown, he
 engine. Direct short-circuits that engine before pool state is read or mutated and uses only the
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
+
+An explicit `Retry-After` or an unclassified quota 429 is account-wide. A reset-derived native-model
+429 is advisory and remains within its confirmed quota group: `gpt-5.3-codex-spark` is separate from
+the shared native group (including GPT-5.6 Terra/Luna). This allows a same-account combo to test an
+independent quota without allowing fallbacks that share the exhausted quota.
+
+`pausedCodexAccountIds` is a persisted Pool eligibility boundary. A paused added account or the
+stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
+affinity, quota rotation, cooldown probes, transient failover, and manual activation. In-flight
+requests keep their captured credential. An all-paused pool fails closed.
+The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
+plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
 
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option

@@ -216,3 +216,4 @@ describe("config.json schema resilience", () => {
     expect(loadConfig().streamMode).toBe("legacy-tee");
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

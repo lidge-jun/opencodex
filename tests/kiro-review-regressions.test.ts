@@ -17,6 +17,10 @@ import type { OcxConfig } from "../src/types";
 
 const ENV_KEYS = [
   "HOME",
+  // The native kiro-cli store resolves per-platform (issue #710) and win32 prefers these over HOME,
+  // so both must be isolated or a Windows runner would read the real user profile.
+  "LOCALAPPDATA",
+  "USERPROFILE",
   "OPENCODEX_HOME",
   "KIRO_ACCESS_TOKEN",
   "KIRO_REFRESH_TOKEN",
@@ -41,8 +45,18 @@ function config(): OcxConfig {
   };
 }
 
+/**
+ * Seeds/reads the layout the HOST resolver picks (issue #710). Mirrors
+ * `resolveKiroCliNativeSessionEntries` in src/oauth/kiro-credentials.ts.
+ */
+function kiroCliDbDir(): string {
+  if (process.platform === "win32") return join(tmp, "AppData", "Local", "Kiro-Cli");
+  if (process.platform === "darwin") return join(tmp, "Library", "Application Support", "kiro-cli");
+  return join(tmp, ".local", "share", "kiro-cli");
+}
+
 function kiroCliDbPath(): string {
-  return join(tmp, "Library", "Application Support", "kiro-cli", "data.sqlite3");
+  return join(kiroCliDbDir(), "data.sqlite3");
 }
 
 function kiroCliRecoveryPath(): string {
@@ -107,6 +121,8 @@ beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "kiro-review-regressions-"));
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.HOME = tmp;
+  process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
+  process.env.USERPROFILE = tmp;
   process.env.OPENCODEX_HOME = join(tmp, "opencodex");
 });
 
@@ -221,7 +237,13 @@ describe("Kiro review regressions", () => {
       OAUTH_PROVIDERS.kiro.login = originalLogin;
     }
 
-    expect(events).toEqual(["load-config", "save-config", "settle:false"]);
+    expect(events).toEqual([
+      "load-config", // namespace preflight before browser/CLI auth
+      "load-config", // provider validation before credential persistence
+      "load-config", // latest-row upsert after credential persistence
+      "save-config",
+      "settle:false",
+    ]);
     expect(getAccountSet("kiro")?.activeAccountId).toBe(previousActive);
     expect(getAccountSet("kiro")?.accounts).toHaveLength(1);
     expect(getAccountCredential("kiro", previousActive)).toMatchObject({

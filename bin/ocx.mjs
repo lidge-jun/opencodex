@@ -14,6 +14,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
 const PKG = "@bitkyc08/opencodex";
@@ -27,10 +28,6 @@ function isNodeModulesInstall() {
 
 function isBunGlobalInstall() {
   return /[\\/]\.bun[\\/]/.test(here);
-}
-
-function npmBin() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
 function currentPackageVersion() {
@@ -115,15 +112,17 @@ function runTrayLifecycle(launcher, action) {
 function runNpmSelfUpdate() {
   const current = currentPackageVersion();
   const tag = updateTag(current);
-  const npm = npmBin();
-  // Node ≥18.20/20.12 refuses to spawn .cmd/.bat without a shell (CVE-2024-27980
-  // hardening) — spawning "npm.cmd" shell-less throws EINVAL on Windows.
-  const winShell = process.platform === "win32";
-  const latestResult = spawnSync(npm, ["view", `${PKG}@${tag}`, "version"], {
+  const latestInvocation = npmInvocation(["view", `${PKG}@${tag}`, "version"]);
+  const installInvocation = npmInvocation(["install", "-g", `${PKG}@${tag}`]);
+  if (!latestInvocation || !installInvocation) {
+    console.error("opencodex: could not resolve npm from a trusted absolute PATH entry; aborting before stopping the proxy.");
+    process.exit(1);
+  }
+  const latestResult = spawnSync(latestInvocation.file, latestInvocation.args, {
     encoding: "utf8",
     timeout: 12000,
     windowsHide: true,
-    shell: winShell,
+    ...latestInvocation.options,
   });
   const latest = latestResult.status === 0 ? latestResult.stdout.trim() : "";
 
@@ -221,12 +220,12 @@ function runNpmSelfUpdate() {
     }
   }
 
-  console.log(`Updating${latest ? ` to v${latest}` : ""}...\n$ ${npm} install -g ${PKG}@${tag}`);
-  const res = spawnSync(npm, ["install", "-g", `${PKG}@${tag}`], {
+  console.log(`Updating${latest ? ` to v${latest}` : ""}...\n$ npm install -g ${PKG}@${tag}`);
+  const res = spawnSync(installInvocation.file, installInvocation.args, {
     stdio: "inherit",
     timeout: 180000,
     windowsHide: true,
-    shell: winShell,
+    ...installInvocation.options,
   });
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
@@ -278,7 +277,7 @@ function runNpmSelfUpdate() {
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-  console.error(`\nUpdate failed (${npm} exit ${res.status ?? "?"}). Try manually:  ${npm} install -g ${PKG}@${tag}`);
+  console.error(`\nUpdate failed (npm exit ${res.status ?? "?"}). Try manually:  npm install -g ${PKG}@${tag}`);
   process.exit(1);
 }
 

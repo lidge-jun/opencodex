@@ -233,3 +233,4 @@ describe("POST /api/system/restart", () => {
     expect(body.message.toLowerCase()).toContain("drain");
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

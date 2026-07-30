@@ -24,8 +24,16 @@ import {
   type RequestLogContext,
 } from "../src/server/request-log";
 import { bridgeToResponsesSSE } from "../src/bridge";
-import type { AdapterEvent } from "../src/types";
-import type { PersistedUsageEntry } from "../src/usage/log";
+import type { AdapterEvent, OcxUsage } from "../src/types";
+import {
+  appendUsageEntry,
+  readUsageEntries,
+  resetUsageReadCacheForTests,
+  type PersistedUsageEntry,
+} from "../src/usage/log";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
@@ -931,6 +939,94 @@ describe("request log metadata", () => {
       totalTokens: 50_000,
       usage: { inputTokens: 49_900, outputTokens: 100, totalTokens: 50_000, estimated: true },
     });
+  });
+
+  test("deferred logging keeps the checkpoint when the bridge reports raw usage (production path)", async () => {
+    // Regression guard for the composition that shipped the bug. The test above exercises the
+    // OLD source of logged usage: re-parsing the bridged wire, where responsesUsage() folds
+    // contextTotalTokens into input_tokens/total_tokens. Production no longer does that —
+    // responses/core.ts wires bridgeToResponsesSSE's onUsage callback, stores the RAW adapter
+    // usage and sets usageFromBridge, which suppresses wire re-parsing. In that shape the
+    // cumulative figure exists ONLY as contextTotalTokens, so usage-log normalization has to
+    // carry the field or Kiro context growth vanishes from every persisted row.
+    const entries: RequestLogEntry[] = [];
+    let reportedRaw: OcxUsage | undefined;
+    const logCtx: Partial<RequestLogContext> = {
+      model: "kiro/claude-opus-5",
+      provider: "kiro-p9d8524",
+      usageLogInputTokens: 200,
+    };
+    const body = bridgeToResponsesSSE(
+      replayAdapterEvents([{
+        type: "done",
+        usage: {
+          inputTokens: 58,
+          outputTokens: 100,
+          contextTotalTokens: 50_000,
+          estimated: true,
+        },
+      }]),
+      "kiro/claude-opus-5",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        onUsage: usage => {
+          // Mirror responses/core.ts: store RAW adapter usage and mark provenance so the
+          // deferred logger does not re-parse the wire.
+          reportedRaw = usage;
+          logCtx.usageFromBridge = true;
+          if (usage) logCtx.usage = usage;
+        },
+      },
+    );
+    const response = responseWithDeferredRequestLog(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-kiro-raw-usage-checkpoint",
+      Date.now(),
+      logCtx,
+      entry => entries.push(entry),
+    );
+    await response.text();
+
+    // The bridge hands the logger the RAW adapter usage, not the projected wire shape.
+    expect(reportedRaw).toMatchObject({ inputTokens: 58, contextTotalTokens: 50_000 });
+    expect(entries).toHaveLength(1);
+    const logged = entries[0]?.usage;
+    expect(logged?.contextTotalTokens).toBe(50_000);
+    // Cache detail stays absent so cost estimation still reports cache_detail_missing —
+    // the provenance behavior that the raw-usage change was introduced to protect.
+    expect(logged && "cacheReadInputTokens" in logged).toBe(false);
+    expect(logged && "cacheCreationInputTokens" in logged).toBe(false);
+
+    // End-to-end: the checkpoint must also survive serialization to usage.jsonl. Asserting
+    // only the in-memory entry would pass even while persistence silently drops the field,
+    // which is exactly how the original regression escaped review.
+    const home = mkdtempSync(join(tmpdir(), "ocx-req-log-usage-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      resetUsageReadCacheForTests();
+      appendUsageEntry({
+        requestId: entries[0]!.requestId,
+        timestamp: entries[0]!.timestamp,
+        provider: entries[0]!.provider,
+        model: entries[0]!.model,
+        status: entries[0]!.status,
+        durationMs: entries[0]!.durationMs,
+        usageStatus: entries[0]!.usageStatus,
+        ...(logged ? { usage: logged } : {}),
+      });
+      const [persisted] = readUsageEntries();
+      expect(persisted?.usage?.contextTotalTokens).toBe(50_000);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("final logging shows numeric Kiro estimates even when SSE usage is absent", async () => {

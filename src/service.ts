@@ -34,6 +34,8 @@ import {
 import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
+import { recordOwnedConfigPath } from "./lib/config-ownership";
+import { maybeShowStarPrompt } from "./cli/star-prompt";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
@@ -146,6 +148,7 @@ function writeServiceInstallState(backend: ServiceBackend = "scheduler"): void {
   };
   for (const path of serviceStatePaths()) {
     const dir = dirname(path);
+    recordOwnedConfigPath(getConfigDir(), path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(path, JSON.stringify(state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
     try { chmodSync(path, 0o600); } catch { /* best-effort */ }
@@ -254,6 +257,7 @@ function writeServiceApiTokenFile(): string | null {
   if (!token) return null;
   const path = serviceApiTokenFilePath();
   const dir = getConfigDir();
+  recordOwnedConfigPath(dir, path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") hardenSecretDir(dir, { required: true });
   writeFileSync(path, `${token}\n`, { encoding: "utf8", mode: 0o600 });
@@ -1039,6 +1043,43 @@ function taskXmlHasPrefixedTag(xml: string, tag: string): boolean {
  * Absence means the documented schema default (#432); a present element must still
  * match exactly, so a malformed or explicitly unsafe value never reads as healthy.
  */
+/**
+ * Decode XML's five predefined entities, exactly once.
+ *
+ * Task Scheduler re-encodes element text when it exports a task, so a needle we
+ * escaped ourselves can never match its output (#608). Compare decoded values
+ * instead of encoded ones.
+ *
+ * The single pass is the point: decoding twice would turn `&amp;quot;` into `"`,
+ * letting a doubly-encoded value impersonate the expected launcher path.
+ */
+function taskXmlDecodeEntities(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => (
+    name === "amp" ? "&"
+      : name === "lt" ? "<"
+        : name === "gt" ? ">"
+          : name === "quot" ? "\""
+            : "'"
+  ));
+}
+
+/**
+ * Exactly one unprefixed `<tag>` whose DECODED text equals `expected`.
+ *
+ * Unlike taskXmlOptionalValueEquals(), an absent element is NOT a pass: these
+ * elements name what actually gets executed, so a missing <Command>/<Arguments>
+ * must fail the health check rather than inherit a schema default.
+ */
+function taskXmlDecodedValueEquals(xml: string, tag: string, expected: string): boolean {
+  // Same reasoning as the optional helper: `<t:Arguments>` must not read as absent.
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  if (taskXmlElementCount(xml, tag) !== 1) return false;
+  // `[^<]*` refuses nested markup, so a decoy inside a child element cannot match.
+  const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>([^<]*)<\\/${tag}>`, "i").exec(xml)?.[1];
+  if (value === undefined) return false;
+  return taskXmlDecodeEntities(value).trim() === expected.trim();
+}
+
 function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string): boolean {
   // Check the prefixed form first: treating `<t:Enabled>false</t:Enabled>` as an
   // omission would turn an explicitly disabled task into a healthy one.
@@ -1076,8 +1117,11 @@ export function windowsTaskRegistrationHealthy(
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
-    && action.includes(`<Command>${taskXmlString(wscript)}</Command>`)
-    && action.includes(`<Arguments>${taskXmlString(`/b /nologo "${launcher}"`)}</Arguments>`);
+    // Compare decoded VALUES, not encodings: Task Scheduler canonicalizes the
+    // quotes we wrote as `&quot;` back to literal `"` on export, so an escaped
+    // needle never matched and a healthy task read as permanently stale (#608).
+    && taskXmlDecodedValueEquals(action, "Command", wscript)
+    && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
 }
 
 export interface WindowsSchedulerXmlState {
@@ -1112,6 +1156,7 @@ export function readWindowsSchedulerXmlState(
 function installLaunchd(): void {
   const dir = join(homedir(), "Library", "LaunchAgents");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   const p = plistPath();
@@ -1148,6 +1193,7 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
 }
 
 function installWindows(): void {
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   // Transactional backend switch: installing the scheduler backend removes a native
@@ -1183,6 +1229,7 @@ function installWindows(): void {
  * reported) — never a silent fallback to the scheduler.
  */
 async function installWindowsNative(): Promise<void> {
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   let hadScheduler = false;
@@ -1321,6 +1368,7 @@ function installSystemd(): void {
   ensureUserBusEnv(); // reach the user bus over a bare SSH session (F9)
   const dir = unitDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   writeFileSync(unitPath(), buildUnit(), "utf8");
@@ -1680,6 +1728,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         ? "✅ opencodex native service installed + started (windowless, starts at boot, auto-restarts on crash)."
         : "✅ opencodex service installed + started (auto-starts on login, auto-restarts on crash).");
       if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
+      // Service users never reach the `ocx start` prompt: the proxy they run is the
+      // supervised child, which always carries OCX_SERVICE=1. This command, though, is
+      // hand-typed in a real terminal, so it is the one interactive moment they get.
+      // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
+      await maybeShowStarPrompt();
       break;
     case "start":
       ops.start();

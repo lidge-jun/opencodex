@@ -5,7 +5,16 @@ import {
   callsTo,
   methodsOf,
   runEnforcePrTarget,
+  type HarnessResult,
 } from "./helpers/enforce-pr-target-harness";
+
+/** Final enforcer comment body after pending/draft checkpoints. */
+function lastEnforcerCommentBody(result: HarnessResult): string {
+  const updates = callsTo(result, "issues.updateComment") as Array<{ body: string }>;
+  if (updates.length > 0) return updates[updates.length - 1]!.body;
+  const creates = callsTo(result, "issues.createComment") as Array<{ body: string }>;
+  return creates[creates.length - 1]!.body;
+}
 
 const root = new URL("../", import.meta.url);
 const doctorGuiIfChangedScript = fileURLToPath(new URL("../scripts/doctor-gui-if-changed.ts", import.meta.url));
@@ -22,8 +31,14 @@ describe("GitHub Actions hardening", () => {
   test("cross-platform CI keeps bounded jobs and immutable action references", async () => {
     const workflow = await readText(".github/workflows/ci.yml");
 
-    expect(count(workflow, "timeout-minutes: 12")).toBe(1);
+    // The cross-platform `test` job sits at 20 minutes: a green Windows run measured
+    // 11.8 min against 4.6 on Linux, and the previous 12-minute ceiling left ~12s of
+    // margin, so runner variance rather than the code decided the verdict (#717).
+    // `npm-global-smoke` stays at 8; it finishes in 1-2 minutes.
+    expect(count(workflow, "timeout-minutes: 20")).toBe(1);
     expect(count(workflow, "timeout-minutes: 8")).toBe(1);
+    // Both jobs must stay bounded — an unbounded job can hang a queue for hours.
+    expect(count(workflow, "timeout-minutes:")).toBe(2);
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
@@ -32,16 +47,15 @@ describe("GitHub Actions hardening", () => {
   });
 
   test("PR checks reach every branch the target gate accepts", async () => {
-    // These two lists have to move together with enforce-pr-target.yml. The
-    // gate now accepts dev2-go, and a PR that passes the gate but triggers no
-    // checks is worse than one that is blocked: it looks reviewable and has
-    // nothing behind it. Pin the pull_request branch lists to the gate's
-    // allow-list plus main.
+    // These two lists have to move together with enforce-pr-target.yml. A PR
+    // that passes the gate but triggers no checks is worse than one that is
+    // blocked: it looks reviewable and has nothing behind it. Pin the
+    // pull_request branch lists to the gate's allow-list plus main.
     const gate = await readText(".github/workflows/enforce-pr-target.yml");
     const allowed = gate.match(/const ALLOWED_BASES = \[([^\]]*)\];/);
     expect(allowed).not.toBeNull();
     const bases = [...(allowed?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
-    expect(bases).toEqual(["dev", "dev2-go"]);
+    expect(bases).toEqual(["dev"]);
 
     for (const path of [".github/workflows/ci.yml", ".github/workflows/service-lifecycle.yml"]) {
       const workflow = Bun.YAML.parse(await readText(path)) as {
@@ -49,7 +63,7 @@ describe("GitHub Actions hardening", () => {
       };
       const trigger = workflow.on?.pull_request ?? {};
       const branches = (trigger.branches as string[] | undefined) ?? [];
-      expect([...branches].sort()).toEqual(["dev", "dev2-go", "main"]);
+      expect([...branches].sort()).toEqual(["dev", "main"]);
 
       // Narrowing a default is a mutation that deletes nothing. Omitting
       // `types` means opened + synchronize + reopened; writing
@@ -65,9 +79,9 @@ describe("GitHub Actions hardening", () => {
       }
     }
 
-    // The push trigger is deliberately narrower: dev2-go is an integration
-    // line, not a release-promotion source, and release.yml gates on main and
-    // preview. Widening this one would put dev2-go into that path.
+    // The push trigger stays pinned to the release-relevant lines: release.yml
+    // gates on main and preview, so widening this one would pull an unrelated
+    // branch into that path.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -374,6 +388,46 @@ describe("GitHub Actions hardening", () => {
     return { workflow, jobs, steps: steps!, allSteps, script };
   }
 
+  const SCRIPT_LOAD = ["require", "require"] as const;
+
+  /** Reads every allowed-base PR performs before any enforcement writes. */
+  function readsAllowedBase(tail: string[] = []): string[] {
+    return [
+      ...SCRIPT_LOAD,
+      "pulls.get",
+      "issues.listComments",
+      "repos.getCollaboratorPermissionLevel",
+      "repos.compareCommitsWithBasehead",
+      "repos.compareCommitsWithBasehead",
+      ...tail,
+    ];
+  }
+
+  /** Reads for a PR whose base is outside the allow-list (no ancestry compares). */
+  function readsWrongBase(tail: string[] = []): string[] {
+    return [
+      ...SCRIPT_LOAD,
+      "pulls.get",
+      "issues.listComments",
+      "repos.getCollaboratorPermissionLevel",
+      ...tail,
+    ];
+  }
+
+  /** Like readsAllowedBase but with a second listComments page from paginate. */
+  function readsAllowedBasePaged(tail: string[] = []): string[] {
+    return [
+      ...SCRIPT_LOAD,
+      "pulls.get",
+      "issues.listComments",
+      "issues.listComments",
+      "repos.getCollaboratorPermissionLevel",
+      "repos.compareCommitsWithBasehead",
+      "repos.compareCommitsWithBasehead",
+      ...tail,
+    ];
+  }
+
   /**
    * Drop JavaScript comments so a commented-out call cannot satisfy a "calls X"
    * assertion. Both forms matter: an audit round removed the draft conversion
@@ -466,10 +520,15 @@ describe("GitHub Actions hardening", () => {
     // single assertion.
     expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
 
-    // Exactly one permission scope. Asserting that `pull-requests: write` is
-    // present says nothing about what was added beside it, and a `write-all`
-    // scalar is not an object at all.
-    expect(workflow.permissions).toEqual({ "pull-requests": "write" });
+    // Exactly the scopes this gate needs. `pull-requests: write` covers title
+    // and comment updates. `contents: write` is required for the draft GraphQL
+    // mutations with GITHUB_TOKEN (#626: "Resource not accessible by integration"
+    // when contents was unset). Asserting the whole object pins both presence
+    // and the absence of anything broader (write-all, contents alone, …).
+    expect(workflow.permissions).toEqual({
+      contents: "write",
+      "pull-requests": "write",
+    });
 
     // One run per PR, so two rapid events cannot race on the title/draft state,
     // and no `cancel-in-progress` — cancelling the in-flight run mid-mutation is
@@ -491,22 +550,36 @@ describe("GitHub Actions hardening", () => {
     expect(Object.keys(job).sort()).toEqual(["runs-on", "steps"]);
     expect(job["runs-on"]).toBe("ubuntu-latest");
 
-    // Exactly one step: name, the pinned action, and its inputs. Anything more
-    // is an extra privileged action nobody reviewed — the audit added a second
-    // `github-script` step that mutated the PR and the suite stayed green.
-    expect(steps).toHaveLength(1);
-    const [step] = steps as [WorkflowStep];
-    expect(Object.keys(step).sort()).toEqual(["name", "uses", "with"]);
+    // Checkout trusted scripts, then run the gate. Anything more is an extra
+    // privileged action nobody reviewed.
+    expect(steps).toHaveLength(2);
+    const [checkout, scriptStep] = steps as [WorkflowStep, WorkflowStep];
+    expect(Object.keys(checkout).sort()).toEqual(["name", "uses", "with"]);
+    expect(checkout.uses).toBe(
+      "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+    );
+    expect(Object.keys(checkout.with ?? {}).sort()).toEqual([
+      "persist-credentials",
+      "ref",
+      "sparse-checkout",
+    ]);
+    expect(checkout.with).toEqual({
+      ref: "${{ github.event.repository.default_branch }}",
+      "persist-credentials": false,
+      "sparse-checkout": ".github/scripts",
+    });
+
+    expect(Object.keys(scriptStep).sort()).toEqual(["name", "uses", "with"]);
 
     // `github-script` is the action, pinned to a 40-hex commit SHA: this
     // workflow hands a write token to whatever the ref resolves to, so a tag or
     // branch is a mutable dependency.
-    expect(step.uses).toMatch(/^actions\/github-script@[0-9a-f]{40}$/);
+    expect(scriptStep.uses).toMatch(/^actions\/github-script@[0-9a-f]{40}$/);
 
     // `script` is the only input. `github-token:` swaps the restricted
     // `GITHUB_TOKEN` for an arbitrary PAT, and every other input changes how the
     // action behaves with that token in hand.
-    expect(Object.keys(step.with ?? {})).toEqual(["script"]);
+    expect(Object.keys(scriptStep.with ?? {})).toEqual(["script"]);
   });
 
   /**
@@ -520,10 +593,9 @@ describe("GitHub Actions hardening", () => {
    * everything it needs from the `context` object at runtime.
    */
   test("PR target enforcement's script interpolates nothing from the event", async () => {
-    const { workflow } = await readEnforcePrTarget();
-    const rawScript = String(
-      (workflow.jobs?.["enforce-target"]?.steps?.[0]?.with?.script as string) ?? "",
-    );
+    const { steps } = await readEnforcePrTarget();
+    const scriptStep = steps.find(step => typeof step.with?.script === "string");
+    const rawScript = String(scriptStep?.with?.script ?? "");
     expect(rawScript).not.toContain("${{");
   });
 
@@ -534,20 +606,24 @@ describe("GitHub Actions hardening", () => {
     // the draft when someone undoes it by hand. Dropping either silently makes
     // the gate one-shot.
     const types = workflow.on?.pull_request_target?.types ?? [];
-    expect([...types].sort()).toEqual(["edited", "opened", "ready_for_review", "reopened"]);
+    expect([...types].sort()).toEqual([
+      "edited",
+      "opened",
+      "ready_for_review",
+      "reopened",
+      "synchronize",
+    ]);
 
-    // The verdict is a live base-branch comparison, not a cached one: re-read the
-    // PR, then derive wrongBase from it. Pinning the comparison itself stops a
-    // rewrite that leaves the constant in place while hard-coding the answer.
+    // The verdict is a live PR read plus ancestry/description checks.
     expect(script).toContain("github.rest.pulls.get");
+    expect(script).toContain("collectPrQualityFailures");
+    expect(script).toContain("github.rest.repos.getCollaboratorPermissionLevel");
+    expect(script).toContain("github.rest.repos.compareCommitsWithBasehead");
     // The allow-list is the gate's whole policy, so it is pinned by value and
     // not just by shape: a widened list is the one edit that opens every base
     // at once while every behavioural scenario below still passes.
-    expect(script).toMatch(/const ALLOWED_BASES = \["dev", "dev2-go"\];/);
+    expect(script).toMatch(/const ALLOWED_BASES = \["dev"\];/);
     expect(script).toMatch(/const DEFAULT_BASE = "dev";/);
-    expect(script).toMatch(
-      /const wrongBase = !ALLOWED_BASES\.includes\(pr\.base\.ref\);/,
-    );
 
     // Every mutation targets the PR the event fired for. `pull_number` is the
     // only handle the script has, and an audit round repointed it at
@@ -622,6 +698,7 @@ describe("GitHub Actions hardening", () => {
     expect(callArgs("github.rest.pulls.update")).toEqual([
       ["owner", "pull_number", "repo", "title"],
       ["owner", "pull_number", "repo", "title"],
+      ["owner", "pull_number", "repo", "title"],
     ]);
 
     // Both comment writes address the PR being enforced, by its own number.
@@ -641,7 +718,13 @@ describe("GitHub Actions hardening", () => {
     // nobody reviewed.
     const restWrites = [...script.matchAll(/github\.rest\.[\w.]+/g)]
       .map(match => match[0])
-      .filter(name => !name.endsWith(".get") && !name.endsWith(".listComments"));
+      .filter(
+        name =>
+          !name.endsWith(".get") &&
+          !name.endsWith(".listComments") &&
+          name !== "github.rest.repos.getCollaboratorPermissionLevel" &&
+          name !== "github.rest.repos.compareCommitsWithBasehead",
+      );
     expect([...new Set(restWrites)].sort()).toEqual([
       "github.rest.issues.createComment",
       "github.rest.issues.updateComment",
@@ -689,14 +772,15 @@ describe("GitHub Actions hardening", () => {
     }
 
     const BOT = "github-actions[bot]";
-    const MARKER = "<!-- wrong-branch-enforcer -->";
+    const MARKER = "<!-- pr-quality-enforcer -->";
+    const LEGACY_MARKER = "<!-- wrong-branch-enforcer -->";
 
     function botComment(state: Record<string, unknown>, title = "Add a thing") {
       return {
         id: 7,
         user: { login: BOT },
         body: [
-          MARKER,
+          LEGACY_MARKER,
           `<!-- wrong-branch-enforcer-state:${JSON.stringify(state)} -->`,
           `about ${title}`,
         ].join("\n"),
@@ -707,72 +791,141 @@ describe("GitHub Actions hardening", () => {
       const result = await run({ pr: { base: { ref: "dev" } } });
 
       // Reads only. If a rewrite adds a write here, it appears in this list.
-      expect(methodsOf(result)).toEqual(["pulls.get", "issues.listComments"]);
-      expect(result.logs.join(" ")).toContain("Target branch is correct");
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.logs.join(" ")).toContain("All PR quality gates passed");
     });
 
-    test("a PR targeting dev2-go is left completely alone, exactly like dev", async () => {
-      // The whole point of the allow-list. dev2-go is the Go native-port
-      // integration line; before this change the gate prefixed and drafted
-      // every PR aimed at it, and GitHub refuses to merge a draft — so the
-      // line existed but nothing could land on it.
-      const result = await run({ pr: { base: { ref: "dev2-go" }, title: "Port the runtime entry", draft: false } });
+    const HEAD_SHA = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
+    const ANCESTRY_FAIL_COMPARES = {
+      [`main...${HEAD_SHA}`]: { ahead_by: 1, behind_by: 0 },
+      [`dev...${HEAD_SHA}`]: { ahead_by: 0, behind_by: 44 },
+    } as const;
 
-      expect(methodsOf(result)).toEqual(["pulls.get", "issues.listComments"]);
-      expect(result.logs.join(" ")).toContain("Target branch is correct");
-      // No comment either. Silence is the acceptance signal.
-      expect(callsTo(result, "issues.createComment")).toEqual([]);
+    test("wrong ancestry on dev fails without title prefix (#644)", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" } },
+        authorPermission: "read",
+        compareByBasehead: ANCESTRY_FAIL_COMPARES,
+      });
+
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "issues.createComment",
+        "issues.updateComment",
+        "graphql",
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
+      const commentBody = lastEnforcerCommentBody(result);
+      expect(commentBody).toContain("Wrong branch ancestry");
+      expect(commentBody).not.toContain("Wrong target branch");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+      expect(result.warnings.some((w) => w.includes("wrong ancestry"))).toBe(true);
+    });
+
+    test("maintainers skip ancestry enforcement with the same compares", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" } },
+        authorPermission: "write",
+        compareByBasehead: ANCESTRY_FAIL_COMPARES,
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("empty PR description fails and drafts", async () => {
+      const result = await run({ pr: { base: { ref: "dev" }, body: "" } });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("Pull request description");
+      expect(lastEnforcerCommentBody(result)).toContain("body is empty");
+      expect(callsTo(result, "graphql")).toHaveLength(1);
+    });
+
+    test("literal backslash-n in the body fails the description gate", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          body: "## Summary\\n\\nThis uses escaped newlines instead of real breaks.\\n\\n## Test plan\\n\\nAlso escaped here.",
+        },
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("literal `\\n` escape sequences");
+    });
+
+    test("clears prior bot state when every gate passes again", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" }, draft: true },
+        comments: [botComment({
+          version: 1,
+          active: true,
+          autoDraftedByBot: true,
+          titlePrefixedByBot: false,
+          ancestryFailed: true,
+          descriptionFailed: true,
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "issues.updateComment",
+      ]));
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+      const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
+      expect(cleared.body).toContain('"active":false');
+      expect(cleared.body).toContain("PR quality gates passed");
     });
 
     test("every base outside the allow-list is still blocked", async () => {
       // Widening a list is a one-token edit, and the danger is widening it too
-      // far. These four are the bases a contributor actually reaches for:
-      // the release branch, its old name, the prerelease train, and a topic
-      // branch. None of them is an integration line.
-      for (const ref of ["main", "master", "preview", "feature/x"]) {
+      // far. These are the bases a contributor actually reaches for: the
+      // release branch, its old name, the prerelease train, the retired Go
+      // native-port line, and a topic branch. None of them is an integration
+      // line any more — `dev` is the only one.
+      for (const ref of ["main", "master", "preview", "dev2-go", "feature/x"]) {
         const result = await run({ pr: { base: { ref }, title: "Add a thing", draft: false } });
 
-        expect(methodsOf(result)).toEqual([
-          "pulls.get",
-          "issues.listComments",
+        expect(methodsOf(result)).toEqual(readsWrongBase([
           "issues.createComment",
           "pulls.update",
+          "issues.updateComment",
           "graphql",
-        ]);
-        const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
-        expect(comment.body).toContain(`\`${ref}\``);
+          "issues.updateComment",
+          "issues.updateComment",
+        ]));
+        expect(lastEnforcerCommentBody(result)).toContain(`\`${ref}\``);
+        expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
     });
 
-    test("a PR retargeted from main to dev2-go is restored, not left prefixed", async () => {
-      // The migration case the allow-list creates: `wrongBase` now goes false
-      // for two bases, so the restoration path has to fire for dev2-go the
-      // same way it fires for dev. If it does not, a contributor who follows
-      // the bot's own instruction ends up with a permanently renamed, drafted
-      // PR and no state left to explain it.
+    test("a PR retargeted from main to dev is restored, not left prefixed", async () => {
+      // A contributor who follows the bot's own instruction must end up with
+      // their original title and ready state back. If the restoration path
+      // does not fire, they are left with a permanently renamed, drafted PR
+      // and no state to explain it.
       const result = await run({
-        pr: { base: { ref: "dev2-go" }, draft: true, title: "[WRONG BRANCH] Port the runtime entry" },
+        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Port the runtime entry" },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
         "graphql",
         "issues.updateComment",
-      ]);
+      ]));
       expect(callsTo(result, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Port the runtime entry" },
       ]);
       const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
       expect(cleared.body).toContain('"active":false');
-      // The confirmation names where the PR actually went, not a hard-coded
-      // default — otherwise it tells a dev2-go contributor they landed on dev.
-      expect(cleared.body).toContain("now targets `dev2-go`");
+      // The confirmation names where the PR actually went, read from the live
+      // PR rather than assumed.
+      expect(cleared.body).toContain("now targets `dev`");
     });
 
-    test("a PR moved from dev2-go back to main is enforced again from a cleared state", async () => {
+    test("a PR moved from dev back to main is enforced again from a cleared state", async () => {
       // The other half of the round trip. After a restoration the marker is
       // inactive, so a move back out has to build fresh state rather than
       // reuse the cleared one, and must not stack a second prefix.
@@ -781,35 +934,34 @@ describe("GitHub Actions hardening", () => {
         comments: [botComment({ version: 1, active: false, autoDraftedByBot: false, titlePrefixedByBot: false })],
       });
 
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.updateComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
-      ]);
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
       expect(callsTo(result, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Port the runtime entry" },
       ]);
-      const [comment] = callsTo(result, "issues.updateComment") as [{ body: string }];
-      expect(comment.body).toContain('"active":true');
-      expect(comment.body).toContain('"autoDraftedByBot":true');
-      expect(comment.body).toContain('"titlePrefixedByBot":true');
+      expect(lastEnforcerCommentBody(result)).toContain('"active":true');
+      expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
+      expect(lastEnforcerCommentBody(result)).toContain('"titlePrefixedByBot":true');
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 
-    test("the wrong-target explanation lists every allowed base and names the default", async () => {
-      // Two branches are legitimate and only one is the default, so listing
-      // them without ranking them sends ordinary contributions to the Go port
-      // line. The instruction has to say which one to pick and why the other
-      // exists.
+    test("the wrong-target explanation names the one allowed base", async () => {
+      // `dev` is the only integration line, so the instruction has to name it
+      // without offering an alternative the gate would then reject.
       const result = await run({
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
       });
-      const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
+      const commentBody = lastEnforcerCommentBody(result);
 
-      expect(comment.body).toContain("must target one of `dev` or `dev2-go`");
-      expect(comment.body).toContain("Please retarget this PR to `dev`");
-      expect(comment.body).toContain("only for scoped Go native-port work");
+      expect(commentBody).toContain("must target one of `dev`");
+      expect(commentBody).toContain("Please retarget this PR to `dev`");
+      expect(commentBody).not.toContain("dev2-go");
     });
 
     test("a PR targeting main is prefixed, drafted, and explained — and nothing else", async () => {
@@ -817,15 +969,17 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
       });
 
-      // The comment lands before the mutations, so a rerun after a failed
-      // mutation can still find the restoration state.
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      // Pending ownership first, then title prefix, then claim autoDraftedByBot and
+      // checkpoint before convertToDraft so a successful convert followed by a
+      // failed comment still restores later.
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
-      ]);
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
 
       // The title update carries the title and nothing else. `base`, `state`
       // and `body` are all accepted by this endpoint; an audit round added
@@ -834,17 +988,22 @@ describe("GitHub Actions hardening", () => {
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Add a thing" },
       ]);
 
-      // The comment addresses this PR, by its own number.
-      const [comment] = callsTo(result, "issues.createComment") as [{ issue_number: number; body: string }];
-      expect(comment.issue_number).toBe(42);
-      expect(comment.body).toContain(MARKER);
-      expect(comment.body).toContain("@contributor");
+      // The first comment create addresses this PR, by its own number.
+      const [created] = callsTo(result, "issues.createComment") as [{ issue_number: number; body: string }];
+      expect(created.issue_number).toBe(42);
+      expect(created.body).toContain(MARKER);
+      const commentBody = lastEnforcerCommentBody(result);
+      expect(commentBody).toContain("@contributor");
+      expect(commentBody).toContain('"autoDraftedByBot":true');
 
       // The only GraphQL mutation is the draft conversion — not a retarget.
       const [draft] = callsTo(result, "graphql") as [{ query: string; variables: unknown }];
       expect(draft.query).toContain("convertPullRequestToDraft");
       expect(draft.query).not.toContain("updatePullRequest");
       expect(draft.variables).toEqual({ pullRequestId: "PR_kwDOnode42" });
+
+      // Wrong-base runs must fail the required check even when mutations succeed.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 
     test("a PR that was already a draft is not un-drafted afterwards", async () => {
@@ -852,16 +1011,16 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, draft: true },
       });
 
-      // No draft conversion: it is already a draft. And the state it records
-      // says so, which is what stops the restore path from marking it ready.
-      expect(methodsOf(wrong)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      // No draft conversion: it is already a draft. Pending ownership first,
+      // then title prefix, then final explanation. State records that the bot
+      // did not draft — which stops restore from marking it ready.
+      expect(methodsOf(wrong)).toEqual(readsWrongBase([
         "issues.createComment",
         "pulls.update",
-      ]);
-      const [comment] = callsTo(wrong, "issues.createComment") as [{ body: string }];
-      expect(comment.body).toContain('"autoDraftedByBot":false');
+        "issues.updateComment",
+      ]));
+      expect(lastEnforcerCommentBody(wrong)).toContain('"autoDraftedByBot":false');
+      expect(wrong.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
 
       // Now retarget it correctly, feeding that state back in.
       const restored = await run({
@@ -870,12 +1029,10 @@ describe("GitHub Actions hardening", () => {
       });
 
       // The prefix comes off; the draft stays. No GraphQL at all.
-      expect(methodsOf(restored)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(restored)).toEqual(readsAllowedBase([
         "pulls.update",
         "issues.updateComment",
-      ]);
+      ]));
       expect(callsTo(restored, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
       ]);
@@ -887,13 +1044,11 @@ describe("GitHub Actions hardening", () => {
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
         "graphql",
         "issues.updateComment",
-      ]);
+      ]));
       expect(callsTo(result, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
       ]);
@@ -905,7 +1060,7 @@ describe("GitHub Actions hardening", () => {
       const [update] = callsTo(result, "issues.updateComment") as [{ comment_id: number; body: string }];
       expect(update.comment_id).toBe(7);
       expect(update.body).toContain('"active":false');
-      expect(update.body).toContain("Target branch corrected");
+      expect(update.body).toContain("PR quality gates passed");
     });
 
     test("only this workflow's own prefix is removed, not a contributor's edits", async () => {
@@ -925,8 +1080,11 @@ describe("GitHub Actions hardening", () => {
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
-      // The comment is refreshed; the title and draft state are already right.
-      expect(methodsOf(result)).toEqual(["pulls.get", "issues.listComments", "issues.updateComment"]);
+      // The comment is refreshed (pending + final); title and draft are already right.
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
     });
 
     test("the verdict comes from the fetched PR, not the stale event payload", async () => {
@@ -942,13 +1100,14 @@ describe("GitHub Actions hardening", () => {
       // Exact equality, not `toContain`. An audit round hung an extra
       // `github.request("POST /repos/attacker/other/issues", …)` off precisely
       // this path because it was the one scenario asserting loosely.
-      expect(methodsOf(wentWrong)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(wentWrong)).toEqual(readsWrongBase([
         "issues.createComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
-      ]);
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
       expect(callsTo(wentWrong, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Add a thing" },
       ]);
@@ -958,7 +1117,7 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "dev" } },
         eventPayload: { base: { ref: "main" } },
       });
-      expect(methodsOf(wasFixed)).toEqual(["pulls.get", "issues.listComments"]);
+      expect(methodsOf(wasFixed)).toEqual(readsAllowedBase());
     });
 
     test("what the comment tells the author is the live base, not the event's", async () => {
@@ -972,20 +1131,19 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
         eventPayload: { base: { ref: "dev" }, title: "Add a thing", draft: false },
       });
-      const [posted] = callsTo(wrongTarget, "issues.createComment") as [{ body: string }];
-      expect(posted.body).toContain("currently targets `main`");
-      expect(posted.body).not.toContain("currently targets `dev`");
+      expect(lastEnforcerCommentBody(wrongTarget)).toContain("currently targets `main`");
+      expect(lastEnforcerCommentBody(wrongTarget)).not.toContain("currently targets `dev`");
 
       // The corrected-path sentence: the event still carries the old wrong
-      // base, the live PR is on dev2-go. Naming the event's base here tells the
+      // base, the live PR is on dev. Naming the event's base here tells the
       // author their retarget did not take.
       const corrected = await run({
-        pr: { base: { ref: "dev2-go" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         eventPayload: { base: { ref: "main" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: false, titlePrefixedByBot: true })],
       });
       const [edited] = callsTo(corrected, "issues.updateComment") as [{ body: string }];
-      expect(edited.body).toContain("now targets `dev2-go`");
+      expect(edited.body).toContain("now targets `dev`");
       expect(edited.body).not.toContain("now targets `main`");
     });
 
@@ -1010,14 +1168,11 @@ describe("GitHub Actions hardening", () => {
 
       // Found it: the prefix comes off, the PR is marked ready, and the
       // existing comment is edited rather than duplicated.
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsAllowedBasePaged([
         "pulls.update",
         "graphql",
         "issues.updateComment",
-      ]);
+      ]));
       expect(callsTo(result, "issues.createComment")).toEqual([]);
     });
 
@@ -1037,13 +1192,14 @@ describe("GitHub Actions hardening", () => {
 
       // Enforcement still happens, and the unreadable comment is repaired in
       // place rather than duplicated.
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.updateComment",
         "pulls.update",
+        "issues.updateComment",
         "graphql",
-      ]);
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
       expect(result.warnings.join(" ")).toContain("Could not parse stored workflow state");
     });
 
@@ -1065,11 +1221,10 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment(noRecordedChanges)],
       });
-      expect(methodsOf(stillWrong)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(stillWrong)).toEqual(readsWrongBase([
         "issues.updateComment",
-      ]);
+        "issues.updateComment",
+      ]));
 
       // Corrected: nothing to undo, but the state must still be cleared or the
       // next wrong-target event resumes from a stale record.
@@ -1077,14 +1232,10 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment(noRecordedChanges)],
       });
-      expect(methodsOf(corrected)).toEqual([
-        "pulls.get",
-        "issues.listComments",
-        "issues.updateComment",
-      ]);
+      expect(methodsOf(corrected)).toEqual(readsAllowedBase(["issues.updateComment"]));
       const [cleared] = callsTo(corrected, "issues.updateComment") as [{ body: string }];
       expect(cleared.body).toContain('"active":false');
-      expect(cleared.body).toContain("Target branch corrected");
+      expect(cleared.body).toContain("PR quality gates passed");
     });
 
     test("a PR undrafted by hand before the retarget still gets its state cleared", async () => {
@@ -1099,12 +1250,10 @@ describe("GitHub Actions hardening", () => {
       });
 
       // Nothing to un-draft, the prefix comes off, and the state is cleared.
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
         "issues.updateComment",
-      ]);
+      ]));
       const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
       expect(cleared.body).toContain('"active":false');
     });
@@ -1119,12 +1268,10 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(callsTo(result, "pulls.update")).toEqual([]);
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "issues.updateComment",
-      ]);
+      ]));
     });
 
     test("the explanation tells the contributor what to do and where to read", async () => {
@@ -1137,20 +1284,18 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false, user: { login: "someone-else" } },
       });
 
-      const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
+      const commentBody = lastEnforcerCommentBody(result);
       // Addressed to the PR author, so GitHub actually notifies them.
-      expect(comment.body).toContain("@someone-else");
+      expect(commentBody).toContain("@someone-else");
       // Names every branch involved, so the instruction is actionable without
-      // context: where the PR is now, where it should go, and the one other
-      // base that is legitimate but not the default.
-      expect(comment.body).toContain("`main`");
-      expect(comment.body).toContain("`dev`");
-      expect(comment.body).toContain("`dev2-go`");
+      // context: where the PR is now and where it should go.
+      expect(commentBody).toContain("`main`");
+      expect(commentBody).toContain("`dev`");
       // Points at the documentation rather than assuming the reader knows.
-      expect(comment.body).toContain("https://lidge-jun.github.io/opencodex/contributing/");
+      expect(commentBody).toContain("https://lidge-jun.github.io/opencodex/contributing/");
       // And carries the state the next run needs.
-      expect(comment.body).toContain(MARKER);
-      expect(comment.body).toContain('"version":1');
+      expect(commentBody).toContain(MARKER);
+      expect(commentBody).toContain('"version":1');
     });
 
     test("comment listing asks for full pages, so the bot's own comment is found", async () => {
@@ -1203,13 +1348,11 @@ describe("GitHub Actions hardening", () => {
           pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
           comments: [botComment(active)],
         });
-        expect(methodsOf(restored)).toEqual([
-          "pulls.get",
-          "issues.listComments",
+        expect(methodsOf(restored)).toEqual(readsAllowedBase([
           "pulls.update",
           "graphql",
           "issues.updateComment",
-        ]);
+        ]));
         expect(callsTo(restored, "pulls.update")).toEqual([
           { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
         ]);
@@ -1224,16 +1367,17 @@ describe("GitHub Actions hardening", () => {
           pr: { base: { ref: "main" }, draft: false, title: "Add a thing" },
           comments: [botComment(active)],
         });
-        expect(methodsOf(wrong)).toEqual([
-          "pulls.get",
-          "issues.listComments",
+        expect(methodsOf(wrong)).toEqual(readsWrongBase([
           "issues.updateComment",
           "pulls.update",
+          "issues.updateComment",
           "graphql",
-        ]);
-        const [refreshed] = callsTo(wrong, "issues.updateComment") as [{ body: string }];
-        expect(refreshed.body).toContain(`"version":${version}`);
-        expect(refreshed.body).toContain('"active":true');
+          "issues.updateComment",
+          "issues.updateComment",
+        ]));
+        expect(lastEnforcerCommentBody(wrong)).toContain(`"version":${version}`);
+        expect(lastEnforcerCommentBody(wrong)).toContain('"active":true');
+        expect(wrong.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
     });
 
@@ -1254,13 +1398,11 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment({ version: 1, active: "true", autoDraftedByBot: 1, titlePrefixedByBot: "yes" })],
       });
-      expect(methodsOf(loose)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(loose)).toEqual(readsAllowedBase([
         "pulls.update",
         "graphql",
         "issues.updateComment",
-      ]);
+      ]));
       expect(callsTo(loose, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
       ]);
@@ -1271,28 +1413,28 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: null, titlePrefixedByBot: 0 })],
       });
-      expect(methodsOf(falsy)).toEqual([
-        "pulls.get",
-        "issues.listComments",
-        "issues.updateComment",
-      ]);
+      expect(methodsOf(falsy)).toEqual(readsAllowedBase(["issues.updateComment"]));
       const [cleared] = callsTo(falsy, "issues.updateComment") as [{ body: string }];
       expect(cleared.body).toContain('"active":false');
     });
 
-    test("the state comment is written before the PR is touched", async () => {
-      // Order is the recovery story. The comment records what the workflow is
-      // about to change; if a mutation fails afterwards, a rerun reads that
-      // record and finishes the job. Write the PR first and a failure in
-      // between leaves a renamed, drafted PR with no record that the bot did
-      // it — permanently stuck. The scenario above asserts the full call list,
-      // but this states the invariant on its own so a reordering says why.
+    test("ownership comment is checkpointed before mutations and finalized after", async () => {
+      // Ownership is written before title/draft. autoDraftedByBot is claimed and
+      // checkpointed before convertToDraft so a successful convert followed by a
+      // failed comment still restores later.
       const result = await run({ pr: { base: { ref: "main" }, draft: false } });
       const methods = methodsOf(result);
-      const comment = methods.indexOf("issues.createComment");
-      expect(comment).toBeGreaterThan(-1);
-      expect(comment).toBeLessThan(methods.indexOf("pulls.update"));
-      expect(comment).toBeLessThan(methods.indexOf("graphql"));
+      const pending = methods.indexOf("issues.createComment");
+      const title = methods.indexOf("pulls.update");
+      const draftClaim = methods.indexOf("issues.updateComment");
+      const draft = methods.indexOf("graphql");
+      const finalUpdate = methods.lastIndexOf("issues.updateComment");
+      expect(pending).toBeGreaterThan(-1);
+      expect(pending).toBeLessThan(title);
+      expect(title).toBeLessThan(draftClaim);
+      expect(draftClaim).toBeLessThan(draft);
+      expect(draft).toBeLessThan(finalUpdate);
+      expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
     });
 
     test("a title that is exactly the prefix is still enforced", async () => {
@@ -1305,18 +1447,17 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "[WRONG BRANCH] ", draft: false },
       });
 
-      // Already prefixed, so no title write — but the state and the draft
-      // conversion still have to happen.
+      // Already prefixed, so no title write — but pending/draft/final still run.
       expect(callsTo(result, "pulls.update")).toEqual([]);
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
+        "issues.updateComment",
         "graphql",
-      ]);
-      const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
-      expect(comment.body).toContain('"titlePrefixedByBot":false');
-      expect(comment.body).toContain('"autoDraftedByBot":true');
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
+      expect(lastEnforcerCommentBody(result)).toContain('"titlePrefixedByBot":false');
+      expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
     });
 
     test("an empty title is enforced rather than skipped", async () => {
@@ -1330,12 +1471,11 @@ describe("GitHub Actions hardening", () => {
       expect(callsTo(result, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] " },
       ]);
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
         "pulls.update",
-      ]);
+        "issues.updateComment",
+      ]));
     });
 
     test("an already-prefixed title is never prefixed twice", async () => {
@@ -1353,14 +1493,12 @@ describe("GitHub Actions hardening", () => {
       // Asserting only the absent write would let an early return keyed on the
       // doubled prefix pass, since that skips the write too.
       expect(callsTo(result, "pulls.update")).toEqual([]);
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
-      ]);
-      const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
-      expect(comment.body).toContain('"titlePrefixedByBot":false');
-      expect(comment.body).toContain('"active":true');
+        "issues.updateComment",
+      ]));
+      expect(lastEnforcerCommentBody(result)).toContain('"titlePrefixedByBot":false');
+      expect(lastEnforcerCommentBody(result)).toContain('"active":true');
     });
 
     test("a title that already carries the prefix twice is still enforced", async () => {
@@ -1374,17 +1512,17 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "[WRONG BRANCH] [WRONG BRANCH] mine", draft: false },
       });
 
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsWrongBase([
         "issues.createComment",
+        "issues.updateComment",
         "graphql",
-      ]);
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
       // Already prefixed by the `startsWith` test, so no third prefix is added.
       expect(callsTo(result, "pulls.update")).toEqual([]);
-      const [comment] = callsTo(result, "issues.createComment") as [{ body: string }];
-      expect(comment.body).toContain('"active":true');
-      expect(comment.body).toContain('"autoDraftedByBot":true');
+      expect(lastEnforcerCommentBody(result)).toContain('"active":true');
+      expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
     });
 
     test("with two bot comments, the workflow reads and writes the first", async () => {
@@ -1410,13 +1548,11 @@ describe("GitHub Actions hardening", () => {
 
       // The first comment's state is the one honoured: it says the bot
       // prefixed and drafted, so both are undone.
-      expect(methodsOf(result)).toEqual([
-        "pulls.get",
-        "issues.listComments",
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
         "graphql",
         "issues.updateComment",
-      ]);
+      ]));
       // And the first comment is the one rewritten, not the second.
       const [updated] = callsTo(result, "issues.updateComment") as [{ comment_id: number }];
       expect(updated.comment_id).toBe(7);
@@ -1532,7 +1668,7 @@ describe("GitHub Actions hardening", () => {
       expect(probe["core.isDebug"]).toBe(false);
 
       // And the normal path is unaffected by the probe scenario.
-      expect(methodsOf(result)).toEqual(["pulls.get", "issues.listComments"]);
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
     });
 
     test("the harness runs the Node major the pinned action declares", async () => {
@@ -1564,27 +1700,36 @@ describe("GitHub Actions hardening", () => {
       expect(probe.bun).toBe("undefined");
     });
 
-    test("an API failure is never swallowed, whatever status it carries", async () => {
-      // Octokit rejects with a `RequestError` that has a `.status`, and an
-      // audit round swallowed exactly one code:
-      //
-      //     catch (error) { if (error.status === 404) return; throw error; }
-      //
-      // A green workflow, an un-drafted PR. Drive the failure at several
-      // statuses so a code-specific catch cannot hide in the gap.
+    test("a draft GraphQL failure is soft-failed with accurate state and a hard check failure", async () => {
+      // Observed on PR #626: convertPullRequestToDraft failed with
+      // "Resource not accessible by integration", the job crashed before
+      // setFailed, and the PR stayed ready. Soft-catch the draft mutation,
+      // record autoDraftedByBot:false, explain the fallback, and still fail
+      // the required check so merge stays blocked.
       const { script } = await readEnforcePrTarget();
 
       for (const status of [403, 404, 422, 500]) {
-        await expect(
-          runEnforcePrTarget(script, {
-            pr: { base: { ref: "main" }, draft: false },
-            failOn: ["graphql"],
-            failStatus: status,
-          }),
-        ).rejects.toThrow(/simulated failure: graphql/);
+        const result = await runEnforcePrTarget(script, {
+          pr: { base: { ref: "main" }, draft: false },
+          failOn: ["graphql"],
+          failStatus: status,
+        });
+        expect(methodsOf(result)).toEqual(readsWrongBase([
+          "issues.createComment",
+          "pulls.update",
+          "issues.updateComment",
+          "graphql",
+          "issues.updateComment",
+        ]));
+        const commentBody = lastEnforcerCommentBody(result);
+        expect(commentBody).toContain('"autoDraftedByBot":false');
+        expect(commentBody).toContain("Automatic draft conversion failed");
+        expect(result.warnings.some((w) => w.includes("Could not convert pull request to draft"))).toBe(true);
+        expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
 
-      // Same for the title update, which fails before the draft conversion.
+      // Title update failures still propagate — without the prefix the gate
+      // has no durable signal on the PR itself.
       for (const status of [403, 404, 422]) {
         await expect(
           runEnforcePrTarget(script, {
@@ -1596,40 +1741,44 @@ describe("GitHub Actions hardening", () => {
       }
     });
 
-    test("a failed draft conversion propagates, and the state is already stored", async () => {
-      // Observed on PR #527 (devlog .../050_live_evidence.md): the GraphQL
-      // mutation failed, the workflow ended in failure, and the PR stayed
-      // ready — but the comment already claimed `autoDraftedByBot: true`.
-      //
-      // The ordering is deliberate: writing the state first is what makes a
-      // rerun recoverable. This pins both halves of it, including the part
-      // that is wrong — the recorded state disagrees with reality until the
-      // rerun. The redesign in 040 owns fixing that; this test documents it so
-      // the fix is visible when it lands.
+    test("a failed draft conversion does not claim autoDraftedByBot", async () => {
       const { script } = await readEnforcePrTarget();
-      const observed: string[] = [];
-
-      await expect(
-        runEnforcePrTarget(script, {
-          pr: { base: { ref: "main" }, draft: false },
-          failOn: ["graphql"],
-        }).catch((error: unknown) => {
-          observed.push(String(error));
-          throw error;
-        }),
-      ).rejects.toThrow(/simulated failure: graphql/);
-
-      // The failure is not swallowed. An audit round wrapped the whole script
-      // in `try { … } catch {}`, which turns every API failure into a silent
-      // no-op and a green check; this assertion is what makes that visible.
-      expect(observed).toHaveLength(1);
-
-      // …and the state comment went out before the mutation that failed.
-      const upTo = await runEnforcePrTarget(script, {
+      const result = await runEnforcePrTarget(script, {
         pr: { base: { ref: "main" }, draft: false },
-        failOn: ["pulls.update"],
-      }).catch(() => null);
-      expect(upTo).toBeNull();
+        failOn: ["graphql"],
+      });
+      const commentBody = lastEnforcerCommentBody(result);
+      expect(commentBody).toContain('"autoDraftedByBot":false');
+      expect(commentBody).toContain('"titlePrefixedByBot":true');
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+    });
+
+    test("a failed ready-for-review conversion keeps ownership active for retry", async () => {
+      const { script } = await readEnforcePrTarget();
+      const result = await runEnforcePrTarget(script, {
+        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        comments: [
+          {
+            id: 7,
+            user: { login: "github-actions[bot]" },
+            body: [
+              "<!-- wrong-branch-enforcer -->",
+              `<!-- wrong-branch-enforcer-state:${JSON.stringify({
+                version: 1,
+                active: true,
+                autoDraftedByBot: true,
+                titlePrefixedByBot: true,
+              })} -->`,
+            ].join("\n"),
+          },
+        ],
+        failOn: ["graphql"],
+      });
+      const commentBody = lastEnforcerCommentBody(result);
+      expect(commentBody).toContain('"active":true');
+      expect(commentBody).toContain('"autoDraftedByBot":true');
+      expect(commentBody).toContain("Automatic ready-for-review conversion failed");
+      expect(result.warnings.some((w) => w.includes("Could not mark pull request ready for review"))).toBe(true);
     });
   });
 
@@ -1646,6 +1795,7 @@ describe("GitHub Actions hardening", () => {
     expect(script).toMatch(/storedState\.titlePrefixedByBot/);
     expect(script).toMatch(/await\s+convertToDraft\(\)/);
     expect(script).toMatch(/await\s+markReadyForReview\(\)/);
+    expect(script).toMatch(/core\.setFailed\(/);
 
     // Tie each helper to its GraphQL body. Asserting that the call and the
     // mutation name both appear somewhere leaves a gap: declaring an empty
@@ -1671,26 +1821,21 @@ describe("GitHub Actions hardening", () => {
     // helpers and both state fields were still textually present. Presence of a
     // call proves nothing about whether it can be reached.
     expect(script).toMatch(/\n\s*if \(!storedState\?\.active\) \{\n/);
-    expect(script).toMatch(/\n\s*if \(wrongBase\) \{\n/);
+    expect(script).toMatch(/\n\s*if \(failures\.length > 0\) \{\n/);
 
-    // Observed on PR #527 (devlog .../050_live_evidence.md): the state is written
-    // BEFORE the mutation and is not reconciled when the mutation fails, so a
-    // failed convertToDraft still records autoDraftedByBot: true. This documents
-    // that ordering rather than endorsing it — the redesign in 040 owns fixing
-    // it, and this assertion should change with it.
-    //
-    // Scope the comparison to the wrong-base branch: upsertComment is called from
-    // both branches, so comparing across the whole script would measure whichever
-    // call happens to come first in the text.
-    const branchStart = script.indexOf("if (wrongBase) {");
+    // Pending ownership is written before mutations; convertToDraft runs next;
+    // a later upsertComment records autoDraftedByBot only after success (#631).
+    const branchStart = script.indexOf("if (failures.length > 0) {");
     expect(branchStart).toBeGreaterThan(-1);
     const branch = script.slice(branchStart);
-    const stateWriteIndex = branch.indexOf("await upsertComment(");
+    const pendingWriteIndex = branch.indexOf("await upsertComment(");
     const draftCallIndex = branch.indexOf("await convertToDraft()");
-    expect(stateWriteIndex).toBeGreaterThan(-1);
-    expect(draftCallIndex).toBeGreaterThan(stateWriteIndex);
+    const afterDraftWriteIndex = branch.indexOf("await upsertComment(", draftCallIndex);
+    expect(pendingWriteIndex).toBeGreaterThan(-1);
+    expect(draftCallIndex).toBeGreaterThan(-1);
+    expect(pendingWriteIndex).toBeLessThan(draftCallIndex);
+    expect(afterDraftWriteIndex).toBeGreaterThan(draftCallIndex);
   });
-
 
   test("docs deployment is pinned, bounded, and scoped to Pages", async () => {
     const workflow = await readText(".github/workflows/deploy-docs.yml");

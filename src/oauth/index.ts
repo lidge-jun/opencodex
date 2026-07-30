@@ -14,7 +14,8 @@ import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
-import { effectiveGoogleMode, getProviderRegistryEntry } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
+import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
@@ -38,6 +39,7 @@ export {
   type OAuthHealthLabel,
 } from "./health";
 export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } from "./store";
+import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 const REFRESH_SKEW_MS = 60_000;
 export interface OAuthAccessSnapshot {
@@ -59,6 +61,11 @@ function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 
 export interface LoginOpts { forceLogin?: boolean; /** When set, persist into this account slot and require matching identity. */ reauthAccountId?: string }
+
+export interface LoginFlowLifecycle {
+  /** Runs after background credential/config persistence settles, before status becomes done. */
+  onSettled?: () => void | Promise<void>;
+}
 
 interface OAuthProviderDef {
   login(ctrl: OAuthController, opts?: LoginOpts): Promise<OAuthCredentials>;
@@ -461,6 +468,22 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
   return resolveEnvValue(prov.apiKey);
 }
 
+function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConfig): OcxProviderConfig {
+  const entry = getProviderRegistryEntry(providerName);
+  if (
+    prov.authMode !== "oauth"
+    || entry?.authKind !== "oauth"
+    || entry.allowBaseUrlOverride === true
+    || /\{[^}]*\}/.test(entry.baseUrl)
+    || !providerMatchesRegistryTransport(providerName, prov)
+  ) {
+    return prov;
+  }
+  // Normal routing pins fixed OAuth presets before adapter-specific transport resolution.
+  // Discovery must do the same so a stale or modified config baseUrl never receives a token.
+  return { ...prov, adapter: entry.adapter, baseUrl: entry.baseUrl };
+}
+
 /**
  * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
  * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
@@ -473,20 +496,27 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
  * response.
  */
 export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | undefined, providerName = ""): { url: string; headers: Record<string, string> } {
+  const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
   const effectiveProvider = resolveProviderTransport(
     providerName,
-    prov,
+    transportSeed,
     undefined,
     providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
   );
   const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
+  const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
+    providerName,
+    prov,
+    effectiveProvider.baseUrl,
+    defaultUrl,
+  );
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
     // enough to list everything without a pageToken loop. Vertex/antigravity keep the
     // generic branch (they fall back to their static model lists).
     if (apiKey) headers["x-goog-api-key"] = apiKey;
-    return { url: `${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`, headers };
+    return { url: discoveryUrl(`${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`), headers };
   }
   if (effectiveProvider.adapter === "anthropic") {
     const base = effectiveProvider.baseUrl.replace(/\/v1\/?$/, "");
@@ -498,10 +528,10 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
       if (effectiveProvider.apiKeyTransport === "bearer") headers["Authorization"] = `Bearer ${apiKey}`;
       else headers["x-api-key"] = apiKey;
     }
-    return { url: `${base}/v1/models?limit=1000`, headers };
+    return { url: discoveryUrl(`${base}/v1/models?limit=1000`), headers };
   }
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return { url: `${effectiveProvider.baseUrl}/models`, headers };
+  return { url: discoveryUrl(`${effectiveProvider.baseUrl}/models`), headers };
 }
 
 /**
@@ -617,6 +647,8 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
+  if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
   const next: OcxProviderConfig = { ...def.providerConfig };
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
@@ -681,6 +713,16 @@ export async function runLogin(
 ): Promise<OAuthCredentials> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
+  const loadLatestConfig = deps.loadConfig ?? loadConfig;
+  const saveLatestConfig = deps.saveConfig ?? saveConfig;
+  if (provider !== "chatgpt") {
+    const preflightConfig = loadLatestConfig();
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(
+      preflightConfig.codexAccountNamespaces,
+      provider,
+    );
+    if (namespaceCollision) throw new Error(namespaceCollision);
+  }
   // loginKiro keys its pending CLI-session transaction by object identity. Keep this exact object
   // for settlement even when source normalization below creates a derived credential object.
   const shouldRollbackKiroAccounts = provider === "kiro" && opts?.forceLogin === true;
@@ -691,6 +733,12 @@ export async function runLogin(
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
   const settleKiroTransaction = deps.settleKiroLoginTransaction ?? settleKiroLoginTransaction;
   try {
+    // Validate the provider row before credential persistence. A namespace claimed during the
+    // credential write is handled again below before the latest row is re-upserted.
+    if (provider !== "chatgpt") {
+      const preCommitConfig = loadLatestConfig();
+      upsertOAuthProvider(preCommitConfig, provider);
+    }
     if (opts?.reauthAccountId) {
       const existing = getAccountCredential(provider, opts.reauthAccountId);
       if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
@@ -712,9 +760,21 @@ export async function runLogin(
       });
     }
     if (provider !== "chatgpt") {
-      const config = (deps.loadConfig ?? loadConfig)();
-      upsertOAuthProvider(config, provider);
-      (deps.saveConfig ?? saveConfig)(config);
+      // Re-run against post-credential state so same-provider API-key additions, removals,
+      // and active-key switches survive. A late namespace claim wins over provider creation.
+      const latestConfig = loadLatestConfig();
+      const lateCollision = codexAccountNamespaceProviderCollisionError(
+        latestConfig.codexAccountNamespaces,
+        provider,
+      );
+      if (lateCollision) {
+        throw new Error(
+          `${lateCollision}. The credential for "${provider}" was saved, but the provider entry was not written. `
+          + "Rename the account selector, then re-run the login.",
+        );
+      }
+      upsertOAuthProvider(latestConfig, provider);
+      saveLatestConfig(latestConfig);
     }
   } catch (error) {
     const errors: unknown[] = [error];
@@ -894,7 +954,11 @@ export function cancelLoginFlow(provider: string): boolean {
   return true;
 }
 
-export async function startLoginFlow(provider: string, opts?: LoginOpts): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
+export async function startLoginFlow(
+  provider: string,
+  opts?: LoginOpts,
+  lifecycle?: LoginFlowLifecycle,
+): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
   const existing = loginState.get(provider);
@@ -917,22 +981,44 @@ export async function startLoginFlow(provider: string, opts?: LoginOpts): Promis
       onManualCodeInput: (expectedState?: string) => waitForManualLoginCode(provider, abort.signal, expectedState),
       signal: abort.signal,
     };
-    // Background: runLogin persists the credential + upserts the provider entry to disk config.
-    runLogin(provider, ctrl, opts)
-      .then(() => {
+    const settle = async (error?: unknown): Promise<void> => {
+      let finalError = error;
+      try {
+        await lifecycle?.onSettled?.();
+      } catch (settleError) {
+        // A successful credential/config commit is not fully live until its owner reconciles the
+        // runtime config. For an already-failed login, keep the original recovery error.
+        if (finalError === undefined) finalError = settleError;
+      }
+      if (finalError === undefined) {
         loginAbort.delete(provider);
         clearManualCodeSlot(provider);
         loginState.set(provider, { done: true });
         // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
         // resolve so the GUI call returns instead of hanging.
         if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
-      })
-      .catch((e: unknown) => {
-        loginAbort.delete(provider);
-        clearManualCodeSlot(provider);
-        const msg = e instanceof Error ? e.message : String(e);
-        loginState.set(provider, { done: true, error: msg });
-        if (!urlResolved) reject(e);
-      });
+        return;
+      }
+
+      const e = finalError;
+      loginAbort.delete(provider);
+      clearManualCodeSlot(provider);
+      const msg = e instanceof Error ? e.message : String(e);
+      loginState.set(provider, { done: true, error: msg });
+      if (!urlResolved) reject(e);
+    };
+    // Background: runLogin persists the credential + provider entry to disk. The lifecycle hook
+    // lets a long-lived server config adopt that settled state before clients observe done=true.
+    void runLogin(provider, ctrl, opts).then(
+      () => settle(),
+      (e: unknown) => settle(e),
+    ).catch((e: unknown) => {
+      // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
+      loginAbort.delete(provider);
+      clearManualCodeSlot(provider);
+      const msg = e instanceof Error ? e.message : String(e);
+      loginState.set(provider, { done: true, error: msg });
+      if (!urlResolved) reject(e);
+    });
   });
 }

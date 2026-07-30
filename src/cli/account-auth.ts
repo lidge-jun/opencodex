@@ -137,11 +137,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt++) {
     await Bun.sleep(2_000);
     const state = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, {}, deps);
+    if (state.error) throw new CliUsageError(String(state.error));
     if (state.loggedIn === true) {
       printData(state, wantsJson, [`Logged in to ${provider}.`]);
       return;
     }
-    if (state.error) throw new CliUsageError(String(state.error));
   }
   throw new CliUsageError("login timed out");
 }

@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
 import { currentExternalCodexModelProvider, restoreNativeCodex, shouldInjectApiAuthHeader } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
 import { restoreLegacyOpenaiHistory } from "../codex/history-provider";
@@ -43,6 +42,7 @@ import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
+import { removeOwnedConfigState } from "../lib/config-ownership";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -608,7 +608,13 @@ async function handleUninstall() {
 
   if (failures.length === 0) {
     await runStep("opencodex config removed", () => {
-      rmSync(getConfigDir(), { recursive: true, force: true });
+      const result = removeOwnedConfigState(getConfigDir());
+      if (result.status === "absent") return false;
+      if (result.status === "removed") return true;
+      const residual = result.residualPaths.length > 0
+        ? ` Residual path(s): ${result.residualPaths.join(", ")}`
+        : "";
+      throw new Error(`${result.status} uninstall: ${result.reason ?? "config state was not removed"}.${residual}`);
     });
   } else {
     console.error("Leaving opencodex config/backups in place so the failed restore step can be retried.");

@@ -16,6 +16,12 @@ export interface AccountPoolStrategyControlsProps {
   disabled?: boolean;
   strategySelectId?: string;
   stickyInputId?: string;
+  /**
+   * Hide the visual strategy label when the surrounding card title already reads
+   * "Rotation strategy". The select keeps its aria-label, so the accessible name
+   * survives while the duplicated on-screen text disappears.
+   */
+  strategyLabelHidden?: boolean;
   onStrategyChange(strategy: AccountPoolStrategy): void;
   onStickyDraftChange(value: string): void;
   onStickyCommit(): void;
@@ -30,6 +36,7 @@ export default function AccountPoolStrategyControls({
   disabled = false,
   strategySelectId = "account-pool-strategy",
   stickyInputId = "account-pool-sticky-limit",
+  strategyLabelHidden = false,
   onStrategyChange,
   onStickyDraftChange,
   onStickyCommit,
@@ -38,7 +45,9 @@ export default function AccountPoolStrategyControls({
   return (
     <div style={{ marginTop: 12 }}>
       <label className="field" style={{ display: "block" }} htmlFor={strategySelectId}>
-        <span className="field-label">{t("accountPool.strategy")}</span>
+        <span className={strategyLabelHidden ? "sr-only" : "field-label"}>
+          {t("accountPool.strategy")}
+        </span>
         <select
           id={strategySelectId}
           className="input"

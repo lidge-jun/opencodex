@@ -22,6 +22,13 @@ function collidingConfig(): OcxConfig {
   return config;
 }
 
+function namespaceCollidingConfig(): OcxConfig {
+  return {
+    ...migratableConfig(),
+    codexAccountNamespaces: { "alibaba-token-plan-intl": "pool-a" },
+  };
+}
+
 test("backs up strictly before saving, exactly once, when the projection changed", () => {
   const order: string[] = [];
   const saved: OcxConfig[] = [];
@@ -55,6 +62,27 @@ test("a no-op never backs up or saves, but a collision still warns", () => {
   expect(saved).toEqual([]);
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain("[alibaba-region-migration]");
+});
+
+test("an account namespace collision warns without backing up or saving", () => {
+  const order: string[] = [];
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+  try {
+    const config = namespaceCollidingConfig();
+    const result = runAlibabaRegionStartupMigration(config, {
+      project: projectAlibabaRegionMigration,
+      backup: () => { order.push("backup"); },
+      save: () => { order.push("save"); },
+    });
+    expect(result).toBe(config);
+  } finally {
+    console.warn = originalWarn;
+  }
+  expect(order).toEqual([]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("reserved by a configured Codex account namespace");
 });
 
 test("a backup failure prevents the migration from saving", () => {

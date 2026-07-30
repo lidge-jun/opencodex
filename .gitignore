@@ -3,7 +3,16 @@ dist/
 .env
 *.log
 .DS_Store
+
+# Maintainer-only planning notes. `devlog` is a private submodule
+# (lidge-jun/opencodex-internal) pinned by gitlink; its contents are never
+# tracked here. Commit inside the submodule, then bump the pointer separately.
 devlog/
+
+# Scratch space. Security working notes — unreleased findings, draft advisories,
+# exploit reasoning, pre-disclosure patch plans — belong here or in a
+# `mktemp -d` path, and nowhere else. Not devlog/, not a private repo. See the
+# "Security working notes" section of AGENTS.md.
 .tmp/
 .opencode/
 

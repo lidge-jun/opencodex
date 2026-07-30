@@ -52,6 +52,8 @@ namespaced selected id를 bare id로 바꿉니다.
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 이전에 설치한 shim을 교체하면 자동으로 복구합니다. 끄려면 `false`로 설정하거나 프로세스에 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정합니다. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App 기록 호환 모드. opencodex가 원래 Codex thread metadata를 백업하고, 예전 OpenAI interactive row를 `opencodex`로 재매핑하며, opencodex가 만든 `exec` row를 App에 보이는 source로 잠시 승격합니다. `ocx stop` / `ocx restore`는 백업한 OpenAI row를 복원하고 남은 opencodex user thread를 OpenAI로 돌려 네이티브 Codex가 `config.toml`에서 프록시를 제거한 뒤에도 이어서 열 수 있게 합니다. 끄려면 `false`로 설정합니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 대시보드에서 관리하는 ChatGPT/Codex pool 계정 metadata. secret은 `codex-accounts.json`에 따로 둡니다. |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | Codex Auth에서 재개할 때까지 이후의 모든 Pool 선택에서 제외할 계정 ID. 메인 계정을 일시 중지하면 `__main__`도 포함됩니다. |
+| `codexAccountNamespaces?` | `Record<string,string>` | — | 공개 model selector namespace에서 저장된 Codex 계정 target으로 연결하는 선택적 map입니다. 이 foundation layer는 map을 검증하고 저장하지만 picker row를 추가하거나 routing을 변경하지 않습니다. |
 | `activeCodexAccountId?` | `string` | — | 수동으로 선택한 pool 계정. 선택 시 기존 thread affinity를 지우고 다음 요청부터 적용하며, 진행 중인 요청은 기존 계정을 유지합니다. |
 | `autoSwitchThreshold?` | `number` | `80` | 새 세션 자동 전환용 사용량 백분율 threshold. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`이면 quota 자동 전환을 끕니다. `quota` 전략과 `fill-first` drain threshold에도 사용됩니다. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool의 새 세션 rotation 전략. **새 세션에만** 적용되며 기존 thread id는 affinity를 유지합니다. `quota`(기본) — 활성 계정이 `autoSwitchThreshold`를 넘으면 알려진 usage가 가장 낮은 계정 선택. `round-robin` — 적격 계정 간 smooth weighted 균등 분배. `fill-first` — cooldown, 사용 불가 또는(설정 시) `autoSwitchThreshold`까지 활성 계정을 소진(알 수 없는 usage는 강제 전환하지 않음)한 뒤 안정 정렬 순으로 다음 계정. |
@@ -63,6 +65,15 @@ namespaced selected id를 bare id로 바꿉니다.
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | 비전 사이드카 옵션(아래 참조). |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | 선택형 proactive OAuth 갱신 및 Codex 계정 warmup 정책. 필드는 아래에 설명합니다. |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS에서 추가로 허용할 정확한 origin. loopback origin은 항상 허용합니다. |
+
+`codexAccountNamespaces` 키는 공개 selector입니다. 길이는 1~64자이고 시작과 끝은 ASCII 영숫자여야
+하며, 내부에는 영숫자, `.`, `_`, `-`를 사용할 수 있습니다. 예약된 JavaScript object 이름은 거부됩니다.
+값은 유효한 pool account id(내부 `__main__` 제외)이거나 Codex Desktop 계정을 나타내는 `"@main"`입니다.
+provider 및 예약된 `openai` / `combo` 충돌은 대소문자를 구분하지 않고 검사하며, namespace가 있는
+combo alias는 selector를 namespace prefix로 재사용할 수 없습니다. 설정된 pool id와 다른 selector
+target도 selector로 재사용할 수 없습니다. raw account id와 email은 비공개로
+유지하고 selector를 공개 이름으로 사용하세요. 이 foundation layer에서 map은 inert하며 model picker
+entry 생성, session 고정, Pool / Direct routing 변경을 수행하지 않습니다.
 
 `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2`에서 쓰는 camel-case
 필드입니다. `ocx v2 threads <n>`은 대응하는 `max_concurrent_threads_per_session` 값을 Codex의
@@ -77,6 +88,10 @@ pool 계정 추가와 quota 갱신은 대시보드의 **Codex Auth** 페이지�
 아닌 계정 metadata만 저장하고, access/refresh token은 강화된 Codex 계정 credential store에 따로
 보관합니다. 기존 thread id는 계정 affinity를 유지하며, 새 세션은 `accountPoolStrategy`, quota,
 cooldown, health에 따라 자동 라우팅됩니다.
+일시 중지된 계정과 quota metadata는 계속 표시되지만 자동 전환, 재시도/failover 선택, cooldown 복구 probe, 수동 활성화에서는 제외됩니다.
+일시 중지는 해당 계정의 thread affinity map도 지웁니다. 진행 중인 요청은 이미 확보한 credential을 유지하지만, 이후 턴은 다시 라우팅되며 일시 중지된 계정은 재사용할 수 없습니다.
+상태는 재시작 후에도 유지되며, 모든 계정이 일시 중지되면 Pool 라우팅은 계정을 몰래 선택하지 않고 실패합니다.
+**한도 도달 계정 일시 중지**는 credential이 있는 적격 계정만 먼저 새로고친 뒤 관련 quota window가 이번 응답에서 100%로 확인된 계정만 일시 중지합니다. credential이 없는 계정과 quota가 없거나 새로고침에 실패한 계정은 변경하지 않습니다.
 
 **rotation 전략**(새 세션만; bound thread는 변경 없음): `quota`(기본) — `autoSwitchThreshold` 초과 시
 최저 usage 선택; `round-robin` — 균등 분배, `accountPoolStickyLimit`(기본 `1`, 1–100)로 한 선택당
@@ -143,7 +158,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai`(또는 별칭 `azure`) 중 하나. |
-| `baseUrl` | `string` | 업스트림 API base URL. |
+| `baseUrl` | `string` | 업스트림 API base URL. 고정 endpoint를 쓰는 대부분의 기본 제공 provider는 일치하지 않는 URL을 무시합니다. 새로 승격된 충돌 보호 API-key preset은 기존의 같은 이름 custom provider 목적지를 유지합니다. [고정 프로바이더 엔드포인트](#고정-프로바이더-엔드포인트)를 참조하세요. |
 | `responsesPath?` | `string` | `key` 인증 `openai-responses` 요청에 사용할 선택적 상대 resource path. `/`로 시작해야 하며 URL scheme, query, fragment를 포함할 수 없습니다. 생략하면 기존 `/v1/responses` URL 구성을 유지합니다. |
 | `disabled?` | `boolean` | 설정은 디스크에 남기되 라우팅과 모델/카탈로그 목록에서 제외합니다. |
 | `apiKey?` | `string` | API 키 또는 요청 시점에 해석할 `${ENV_VAR}` / `$ENV_VAR` 참조. |
@@ -151,7 +166,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 여러 키를 담는 pool. `apiKey`는 활성 항목을 반영합니다. 각 항목에는 `id`, `key`, 선택 `label`, 선택 숫자 `addedAt`이 있습니다. |
 | `defaultModel?` | `string` | 명시적인 모델 없이 이 프로바이더를 선택했을 때 쓸 모델. |
 | `models?` | `string[]` | seed/fallback 모델 목록. `liveModels`가 `false`이면 여기 있는 모델만 발견됩니다. |
-| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 `/models` 카탈로그를 가져옵니다(기본 `true`). `false`이면 설정된 `models`만 사용합니다. |
+| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 모델 카탈로그를 가져옵니다(기본 `true`). 기본 제공 preset은 registry의 신뢰된 URL·쿼리·필터를 사용할 수 있고, 사용자 지정 provider는 `${baseUrl}/models`가 기본입니다. `false`이면 설정된 `models`만 사용합니다. |
 | `selectedModels?` | `string[]` | 모델 발견 뒤 적용할 카탈로그 allowlist. 비어 있지 않으면 해당 id만 Codex에 노출하고, 비어 있거나 생략하면 발견한 모델을 모두 노출합니다. |
 | `contextWindow?` | `number` | 라우팅 카탈로그 항목에 표시할 프로바이더 단위 context-window cap. 실시간 metadata가 더 작으면 그대로 둡니다. |
 | `modelContextWindows?` | `Record<string,number>` | 모델별 context-window cap. 일치하는 모델에서는 `contextWindow`보다 우선하며 더 작은 실시간 metadata를 올리지 않습니다. |
@@ -186,6 +201,29 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `mcpServers?` | `Record<string,CursorMcpServerConfig>` | **Cursor 전용.** stdio로 시작하거나 Streamable HTTP로 연결할 MCP server. 필드는 아래에 설명합니다. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | **Cursor 전용.** 외부 computer-use/record-screen 명령. 필드는 아래에 설명합니다. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor 어댑터 전용.** Cursor 서버가 지시한 로컬 `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` 실행을 허용하는 opt-in escape hatch. 기본 `false`라 원격 Cursor 메시지가 Codex 승인과 sandbox를 우회하지 못합니다. 아래 [Cursor 프로바이더](#cursor-프로바이더-adapter-cursor) 참조. |
+
+### 고정 프로바이더 엔드포인트
+
+라우팅은 adapter가 요청을 보기 전에 provider endpoint를 결정합니다. 대부분의 기본 제공 provider에서는
+config의 `baseUrl`보다 registry endpoint가 우선합니다. 이 단계에서 설정 URL을 유지하는 경우는 네 가지입니다.
+
+- override를 명시적으로 허용하는 provider: `ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud`,
+  `alibaba-token-plan-intl`.
+- registry endpoint가 사용자가 채우는 template인 provider(예: `azure-openai`,
+  `cloudflare-ai-gateway`).
+- 이름 충돌을 보호하는 새 고정 API-key preset. 기존의 같은 이름 custom provider가 다른 목적지를
+  가리키면 원래 목적지를 유지하며 key를 새 registry host로 보내지 않습니다.
+- registry에 없고 사용자가 직접 정의한 provider.
+
+그 뒤에도 adapter가 결정된 URL을 조정할 수 있습니다. 예를 들어 `kiro` adapter는 canonical
+`runtime.{region}.kiro.dev` host에서 가져온 credential의 API region을 사용합니다. adapter별 규칙은
+[Adapters](/ko/reference/adapters/)를 참조하세요.
+
+라우팅이 설정된 `baseUrl`을 버리면 opencodex가 경고를 출력합니다. registry endpoint는 전체를 표시하고
+설정 URL은 origin만 표시합니다. path는 credential 정보를 포함할 수 있으므로 기록하지 않습니다. 사용하지
+않는 `baseUrl`을 제거하거나 목적 URL과 endpoint가 일치하는 provider를 선택하세요. 지역별 서비스에서는
+올바른 항목을 사용해야 합니다. `alibaba-token-plan`은 베이징으로 고정되고,
+`alibaba-token-plan-intl`은 국제 endpoint override를 허용합니다.
 
 ## Cursor 프로바이더 (`adapter: "cursor"`)
 
@@ -258,6 +296,11 @@ OpenRouter에서 같은 모델을 제공하는 endpoint마다 prompt cache 지�
 
 일부 프로바이더는 실시간 모델 카탈로그가 매우 크거나 느립니다. Codex에 `models`로 고정한 모델만
 보이게 하려면 `liveModels`를 `false`로 설정하세요.
+
+실시간 discovery 응답이 4 MiB 또는 원시 모델 행 2,000개를 넘으면 캐시 전에 거부됩니다. 기본 제공
+preset은 이 한도를 더 낮추고 혼합 카탈로그를 채팅 가능 행으로 필터링할 수 있습니다. 한도 초과 또는
+손상된 응답은 stale/static fallback을 사용하고, 부적격 행은 제외됩니다. 유효한 응답에 적격 행이
+없으면 권위 있는 빈 카탈로그가 되며, 한도 초과 응답을 조용히 잘라 사용하지 않습니다.
 
 `liveModels`가 `false`이고 `models`가 비어 있거나 생략되면 opencodex는 해당 프로바이더의 라우팅
 모델을 하나도 노출하지 않습니다.

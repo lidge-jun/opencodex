@@ -14,5 +14,7 @@
 /src/server/management-api.ts @lidge-jun @Ingwannu
 
 # Governance and security policy
+/AGENTS.md @lidge-jun @Ingwannu
+**/AGENTS.md @lidge-jun @Ingwannu
 /MAINTAINERS.md @lidge-jun @Ingwannu
 /SECURITY.md @lidge-jun @Ingwannu

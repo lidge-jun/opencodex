@@ -1,4 +1,5 @@
 import { expect, test, describe } from "bun:test";
+import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";

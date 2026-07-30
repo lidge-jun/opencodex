@@ -3,8 +3,16 @@ import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import * as z from "zod/v4";
-import { comboConfigIssues } from "./combos/types";
-import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
+import {
+  CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
+  codexAccountNamespaceForModel,
+  codexProviderNamespaceKey,
+  isValidCodexAccountNamespaceTarget,
+  MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
+} from "./codex/account-namespace-match";
+import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
+import { hardenSecretDir, hardenSecretPath, hardenSecretPathAsync } from "./lib/windows-secret-acl";
+import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import {
@@ -12,10 +20,11 @@ import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
   REASONING_SUMMARY_DELIVERY_VALUES,
+  type OcxClaudeCodeConfig,
   type OcxConfig,
   type OcxProviderConfig,
 } from "./types";
-import { isCanonicalOpenAiForwardProvider } from "./providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 
@@ -90,6 +99,7 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
   truncate: target => truncateSync(target, 0),
   unlink: unlinkSync,
 }): void {
+  recordOwnedConfigPath(resolveConfigDir(), path);
   const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {
@@ -122,6 +132,90 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
     if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
     if (!removed && !hardened) {
       try { io.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
+    }
+    if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
+    throw cause;
+  }
+}
+
+/** Async atomic-write I/O: harden may await icacls without blocking the event loop (#612). */
+export interface AtomicWriteAsyncIO {
+  write: (path: string, content: string) => void | Promise<void>;
+  harden: (path: string) => void | Promise<void>;
+  rename: (source: string, destination: string) => void | Promise<void>;
+  truncate: (path: string) => void | Promise<void>;
+  unlink: (path: string) => void | Promise<void>;
+}
+
+async function renameAtomicFileAsync(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(source, destination);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const transientWindowsError = process.platform === "win32"
+        && (code === "EBUSY" || code === "EPERM" || code === "EACCES");
+      if (!transientWindowsError || attempt >= 2) throw error;
+      await Bun.sleep(25 * (attempt + 1));
+    }
+  }
+}
+
+/**
+ * Async atomic write (#612): same temp+harden+rename and residual-temp policy as
+ * atomicWriteFile, but Windows ACL harden yields the event loop. Timeout memo is keyed
+ * by the final destination path (not the unique temp, not the parent directory).
+ */
+export async function atomicWriteFileAsync(
+  path: string,
+  content: string,
+  io?: AtomicWriteAsyncIO,
+): Promise<void> {
+  const effective: AtomicWriteAsyncIO = io ?? {
+    write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
+    harden: async target => {
+      try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
+      if (process.platform === "win32") {
+        await hardenSecretPathAsync(target, { required: true, timeoutMemoKey: path });
+      }
+    },
+    rename: renameAtomicFileAsync,
+    truncate: target => truncateSync(target, 0),
+    unlink: unlinkSync,
+  };
+  const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  let hardened = false;
+  try {
+    await effective.write(tmp, content);
+    await effective.harden(tmp);
+    hardened = true;
+    await effective.rename(tmp, path);
+  } catch (cause) {
+    let scrubbed = false;
+    try {
+      await effective.truncate(tmp);
+      scrubbed = true;
+    } catch (error) {
+      if (isMissingPathError(error)) scrubbed = true;
+      else {
+        try { await effective.write(tmp, ""); scrubbed = true; } catch { /* removal may still succeed */ }
+      }
+    }
+    let removed = false;
+    try {
+      await effective.unlink(tmp);
+      removed = true;
+    } catch (error) {
+      if (isMissingPathError(error)) removed = true;
+      else {
+        try { await effective.unlink(tmp); removed = true; }
+        catch (retryError) { if (isMissingPathError(retryError)) removed = true; }
+      }
+    }
+    if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
+    if (!removed && !hardened) {
+      try { await effective.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
     }
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
@@ -525,8 +619,61 @@ export function modelAdapterRecordConfigError(
   return null;
 }
 
+const CODEX_ACCOUNT_NAMESPACES_RECORD_ERROR =
+  "codexAccountNamespaces must be a plain object mapping account selectors to Codex account ids";
+const CODEX_ACCOUNT_NAMESPACE_KEY_ERROR =
+  "account selectors must use 1-64 letters, numbers, dots, underscores, or hyphens and cannot be reserved JavaScript object keys";
+const CODEX_ACCOUNT_NAMESPACE_TARGET_ERROR =
+  "account selector targets must be @main or valid Codex pool-account ids";
+const CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR =
+  "account selectors must not collide with configured Codex pool-account ids or account selector targets";
+
+function configuredCodexPoolAccountIds(value: unknown): Set<string> {
+  const accountIds = new Set<string>();
+  if (!Array.isArray(value)) return accountIds;
+  for (const account of value) {
+    if (!account || typeof account !== "object" || Array.isArray(account)) continue;
+    const { id, isMain } = account as { id?: unknown; isMain?: unknown };
+    if (typeof id === "string" && isMain !== true) accountIds.add(id);
+  }
+  return accountIds;
+}
+
+const codexAccountNamespacesSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: CODEX_ACCOUNT_NAMESPACES_RECORD_ERROR },
+).superRefine((accountNamespaces, ctx) => {
+  // Inspect raw own entries before z.record parses them; Zod omits __proto__ record keys.
+  for (const [namespace, accountId] of Object.entries(accountNamespaces)) {
+    if (!isValidProviderName(namespace)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [namespace],
+        message: CODEX_ACCOUNT_NAMESPACE_KEY_ERROR,
+      });
+    }
+    if (!isValidCodexAccountNamespaceTarget(accountId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [namespace],
+        message: CODEX_ACCOUNT_NAMESPACE_TARGET_ERROR,
+      });
+    }
+  }
+}).pipe(z.record(z.string(), z.string()));
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
+  // A blank hostname degrades to undefined rather than failing the parse. `getDefaultConfig()`
+  // carries no `hostname` key, so the backup-and-defaults repair path below cannot merge one
+  // away — a hand-edited `"hostname": ""` would fail twice and reset providers/apiKeys to
+  // defaults, which is strictly worse than the bind bug this validation exists for. Degrading
+  // is safe: startServer() already falls back to 127.0.0.1 for a missing hostname. Write-time
+  // rejection lives in validateConfigCandidate() so bad values still surface to the caller.
+  hostname: z.string().trim().min(1).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
@@ -541,6 +688,8 @@ const configSchema = z.object({
   injectionEffort: z.string().optional().catch(undefined),
   syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
+  pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
@@ -551,15 +700,48 @@ const configSchema = z.object({
   const claudeCode = (config as { claudeCode?: unknown }).claudeCode;
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
-  } else if (claudeCode && "desktopProfile" in claudeCode && (claudeCode as { desktopProfile?: unknown }).desktopProfile !== undefined) {
-    try {
-      parseDesktopProfile((claudeCode as { desktopProfile?: unknown }).desktopProfile);
-    } catch (error) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["claudeCode", "desktopProfile"],
-        message: error instanceof Error ? error.message : String(error),
-      });
+  } else if (claudeCode) {
+    const claude = claudeCode as { desktopProfile?: unknown };
+    if (claude.desktopProfile !== undefined) {
+      try {
+        parseDesktopProfile(claude.desktopProfile);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["claudeCode", "desktopProfile"],
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  const accountNamespaces = config.codexAccountNamespaces;
+  if (accountNamespaces) {
+    const configuredAccountIds = configuredCodexPoolAccountIds(config.codexAccounts);
+    const configuredProviderNamespaces = new Set([
+      COMBO_NAMESPACE,
+      OPENAI_CODEX_PROVIDER_ID,
+      ...Object.keys(config.providers),
+    ].map(codexProviderNamespaceKey));
+    const namespaceTargets = new Set(
+      Object.values(accountNamespaces)
+        .filter(accountId => accountId !== MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET),
+    );
+    for (const namespace of Object.keys(accountNamespaces)) {
+      if (configuredProviderNamespaces.has(codexProviderNamespaceKey(namespace))) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["codexAccountNamespaces", namespace],
+          message: "account selectors must not collide with configured provider or combo namespaces",
+        });
+      }
+      if (configuredAccountIds.has(namespace) || namespaceTargets.has(namespace)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["codexAccountNamespaces", namespace],
+          message: CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
+        });
+      }
     }
   }
   for (const name of Object.keys(config.providers)) {
@@ -731,6 +913,16 @@ const configSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["combos"], message: "combos must be an object" });
     } else {
       for (const [id, raw] of Object.entries(combos as Record<string, unknown>)) {
+        const alias = raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as { alias?: unknown }).alias
+          : undefined;
+        if (typeof alias === "string" && codexAccountNamespaceForModel(accountNamespaces, alias.trim())) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["combos", id, "alias"],
+            message: CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
+          });
+        }
         // Pass the full map so cross-combo rules (alias uniqueness) apply at load time
         // too, not just via the management API; each combo is excluded from its own check.
         for (const issue of comboConfigIssues(id, raw, config.providers, {
@@ -803,6 +995,56 @@ function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void 
   const raw = (rawParsed as Record<string, unknown>).streamMode;
   if (raw !== undefined && validated.streamMode === undefined) {
     console.warn(`⚠️  config.json streamMode ${JSON.stringify(raw)} is invalid (expected "auto", "legacy-tee", or "eager-relay") — falling back to "auto"`);
+  }
+}
+
+/**
+ * Companion to {@link warnDegradedStreamMode} for a blank persisted `hostname`. The bind
+ * falls back to loopback, which is the safe direction but not what the file asked for —
+ * say so once instead of silently ignoring the field.
+ */
+function warnDegradedHostname(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).hostname;
+  if (raw !== undefined && validated.hostname === undefined) {
+    console.warn(`⚠️  config.json hostname ${JSON.stringify(raw)} is not a usable bind address — falling back to 127.0.0.1`);
+  }
+}
+
+const CLAUDE_SUBAGENT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+function isClaudeSubagentEffort(value: unknown): value is NonNullable<OcxClaudeCodeConfig["subagentEffort"]> {
+  return typeof value === "string" && CLAUDE_SUBAGENT_EFFORTS.includes(value as typeof CLAUDE_SUBAGENT_EFFORTS[number]);
+}
+
+function rawClaudeSubagentEffort(rawParsed: unknown): unknown {
+  const raw = rawConfigRecord(rawParsed);
+  const claudeCode = raw?.claudeCode;
+  if (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode)) return undefined;
+  return (claudeCode as Record<string, unknown>).subagentEffort;
+}
+
+function normalizePersistedClaudeCode(claudeCode: unknown): OcxConfig["claudeCode"] {
+  if (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode)) {
+    return claudeCode as OcxConfig["claudeCode"];
+  }
+  const normalized = { ...claudeCode } as Record<string, unknown>;
+  if (Object.hasOwn(normalized, "subagentEffort") && !isClaudeSubagentEffort(normalized.subagentEffort)) {
+    delete normalized.subagentEffort;
+  }
+  return normalized as OcxConfig["claudeCode"];
+}
+
+function normalizeClaudeSubagentEffort(config: OcxConfig, rawParsed: unknown): OcxConfig {
+  const rawEffort = rawClaudeSubagentEffort(rawParsed);
+  if (rawEffort === undefined || isClaudeSubagentEffort(rawEffort)) return config;
+  return { ...config, claudeCode: normalizePersistedClaudeCode(config.claudeCode) };
+}
+
+function warnDegradedClaudeSubagentEffort(rawParsed: unknown): void {
+  const rawEffort = rawClaudeSubagentEffort(rawParsed);
+  if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
+    console.warn(`⚠️  config.json claudeCode.subagentEffort is invalid (expected ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}) — ignoring it. Other settings were preserved.`);
   }
 }
 
@@ -880,8 +1122,10 @@ export function loadConfig(): OcxConfig {
     if (result.success) {
       const config = result.data as OcxConfig;
       warnDegradedStreamMode(parsed, config);
+      warnDegradedHostname(parsed, config);
+      warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
-      return normalizeNativeSubagentSync(config, parsed);
+      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -896,8 +1140,10 @@ export function loadConfig(): OcxConfig {
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
       const config = retryResult.data as OcxConfig;
+      warnDegradedHostname(parsed, config);
+      warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
-      return normalizeNativeSubagentSync(config, parsed);
+      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
@@ -928,12 +1174,16 @@ function configPlaceholderWarnings(config: OcxConfig): string[] {
 }
 
 function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): ConfigDiagnostics {
-  // An unsafe hand-edited opt-in is disabled in memory instead of rejecting
+  // Unsafe hand-edited optional values are disabled in memory instead of rejecting
   // the entire config, which would hide unrelated providers/accounts. The next
   // ordinary save persists the normalized absence.
   const syncDisabledReason = nativeSubagentSyncDisabledReason(config, rawParsed);
-  const normalized = normalizeNativeSubagentSync(config, rawParsed);
+  const rawEffort = rawClaudeSubagentEffort(rawParsed);
+  const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
   const warnings = configPlaceholderWarnings(normalized);
+  if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
+    warnings.push(`claudeCode.subagentEffort ignored: expected one of ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}`);
+  }
   warnings.push(...malformedNativeSubagentFields(rawParsed).map(malformedNativeSubagentFieldWarning));
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
@@ -971,8 +1221,32 @@ function schemaDiagnosticsError(error: z.ZodError): string {
   return details.length > 0 ? `schema_invalid: ${details.join("; ")}` : "schema_invalid";
 }
 
+/**
+ * Reject a hostname the schema deliberately degrades on read. Load-time has to keep a
+ * blank value non-fatal (see the `hostname` field comment), but an incoming write is a
+ * live caller who can be told the value is wrong — silently rewriting it to loopback
+ * would look like the bind succeeded on the address they asked for.
+ */
+function blankHostnameError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const hostname = (value as Record<string, unknown>).hostname;
+  if (hostname === undefined) return null;
+  if (typeof hostname !== "string" || !hostname.trim()) {
+    return "schema_invalid: hostname: must be a nonblank bind address";
+  }
+  return null;
+}
+
+function claudeSubagentEffortError(value: unknown): string | null {
+  const effort = rawClaudeSubagentEffort(value);
+  if (effort === undefined || isClaudeSubagentEffort(effort)) return null;
+  return `schema_invalid: claudeCode.subagentEffort: must be one of ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}`;
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
+  const boundaryError = blankHostnameError(value) ?? claudeSubagentEffortError(value);
+  if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) return { ok: true, config: result.data as OcxConfig };
   return { ok: false, error: schemaDiagnosticsError(result.error) };
@@ -1039,6 +1313,16 @@ export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolea
 const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
 
 /**
+ * The live config retains the address of the socket Bun actually opened, while
+ * this map retains the operator's desired address for the next process start.
+ * Keeping them separate prevents an unrelated live save from restoring a stale
+ * externally exposed bind after OAuth adopted a newer loopback disk config.
+ */
+type PersistedServerBinding = Pick<OcxConfig, "port" | "hostname">;
+
+const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding>();
+
+/**
  * Arm the baseline for a long-lived config. MANDATORY at `startServer`, not lazy on
  * first save — arming lazily would lose exactly the hand edit made before that first
  * save, which is the case the guard exists for.
@@ -1074,6 +1358,116 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return true;
 }
 
+const MISSING_CONFIG_VALUE = Symbol("missing-config-value");
+type ConfigMergeValue = unknown | typeof MISSING_CONFIG_VALUE;
+
+function isPlainConfigRecord(value: ConfigMergeValue): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function ownConfigValue(record: Record<string, unknown>, key: string): ConfigMergeValue {
+  return Object.hasOwn(record, key) ? record[key] : MISSING_CONFIG_VALUE;
+}
+
+function cloneConfigValue(value: ConfigMergeValue): ConfigMergeValue {
+  return value === MISSING_CONFIG_VALUE ? value : structuredClone(value);
+}
+
+function reconcileConfigRecord(
+  live: Record<string, unknown>,
+  baseline: Record<string, unknown>,
+  persisted: Record<string, unknown>,
+  skippedKeys?: ReadonlySet<string>,
+): void {
+  const keys = new Set([...Object.keys(baseline), ...Object.keys(live), ...Object.keys(persisted)]);
+  for (const key of keys) {
+    if (skippedKeys?.has(key)) continue;
+    const merged = reconcileConfigValue(
+      ownConfigValue(baseline, key),
+      ownConfigValue(live, key),
+      ownConfigValue(persisted, key),
+    );
+    if (merged === MISSING_CONFIG_VALUE) delete live[key];
+    else live[key] = merged;
+  }
+}
+
+function reconcileConfigValue(
+  baseline: ConfigMergeValue,
+  live: ConfigMergeValue,
+  persisted: ConfigMergeValue,
+): ConfigMergeValue {
+  const liveChanged = !deepEqual(live, baseline);
+  const persistedChanged = !deepEqual(persisted, baseline);
+
+  if (!liveChanged) {
+    if (live !== MISSING_CONFIG_VALUE && Array.isArray(live) && Array.isArray(persisted)) {
+      live.splice(0, live.length, ...structuredClone(persisted));
+      return live;
+    }
+    if (isPlainConfigRecord(live) && isPlainConfigRecord(persisted)) {
+      reconcileConfigRecord(
+        live,
+        isPlainConfigRecord(baseline) ? baseline : {},
+        persisted,
+      );
+      return live;
+    }
+    return cloneConfigValue(persisted);
+  }
+
+  if (!persistedChanged) return live;
+
+  if (isPlainConfigRecord(live)
+    && isPlainConfigRecord(persisted)
+    && (baseline === MISSING_CONFIG_VALUE || isPlainConfigRecord(baseline))) {
+    reconcileConfigRecord(
+      live,
+      isPlainConfigRecord(baseline) ? baseline : {},
+      persisted,
+    );
+  }
+  // Same-leaf conflicts prefer the pending live management mutation.
+  return live;
+}
+
+/**
+ * Reconcile an async OAuth disk commit into the shared live config without erasing
+ * management mutations that have not saved yet. The baseline is a normalized disk
+ * snapshot from immediately before login; disjoint object edits merge recursively,
+ * while same-leaf conflicts prefer live state.
+ */
+export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline: OcxConfig): void {
+  const diagnostics = readConfigDiagnostics();
+  if (diagnostics.source === "fallback") {
+    throw new Error(`OAuth config reconciliation failed: ${diagnostics.error ?? "invalid config file"}`);
+  }
+  const persisted = diagnostics.config;
+  const claudeGuardArmed = claudeCodeBaseline.has(config);
+  const pendingLiveClaudeMutation = claudeGuardArmed
+    && !deepEqual(config.claudeCode, claudeCodeBaseline.get(config));
+
+  persistedLiveServerBinding.set(config, {
+    port: persisted.port,
+    ...(persisted.hostname !== undefined ? { hostname: persisted.hostname } : {}),
+  });
+
+  reconcileConfigRecord(
+    config as unknown as Record<string, unknown>,
+    persistedBaseline as unknown as Record<string, unknown>,
+    persisted as unknown as Record<string, unknown>,
+    new Set(["hostname", "port", ...(claudeGuardArmed ? ["claudeCode"] : [])]),
+  );
+
+  if (claudeGuardArmed && !pendingLiveClaudeMutation) {
+    if (persisted.claudeCode === undefined) delete config.claudeCode;
+    else config.claudeCode = structuredClone(persisted.claudeCode);
+    claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  }
+}
+
 /** The literal file, with no schema merge or default injection. */
 function readRawConfigJson(): Record<string, unknown> | undefined {
   try {
@@ -1090,6 +1484,28 @@ function readRawConfigJson(): Record<string, unknown> | undefined {
 }
 
 /**
+ * Read only schema-valid binding fields from the literal file. Missing fields mean
+ * their schema defaults; malformed fields keep the last known persisted value.
+ */
+function readPersistedServerBinding(
+  raw: Record<string, unknown>,
+  baseline: PersistedServerBinding,
+): PersistedServerBinding {
+  const port = raw.port === undefined
+    ? 10100
+    : (typeof raw.port === "number"
+        && Number.isInteger(raw.port)
+        && raw.port >= 0
+        && raw.port <= 65535
+      ? raw.port
+      : baseline.port);
+  const hostname = raw.hostname === undefined
+    ? undefined
+    : (typeof raw.hostname === "string" ? raw.hostname : baseline.hostname);
+  return { port, ...(hostname !== undefined ? { hostname } : {}) };
+}
+
+/**
  * The save entry point for every writer holding a LIVE server config.
  *
  * Conflict policy, chosen deliberately:
@@ -1103,18 +1519,33 @@ function readRawConfigJson(): Record<string, unknown> | undefined {
  * guarantee.
  */
 export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
+  const bindingBaseline = persistedLiveServerBinding.get(config);
+  const onDisk = claudeCodeBaseline.has(config) || bindingBaseline
+    ? readRawConfigJson()
+    : undefined;
   if (claudeCodeBaseline.has(config)) {
-    const onDisk = readRawConfigJson();
     if (onDisk !== undefined) {
       const baseline = claudeCodeBaseline.get(config);
-      const diskChanged = !deepEqual(onDisk.claudeCode, baseline);
+      const persistedClaudeCode = normalizePersistedClaudeCode(onDisk.claudeCode);
+      const diskChanged = !deepEqual(persistedClaudeCode, baseline);
       const weChanged = !deepEqual(config.claudeCode, baseline);
       if (diskChanged && !weChanged) {
-        config.claudeCode = onDisk.claudeCode as OcxConfig["claudeCode"];
+        config.claudeCode = persistedClaudeCode;
       }
     }
   }
-  saveConfig(config);
+  const persistedBinding = bindingBaseline && onDisk
+    ? readPersistedServerBinding(onDisk, bindingBaseline)
+    : bindingBaseline;
+  if (persistedBinding) {
+    const persistedConfig: OcxConfig = { ...config, port: persistedBinding.port };
+    if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
+    else persistedConfig.hostname = persistedBinding.hostname;
+    saveConfig(persistedConfig);
+    persistedLiveServerBinding.set(config, persistedBinding);
+  } else {
+    saveConfig(config);
+  }
   if (claudeCodeBaseline.has(config)) {
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
   }

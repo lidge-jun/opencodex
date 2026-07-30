@@ -219,3 +219,4 @@ describe("GET /api/system/memory", () => {
     expect(body.watchdog).toBeNull();
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

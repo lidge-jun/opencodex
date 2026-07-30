@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 import { Database } from "bun:sqlite";
 
 const DEFAULT_EXPIRES_MS = 3600_000;
@@ -39,7 +39,14 @@ export type KiroDiagnosticStatus =
   | "registration_found";
 
 export interface KiroImportDiagnostic {
-  location: "kiro-creds-file" | "kiro-cli-db-env" | "kiro-cli-data" | "kiro-cli-linux-data" | "amazon-q-data" | "kiro-sso-cache";
+  location:
+    | "kiro-creds-file"
+    | "kiro-cli-db-env"
+    | "kiro-cli-data"
+    | "kiro-cli-linux-data"
+    | "kiro-cli-windows-data"
+    | "amazon-q-data"
+    | "kiro-sso-cache";
   status: KiroDiagnosticStatus;
 }
 
@@ -122,14 +129,56 @@ function jsonCredentialPaths(): string[] {
     .map(expandPath);
 }
 
-function nativeKiroCliSessionEntries(): Array<{ location: "kiro-cli-data" | "kiro-cli-linux-data"; path: string }> {
-  const home = userHome();
+export type KiroCliNativeLocation = "kiro-cli-data" | "kiro-cli-linux-data" | "kiro-cli-windows-data";
+
+export interface KiroCliNativeInputs {
+  env: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+  home: string;
+}
+
+/**
+ * Native kiro-cli session stores, as a pure function of (env, platform, home).
+ *
+ * Pure + parameterized following `src/claude/desktop-3p-paths.ts`: `process.platform` is stubbable
+ * in this repo, but `os.platform()` does NOT follow it under Bun, so a pure resolver is the reliable
+ * way to exercise the win32 branch (and its env fallbacks) on a macOS/Linux host.
+ *
+ * Windows (issue #710): the official installer stores the auth DB at
+ * `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`. When LOCALAPPDATA is unset or blank, fall back to
+ * `%USERPROFILE%\AppData\Local`, then to the injected platform-native home. Deliberately NOT
+ * `userHome()`: that is `HOME || homedir()` and Windows shells (Git Bash / MSYS / CI) routinely
+ * export a POSIX-style `HOME`, which would point this at a non-native path.
+ *
+ * One entry per platform on purpose: this list also drives forced-login snapshot/rollback, so it
+ * must name the database the LOCAL kiro-cli actually mutates, never a foreign platform's path.
+ */
+export function resolveKiroCliNativeSessionEntries(
+  inputs: KiroCliNativeInputs,
+): Array<{ location: KiroCliNativeLocation; path: string }> {
+  const { env, platform, home } = inputs;
+  if (platform === "win32") {
+    const base = env.LOCALAPPDATA?.trim()
+      || (env.USERPROFILE?.trim() ? win32.join(env.USERPROFILE.trim(), "AppData", "Local") : "")
+      || win32.join(home, "AppData", "Local");
+    return [{ location: "kiro-cli-windows-data", path: win32.join(base, "Kiro-Cli", "data.sqlite3") }];
+  }
+  if (platform === "darwin") {
+    return [{ location: "kiro-cli-data", path: join(home, "Library", "Application Support", "kiro-cli", "data.sqlite3") }];
+  }
+  return [{ location: "kiro-cli-linux-data", path: join(home, ".local", "share", "kiro-cli", "data.sqlite3") }];
+}
+
+function nativeKiroCliSessionEntries(): Array<{ location: KiroCliNativeLocation; path: string }> {
   // Only the stores that `kiro-cli logout` / `kiro-cli login` themselves mutate. Import fallbacks
   // (Amazon Q / SSO cache) and KIROCLI_DB_PATH selectors must not be snapshotted for rollback.
-  return [
-    { location: "kiro-cli-data", path: join(home, "Library", "Application Support", "kiro-cli", "data.sqlite3") },
-    { location: "kiro-cli-linux-data", path: join(home, ".local", "share", "kiro-cli", "data.sqlite3") },
-  ];
+  return resolveKiroCliNativeSessionEntries({
+    env: process.env,
+    platform: process.platform,
+    // POSIX keeps HOME-first userHome() so existing HOME-based fixtures still resolve; win32 prefers
+    // LOCALAPPDATA/USERPROFILE and only falls back to this platform-native home.
+    home: process.platform === "win32" ? homedir() : userHome(),
+  });
 }
 
 function sqliteEntries(): Array<{ location: KiroImportDiagnostic["location"]; path: string }> {

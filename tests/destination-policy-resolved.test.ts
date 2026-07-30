@@ -4,7 +4,7 @@ import { describe, expect, mock, test } from "bun:test";
 const lookupMock = mock(async (_hostname: string, _opts: unknown): Promise<{ address: string; family: number }[]> => []);
 mock.module("node:dns/promises", () => ({ lookup: lookupMock }));
 
-const { providerDestinationConfigError, providerDestinationResolvedError } = await import("../src/lib/destination-policy");
+const { providerDestinationConfigError, providerDestinationResolvedError, resolvePublicAddresses } = await import("../src/lib/destination-policy");
 
 const provider = (baseUrl: string, allowPrivateNetwork?: boolean) => ({ baseUrl, allowPrivateNetwork });
 
@@ -162,5 +162,42 @@ describe("providerDestinationResolvedError — canonical openai Clash fake-IP ex
       "openai",
       provider("https://chatgpt.com/backend-api/codex"),
     )).toContain("benchmark address (198.18.0.30)");
+  });
+});
+
+describe("resolvePublicAddresses — caller-specific diagnostics", () => {
+  test("provider callers do not receive image-URL DNS errors", async () => {
+    lookupMock.mockRejectedValueOnce(Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }));
+
+    await expect(resolvePublicAddresses(
+      "https://unresolvable.example/v1/models",
+      { context: "provider URL" },
+    )).rejects.toThrow("provider URL hostname unresolvable.example could not be resolved");
+  });
+
+  test("DNS resolution failures have a distinct error type for proxy degradation", async () => {
+    lookupMock.mockRejectedValueOnce(Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }));
+
+    let error: unknown;
+    try {
+      await resolvePublicAddresses("https://proxy-only.example/v1/models", { context: "provider URL" });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("DestinationDnsResolutionError");
+  });
+
+  test("provider private-network opt-in returns classified private addresses", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "192.168.1.50", family: 4 }]);
+
+    const resolved = await resolvePublicAddresses(
+      "http://ollama.lan:11434/v1/models",
+      { context: "provider URL", allowPrivateNetwork: true },
+    );
+
+    expect(resolved.privateNetwork).toBe(true);
+    expect(resolved.addresses).toEqual([{ address: "192.168.1.50", family: 4 }]);
   });
 });

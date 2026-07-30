@@ -127,7 +127,10 @@ Terminal refresh failures mark the account as needing reauthentication instead o
 **Cooldowns (Codex pool).** Upstream `429` / quota responses set a hard cooldown from
 `Retry-After`, quota `reset` headers (capped), or a short default backoff. Accounts on an explicit
 `Retry-After` cooldown are not probed early; reset-derived cooldowns may receive a paced probe lease
-so recovery can be detected without flooding the provider.
+so recovery can be detected without flooding the provider. Reset-derived native-model cooldowns
+also preserve known independent quota groups: `gpt-5.3-codex-spark` does not prevent the same account
+from trying the shared GPT-5.6 Terra/Luna quota, while models in that shared group still protect one
+another. Explicit `Retry-After` and default cooldowns always remain account-wide.
 
 **Session affinity.** Codex thread→account affinity is process-local (in-memory only; not persisted
 across proxy restarts). On credential failures (`401` / `403`) the account is quarantined for

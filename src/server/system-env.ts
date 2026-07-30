@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
@@ -6,6 +6,7 @@ import { resolveAutoContext, type AutoContextMode } from "../claude/context-wind
 import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import type { OcxConfig } from "../types";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 
 /**
  * Does the opencodex dummy marker belong in the system environment?
@@ -72,8 +73,10 @@ function writeShellEnvFile(port: number, config: OcxConfig, modelEnv: Record<str
   if (config.claudeCode?.alwaysEnableEffort === true) {
     lines.push(conditional("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1"));
   }
+  const shellEnvPath = getShellEnvFilePath();
+  recordOwnedConfigPath(getConfigDir(), shellEnvPath);
   mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-  writeFileSync(getShellEnvFilePath(), lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(shellEnvPath, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
 function removeShellEnvFile(): void {
@@ -128,6 +131,19 @@ const SYSTEM_ENV_NAMES = [
   "ANTHROPIC_AUTH_TOKEN",
 ] as const;
 
+const MANAGED_SYSTEM_ENV_NAMES = new Set<string>([
+  ...SYSTEM_ENV_NAMES,
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+  "DISABLE_COMPACT",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+]);
+
 interface SystemEnvTracking {
   pid: number;
   port: number;
@@ -147,7 +163,7 @@ export function getSystemEnvTrackingPath(): string {
 export function launchctlGetenv(name: string): string | undefined {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return undefined;
   try {
-    const value = execSync(`launchctl getenv ${name}`, { encoding: "utf8" }).trim();
+    const value = execFileSync("/bin/launchctl", ["getenv", name], { encoding: "utf8" }).trim();
     return value || undefined;
   } catch {
     return undefined;
@@ -160,22 +176,23 @@ function readTracking(): SystemEnvTracking | undefined {
     if (!Number.isInteger(tracking.port) || typeof tracking.pid !== "number" || typeof tracking.injectedAt !== "string") {
       return undefined;
     }
-    return tracking as SystemEnvTracking;
+    const injectedKeys = Array.isArray(tracking.injectedKeys)
+      ? [...new Set(tracking.injectedKeys.filter(
+        (name): name is string => typeof name === "string" && MANAGED_SYSTEM_ENV_NAMES.has(name),
+      ))]
+      : undefined;
+    return { ...tracking, injectedKeys } as SystemEnvTracking;
   } catch {
     return undefined;
   }
 }
 
-function shellArg(value: string): string {
-  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 function setLaunchctlEnv(name: string, value: string): void {
-  execSync(`launchctl setenv ${name} ${shellArg(value)}`);
+  execFileSync("/bin/launchctl", ["setenv", name, value]);
 }
 
 function unsetLaunchctlEnv(name: string): void {
-  execSync(`launchctl unsetenv ${name}`);
+  execFileSync("/bin/launchctl", ["unsetenv", name]);
 }
 
 function ownedBaseUrl(port: number): string {
@@ -183,6 +200,7 @@ function ownedBaseUrl(port: number): string {
 }
 
 function writeTracking(port: number, injectedKeys: string[]): void {
+  recordOwnedConfigPath(getConfigDir(), getSystemEnvTrackingPath());
   mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
   writeFileSync(getSystemEnvTrackingPath(), JSON.stringify({
     pid: process.pid,

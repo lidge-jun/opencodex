@@ -453,12 +453,15 @@ export function responsesSseToAnthropicSse(
                 if (line.startsWith("event: ")) eventName = line.slice(7).trim();
                 else if (line.startsWith("data: ")) dataLine += line.slice(6);
               }
-              if (!eventName || !dataLine) continue;
+              if (!dataLine) continue;
               let data: unknown;
               try { data = JSON.parse(dataLine); } catch { continue; }
               if (!isRec(data)) continue;
-              if (terminated) continue;
-              handleFrame(eventName, data);
+              // Responses-compatible gateways may omit the optional SSE event field
+              // while retaining the event name in the JSON payload's required type.
+              const resolvedEventName = eventName || (typeof data.type === "string" ? data.type : "");
+              if (!resolvedEventName || terminated) continue;
+              handleFrame(resolvedEventName, data);
             }
           }
           // EOF without a terminal frame is a TRUNCATION, not success (devlog 100:

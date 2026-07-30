@@ -490,6 +490,40 @@ describe("anthropic tool result history repair", () => {
     });
   });
 
+  test("reorders interleaved text after tool_use so Anthropic pairing stays valid (#620)", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const request = await adapter.buildRequest({
+      modelId: "claude-sonnet",
+      context: {
+        messages: [
+          { role: "user", content: "start", timestamp: 0 },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "before" },
+              { type: "toolCall", id: "call_a", name: "first_tool", arguments: {} },
+              { type: "text", text: "between steps" },
+              { type: "toolCall", id: "call_b", name: "second_tool", arguments: {} },
+            ],
+            model: "claude-sonnet",
+            timestamp: 0,
+          },
+          { role: "toolResult", toolCallId: "call_a", toolName: "first_tool", content: "one", isError: false, timestamp: 0 },
+          { role: "toolResult", toolCallId: "call_b", toolName: "second_tool", content: "two", isError: false, timestamp: 0 },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const wire = JSON.parse(request.body) as { messages: Array<{ role: string; content: any }> };
+    const assistant = wire.messages.find(m => m.role === "assistant" && Array.isArray(m.content) && m.content.some((c: { type?: string }) => c.type === "tool_use"));
+    expect(assistant).toBeDefined();
+    const types = (assistant!.content as { type: string }[]).map(c => c.type);
+    expect(types).toEqual(["text", "text", "tool_use", "tool_use"]);
+    expect(wire.messages[2].role).toBe("user");
+    expect(wire.messages[2].content.map((c: { tool_use_id?: string }) => c.tool_use_id)).toEqual(["call_a", "call_b"]);
+  });
+
   test("preserves orphan tool results as text instead of invalid Anthropic tool_result blocks", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
     const request = await adapter.buildRequest({

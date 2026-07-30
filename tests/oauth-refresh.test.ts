@@ -8,6 +8,8 @@ import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 
 const origHome = process.env.HOME;
+const origLocalAppData = process.env.LOCALAPPDATA;
+const origUserProfile = process.env.USERPROFILE;
 const origOcxHome = process.env.OPENCODEX_HOME;
 const origRegion = process.env.KIRO_REGION;
 const origCliDbFile = process.env.KIRO_CLI_DB_FILE;
@@ -22,6 +24,9 @@ beforeEach(() => {
   tmp = join(tmpdir(), `oauth-refresh-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(tmp, { recursive: true });
   process.env.HOME = tmp;
+  // Native kiro-cli store resolves per-platform (issue #710); win32 prefers these over HOME.
+  process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
+  process.env.USERPROFILE = tmp;
   process.env.OPENCODEX_HOME = join(tmp, "ocx");
   process.env.KIRO_REGION = "us-east-1";
   delete process.env.KIRO_CLI_DB_FILE;
@@ -32,6 +37,8 @@ beforeEach(() => {
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+  if (origLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = origLocalAppData;
+  if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
   if (origRegion === undefined) delete process.env.KIRO_REGION; else process.env.KIRO_REGION = origRegion;
   if (origCliDbFile === undefined) delete process.env.KIRO_CLI_DB_FILE; else process.env.KIRO_CLI_DB_FILE = origCliDbFile;
@@ -50,7 +57,12 @@ function seedKiroCliDb(token: {
   profile_arn?: string;
   region?: string;
 }) {
-  const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+  // Host-resolved layout (issue #710): mirrors resolveKiroCliNativeSessionEntries.
+  const dir = process.platform === "win32"
+    ? join(tmp, "AppData", "Local", "Kiro-Cli")
+    : process.platform === "darwin"
+      ? join(tmp, "Library", "Application Support", "kiro-cli")
+      : join(tmp, ".local", "share", "kiro-cli");
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "data.sqlite3"));
   db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");

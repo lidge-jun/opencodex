@@ -20,6 +20,7 @@ import {
   isCodexAccountInCooldown,
 } from "./routing";
 import { isCodexAccountUsable } from "./account-usability";
+import { isCodexAccountPaused } from "./account-pause";
 import { slugEquals } from "../providers/slug-codec";
 import { isThreadSpawnRequest } from "../server/effort-policy";
 import { PROVIDER_REGISTRY } from "../providers/registry";
@@ -187,6 +188,7 @@ export function isSubagentModelUnavailable(
   // route (canonical openai defaults to pool even when codexAccountMode is omitted).
   const resolvedAccountId = resolvePoolFallbackAccountId(config, accountId);
   if (!resolvedAccountId) return true;
+  if (isCodexAccountPaused(config, resolvedAccountId)) return true;
   if (!isCodexAccountUsable(config, resolvedAccountId)) return true;
   if (
     isCodexAccountInCooldown(resolvedAccountId, now)

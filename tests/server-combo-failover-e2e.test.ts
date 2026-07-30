@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -848,6 +849,53 @@ describe("server combo failover 030 activation matrix", () => {
     await response.text();
     expect(calls).toBe(1);
     expect(getCodexUpstreamHealth(rawAccountId)?.cooldownSource).toBe("retry-after");
+  });
+
+  test("Spark reset cooldown fails over to the shared native quota on the same account (#590)", async () => {
+    const rawAccountId = "spark-scope-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.6-terra" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "pool@example.test",
+      isMain: false,
+      logLabel: "pspark1",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-pool-spark",
+    });
+
+    const resetAt = Math.floor((Date.now() + 4 * 24 * 60 * 60_000) / 1000);
+    let upstreamCalls = 0;
+    customTransientResponse = async () => {
+      upstreamCalls += 1;
+      if (upstreamCalls === 1) {
+        return Response.json({ error: { message: "Spark quota exhausted" } }, {
+          status: 429,
+          headers: { "x-codex-primary-reset-at": String(resetAt) },
+        });
+      }
+      return Response.json(responsesSuccess("Terra fallback", "gpt-5.6-terra"));
+    };
+
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(upstreamCalls).toBe(2);
+    expect(await response.json()).toMatchObject({ model: "gpt-5.6-terra" });
   });
 
   test("keeps a failed estimate on A without overwriting B reported usage", async () => {

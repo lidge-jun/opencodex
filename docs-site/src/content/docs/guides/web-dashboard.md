@@ -21,6 +21,14 @@ ocx start
 bun run dev:gui
 ```
 
+## Sign-in
+
+On the default loopback bind (`localhost` / `127.0.0.1`) the dashboard never asks for a token:
+the proxy mints short-lived GUI sessions into the served page and renews them silently when
+they expire or the proxy restarts. Only a dashboard bound to a non-loopback hostname requires
+the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
+`~/.opencodex/admin-api-token` file).
+
 ## What you can do
 
 | Area | What it does |

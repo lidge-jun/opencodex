@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { getConfigDir } from "../config";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isAgentDriven } from "./agent-driven";
 import { interactiveConfirm } from "./interactive-confirm";
 
@@ -85,7 +86,11 @@ export async function maybeShowStarPrompt(): Promise<void> {
       printAgentDeferral();
       return;
     }
-    try { mkdirSync(dir, { recursive: true }); writeFileSync(marker, new Date().toISOString()); } catch { /* best-effort */ }
+    try {
+      recordOwnedConfigPath(dir, marker);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(marker, new Date().toISOString());
+    } catch { /* best-effort */ }
 
     const yes = await interactiveConfirm({
       question: "\n  \x1b[38;5;141m⭐ Enjoying opencodex? Star it on GitHub (via gh)?\x1b[0m",

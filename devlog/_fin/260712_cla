@@ -1,1 +1,0 @@
-request-shape test asserts it. Confirmed valid: max_tokens 8192, tool name web_search, max_uses.

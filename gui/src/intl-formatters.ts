@@ -19,16 +19,42 @@ export function cachedNumberFormat(
   return fmt;
 }
 
-const CREDIT_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+const CREDIT_DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   month: "short",
   day: "numeric",
   year: "numeric",
-});
+};
 
-export function formatCreditDate(iso: string): string {
+const CREDIT_DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function cachedDateFormatter(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = cacheKey(locale, options);
+  let fmt = dateFormatters.get(key);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat(locale, options);
+    dateFormatters.set(key, fmt);
+  }
+  return fmt;
+}
+
+export function formatCreditDate(iso: string, locale?: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "\u2014";
-  return CREDIT_DATE_FORMAT.format(date);
+  return cachedDateFormatter(locale, CREDIT_DATE_OPTIONS).format(date);
+}
+
+export function formatCreditDateTime(iso: string, locale?: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "\u2014";
+  return cachedDateFormatter(locale, CREDIT_DATE_TIME_OPTIONS).format(date);
 }
 
 /** Format a USD cost estimate for display. Returns "—" when unavailable. */

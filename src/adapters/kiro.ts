@@ -52,6 +52,24 @@ const AMZ_TARGET = "AmazonCodeWhispererStreamingService.GenerateAssistantRespons
 const SDK_VERSION = "1.0.27";
 const NODE_VERSION = "22.21.1";
 const KIRO_IDE_VERSION = "1.0.0";
+type KiroWireClient = "ide" | "cli";
+
+function kiroCliPlatform(): "linux" | "macos" | "windows" {
+  return process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+}
+
+function kiroCliUserAgent(includeAppVersion: boolean): string {
+  return [
+    "aws-sdk-rust/1.3.15",
+    "ua/2.1",
+    "api/codewhispererstreaming/0.1.17975",
+    `os/${kiroCliPlatform()}`,
+    "lang/rust/1.92.0",
+    ...(includeAppVersion ? ["md/appVersion-2.14.2"] : []),
+    "m/F",
+    "app/AmazonQ-For-CLI",
+  ].join(" ");
+}
 
 // Payload construction (conversationState)
 interface KiroToolUse {
@@ -68,7 +86,10 @@ interface KiroUserInputMessage {
   content: string;
   modelId?: string;
   origin?: string;
-  userInputMessageContext?: { tools?: unknown[]; toolResults?: KiroToolResult[] };
+  userInputMessageContext?: {
+    tools?: unknown[];
+    toolResults?: KiroToolResult[];
+  };
   images?: KiroImage[];
 }
 interface KiroHistoryEntry {
@@ -385,6 +406,7 @@ export function buildKiroPayload(
   parsed: OcxParsedRequest,
   profileArn: string | undefined,
   forcedCompletionMode?: KiroCompletionMode,
+  wireClient: KiroWireClient = "ide",
 ): {
   payload: Record<string, unknown>;
   nameMap: Map<string, string>;
@@ -476,7 +498,11 @@ export function buildKiroPayload(
       if (!priorCalls.has(toolUseId)) {
         throw new Error(`Kiro history contains an orphaned tool result for call ${JSON.stringify(tr.toolCallId)}`);
       }
-      pushUser(KIRO_TOOL_RESULT_CARRIER_MESSAGE, images, [{
+      // Carrier text is a placeholder for an OTHERWISE EMPTY tool-result turn, not a prefix.
+      // Passing it here would push proxy filler AHEAD of a human instruction that Claude Code
+      // sends in the same turn (mid-turn steering / queued_command, issue #543), burying the
+      // newest user intent behind boilerplate. Backfill below only when nothing else speaks.
+      pushUser("", images, [{
         content: [{ text: resultText }],
         status: tr.isError ? "error" : "success",
         toolUseId,
@@ -496,6 +522,16 @@ export function buildKiroPayload(
     });
   }
 
+  // Give tool-result turns a carrier sentence ONLY when they carry no other text. This runs
+  // before the pop below so the current turn is covered too: skipping it there would ship an
+  // empty current content, which validateKiroConversationState accepts (tool results count as
+  // payload) and would therefore fail silently.
+  for (const turn of turns) {
+    if (turn.kind === "user" && !turn.content.trim() && turn.toolResults.length > 0) {
+      turn.content = KIRO_TOOL_RESULT_CARRIER_MESSAGE;
+    }
+  }
+
   const currentTurn = turns.pop();
   if (!currentTurn || currentTurn.kind !== "user") throw new Error("Kiro request must end with a user turn");
   const toEntry = (turn: KiroTurn): KiroHistoryEntry => turn.kind === "assistant"
@@ -509,7 +545,7 @@ export function buildKiroPayload(
         userInputMessage: {
           content: turn.content,
           modelId,
-          origin: "AI_EDITOR",
+          origin: wireClient === "cli" ? "KIRO_CLI" : "AI_EDITOR",
           ...(turn.images.length > 0 ? { images: turn.images } : {}),
           ...(turn.toolResults.length > 0 ? { userInputMessageContext: { toolResults: turn.toolResults } } : {}),
         },
@@ -539,6 +575,10 @@ export function buildKiroPayload(
   const payload: Record<string, unknown> = {
     conversationState: {
       chatTriggerType: "MANUAL",
+      ...(wireClient === "cli" ? {
+        agentContinuationId: crypto.randomUUID(),
+        agentTaskType: "vibe",
+      } : {}),
       conversationId,
       currentMessage: { userInputMessage: currentUim },
       ...(history.length > 0 ? { history } : {}),
@@ -1446,9 +1486,25 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       throw new Error("kiro token missing — run ocx login kiro");
     }
     const region = resolveKiroApiRegion(parsed._kiroAuthContext);
-    const profileArn = resolveKiroProfileArn(parsed._kiroAuthContext);
+    const resolvedProfileArn = resolveKiroProfileArn(parsed._kiroAuthContext);
+    const isApiKey = provider.apiKey.trim().startsWith("ksk_");
+    const profileArn = isApiKey ? undefined : resolvedProfileArn;
+    // Builder ID and Kiro API keys have no profile ARN and are accepted only on Kiro's CLI
+    // request path. Enterprise profiles retain the existing IDE-shaped request.
+    const wireClient: KiroWireClient = isApiKey || !profileArn ? "cli" : "ide";
     const fp = fingerprint().slice(0, 64);
-    const headers: Record<string, string> = {
+    const headers: Record<string, string> = wireClient === "cli" ? {
+      authorization: `Bearer ${provider.apiKey}`,
+      "content-type": "application/x-amz-json-1.0",
+      accept: "*/*",
+      "x-amz-target": AMZ_TARGET,
+      "user-agent": kiroCliUserAgent(true),
+      "x-amz-user-agent": kiroCliUserAgent(false),
+      "x-amzn-codewhisperer-optout": "true",
+      "amz-sdk-request": "attempt=1; max=3",
+      "amz-sdk-invocation-id": invocationId(),
+      ...(isApiKey ? { tokentype: "API_KEY" } : {}),
+    } : {
       authorization: `Bearer ${provider.apiKey}`,
       "content-type": "application/x-amz-json-1.0",
       accept: "application/vnd.amazon.eventstream",
@@ -1460,7 +1516,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       "amz-sdk-invocation-id": invocationId(),
     };
     if (profileArn) headers["x-amzn-kiro-profile-arn"] = profileArn;
-    const built = buildKiroPayload(parsed, profileArn, forcedCompletionMode);
+    const built = buildKiroPayload(parsed, profileArn, forcedCompletionMode, wireClient);
     await normalizeKiroImages(built.payload);
     const contextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
     const body = JSON.stringify(built.payload);
@@ -1472,6 +1528,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       messageCount: kiroPayloadMessages(parsed).length,
       toolCount: parsed.context.tools?.length ?? 0,
       hasProfileArn: Boolean(profileArn),
+      wireClient,
       hasPreviousResponseId: Boolean(parsed.previousResponseId),
     });
     return {

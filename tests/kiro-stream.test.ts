@@ -1242,6 +1242,27 @@ describe("kiro adapter — parseStream", () => {
     expect(done.estimated).toBe(true);
   });
 
+  test("a real-shaped Kiro turn without tokenUsage still reports a cumulative context checkpoint", async () => {
+    // This is the shape live CodeWhisperer actually sends: contextUsagePercentage but NO
+    // tokenUsage (proven statically — parseTokenUsage reads totalTokens as required, and no
+    // recent kiro usage row carries usage.totalTokens or any cache field). The per-turn
+    // numbers therefore stay small estimates, and contextTotalTokens is the ONLY signal of
+    // real context occupancy. It must be present so Logs can show cumulative growth.
+    const adapter = createKiroAdapter(provider);
+    await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(4_000) }]));
+    const done = await doneUsage(
+      adapter,
+      eventFrame({ content: "answer" }),
+      eventFrame({ contextUsagePercentage: 42 }, "metadataEvent"),
+    );
+    expect(done.estimated).toBe(true);
+    // No fabricated cache detail when upstream reports none.
+    expect("cacheReadInputTokens" in done).toBe(false);
+    expect("cacheCreationInputTokens" in done).toBe(false);
+    // The checkpoint exceeds the small per-turn total, which is the whole point.
+    expect(done.contextTotalTokens).toBeGreaterThan(done.inputTokens + done.outputTokens);
+  });
+
   test("authoritative metadata token usage overrides estimates and preserves cache splits", async () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(700) }]));

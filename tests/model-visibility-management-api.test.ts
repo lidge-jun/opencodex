@@ -266,3 +266,4 @@ describe("atomic model visibility management", () => {
     expect(refreshes).toBe(2);
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

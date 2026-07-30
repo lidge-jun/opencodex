@@ -50,6 +50,8 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `codexShimAutoRestore?` | `boolean` | `true` | 已完成的外部 Codex 更新替换此前安装的 shim 时自动恢复。若要关闭，请设为 `false`，或为进程设置 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容模式。opencodex 会备份原始 Codex thread metadata，把旧 OpenAI interactive row 重映射到 `opencodex`，并暂时把 opencodex 创建的 `exec` row 提升成 App 可见 source。`ocx stop` / `ocx restore` 会恢复已备份的 OpenAI row，并把剩余 opencodex user thread 转回 OpenAI，使原生 Codex 在从 `config.toml` 移除代理后仍能继续这些 thread。设为 `false` 可退出该模式。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth 仪表盘管理的 ChatGPT/Codex pool account metadata。secret 单独存放在 `codex-accounts.json`。 |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | 在 Codex Auth 中恢复前，不参与任何后续 Pool 选择的账号 ID。暂停主账号时也包含 `__main__`。 |
+| `codexAccountNamespaces?` | `Record<string,string>` | — | 可选的公开 model selector namespace 到已保存 Codex account target 的映射。此 foundation layer 只验证并持久化该映射，不会添加 picker row 或改变 routing。 |
 | `activeCodexAccountId?` | `string` | — | 手动选择的 pool account。选择时清除已有 thread affinity，并从下一次请求开始生效；进行中的请求保留原账号。 |
 | `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。`quota` 策略和 `fill-first` 的耗尽 threshold 都会用到。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool 的新 session 轮换策略。仅适用于**新 session**；已有 thread id 保留 affinity。`quota`（默认）：活跃账号超过 `autoSwitchThreshold` 时选已知 usage 最低者。`round-robin`：在合格账号间平滑加权均分。`fill-first`：持续使用活跃账号，直到 cooldown、不可用或（如已设置）超过 `autoSwitchThreshold`（未知 usage 不会强制切换），再按稳定排序进入下一个合格账号。 |
@@ -62,6 +64,14 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的 proactive OAuth 刷新和 Codex account warmup 策略；字段见下文。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS 额外允许的精确 origin。loopback origin 始终允许。 |
 
+`codexAccountNamespaces` 的 key 是公开 selector：长度为 1–64 个字符，首尾必须是 ASCII 字母或数字，
+中间可使用字母、数字、`.`、`_` 或 `-`；保留的 JavaScript object 名称会被拒绝。value 必须是有效的
+pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex Desktop 账号。与 provider 及
+保留的 `openai` / `combo` 冲突时不区分大小写；带 namespace 的 combo alias 不能把 selector 复用为
+其 namespace prefix，已配置的 pool id 和其他 selector target 也不能复用为 selector。raw account id
+与 email 应保持私密，selector 才是公开名称。在此 foundation layer 中，
+该映射是 inert 的：不会创建 model picker entry、固定 session，也不会改变 Pool / Direct routing。
+
 `maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 使用的 camel-case 字段，不是 `config.json` key。
 `ocx v2 threads <n>` 会把对应的 `max_concurrent_threads_per_session` 值写入 Codex
 `$CODEX_HOME/config.toml` 的 `[features.multi_agent_v2]` 下；请先启用 v2，确保该 table 存在。
@@ -73,6 +83,10 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 请在仪表盘 **Codex Auth** 页面添加 pool account 并刷新 quota。配置只保存非 secret account
 metadata；access/refresh token 存放在加固的 Codex account credential store 中。已有 thread id 会
 保留 account affinity；新 session 按 `accountPoolStrategy`、quota、cooldown 和 health 自动路由。
+暂停后仍会显示账号及其 quota metadata，但不会参与自动切换、重试/failover 选择、cooldown 恢复探测或手动激活。
+暂停还会清除该账号的 thread affinity map：进行中的请求保留已捕获的 credential，但后续 turn 会重新路由，无法再使用已暂停账号。
+暂停状态会跨重启保留；如果所有账号均已暂停，Pool 路由会明确失败，而不会暗中选择某个账号。
+**暂停已达上限账号** 会先刷新有 credential 的合格账号，只暂停相关 quota window 本次明确返回 100% 的账号；无 credential、未知额度或刷新失败的账号保持不变。
 
 **轮换策略**（仅新 session；已绑定 thread 不变）：`quota`（默认）— 活跃账号 usage 超过
 `autoSwitchThreshold` 时选最低者；`round-robin` — 均分，`accountPoolStickyLimit`（默认 `1`，
@@ -135,7 +149,7 @@ x-opencodex-api-key: your-secret-token
 | Field | Type | 含义 |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（或别名 `azure`）之一。 |
-| `baseUrl` | `string` | 上游 API base URL。端点固定的内置 provider 会忽略它 —— 见[固定的 provider 端点](#固定的-provider-端点)。 |
+| `baseUrl` | `string` | 上游 API base URL。大多数固定端点的内置 provider 会忽略不一致的地址；新加入且启用冲突保护的 API-key preset 会保留旧有同名 custom provider 的目标。见[固定的 provider 端点](#固定的-provider-端点)。 |
 | `responsesPath?` | `string` | `key` 认证的 `openai-responses` 请求可选相对 resource path。必须以 `/` 开头，且不得包含 URL scheme、query 或 fragment。省略时保留原有的 `/v1/responses` URL 构造。 |
 | `disabled?` | `boolean` | 配置保留在磁盘上，但从路由和模型/目录列表排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
@@ -143,7 +157,7 @@ x-opencodex-api-key: your-secret-token
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key pool。`apiKey` 映射当前活动条目；每项包含 `id`、`key`、可选 `label` 和可选数字 `addedAt`。 |
 | `defaultModel?` | `string` | 选中该 provider 但未指定明确模型时使用的模型。 |
 | `models?` | `string[]` | seed/fallback 模型列表。`liveModels` 为 `false` 时，只会发现这些模型。 |
-| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时 `/models` 目录（默认 `true`）。设为 `false` 时只使用配置的 `models`。 |
+| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时模型目录（默认 `true`）。内置 preset 可使用 registry 中受信任的 URL、查询参数和过滤规则；自定义 provider 默认请求 `${baseUrl}/models`。设为 `false` 时只使用配置的 `models`。 |
 | `selectedModels?` | `string[]` | 模型发现后应用的目录 allowlist。非空时只向 Codex 暴露这些 id；为空或省略时暴露所有发现的模型。 |
 | `contextWindow?` | `number` | 路由目录条目的 provider 级 Codex 可见 context-window cap。实时 metadata 更小时保留实时值。 |
 | `modelContextWindows?` | `Record<string,number>` | 模型级 context-window cap。匹配模型时优先于 `contextWindow`，且不会抬高更小的实时 metadata。 |
@@ -181,11 +195,13 @@ x-opencodex-api-key: your-secret-token
 ### 固定的 provider 端点
 
 路由会在任何 adapter 介入之前解析 provider 的端点；对大多数内置 provider 而言，registry 自带的端点
-优先于你在配置里写的 `baseUrl`。在这一步保留配置 URL 的只有三类：
+优先于你在配置里写的 `baseUrl`。在这一步保留配置 URL 的有四类：
 
 - 显式开启覆盖的 provider —— `ollama`、`vllm`、`lm-studio`、`litellm`、`qwen-cloud` 和
   `alibaba-token-plan-intl`；
 - registry 端点本身是待填模板的 provider，例如 `azure-openai` 和 `cloudflare-ai-gateway`；
+- 新加入并启用同名冲突保护的固定 API-key preset：若旧有同名 custom provider 指向其他地址，
+  它会继续作为 custom provider 使用原目标，不会把 key 发往新 registry host；
 - 你自己定义的 provider，它们根本不在 registry 中。
 
 之后 adapter 仍可能调整已解析的 URL。例如 `kiro` adapter 在 host 为标准
@@ -267,6 +283,11 @@ MCP、屏幕录制和 computer-use 使用独立的 `mcpServers` / `desktopExecut
 
 部分 provider 的实时模型目录非常大或很慢。若只想让 Codex 看到 `models` 中固定的模型，请把
 `liveModels` 设为 `false`。
+
+实时发现响应超过 4 MiB 或包含超过 2,000 条原始模型记录时，会在缓存前被拒绝。内置 preset
+还可以降低这些上限，并把混合目录过滤为可用于聊天的模型。超限或格式错误的响应会沿用陈旧缓存/
+静态配置回退，不合格的记录则被排除。若合法响应中没有合格记录，结果仍是权威的空目录；超限响应
+不会被静默截断。
 
 当 `liveModels` 为 `false` 且 `models` 为空或省略时，opencodex 不会为该 provider 暴露任何
 路由模型。

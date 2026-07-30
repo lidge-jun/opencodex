@@ -1,5 +1,21 @@
 # Transports And Sidecars SOT
 
+## Provider diagnostic outbound safety
+
+Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
+Direct HTTP(S) resolves once and pins the validated address; HTTPS preserves the original Host/SNI
+and always verifies certificates. Proxy-configured requests stay on Bun fetch so HTTP(S)_PROXY,
+ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies successful local DNS answers, but
+only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
+resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
+cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
+
+Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
+does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
+Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
+redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
+executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
+
 ## Responses HTTP/SSE
 
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
@@ -225,7 +241,7 @@ It also repairs the opposite direction (260718): an assistant `tool_calls` round
 by an intervening user/developer barrier or an interrupted turn — is closed by deferring barrier
 messages until the round completes, reattaching real results to their original call occurrence,
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
-(Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_plan/260718_dangling_toolcall_hardening`).
+(Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_fin/260718_dangling_toolcall_hardening`).
 
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
@@ -303,7 +319,7 @@ backends may reject the OpenAI-specific field.
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
-`devlog/_plan/260716_grok_build_hardening/`.
+`devlog/_fin/260716_grok_build_hardening/`.
 
 - **Reasoning folding:** the Responses parser folds `reasoning` items into the FOLLOWING
   assistant turn (`pendingReasoning` in `src/responses/parser.ts`) so the Grok chat wire carries
@@ -342,7 +358,7 @@ request-level `parallel_tool_calls` bit (default true) and routed catalog entrie
 opt-out (registry-seeded, router-backfilled; an explicit user value always wins). Non-chat
 adapters advertise the catalog bit only on explicit `true`; cursor keeps its own special-casing.
 Providers with flaky parallel streaming can be opted out individually. Evidence and provider
-ledger: `devlog/_plan/260709_parallel_tool_calls/`.
+ledger: `devlog/_fin/260709_parallel_tool_calls/`.
 
 ## Reasoning display parity (hideThinkingSummary)
 
@@ -353,7 +369,7 @@ item (`summary: []`, txt-only `ocxr1:` `encrypted_content`, no text deltas) — 
 Codex app, so tool cells group like native models — while the text still round-trips for
 `preserveReasoningContentModels` replay. Visible mode (summary "auto") keeps the raw
 `content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
-`devlog/_plan/260709_native_response_pattern/`.
+`devlog/_fin/260709_native_response_pattern/`.
 
 ## Chat-to-Responses message phase inference
 

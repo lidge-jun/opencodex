@@ -57,6 +57,8 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore a previously installed Codex shim when a completed external Codex update replaces it. Set `false`, or set `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility mode. opencodex backs up original Codex thread metadata, remaps old OpenAI interactive rows to `opencodex`, and temporarily promotes opencodex-created `exec` rows to an app-visible source. `ocx stop` / `ocx restore` restore backed-up OpenAI rows and eject remaining opencodex user threads to OpenAI so native Codex can resume them after the proxy is removed from `config.toml`. Set `false` to opt out. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by the Codex Auth dashboard. Secrets live separately in `codex-accounts.json`. |
+| `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from every future Pool selection until resumed in Codex Auth. Includes the main `__main__` account when paused. |
+| `codexAccountNamespaces?` | `Record<string,string>` | — | Optional public model-selector namespace → stored Codex account target map. This foundation layer validates and persists the map but does not add picker rows or change routing. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
 | `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy for the Codex pool. Applies to **new sessions only**; existing thread ids keep affinity. `quota` — today's default: pick the lowest known usage when the active account crosses `autoSwitchThreshold`. `round-robin` — even spread across eligible accounts via smooth weighted selection. `fill-first` — keep the active account until it cools down, becomes unusable, or crosses `autoSwitchThreshold` when set (unknown usage does not force a switch), then advance to the next eligible account in stable sorted order. |
@@ -70,10 +72,46 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | Optional proactive OAuth refresh and Codex-account warmup policy; fields are listed below. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. |
 
+`codexAccountNamespaces` keys are public selectors: 1–64 characters, starting and ending with an
+ASCII letter or number, with letters, numbers, `.`, `_`, or `-` inside; reserved JavaScript object
+names are rejected. Each value is either a valid pool-account id (never the internal `__main__`) or
+`"@main"` for the Codex Desktop account. Provider and reserved `openai` / `combo` collisions are
+checked case-insensitively; a namespaced combo alias cannot reuse a selector as its namespace prefix,
+and configured pool ids or selector targets also cannot reuse a selector. Keep raw
+account ids and emails private—the selector is the public name. In this foundation layer the map is
+inert: it does not create model-picker entries, pin sessions, or alter Pool or Direct routing.
+
 `maxConcurrentThreadsPerSession` is the camel-case field used by `PUT /api/v2`, not a
 `config.json` key. `ocx v2 threads <n>` persists the corresponding
 `max_concurrent_threads_per_session` value under `[features.multi_agent_v2]` in Codex's
 `$CODEX_HOME/config.toml`; enable v2 first so that table exists.
+
+## Provider diagnostic outbound safety
+
+The dashboard provider connection test and live model discovery use a bounded GET-only outbound
+transport. Without an outbound proxy, opencodex resolves the provider hostname once and connects
+only to that validated address. HTTPS keeps the original hostname for Host, SNI, and certificate
+verification; certificate verification cannot be disabled by provider config.
+
+When `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` applies, these two operations keep Bun's native fetch
+so existing proxy behavior is not silently bypassed. URL/literal checks still run. Successful local DNS answers
+are classified, but a local DNS failure is allowed through because proxy-only networks commonly
+delegate name resolution to the proxy. The proxy chooses the final route, DNS answer, and peer, so
+opencodex logs that this path cannot pin or verify the proxy-selected peer. This is an explicit
+security limitation, not equivalent protection against DNS rebinding.
+
+Private/local provider destinations require both `allowPrivateNetwork: true` and a matching
+`NO_PROXY` entry whenever an outbound proxy is configured. Loopback entries are added to `NO_PROXY`
+automatically. A LAN provider such as `192.168.1.50` must be added explicitly; otherwise connection
+tests and model discovery reject it with an actionable message instead of sending it to the proxy.
+Metadata and link-local destinations remain blocked even when `allowPrivateNetwork` is enabled.
+The safety guard accepts exact hosts, domain suffixes, optional ports, bracketed IPv6, and `*` in
+`NO_PROXY`; it does not interpret CIDR entries, so list each private provider host or address explicitly.
+
+Both direct and proxied diagnostic paths reject redirects and report a credential-stripped target;
+configure the final provider URL directly. Ordinary provider requests, streaming responses, and
+retry paths are not migrated in this phase. Their redirect handling and per-hop destination review
+remain deferred, so this phase does not close the main-request redirect finding.
 
 ## Combos (`config.combos`)
 
@@ -105,6 +143,14 @@ credential store. Existing thread ids keep account affinity, while new sessions 
 `accountPoolStrategy`, quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool
 account is retried once on an eligible alternate account in the same request (so Codex CLI does not
 stall on a depleted primary while another account still has quota).
+Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
+retry/failover selection, cooldown recovery probes, and manual activation. Pausing also clears that
+account's thread-affinity map: in-flight requests keep their captured credentials, but subsequent
+turns are re-routed and cannot reuse the paused account. The exclusion survives
+restarts; if every account is paused, Pool routing fails instead of silently selecting one.
+**Pause exhausted** first refreshes eligible accounts that have credentials available and pauses
+only those whose relevant quota window is freshly confirmed at 100%; accounts without credentials
+and unknown or failed quota refreshes are left unchanged.
 :::
 
 **Rotation strategies** (new sessions only; bound threads are unchanged):
@@ -160,6 +206,7 @@ body-occupancy guard):
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Native passthrough cumulative body byte cap (streamed SSE and buffered non-stream). Exactly `0` disables. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | unset (auto) | How `ANTHROPIC_AUTH_TOKEN` is handled at launch. Unset means auto: opencodex detects Claude auth on every launch and picks subscription when it finds any, proxy when it finds none, and subscription with a warning when it cannot tell. An explicit value is never overridden by detection. See [Claude Code](/guides/claude-code/#auth-mode). |
 | `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time marker. Written once when an upgrade pins a pre-`auto` config to `subscription`, so a deliberate subscriber is not silently moved onto the proxy. Do not set by hand. |
+| `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | unset (inherit) | Effort written to every generated `~/.claude/agents/ocx-*.md` definition. Unset lets each subagent inherit the parent Claude Code session effort. This controls Claude Code custom-agent frontmatter; it is separate from Codex `injectionEffort` guidance and proxy-side effort caps. Regenerate the definitions by starting through `ocx claude` after changing it. |
 
 ### Managed record shapes
 
@@ -252,7 +299,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
-| `baseUrl` | `string` | Upstream API base URL. Built-in providers with a fixed endpoint ignore it — see [Fixed provider endpoints](#fixed-provider-endpoints). |
+| `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; newly promoted collision-safe key presets preserve an older same-named custom destination. See [Fixed provider endpoints](#fixed-provider-endpoints). |
 | `responsesPath?` | `string` | Optional relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no URL scheme, query, or fragment. When omitted, the adapter keeps its legacy `/v1/responses` URL construction. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
@@ -260,7 +307,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. When `liveModels` is `false`, these are the only discovered models. |
-| `liveModels?` | `boolean` | Fetch the provider's live `/models` catalog on start/sync (default `true`). Set `false` to use only configured `models`. |
+| `liveModels?` | `boolean` | Fetch the provider's live model catalog on start/sync (default `true`). Built-in presets may use a trusted registry URL/query/filter; custom providers default to `${baseUrl}/models`. Set `false` to use only configured `models`. |
 | `selectedModels?` | `string[]` | Catalog allowlist applied after discovery. A non-empty list exposes only those ids to Codex; empty/omitted exposes all discovered models. |
 | `contextWindow?` | `number` | Provider-wide Codex-visible context-window cap for routed catalog entries. Live metadata below this value is kept. |
 | `modelContextWindows?` | `Record<string,number>` | Model-specific context-window caps. These override `contextWindow` for matching model ids and never raise smaller live metadata. |
@@ -304,13 +351,16 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 ### Fixed provider endpoints
 
 Routing resolves a provider's endpoint before any adapter sees it, and for most built-in
-providers the registry's own endpoint wins over a `baseUrl` in your config. Three kinds of entry
+providers the registry's own endpoint wins over a `baseUrl` in your config. Four kinds of entry
 keep the configured URL at this stage:
 
 - providers that opt into an override — `ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud`
   and `alibaba-token-plan-intl`;
 - providers whose registry endpoint is a template you fill in, such as `azure-openai` and
   `cloudflare-ai-gateway`;
+- newly promoted fixed API-key presets that protect name collisions: if an older same-named
+  custom provider points somewhere else, it remains custom instead of sending that key to the new
+  registry host;
 - providers you define yourself, which are not in the registry at all.
 
 Adapters may adjust the resolved URL afterward. The `kiro` adapter, for example, follows the API
@@ -473,6 +523,12 @@ want Codex to see only the models pinned in `models`:
 
 When `liveModels` is `false` and `models` is empty or omitted, opencodex exposes no routed models
 for that provider.
+
+Live discovery rejects a response before caching when it exceeds 4 MiB or 2,000 raw model rows.
+Built-in presets may lower either limit and filter mixed catalogs to chat-eligible rows. An
+oversized or malformed response follows the normal stale/configured fallback path, while
+ineligible rows are excluded. A valid result with zero eligible rows remains an authoritative
+empty catalog; OpenCodex never silently truncates an over-limit response.
 
 Use `selectedModels` for a different purpose: discovery still runs, but only the selected ids are
 published to Codex's catalog and `/v1/models`. The dashboard's full model list remains available so

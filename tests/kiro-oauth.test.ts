@@ -11,6 +11,8 @@ import { inspectKiroCliSqlite, loginKiro, readKiroCliSqlite, refreshKiroToken, r
 setDefaultTimeout(30_000);
 
 const origHome = process.env.HOME;
+const origLocalAppData = process.env.LOCALAPPDATA;
+const origUserProfile = process.env.USERPROFILE;
 const origEnvTok = process.env.KIRO_ACCESS_TOKEN;
 const origArn = process.env.KIRO_PROFILE_ARN;
 const origRegion = process.env.KIRO_REGION;
@@ -33,6 +35,11 @@ function silenceWarn(): ReturnType<typeof spyOn> {
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "kiro-oauth-"));
   process.env.HOME = tmp;
+  // The native-store resolver is per-platform (issue #710), and on win32 it prefers
+  // LOCALAPPDATA/USERPROFILE over HOME — so HOME alone no longer isolates a Windows runner from its
+  // real profile. Point both at the temp dir for the duration of each test.
+  process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
+  process.env.USERPROFILE = tmp;
   delete process.env.KIRO_ACCESS_TOKEN;
   delete process.env.KIRO_PROFILE_ARN;
   delete process.env.KIRO_REGION;
@@ -47,6 +54,10 @@ afterEach(() => {
   for (const warning of warnSpies.splice(0)) warning.mockRestore();
   if (origHome === undefined) delete process.env.HOME;
   else process.env.HOME = origHome;
+  if (origLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+  else process.env.LOCALAPPDATA = origLocalAppData;
+  if (origUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = origUserProfile;
   if (origEnvTok === undefined) delete process.env.KIRO_ACCESS_TOKEN;
   else process.env.KIRO_ACCESS_TOKEN = origEnvTok;
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN;
@@ -69,11 +80,21 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+/**
+ * The native kiro-cli store is resolved per-platform (issue #710), so fixtures must seed the layout
+ * the HOST resolves. Mirrors `resolveKiroCliNativeSessionEntries` in src/oauth/kiro-credentials.ts.
+ */
+function kiroCliDbDir(): string {
+  if (process.platform === "win32") return join(tmp, "AppData", "Local", "Kiro-Cli");
+  if (process.platform === "darwin") return join(tmp, "Library", "Application Support", "kiro-cli");
+  return join(tmp, ".local", "share", "kiro-cli");
+}
+
 function seedKiroCliDb(
   token: { access_token: string; refresh_token?: string; expires_at?: string; profile_arn?: string; region?: string },
   opts: { registration?: Record<string, unknown>; stateArn?: string } = {},
 ) {
-  const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+  const dir = kiroCliDbDir();
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "data.sqlite3"));
   db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
@@ -89,7 +110,7 @@ function seedKiroCliDb(
 }
 
 function seedKiroCliRawValue(value: string) {
-  const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+  const dir = kiroCliDbDir();
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "data.sqlite3"));
   db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
@@ -103,7 +124,7 @@ function removeKiroCliDb(): void {
 }
 
 function kiroCliDbPath(): string {
-  return join(tmp, "Library", "Application Support", "kiro-cli", "data.sqlite3");
+  return join(kiroCliDbDir(), "data.sqlite3");
 }
 
 function kiroCliRecoveryPath(): string {
@@ -284,7 +305,7 @@ describe("kiro oauth — import-first", () => {
   });
 
   test("force login refuses to log out when a present CLI session cannot be snapshotted", async () => {
-    const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+    const dir = kiroCliDbDir();
     mkdirSync(dir, { recursive: true });
     const db = new Database(join(dir, "data.sqlite3"));
     db.run("CREATE TABLE other_table (key TEXT PRIMARY KEY, value TEXT)");
@@ -603,7 +624,7 @@ describe("kiro oauth — import-first", () => {
   });
 
   test("inspectKiroCliSqlite distinguishes schema mismatch from no token", () => {
-    const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+    const dir = kiroCliDbDir();
     mkdirSync(dir, { recursive: true });
     const db = new Database(join(dir, "data.sqlite3"));
     db.run("CREATE TABLE other_table (key TEXT PRIMARY KEY, value TEXT)");
@@ -634,7 +655,7 @@ describe("kiro oauth — import-first", () => {
   });
 
   test("inspectKiroCliSqlite distinguishes unreadable database path", () => {
-    const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+    const dir = kiroCliDbDir();
     mkdirSync(join(dir, "data.sqlite3"), { recursive: true });
 
     const result = inspectKiroCliSqlite();

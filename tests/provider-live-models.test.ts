@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { gatherRoutedModels } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
-import type { OcxConfig } from "../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 // Phase 2 of devlog/model_update/260709_model_refresh: live /models discovery is the
 // authoritative lineup; static config lists are the fallback seed. These tests pin the
@@ -12,17 +12,24 @@ const HY3_PROVIDER = "opencode-go";
 const HY3_CONTROL_PROVIDER = "hy3-control-live-test";
 const OPENCODE_FREE_PROVIDER = "opencode-free";
 
+function withTestFetch<T extends OcxProviderConfig>(provider: T): T {
+  if (globalThis.fetch !== originalFetch) {
+    (provider as T & { fetch?: typeof fetch }).fetch = globalThis.fetch;
+  }
+  return provider;
+}
+
 function config(): OcxConfig {
   return {
     providers: {
-      [PROVIDER]: {
+      [PROVIDER]: withTestFetch({
         baseUrl: "https://api.x.ai/v1",
         adapter: "openai-chat",
         authMode: "key",
         apiKey: "sk-test",
         models: ["grok-4.5", "grok-4.3"],
         modelContextWindows: { "grok-4.5": 500_000 },
-      },
+      }),
     },
   } as unknown as OcxConfig;
 }
@@ -88,19 +95,19 @@ describe("live provider model discovery (authority + fallback)", () => {
 
     const models = await gatherRoutedModels({
       providers: {
-        [HY3_PROVIDER]: {
+        [HY3_PROVIDER]: withTestFetch({
           baseUrl: "https://opencode-go.test/v1",
           adapter: "openai-chat",
           authMode: "key",
           apiKey: "sk-test",
           models: ["glm-5.2"],
-        },
-        [HY3_CONTROL_PROVIDER]: {
+        }),
+        [HY3_CONTROL_PROVIDER]: withTestFetch({
           baseUrl: "https://hy3-control.test/v1",
           adapter: "openai-chat",
           authMode: "key",
           apiKey: "sk-test",
-        },
+        }),
       },
     } as unknown as OcxConfig);
     const slugs = models.map(model => `${model.provider}/${model.id}`);
@@ -141,14 +148,14 @@ describe("live provider model discovery (authority + fallback)", () => {
 
     const models = await gatherRoutedModels({
       providers: {
-        [OPENCODE_FREE_PROVIDER]: {
+        [OPENCODE_FREE_PROVIDER]: withTestFetch({
           baseUrl: "https://opencode.ai/zen/v1",
           adapter: "openai-chat",
           authMode: "key",
           keyOptional: true,
           models: ["big-pickle", "deepseek-v4-flash-free", "mimo-v2.5-free", "north-mini-code-free"],
           liveModels: true,
-        },
+        }),
       },
     } as unknown as OcxConfig);
 
@@ -162,6 +169,62 @@ describe("live provider model discovery (authority + fallback)", () => {
     const models = await gatherRoutedModels(config());
     const ids = models.filter(m => m.provider === PROVIDER).map(m => m.id);
     expect(ids.sort()).toEqual(["grok-4.3", "grok-4.5"]);
+  });
+
+  test("redirect responses log a credential-safe final-URL hint and fall back", async () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const redirectTarget = new URL("https://final.example/v1/models?token=secret#fragment");
+    redirectTarget.username = "user";
+    redirectTarget.password = "password";
+    globalThis.fetch = (async () => new Response(null, {
+      status: 302,
+      headers: {
+        location: redirectTarget.toString(),
+      },
+    })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels(config());
+      const ids = models.filter(model => model.provider === PROVIDER).map(model => model.id);
+      const warningText = warning.mock.calls.flat().join(" ");
+
+      expect(ids.sort()).toEqual(["grok-4.3", "grok-4.5"]);
+      expect(warningText).toContain("returned 302 redirect");
+      expect(warningText).toContain("https://final.example/v1/models");
+      expect(warningText).not.toContain("user:password");
+      expect(warningText).not.toContain("token=secret");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test("link-local model discovery stays blocked despite private-network opt-in", async () => {
+    const providerName = "link-local-live-test";
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(JSON.stringify({ data: [{ id: "should-not-load" }] }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          [providerName]: withTestFetch({
+            baseUrl: "http://169.254.10.20/v1",
+            adapter: "openai-chat",
+            apiKey: "sk-test",
+            allowPrivateNetwork: true,
+            models: ["configured-fallback"],
+          }),
+        },
+      } as unknown as OcxConfig);
+
+      expect(models.filter(model => model.provider === providerName).map(model => model.id))
+        .toEqual(["configured-fallback"]);
+      expect(fetches).toBe(0);
+    } finally {
+      clearModelCache(providerName);
+    }
   });
 
   test("oauth without a usable token still returns the configured static catalog", async () => {

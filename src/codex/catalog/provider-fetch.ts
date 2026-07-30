@@ -24,7 +24,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
+import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
@@ -39,8 +39,19 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import {
+  ProviderOutboundPolicyError,
+  providerOutboundGet,
+  providerRedirectError,
+} from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
+import {
+  extractProviderModelItems,
+  readBoundedDiscoveryJson,
+  resolveProviderModelDiscovery,
+  type ModelDiscoveryResponseFailure,
+  type ProviderModelsApiItem,
+} from "../../providers/model-discovery";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
@@ -49,27 +60,6 @@ import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
-
-export type ProviderModelsApiItem = {
-  id: string;
-  owned_by?: string;
-  context_length?: number;
-  max_model_len?: number;
-  metadata?: {
-    capabilities?: Record<string, unknown>;
-    limits?: Record<string, unknown>;
-  };
-};
-
-export function isProviderModelsApiItems(value: unknown): value is ProviderModelsApiItem[] {
-  return Array.isArray(value) && value.every(item =>
-    item !== null
-    && typeof item === "object"
-    && !Array.isArray(item)
-    && typeof (item as { id?: unknown }).id === "string"
-    && (item as { id: string }).id.trim().length > 0
-  );
-}
 
 export function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
   const configured = modelRecordValue(prov.modelContextWindows, id) ?? prov.contextWindow;
@@ -193,29 +183,127 @@ export function isGlm52ModelId(id: string): boolean {
   return normalized === "glm-5.2" || normalized === "glm-5.2[1m]";
 }
 
-export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
-  const capabilities = item.metadata?.capabilities;
-  const limits = item.metadata?.limits;
-  const contextWindow =
-    typeof limits?.max_context_length === "number" ? limits.max_context_length
-      : typeof item.context_length === "number" ? item.context_length
-      : typeof item.max_model_len === "number" ? item.max_model_len
-        : undefined;
- const reasoningEfforts = capabilities && typeof capabilities.reasoning_effort === "boolean"
-   ? (capabilities.reasoning_effort
-     ? ((providerName === "neuralwatt" || providerName === "zai") && isGlm52ModelId(item.id)
-       ? ["low", "medium", "high", "xhigh", "max"]
-       : ["low", "medium", "high", "xhigh"])
-     : [])
-   : undefined;
- const inputModalities = capabilities && typeof capabilities.vision === "boolean"
-    ? (capabilities.vision ? ["text", "image"] : ["text"])
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : undefined;
+}
+
+const MODEL_DISCOVERY_METADATA_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+function positiveSafeInteger(...values: unknown[]): number | undefined {
+  return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value > 0) as number | undefined;
+}
+
+function normalizedMetadataString(raw: string, maxLength: number): string | undefined {
+  if (raw.length > maxLength * 4 || MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(raw)) return undefined;
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, maxLength);
+  return normalized || undefined;
+}
+
+function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const maxInspectedItems = Math.max(maxItems * 8, maxItems);
+  for (let i = 0; i < value.length && i < maxInspectedItems; i += 1) {
+    const raw = value[i];
+    if (typeof raw !== "string") continue;
+    const normalized = normalizedMetadataString(raw, maxLength);
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+    if (out.length >= maxItems) break;
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
+  const metadata = plainRecord(item.metadata);
+  const metadataCapabilities = metadata?.capabilities;
+  const capabilityRecord = plainRecord(metadataCapabilities) ?? plainRecord(item.capabilities);
+  const out = new Set<string>();
+  for (const list of [item.capabilities, item.features, item.supported_features, metadataCapabilities]) {
+    for (const capability of normalizedStringList(list) ?? []) out.add(capability);
+  }
+  const capabilityFields = capabilityRecord ?? {};
+  let inspectedCapabilityFields = 0;
+  for (const key in capabilityFields) {
+    if (!Object.hasOwn(capabilityFields, key)) continue;
+    inspectedCapabilityFields += 1;
+    if (inspectedCapabilityFields > 256 || out.size >= 32) break;
+    if (capabilityFields[key] === true) {
+      const normalized = normalizedMetadataString(key, 64);
+      if (normalized) out.add(normalized);
+    }
+  }
+  for (const field of ["supports_tools", "supports_tool_calling", "supports_function_calling"] as const) {
+    if (item[field] === true) out.add("tools");
+  }
+  for (const field of ["supports_reasoning", "reasoning"] as const) {
+    if (item[field] === true) out.add("reasoning");
+  }
+  return out.size > 0 ? [...out].filter(Boolean).slice(0, 32) : undefined;
+}
+
+function modelInputModalities(
+  item: ProviderModelsApiItem,
+  capabilities: readonly string[] | undefined,
+): string[] | undefined {
+  const metadata = plainRecord(item.metadata);
+  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const explicit = normalizedStringList(
+    item.input_modalities
+      ?? item.modalities
+      ?? metadata?.input_modalities
+      ?? capabilityRecord?.input_modalities,
+    8,
+    24,
+  )?.filter(value => value === "text" || value === "image" || value === "audio" || value === "video");
+  if (explicit && explicit.length > 0) return explicit;
+  if (capabilityRecord?.vision === false) return ["text"];
+  if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
+    return ["text", "image"];
+  }
+  return undefined;
+}
+
+export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
+  const metadata = plainRecord(item.metadata);
+  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const limits = plainRecord(metadata?.limits);
+  const contextWindow =
+    positiveSafeInteger(
+      limits?.max_context_length,
+      item.context_length,
+      item.context_size,
+      item.max_model_len,
+      item.max_context_length,
+    );
+  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
+  const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
+  const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
+  const reasoningEfforts = listedReasoningEfforts
+    ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
+    : typeof rawReasoningEfforts === "boolean"
+      ? (rawReasoningEfforts
+        ? ((providerName === "neuralwatt" || providerName === "zai") && isGlm52ModelId(item.id)
+          ? ["low", "medium", "high", "xhigh", "max"]
+          : ["low", "medium", "high", "xhigh"])
+        : [])
+      : undefined;
+  const capabilities = modelCapabilities(item);
+  const inputModalities = modelInputModalities(item, capabilities);
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+    ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
+    ...(capabilities ? { capabilities } : {}),
   };
+}
+
+function boundedOwnedBy(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) return undefined;
+  if (MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(value)) return undefined;
+  return value;
 }
 
 export async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
@@ -299,6 +387,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     const stale = getStaleCached(name);
     return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : failedDiscoveryConfigured;
   }
+  const discovery = resolveProviderModelDiscovery(name, prov);
   const { url, headers } = buildModelsRequest(prov, apiKey, name);
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
@@ -322,21 +411,20 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     };
   };
   try {
-    const destinationError = await providerDestinationResolvedError(name, {
-      baseUrl: url,
-      allowPrivateNetwork: prov.allowPrivateNetwork,
+    const res = await providerOutboundGet(name, prov, url, {
+      headers,
+      signal: AbortSignal.timeout(8000),
     });
-    if (destinationError) {
-      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
+    const redirectError = await providerRedirectError(res, url);
+    if (redirectError) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${destinationError} [urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" ${redirectError} [urlClass=${urlClass}, fallback=${fallback}].`,
         );
       }
       return models;
     }
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
       if (shouldLog) {
@@ -350,15 +438,14 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     const contentType = (
       res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
     ).slice(0, 80);
-    const body = await res.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(body) as unknown;
-    } catch {
+    const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+    if (!bounded.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
-      const diagnostic = contentType === "application/json" || contentType.endsWith("+json")
-        ? "returned invalid JSON in a 2xx response"
-        : "returned a non-JSON 2xx response";
+      const diagnostic = bounded.reason === "response_too_large"
+        ? `exceeded the ${discovery.maxResponseBytes}-byte response limit`
+        : contentType === "application/json" || contentType.endsWith("+json")
+          ? "returned invalid JSON in a 2xx response"
+          : "returned a non-JSON 2xx response";
       if (shouldLog) {
         console.warn(
           `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
@@ -366,25 +453,32 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       }
       return models;
     }
-    const data = json !== null && typeof json === "object" && !Array.isArray(json)
-      ? (json as { data?: unknown }).data
-      : undefined;
-    if (!isProviderModelsApiItems(data)) {
+    const extracted = extractProviderModelItems(bounded.value, discovery);
+    if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {
+        response_too_large: "returned an oversized 2xx response",
+        invalid_json: "returned invalid JSON in a 2xx response",
+        invalid_shape: "returned malformed 2xx data",
+        too_many_models: `exceeded the ${discovery.maxModels}-row model limit`,
+      };
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
         );
       }
       return models;
     }
-    const items = data;
-    const live = items.map(m => applyProviderConfigHints(name, prov, {
-      id: m.id,
-      provider: name,
-      owned_by: m.owned_by,
-      ...catalogHintsFromModelsApiItem(name, m),
-    }, contextCap))
+    const items = extracted.items;
+    const live = items.map(m => {
+      const ownedBy = boundedOwnedBy(m.owned_by);
+      return applyProviderConfigHints(name, prov, {
+        id: m.id,
+        provider: name,
+        ...(ownedBy ? { owned_by: ownedBy } : {}),
+        ...catalogHintsFromModelsApiItem(name, m),
+      }, contextCap);
+    })
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
     // `live`; otherwise configured entries would be reported as discovered ones.
@@ -421,6 +515,15 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     setCached(name, live);
     return live;
   } catch (error) {
+    if (error instanceof ProviderOutboundPolicyError) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${error.message} [urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
+      return models;
+    }
     const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "network" });
     if (shouldLog) {
       console.warn(
@@ -596,7 +699,7 @@ export function augmentRoutedModelsWithRegistryOpenAiApiRows(
   config: OcxConfig,
 ): CatalogModel[] {
   const configured = config.providers[OPENAI_API_PROVIDER_ID];
-  if (!configured || configured.disabled === true) return models;
+  if (!configured || configured.disabled === true || !providerMatchesRegistryTransport(OPENAI_API_PROVIDER_ID, configured)) return models;
   const entry = getProviderRegistryEntry(OPENAI_API_PROVIDER_ID);
   if (!entry?.models) return models;
 

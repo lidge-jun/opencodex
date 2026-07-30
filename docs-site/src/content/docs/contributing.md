@@ -86,22 +86,26 @@ bun run release:watch               # watch the newest Release workflow run
 
 ## Branches
 
-- `dev` — the default integration target. Open your pull request here unless it
-  belongs to a scoped line below.
-- `dev2-go` — parallel integration line for the Go native port (`go/`, the
-  native runtime entrypoint, and the Go release-asset tooling). Open for pull
-  requests alongside `dev`. Send work here only when it belongs to the Go port;
-  everything else goes to `dev`. The automated target-branch check accepts both
-  and cannot tell them apart, so scope is settled in review — a maintainer may
-  ask you to retarget.
+- `dev` — the only integration target. Open your pull request here.
 - `main` — releases only. It moves by maintainer-controlled promotion from
   `dev`; do not open feature pull requests against it.
 - `preview` — the prerelease train.
 
-Porting and rebase pull requests are welcome. Carrying a fix from one
-integration line to another, or rebasing a stale branch onto the current head,
+The `dev2-go` line that carried the Go native port has been retired, and the
+dual-track carry policy with it. Its history is published read-only at
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive).
+Bun-native TypeScript on `dev` is the single runtime line.
+
+Rebase pull requests are welcome. Bringing a stale branch onto the current head
 is normal contribution rather than noise — note the source commits in the
 description.
+
+## Pull requests
+
+- Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
+- Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
+- Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
+- Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
 
 ## Project maintainers
 
@@ -142,6 +146,36 @@ All provider pickers and seeds derive from the canonical registry (`src/provider
 API-key login, and OAuth config seeds. `enrichProviderFromCatalog()` copies model metadata and
 capability classifications onto the saved provider config. OAuth protocol implementations still
 live in `src/oauth/`; registry metadata alone is not an OAuth flow.
+
+### Evidence required for a canonical preset
+
+A registry entry is a maintained promise: opencodex ships the destination that a user's API key is
+sent to. A preset therefore needs primary-source evidence, not a working code path. Pull requests
+that add or promote a provider must supply all of the following in the description:
+
+- **The documented OpenAI-compatible endpoints.** Link the vendor's own API reference for the chat
+  endpoint and, when the entry sets `liveModels: true`, for authenticated `GET /v1/models`. A
+  passing fixture test is not a substitute: it proves our code shape, not the upstream contract.
+- **Terms of service and the operating legal entity.** An empty or placeholder legal page does not
+  establish who runs the endpoint or under what terms user traffic is handled.
+- **Resale or routing authorization for aggregators.** A gateway that sells access to Claude, GPT,
+  Gemini, or other third-party models should show its authorization to route to them. Users read a
+  built-in preset as a maintained route, not as an unverified reseller.
+- **A named maintenance owner.** State who updates the preset when the base URL, authentication, or
+  catalog contract changes, and how a break will be reported.
+- **A citable verification date.** Record the primary source and the date it was checked, the same
+  way `lastVerified` works in `src/providers/free-directory.ts`. A date on an unverified row asserts
+  provenance nobody produced.
+
+Contributors adding their own service are welcome, and several current presets arrived that way.
+Disclose the affiliation in the pull-request description so reviewers can weigh it; affiliation is
+not a reason for rejection, and it does not lower the evidence bar either.
+
+When the evidence is incomplete, the honest home is a reference row in
+`src/providers/free-directory.ts` rather than the canonical registry. Directory rows carry an
+explicit `verification` grade (`official`, `primary`, `unverified`) and are inert: users can still
+reach the service through the custom OpenAI-compatible flow, while opencodex avoids advertising a
+preset it cannot stand behind. Promote the row to the registry once the evidence above exists.
 
 ## Adding an adapter
 

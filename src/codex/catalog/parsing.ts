@@ -110,6 +110,8 @@ export interface CatalogModel {
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
   supportsReasoningSummaries?: boolean;
+  /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
+  capabilities?: string[];
 }
 
 export type RawEntry = Record<string, unknown>;

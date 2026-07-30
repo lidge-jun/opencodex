@@ -37,6 +37,8 @@ export interface LiveProxy {
   port: number;
   /** Raw bind hostname the probe succeeded against; compose URLs via `probeHostname`. */
   hostname?: string;
+  /** Whether the successful probe used runtime-port metadata or the configured listen port. */
+  source: "runtime" | "config";
 }
 
 /**
@@ -118,7 +120,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
         // healthz confirmed the pid itself → trusted; a pidless legacy body did not,
         // so the cheap pid must pass full identity verification before it is returned.
         const trusted = identity.pid === pid ? pid : killablePid(pid);
-        return { pid: trusted, port: runtime.port, hostname: runtime.hostname };
+        return { pid: trusted, port: runtime.port, hostname: runtime.hostname, source: "runtime" };
       }
     }
   }
@@ -133,12 +135,21 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
     // Only the healthz-reported pid is authoritative here. The record's pid may be stale
     // (its process dead, the port reused by a pidless legacy proxy) — synthesizing it
     // would hand destructive callers (stopProxy → kill fallback) a reusable pid.
-    if (identity) return { pid: identity.pid ?? null, port: record.port, hostname: record.hostname };
+    if (identity) {
+      return { pid: identity.pid ?? null, port: record.port, hostname: record.hostname, source: "runtime" };
+    }
   }
 
   const config = configFn();
   const port = config.port ?? 10100;
   const identity = await proxyIdentityAt(port, { hostname: config.hostname }, io);
-  if (identity) return { pid: identity.pid ?? killablePid(pid), port, hostname: config.hostname };
+  if (identity) {
+    return {
+      pid: identity.pid ?? killablePid(pid),
+      port,
+      hostname: config.hostname,
+      source: "config",
+    };
+  }
   return null;
 }

@@ -412,3 +412,4 @@ describe("/api/injection-model guidance kill switch + partial update", () => {
     });
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

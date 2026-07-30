@@ -75,4 +75,26 @@ describe("startup star prompt", () => {
     expect(init).toContain("Install Codex autostart shim? [Y/n]");
     expect(init).toContain("installCodexShim");
   });
+
+  test("ocx service install gets the prompt too, after the service is up", async () => {
+    const service = await readText("src/service.ts");
+    const installIndex = service.indexOf("await ops.install()");
+    const promptIndex = service.indexOf("await maybeShowStarPrompt()");
+
+    expect(installIndex).toBeGreaterThan(-1);
+    expect(promptIndex).toBeGreaterThan(-1);
+    // Installing the service is the real work: it must succeed and report before
+    // the prompt appears, so a declined star never looks like a failed install.
+    expect(installIndex).toBeLessThan(promptIndex);
+    // Only the hand-typed install path prompts. Other subcommands stay silent.
+    expect(service.match(/maybeShowStarPrompt\(\)/g) ?? []).toHaveLength(1);
+  });
+
+  test("the service-installed proxy still cannot prompt", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    // The supervised child always carries OCX_SERVICE=1; that guard is what makes
+    // the `service install` call site the only interactive moment for those users.
+    expect(prompt).toContain("if (process.env.OCX_SERVICE ||");
+  });
 });

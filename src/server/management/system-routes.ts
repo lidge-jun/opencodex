@@ -3,7 +3,7 @@
  * and the memory-card drain-and-restart action (#563).
  *
  * Rides the standard management gate: every /api/* request already passed
- * requireApiAuth("management") + the origin check before dispatch, so these
+ * the independent management-auth gate + the origin check before dispatch, so these
  * routes add no auth of their own. NEVER expose this data on the
  * unauthenticated /healthz surface.
  *

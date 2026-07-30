@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { loadConfig, readRuntimePort } from "../config";
+import { configuredAdminToken } from "./admin-secrets";
 
 export function isProcessAlive(pid: number): boolean {
   try {
@@ -66,8 +67,7 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
   if (!runtime?.port) return false;
   const env = io.env ?? process.env;
   const headers: Record<string, string> = {};
-  // Non-loopback binds require management auth; loopback ignores the extra header.
-  const token = env.OPENCODEX_API_AUTH_TOKEN?.trim();
+  const token = configuredAdminToken(env.OPENCODEX_HOME?.trim() || undefined, env as NodeJS.ProcessEnv);
   if (token) headers["x-opencodex-api-key"] = token;
   const fetchFn = io.fetchFn ?? fetch;
   try {

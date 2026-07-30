@@ -1,6 +1,7 @@
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
+import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
   getConfigPath,
   multiAgentGuidanceEnabled,
@@ -52,7 +53,7 @@ import {
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
-import { buildImageTool, planImageBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME } from "../../images";
+import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -67,6 +68,7 @@ import {
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   codexProbeLeaseId,
+  codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
   stripCodexRuntimeProviderFields,
   type CodexAuthContext,
@@ -320,7 +322,7 @@ async function retryCodexPoolOnAlternateAccount(
       req.headers,
       config,
       "pool",
-      { excludeAccountId: firstAuthCtx.accountId },
+      { excludeAccountId: firstAuthCtx.accountId, modelId: route.modelId },
     );
   } catch (error) {
     if (
@@ -342,7 +344,9 @@ async function retryCodexPoolOnAlternateAccount(
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
       ...quotaMeta,
       threadId: req.headers.get("x-codex-parent-thread-id"),
+      modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
       // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
       ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
     });
@@ -403,6 +407,7 @@ export function codexForwardTerminalOutcomeRecorder(
   config: OcxConfig,
   authCtx: CodexAuthContext,
   provider: OcxProviderConfig,
+  modelId?: string,
   logCtx?: RequestLogContext,
   threadId?: string | null,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
@@ -414,7 +419,9 @@ export function codexForwardTerminalOutcomeRecorder(
       // prior soft-avoid so a healthy account isn't stuck avoided.
       recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
         threadId,
+        modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
+        probeQuotaScope: codexProbeQuotaScope(authCtx),
       });
       return;
     }
@@ -432,7 +439,9 @@ export function codexForwardTerminalOutcomeRecorder(
       : (httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
+      modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
+      probeQuotaScope: codexProbeQuotaScope(authCtx),
     });
   };
 }
@@ -668,7 +677,7 @@ async function resolveResponsesCodexAuth(
     if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
     let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, { modelId: route.modelId });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       authCtx = { kind: "main", accountId: null };
@@ -1428,12 +1437,14 @@ export async function handleResponses(
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
+          probeQuotaScope: codexProbeQuotaScope(authCtx),
         });
       }
       const msg = outcome === "timeout"
         ? `Provider connect timeout after ${connectMs}ms`
-        : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
+        : describeUpstreamConnectFailure(err, connectMs);
       return formatErrorResponse(502, "upstream_error", msg);
     };
     try {
@@ -1514,6 +1525,7 @@ export async function handleResponses(
       config,
       authCtx,
       route.provider,
+      route.modelId,
       logCtx,
       req.headers.get("x-codex-parent-thread-id"),
     );
@@ -1553,7 +1565,9 @@ export async function handleResponses(
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
           ...quotaMeta,
           threadId: req.headers.get("x-codex-parent-thread-id"),
+          modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
+          probeQuotaScope: codexProbeQuotaScope(authCtx),
         });
       }
     }
@@ -1756,48 +1770,74 @@ export async function handleResponses(
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
+  const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
-  if (imgPlan && (!wsPlan || adapter.runTurn)) {
-    // The bridge forces stream:true internally and returns SSE. Non-streaming requests can't be
-    // served — reject explicitly rather than returning SSE to a client expecting JSON.
+  if ((imgPlan || vidPlan) && canRunWebSearch) {
+    // Web search takes priority when both are active — the media bridge cannot run
+    // alongside runWithWebSearch. Surface a runtime signal so the user knows their
+    // configured video/image bridge was skipped for this turn, rather than silently
+    // dropping a paid capability.
+    if (vidPlan) console.warn("[videos] video bridge skipped: web search is active for this turn");
+    if (imgPlan) console.warn("[images] image bridge skipped: web search is active for this turn");
+  }
+  if ((imgPlan || vidPlan) && (!wsPlan || adapter.runTurn)) {
+    // The image bridge detects a hosted image_generation tool and requires streaming.
+    // The video bridge activates from config and injects a tool — it also needs streaming
+    // (the loop returns SSE). For video-only (no imgPlan) on a non-streaming request, skip
+    // the bridge entirely so enabling the feature doesn't break ordinary non-streaming traffic.
     if (!parsed.stream) {
-      return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
-    }
-    // Replace any pre-existing image_gen alias instead of appending a duplicate wire name.
+      if (imgPlan) {
+        return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
+      }
+      // Video-only: skip bridge for non-streaming requests
+    } else {
+    // Replace any pre-existing image_gen/video_gen aliases instead of appending duplicate wire names.
     const priorTools = parsed.context.tools ?? [];
-    parsed.context.tools = [
-      ...priorTools.filter(t => {
-        if (t.imageGeneration) return false;
-        if (imgPlan.toolNames.has(t.name)) return false;
-        if (t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
-        return true;
-      }),
-      buildImageTool(),
-    ];
+    const bridgeTools = [...priorTools.filter(t => {
+      if (t.imageGeneration) return false;
+      if (t.videoGeneration) return false;
+      if (imgPlan && imgPlan.toolNames.has(t.name)) return false;
+      if (imgPlan && t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+      // Only strip unnamespaced video_gen aliases — a namespaced MCP video_gen is left alone.
+      if (vidPlan && !t.namespace && vidPlan.toolNames.has(t.name)) return false;
+      return true;
+    })];
+    const existingNames = new Set(bridgeTools.map(t => t.name));
+    if (imgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) bridgeTools.push(buildImageTool());
+    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
+    parsed.context.tools = bridgeTools;
     // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
+    // Gate on imgPlan — in a video-only turn buildImageTool() was never injected, so rewriting
+    // image_generation/image_gen aliases would add an undeclared tool that strict upstreams reject.
     const tc = parsed.options.toolChoice;
-    if (tc && typeof tc === "object" && "allowedTools" in tc && Array.isArray(tc.allowedTools)) {
+    if (imgPlan && tc && typeof tc === "object" && "allowedTools" in tc && Array.isArray(tc.allowedTools)) {
       const mapped = tc.allowedTools.map(name =>
-        name === "image_generation" || name === "image_gen" || imgPlan.toolNames.has(name)
+        name === "image_generation" || name === "image_gen" || (imgPlan.toolNames.has(name) ?? false)
           ? IMAGE_GEN_TOOL_NAME
           : name,
       );
       parsed.options.toolChoice = { ...tc, allowedTools: [...new Set(mapped)] };
-    } else if (tc && typeof tc === "object" && "name" in tc && typeof tc.name === "string"
+    } else if (imgPlan && tc && typeof tc === "object" && "name" in tc && typeof tc.name === "string"
       && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
       parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
     }
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
-      plan: imgPlan,
+      ...(imgPlan ? { plan: imgPlan } : {}),
+      ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
       onAttemptSend: () => noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens),
       abortSignal: options.abortSignal,
-      maxRounds: clampImageMaxRounds(config.images?.maxRounds),
+      maxRounds: imgPlan && vidPlan
+        ? clampImageMaxRounds(Math.min(config.images?.maxRounds ?? 3, config.images?.videoMaxRounds ?? 2))
+        : imgPlan
+          ? clampImageMaxRounds(config.images?.maxRounds)
+          : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       stallTimeoutSec: config.stallTimeoutSec,
       fetchImpl: providerFetch(route.provider),
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
+      ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
       onUsage: usage => {
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
         // backfill so Logs can filter/total that opening request (parity with the normal
@@ -1843,6 +1883,7 @@ export async function handleResponses(
       });
     }
     return imgResponse;
+    } // end else (streaming bridge)
   }
 
   // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
@@ -2061,9 +2102,7 @@ export async function handleResponses(
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
-    const msg = err instanceof Error && err.name === "TimeoutError"
-      ? `Provider connect timeout after ${connectMs}ms`
-      : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
+    const msg = describeUpstreamConnectFailure(err, connectMs);
     return formatErrorResponse(502, "upstream_error", msg);
   }
 
@@ -2103,9 +2142,7 @@ export async function handleResponses(
         if (options.abortSignal?.aborted) {
           return { failed: clientCancelledResponse() };
         }
-        const msg = err instanceof Error && err.name === "TimeoutError"
-          ? `Provider connect timeout after ${connectMs}ms`
-          : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
+        const msg = describeUpstreamConnectFailure(err, connectMs);
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
       }
     };

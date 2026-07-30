@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { useT } from "../i18n/shared";
+import { useI18n } from "../i18n/shared";
 import { IconAlert, IconTicket } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { CodexCreditItem } from "./codex-account-pool-helpers";
@@ -26,7 +26,7 @@ export function CodexAccountResetModal({
   onCancelConfirm: () => void;
   onRedeem: () => void;
 }) {
-  const t = useT();
+  const { locale, t } = useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export function CodexAccountResetModal({
                   {creditDetails && creditDetails.length > 0 && (
                     <div className="credit-list">
                       {creditDetails.map((c, i) => (
-                        <CodexCreditItem key={`${c.granted_at}:${c.expires_at}`} index={i} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} t={t} />
+                        <CodexCreditItem key={`${c.granted_at}:${c.expires_at}`} index={i} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} locale={locale} t={t} />
                       ))}
                     </div>
                   )}
@@ -87,7 +87,7 @@ export function CodexAccountResetModal({
               <p className="modal-desc">{t("codexAuth.confirmResetDesc", { count: String(resetPopup.quota?.resetCredits ?? 0) })}</p>
               {creditDetails && creditDetails[0] && (
                 <p className="faint text-label">
-                  {t("codexAuth.confirmWhichCredit", { date: formatCreditDate(creditDetails[0].granted_at) })}
+                  {t("codexAuth.confirmWhichCredit", { date: formatCreditDate(creditDetails[0].granted_at, locale) })}
                 </p>
               )}
               <p className="faint text-label">{t("codexAuth.irreversible")}</p>

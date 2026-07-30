@@ -22,6 +22,10 @@ let calls: string[] = [];
 let originalFetch: typeof globalThis.fetch;
 let accounts: unknown[] = [];
 let threshold = 80;
+let nextAccountsResponseGate: Promise<void> | null = null;
+let pauseResponseActiveId: string | null = null;
+let bulkPausedAccountIds: string[] = ["a2"];
+let bulkResponseActiveId: string | null = null;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -36,13 +40,47 @@ beforeEach(() => {
 
   originalFetch = globalThis.fetch;
   calls = [];
-  accounts = [{ id: "a1", email: "account-one", isMain: true, hasCredential: true, quota: null }];
+  nextAccountsResponseGate = null;
+  pauseResponseActiveId = null;
+  bulkPausedAccountIds = ["a2"];
+  bulkResponseActiveId = null;
+  accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       const path = String(url).split("/api/")[1] ?? String(url);
       calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (path === "codex-auth/accounts/pause") {
+        const body = JSON.parse(String(init?.body)) as { id: string; paused: boolean };
+        accounts = accounts.map(account => (
+          typeof account === "object" && account !== null && "id" in account
+            && (account.id === body.id || (body.id === "__main__" && "isMain" in account && account.isMain === true))
+            ? { ...account, paused: body.paused }
+            : account
+        ));
+        return { ok: true, json: async () => ({ activeCodexAccountId: pauseResponseActiveId }) } as unknown as Response;
+      }
+      if (path === "codex-auth/accounts/pause-exhausted") {
+        const pausedIds = new Set(bulkPausedAccountIds);
+        accounts = accounts.map(account => (
+          typeof account === "object" && account !== null && "id" in account
+            && (pausedIds.has(String(account.id)) || (pausedIds.has("__main__") && "isMain" in account && account.isMain === true))
+            ? { ...account, paused: true }
+            : account
+        ));
+        return {
+          ok: true,
+          json: async () => ({
+            pausedAccountIds: bulkPausedAccountIds,
+            pausedCount: bulkPausedAccountIds.length,
+            activeCodexAccountId: bulkResponseActiveId,
+          }),
+        } as unknown as Response;
+      }
       if (path.startsWith("codex-auth/accounts")) {
+        const gate = nextAccountsResponseGate;
+        nextAccountsResponseGate = null;
+        if (gate) await gate;
         return { ok: true, json: async () => ({ accounts }) } as unknown as Response;
       }
       if (path.startsWith("codex-auth/active")) {
@@ -103,6 +141,109 @@ test("the controller loads once on mount", async () => {
 test("an inert controller issues no requests at all", async () => {
   await mountController(false);
   expect(calls.length).toBe(0);
+});
+
+test("pausing an account writes the persisted endpoint and updates shared state", async () => {
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.setAccountPaused("a1", true)).toEqual({ ok: true });
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+  expect(calls).toContain("PUT codex-auth/accounts/pause");
+  expect(seen.current!.accounts[0]?.paused).toBe(true);
+  expect(seen.current!.activeId).toBeNull();
+});
+
+test("pausing the main sentinel updates its distinct account row before reload", async () => {
+  const seen = await mountController();
+  let releaseReload!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseReload = resolve; });
+
+  await act(async () => {
+    expect(await seen.current!.setAccountPaused("__main__", true)).toEqual({ ok: true });
+  });
+
+  expect(calls).toContain("PUT codex-auth/accounts/pause");
+  expect(seen.current!.accounts.find(account => account.isMain)?.id).toBe("a1");
+  expect(seen.current!.accounts.find(account => account.isMain)?.paused).toBe(true);
+
+  await act(async () => {
+    releaseReload();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+});
+
+test("pausing stores the actual fallback account returned by the API", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: false, hasCredential: true, quota: null },
+    { id: "a2", email: "next", isMain: false, paused: false, hasCredential: true, quota: null },
+  ];
+  pauseResponseActiveId = "a2";
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.setAccountPaused("__main__", true)).toEqual({ ok: true });
+  });
+
+  expect(seen.current!.activeId).toBe("a2");
+});
+
+test("a paused main account does not contribute active reauth state", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: true, hasCredential: true, needsReauth: true, quota: null },
+    { id: "a2", email: "next", isMain: false, paused: false, hasCredential: true, quota: null },
+  ];
+  const seen = await mountController();
+
+  expect(seen.current!.activeId).toBeNull();
+  expect(seen.current!.activeNeedsReauth).toBe(false);
+});
+
+test("bulk pausing writes one endpoint and updates every returned account", async () => {
+  accounts = [
+    { id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null },
+    { id: "a2", email: "account-two", isMain: false, paused: false, hasCredential: true, quota: null },
+  ];
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.pauseExhaustedAccounts()).toEqual({ ok: true, pausedCount: 1 });
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+  expect(calls).toContain("PUT codex-auth/accounts/pause-exhausted");
+  expect(seen.current!.accounts.find(account => account.id === "a2")?.paused).toBe(true);
+  expect(seen.current!.pausingExhausted).toBe(false);
+});
+
+test("bulk pausing translates the main sentinel to its distinct account row", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: false, hasCredential: true, quota: null },
+    { id: "a2", email: "pool", isMain: false, paused: false, hasCredential: true, quota: null },
+  ];
+  bulkPausedAccountIds = ["__main__"];
+  bulkResponseActiveId = "a2";
+  const seen = await mountController();
+  let releaseReload!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseReload = resolve; });
+
+  await act(async () => {
+    expect(await seen.current!.pauseExhaustedAccounts()).toEqual({ ok: true, pausedCount: 1 });
+  });
+
+  expect(seen.current!.accounts.find(account => account.isMain)?.id).toBe("a1");
+  expect(seen.current!.accounts.find(account => account.isMain)?.paused).toBe(true);
+  expect(seen.current!.activeId).toBe("a2");
+
+  await act(async () => {
+    releaseReload();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+
+  expect(seen.current!.accounts.find(account => account.isMain)?.paused).toBe(true);
+  expect(seen.current!.activeId).toBe("a2");
 });
 
 test("two pause holders both have to release before polling resumes", async () => {

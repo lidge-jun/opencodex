@@ -201,7 +201,7 @@ describe("GUI/CLI Codex sync backend", () => {
       const { handleManagementAPI } = await import("./src/server/management-api.ts");
       const config = { port: 10100, defaultProvider: "openai", providers: {} };
       const response = await handleManagementAPI(
-        new Request("http://localhost/api/sync", { method: "POST" }),
+        new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } }),
         new URL("http://localhost/api/sync"),
         config,
       );
@@ -268,3 +268,4 @@ describe("GUI/CLI Codex sync backend", () => {
     ]);
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

@@ -289,7 +289,8 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
         "Kiro CLI session could not be backed up, so OCX will not sign it out. " +
           "Repair or remove the unreadable kiro-cli credential database " +
           "(usually `~/.local/share/kiro-cli/data.sqlite3` or " +
-          "`~/Library/Application Support/kiro-cli/data.sqlite3`), " +
+          "`~/Library/Application Support/kiro-cli/data.sqlite3`, or " +
+          "`%LOCALAPPDATA%\\Kiro-Cli\\data.sqlite3` on Windows), " +
           "unset KIROCLI_DB_PATH / KIRO_CLI_DB_FILE if set for import-only overrides, then retry.",
       );
     }

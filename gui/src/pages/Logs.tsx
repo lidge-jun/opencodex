@@ -11,10 +11,13 @@ import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
+import { speedLabel } from "./logs-speed-label";
 
 interface UsageBreakdown {
   inputTokens: number;
   outputTokens: number;
+  /** Absolute active-context snapshot after the response (stateful providers such as Kiro). */
+  contextTotalTokens?: number;
   totalTokens?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
@@ -93,7 +96,7 @@ interface LogAttempt {
   displayMetrics?: LogDisplayMetrics;
 }
 
-interface LogEntry {
+export interface LogEntry {
   requestId?: string;
   timestamp: number;
   model: string;
@@ -136,6 +139,9 @@ function tokensTitle(log: LogEntry, t: TFn): string | undefined {
   ];
   if (split.read !== undefined) parts.push(`${t("logs.tokens.cacheRead")}=${split.read}`);
   if (split.write !== undefined) parts.push(`${t("logs.tokens.cacheWrite")}=${split.write}`);
+  if (typeof log.usage.contextTotalTokens === "number") {
+    parts.push(`${t("logs.tokens.contextTotal")}=${log.usage.contextTotalTokens}`);
+  }
   if (typeof log.usage.reasoningOutputTokens === "number") parts.push(`${t("logs.tokens.reasoning")}=${log.usage.reasoningOutputTokens}`);
   if (log.usageStatus === "estimated") parts.push(t("logs.tokens.estimatedNote"));
   if (log.usageStatus === "estimated" && split.read === undefined && split.write === undefined) {
@@ -153,6 +159,23 @@ function displayTokenTotal(log: LogEntry): number | undefined {
   return typeof explicitTotal === "number" ? Math.max(explicitTotal, baseTotal) : baseTotal;
 }
 
+/**
+ * Row/detail display total that also honors an absolute context checkpoint.
+ *
+ * Stateful providers (Kiro) report per-attempt usage only, so their per-request total stays
+ * small while the real active context grows. `contextTotalTokens` is that absolute snapshot.
+ *
+ * NEVER SUM THIS ACROSS REQUESTS. A checkpoint is not a per-request delta: adding it up over
+ * a conversation counts the same context once per request and inflates aggregates wildly.
+ * Aggregate rollups must keep using `displayTokenTotal`.
+ */
+function displayContextTokenTotal(log: LogEntry): number | undefined {
+  const base = displayTokenTotal(log);
+  const contextTotal = log.usage?.contextTotalTokens;
+  if (typeof contextTotal !== "number") return base;
+  return Math.max(base ?? 0, contextTotal) || undefined;
+}
+
 /** Cache read/write split; recovers reads from legacy rows that stored read+write combined. */
 function cacheSplit(log: LogEntry): { read?: number; write?: number } {
   const u = log.usage;
@@ -164,12 +187,6 @@ function cacheSplit(log: LogEntry): { read?: number; write?: number } {
       ? Math.max(0, u.cachedInputTokens - write)
       : u.cachedInputTokens;
   return { read, write };
-}
-
-function speedLabel(log: LogEntry): string | undefined {
-  if (log.requestedSpeedLabel) return log.requestedSpeedLabel;
-  if (log.modelSupportsServiceTier && log.configuredSpeedLabel) return log.configuredSpeedLabel;
-  return undefined;
 }
 
 interface ReasoningLogFields {
@@ -547,7 +564,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                  <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag)}</td>
                   <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
                     {(() => {
-                      const tokenTotal = displayTokenTotal(log);
+                      const tokenTotal = displayContextTokenTotal(log);
                       const { read, write } = cacheSplit(log);
                       return tokenTotal !== undefined
                         ? (
@@ -851,7 +868,13 @@ function LogDetailDialog({
             <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{tokenSplit.read !== undefined ? formatTokens(tokenSplit.read, localeCode) : "\u2014"}</span>
             <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{tokenSplit.write !== undefined ? formatTokens(tokenSplit.write, localeCode) : "\u2014"}</span>
             <span className="muted">{t("logs.tokens.reasoning")}</span><span className="mono">{detail.usage?.reasoningOutputTokens !== undefined ? formatTokens(detail.usage.reasoningOutputTokens, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayTokenTotal(detail) !== undefined ? formatTokens(displayTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayContextTokenTotal(detail) !== undefined ? formatTokens(displayContextTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            {detail.usage?.contextTotalTokens !== undefined && (
+              <>
+                <span className="muted">{t("logs.tokens.contextTotal")}</span>
+                <span className="mono">{formatTokens(detail.usage.contextTotalTokens, localeCode)}</span>
+              </>
+            )}
           </div>
           {detail.usageStatus === "estimated" && (
             <p className="log-detail-notes-line muted">{t("logs.tokens.estimatedNote")}</p>
