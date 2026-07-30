@@ -6,6 +6,7 @@
  * restore it via the command.
  */
 import { execFileSync, execSync } from "node:child_process";
+import { findLiveProxy } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -1363,7 +1364,38 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
  * scheduler backend first; on failure the machine is left with NO service (explicitly
  * reported) — never a silent fallback to the scheduler.
  */
+/** Refuse WinSW when the interactive user is a Microsoft account (SCM cannot authenticate it). */
+export function assertWindowsNativeServiceAccountSupported(): void {
+  if (process.platform !== "win32") return;
+  const source = readWindowsPrincipalSource();
+  if (source?.toLowerCase() === "microsoftaccount") {
+    throw new Error(
+      "The native (WinSW) service backend cannot run under a Microsoft-account Windows login. "
+        + "Keep the Task Scheduler backend (`ocx service install`) or sign in with a local/domain account before `ocx service install --native`.",
+    );
+  }
+}
+
+function readWindowsPrincipalSource(): string | null {
+  if (process.platform !== "win32") return null;
+  const ps = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!existsSync(ps)) return null;
+  try {
+    const out = execFileSync(ps, [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(Get-LocalUser -Name $env:USERNAME -ErrorAction SilentlyContinue).PrincipalSource",
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 async function installWindowsNative(): Promise<void> {
+  assertWindowsNativeServiceAccountSupported();
   recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
@@ -1402,7 +1434,23 @@ function stopWindows(): void { try { schtasks(["/end", "/tn", TASK]); } catch { 
 function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]); } catch { return ""; } }
 function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TASK, "/xml"]); } catch { return ""; } }
 function uninstallWindows(): void {
-  try { schtasks(["/delete", "/tn", TASK, "/f"]); } catch { /* absent */ }
+  const probe = probeWindowsSchedulerTask(TASK);
+  if (probe.status === "present") {
+    try {
+      schtasks(["/delete", "/tn", TASK, "/f"]);
+    } catch (error) {
+      throw new Error(`Failed to delete Task Scheduler task ${TASK}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const afterDelete = probeWindowsSchedulerTask(TASK);
+    if (afterDelete.status === "present") {
+      throw new Error(`Task Scheduler task ${TASK} is still present after delete — refusing to remove service assets. Retry from an elevated shell.`);
+    }
+    if (afterDelete.status === "unknown") {
+      throw new Error(`Task Scheduler task ${TASK} presence could not be verified after delete — refusing to remove service assets.`);
+    }
+  } else if (probe.status === "unknown") {
+    throw new Error(`Task Scheduler task ${TASK} presence could not be verified — refusing to remove service assets.`);
+  }
   if (existsSync(windowsServiceScriptPath())) unlinkSync(windowsServiceScriptPath());
   if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());
   if (existsSync(windowsTaskXmlPath())) unlinkSync(windowsTaskXmlPath());
@@ -1562,17 +1610,29 @@ function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
 type TrackedProxyCleanupResult = "none" | "stale" | "stopped";
 
 async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
+  let stopped = false;
   const pid = readPid();
-  if (!pid) return "none";
-  if (!isProcessAlive(pid)) {
+  if (pid && isProcessAlive(pid)) {
+    await stopProxy(pid);
     removePid(pid);
     removeRuntimePort(pid);
-    return "stale";
+    stopped = true;
+  } else if (pid) {
+    removePid(pid);
+    removeRuntimePort(pid);
   }
-  await stopProxy(pid);
-  removePid(pid);
-  removeRuntimePort(pid);
-  return "stopped";
+  // Orphan recovery: the pid file can be missing/stale while the service wrapper keeps
+  // a live proxy running — mirror `ocx stop`'s identity-checked findLiveProxy fallback.
+  const live = await findLiveProxy({ timeoutMs: 1500 });
+  if (live?.pid) {
+    await stopProxy(live.pid);
+    removePid(live.pid);
+    removeRuntimePort(live.pid);
+    stopped = true;
+  }
+  if (stopped) return "stopped";
+  if (pid) return "stale";
+  return "none";
 }
 
 async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {
@@ -1886,6 +1946,10 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // (and its Windows/Linux twins) even with nothing installed.
       if (ops.status() !== null || isServiceInstalled()) ops.stop();
       await stopTrackedProxyForServiceCommand();
+      if (await findLiveProxy({ timeoutMs: 1500 })) {
+        console.error("❌ Service stop did not terminate the proxy — it is still running. Check `ocx service status` and the service log.");
+        process.exit(1);
+      }
       {
         const restore = restoreNativeCodex();
         if (restore.success) console.log("✅ service stopped + native Codex restored.");

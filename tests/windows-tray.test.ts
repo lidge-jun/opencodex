@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  buildWindowsTrayPowerShellCommand,
   buildWindowsTrayRunCommand,
   parseWindowsTrayRunValue,
   readWindowsTrayRunValueWithAsyncRunner,
@@ -38,11 +39,17 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("quotes metacharacter and Unicode paths without shell interpolation", () => {
-    const powershellCommand = buildWindowsTrayRunCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    const powershellCommand = buildWindowsTrayPowerShellCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
     expect(powershellCommand).toContain(`-File "${entry.script}"`);
     expect(powershellCommand).toContain(`-OpenCodexHome "${entry.opencodexHome}"`);
     expect(powershellCommand).not.toContain("cmd /c");
     expect(powershellCommand).not.toContain("-Command");
+    const runCommand = buildWindowsTrayRunCommand({
+      ...entry,
+      launcherPath: `${entry.opencodexHome}\\opencodex-tray.vbs`,
+    });
+    expect(runCommand.toLowerCase()).toContain("wscript.exe");
+    expect(runCommand.length).toBeLessThanOrEqual(260);
   });
 
   test("rejects quote and control-character path injection", () => {

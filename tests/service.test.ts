@@ -644,29 +644,45 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain('code !== "EBUSY" && code !== "EPERM" && code !== "EACCES"');
   });
 
-  test("Windows service uninstall removes generated task XML", async () => {
+  test("Windows service uninstall verifies task deletion before removing assets", async () => {
     const service = await readText("src/service.ts");
     const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"), service.indexOf("function serviceDiagnosticsSummary()"));
 
+    expect(uninstallWindows).toContain("probeWindowsSchedulerTask(TASK)");
     expect(uninstallWindows).toContain("windowsServiceScriptPath()");
     expect(uninstallWindows).toContain("windowsTaskXmlPath()");
     expect(uninstallWindows).toContain("unlinkSync(windowsTaskXmlPath())");
+    expect(uninstallWindows).toContain("refusing to remove service assets");
   });
 
-  test("service cleanup stops gracefully first via the shared stopper and clears the pid file", async () => {
+  test("service cleanup falls back to findLiveProxy and clears the pid file", async () => {
     const service = await readText("src/service.ts");
 
     expect(service).toContain('import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";');
     expect(service).toContain("removeRuntimePort(pid);");
     expect(service).toContain('import { isProcessAlive, stopProxy } from "./lib/process-control";');
+    expect(service).toContain('import { findLiveProxy } from "./server/proxy-liveness";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
     expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
-    expect(service).toContain('if (!pid) return "none";');
-    expect(service).toContain("if (!isProcessAlive(pid))");
-    expect(service).toContain('return "stale";');
+    expect(service).toContain("await findLiveProxy({ timeoutMs: 1500 })");
     expect(service).toContain("await stopProxy(pid);");
     expect(service).toContain("removePid(pid);");
     expect(service).toContain('return "stopped";');
+  });
+
+  test("service stop refuses success while the proxy is still live", async () => {
+    const service = await readText("src/service.ts");
+    const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
+    expect(stopCase).toContain("await findLiveProxy({ timeoutMs: 1500 })");
+    expect(stopCase).toContain("Service stop did not terminate the proxy");
+    expect(stopCase).toContain("process.exit(1)");
+  });
+
+  test("native install refuses Microsoft-account logins before removing the scheduler backend", async () => {
+    const service = await readText("src/service.ts");
+    const installNative = service.slice(service.indexOf("async function installWindowsNative()"), service.indexOf("function startWindows()"));
+    expect(installNative.indexOf("assertWindowsNativeServiceAccountSupported()")).toBeLessThan(installNative.indexOf("uninstallWindows()"));
+    expect(service).toContain("Microsoft-account Windows login");
   });
 
   test("service command cleanup logs kill failures without skipping restore/delete", async () => {
