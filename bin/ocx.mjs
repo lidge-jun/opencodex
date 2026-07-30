@@ -290,7 +290,9 @@ function bunBinDir() {
 // The `bun` package ships a tiny ASCII placeholder at bin/bun.exe until its
 // postinstall downloads the real ~60MB binary. --ignore-scripts / pnpm leave
 // the ~450-byte stub in place, which is NOT executable (ENOEXEC). A size gate
-// cleanly distinguishes the stub from a real binary on every platform.
+// cleanly distinguishes the stub from a real binary on every platform. Keep
+// this Node-safe copy aligned with src/lib/bun-runtime.ts: the launcher cannot
+// import Bun-native TypeScript until after it has resolved a Bun executable.
 const REAL_BUN_MIN_BYTES = 1_000_000;
 const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
 
@@ -329,7 +331,13 @@ function resolveBun() {
   // Keep direct npm-launcher starts aligned with durable service/shim installs:
   // a valid explicit runtime must win even when the bundled dependency exists.
   const override = process.env[BUN_OVERRIDE_ENV]?.trim();
-  if (override && isRealBunBinary(override)) return override;
+  if (override) {
+    const overridePath = resolve(override);
+    if (isRealBunBinary(overridePath)) return overridePath;
+    console.error(
+      `opencodex: ${BUN_OVERRIDE_ENV} is missing, unreadable, or not a complete Bun binary; falling back to the bundled runtime.`,
+    );
+  }
 
   let bunDir;
   try {

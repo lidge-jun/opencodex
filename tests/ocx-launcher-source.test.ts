@@ -37,18 +37,28 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
 
   test("valid Bun overrides are selected before the bundled runtime", () => {
     expect(source).toContain('const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";');
-    expect(source).toContain("if (override && isRealBunBinary(override)) return override;");
+    expect(source).toContain("const overridePath = resolve(override);");
+    expect(source).toContain("if (isRealBunBinary(overridePath)) return overridePath;");
 
     const resolveStart = source.indexOf("function resolveBun() {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
+    const overrideResolve = source.indexOf("resolve(override)", overrideCheck);
     const bundledLookup = source.indexOf("bunDir = bunBinDir()", resolveStart);
     expect(resolveStart).toBeGreaterThanOrEqual(0);
     expect(overrideCheck).toBeGreaterThan(resolveStart);
-    expect(bundledLookup).toBeGreaterThan(overrideCheck);
+    expect(overrideResolve).toBeGreaterThan(overrideCheck);
+    expect(bundledLookup).toBeGreaterThan(overrideResolve);
   });
 
-  test("invalid Bun overrides fall back without throwing", () => {
+  test("invalid Bun overrides warn safely and fall back without throwing", () => {
     expect(source).toContain("function isRealBunBinary(path) {");
     expect(source).toMatch(/function isRealBunBinary\(path\) \{[\s\S]*?try \{[\s\S]*?statSync\(path\)[\s\S]*?catch \{[\s\S]*?return false;/);
+    expect(source).toContain("is missing, unreadable, or not a complete Bun binary; falling back to the bundled runtime.");
+    expect(source).not.toContain('${override} is missing, unreadable');
+  });
+
+  test("documents why the Node launcher keeps a synchronized validator copy", () => {
+    expect(source).toContain("this Node-safe copy aligned with src/lib/bun-runtime.ts");
+    expect(source).toContain("cannot\n// import Bun-native TypeScript until after it has resolved a Bun executable");
   });
 });

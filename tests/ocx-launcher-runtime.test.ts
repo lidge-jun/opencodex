@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -128,6 +128,33 @@ function sameProcess(actual: WindowsProcessIdentity | null, expected: WindowsPro
     && sameWindowsPath(actual.executablePath, expected.executablePath);
 }
 
+function captureWindowsProcessIdentity(pid: number): WindowsProcessIdentity {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const identity = windowsProcessIdentity(pid);
+      if (identity) return identity;
+    } catch (error) {
+      lastError = error;
+    }
+    Bun.sleepSync(100);
+  }
+  throw new Error(`could not capture process identity for PID ${pid}: ${String(lastError ?? "process not found")}`);
+}
+
+function inspectWindowsProcessIdentity(pid: number): WindowsProcessIdentity | null {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return windowsProcessIdentity(pid);
+    } catch (error) {
+      lastError = error;
+      Bun.sleepSync(100);
+    }
+  }
+  throw lastError;
+}
+
 function removeTree(path: string): void {
   // Windows can retain the copied executable's image handle briefly after
   // taskkill returns. Retry only transient fixture-cleanup errors, with a cap.
@@ -153,15 +180,19 @@ async function effectiveRuntime(override: string): Promise<string> {
   const opencodexHome = join(root, "opencodex");
   const codexHome = join(root, "codex");
   const grokHome = join(root, "grok");
-  mkdirSync(opencodexHome, { recursive: true });
-  mkdirSync(codexHome, { recursive: true });
-  mkdirSync(grokHome, { recursive: true });
-
-  const port = await freePort();
+  let port: number | null = null;
   let launcher: ChildProcess | null = null;
+  let launcherPid: number | null = null;
   let ownedLauncher: WindowsProcessIdentity | null = null;
   let ownedProxy: WindowsProcessIdentity | null = null;
+  let runtimePath: string | undefined;
+  let hasPrimaryError = false;
+  let primaryError: unknown;
   try {
+    mkdirSync(opencodexHome, { recursive: true });
+    mkdirSync(codexHome, { recursive: true });
+    mkdirSync(grokHome, { recursive: true });
+    port = await freePort();
     launcher = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
       stdio: "ignore",
       windowsHide: true,
@@ -176,8 +207,8 @@ async function effectiveRuntime(override: string): Promise<string> {
       },
     });
     if (!launcher.pid) throw new Error("Node launcher has no process id");
-    ownedLauncher = windowsProcessIdentity(launcher.pid);
-    if (!ownedLauncher) throw new Error("could not capture Node launcher process identity");
+    launcherPid = launcher.pid;
+    ownedLauncher = captureWindowsProcessIdentity(launcherPid);
 
     const health = await waitForHealth(port, 25_000, launcher);
     if (!health) throw new Error("proxy did not become healthy");
@@ -186,33 +217,149 @@ async function effectiveRuntime(override: string): Promise<string> {
       throw new Error("health PID is not the spawned Node launcher's direct Bun child");
     }
     ownedProxy = identity;
-    return identity.executablePath;
-  } finally {
-    // Both identities were captured from processes this test spawned. Re-query
-    // before each kill so a reused PID can never become a cleanup target.
-    const cleanupErrors: string[] = [];
-    for (const [label, identity] of [
-      ["launcher", ownedLauncher],
-      ["proxy", ownedProxy],
-    ] as const) {
-      if (!identity || !sameProcess(windowsProcessIdentity(identity.pid), identity)) continue;
-      try {
-        killProxy(identity.pid);
-      } catch (error) {
-        cleanupErrors.push(`${label} cleanup failed: ${String(error)}`);
+    runtimePath = identity.executablePath;
+  } catch (error) {
+    hasPrimaryError = true;
+    primaryError = error;
+  }
+
+  const cleanupErrors: string[] = [];
+  let launcherTreeStopped = false;
+
+  // Prefer the creation-time/path identity. If the initial CIM capture failed,
+  // the live ChildProcess handle and its PID are still positive ownership of
+  // this test's launcher, so terminate that exact process tree as a fallback.
+  if (ownedLauncher) {
+    try {
+      if (sameProcess(inspectWindowsProcessIdentity(ownedLauncher.pid), ownedLauncher)) {
+        killProxy(ownedLauncher.pid);
+        launcherTreeStopped = true;
       }
-      if (sameProcess(windowsProcessIdentity(identity.pid), identity)) {
+    } catch (error) {
+      cleanupErrors.push(`launcher cleanup failed: ${String(error)}`);
+    }
+  }
+  if (!launcherTreeStopped && launcher && launcherPid && launcher.exitCode === null && launcher.signalCode === null) {
+    try {
+      killProxy(launcherPid);
+      launcherTreeStopped = true;
+    } catch (error) {
+      cleanupErrors.push(`launcher tree fallback failed: ${String(error)}`);
+    }
+  }
+
+  // The launcher tree kill normally removes the Bun child. Retain the
+  // identity-verified proxy fallback in case the launcher exited first.
+  if (ownedProxy) {
+    try {
+      if (sameProcess(inspectWindowsProcessIdentity(ownedProxy.pid), ownedProxy)) {
+        killProxy(ownedProxy.pid);
+      }
+    } catch (error) {
+      cleanupErrors.push(`proxy cleanup failed: ${String(error)}`);
+    }
+  }
+
+  // Inspection failures are reported, but never prevent the remaining
+  // process checks or fixture cleanup from running.
+  for (const [label, identity] of [
+    ["launcher", ownedLauncher],
+    ["proxy", ownedProxy],
+  ] as const) {
+    if (!identity) continue;
+    try {
+      if (sameProcess(inspectWindowsProcessIdentity(identity.pid), identity)) {
         cleanupErrors.push(`owned ${label} PID ${identity.pid} remained after bounded cleanup`);
       }
-    }
-    try {
-      removeTree(root);
     } catch (error) {
-      cleanupErrors.push(`fixture cleanup failed: ${String(error)}`);
+      cleanupErrors.push(`${label} cleanup verification failed: ${String(error)}`);
     }
-    if (cleanupErrors.length > 0) throw new Error(cleanupErrors.join("; "));
   }
+  if (port !== null) {
+    const lingeringProxy = await healthAt(port);
+    if (lingeringProxy) {
+      cleanupErrors.push(`OpenCodex proxy PID ${lingeringProxy.pid} remained on owned port ${port}`);
+    }
+  }
+  try {
+    removeTree(root);
+  } catch (error) {
+    cleanupErrors.push(`fixture cleanup failed: ${String(error)}`);
+  }
+
+  if (hasPrimaryError) {
+    if (cleanupErrors.length > 0) console.error(`additional cleanup errors: ${cleanupErrors.join("; ")}`);
+    throw primaryError;
+  }
+  if (cleanupErrors.length > 0) throw new Error(cleanupErrors.join("; "));
+  if (!runtimePath) throw new Error("proxy runtime path was not captured");
+  return runtimePath;
 }
+
+function isolatedLauncherEnv(root: string, override: string): NodeJS.ProcessEnv {
+  const opencodexHome = join(root, "opencodex");
+  const codexHome = join(root, "codex");
+  const grokHome = join(root, "grok");
+  mkdirSync(opencodexHome, { recursive: true });
+  mkdirSync(codexHome, { recursive: true });
+  mkdirSync(grokHome, { recursive: true });
+  return {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCODEX_HOME: opencodexHome,
+    CODEX_HOME: codexHome,
+    GROK_HOME: grokHome,
+    OPENCODEX_BUN_PATH: override,
+  };
+}
+
+describe.skipIf(!nodeAvailable)("ocx npm launcher relative Bun override", () => {
+  test("resolves a valid bare relative override before spawning", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-launcher-relative-"));
+    try {
+      const overrideName = `custom-bun${process.platform === "win32" ? ".exe" : ""}`;
+      const override = join(root, overrideName);
+      copyFileSync(process.execPath, override);
+      chmodSync(override, 0o755);
+
+      const result = spawnSync("node", [BIN_OCX, "--version"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
+        env: isolatedLauncherEnv(root, overrideName),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("OPENCODEX_BUN_PATH is missing");
+    } finally {
+      removeTree(root);
+    }
+  }, 60_000);
+
+  test("warns without exposing the rejected override path before bundled fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-launcher-invalid-"));
+    try {
+      const overrideName = `stub-bun${process.platform === "win32" ? ".exe" : ""}`;
+      writeFileSync(join(root, overrideName), "not a Bun executable", "utf8");
+
+      const result = spawnSync("node", [BIN_OCX, "--version"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
+        env: isolatedLauncherEnv(root, overrideName),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("OPENCODEX_BUN_PATH is missing, unreadable, or not a complete Bun binary");
+      expect(result.stderr).not.toContain(root);
+    } finally {
+      removeTree(root);
+    }
+  }, 60_000);
+});
 
 describe.skipIf(!runnable)("ocx npm launcher effective Bun runtime", () => {
   test("uses a valid OPENCODEX_BUN_PATH for the actual proxy process", async () => {

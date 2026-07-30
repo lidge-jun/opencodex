@@ -69,11 +69,18 @@ describe("bundledBunPath / durableBunPath", () => {
   });
 
   it("durableBunPath returns the bundled path when present, else process.execPath", () => {
-    const bundled = bundledBunPath();
-    const durable = durableBunPath();
-    expect(typeof durable).toBe("string");
-    expect(durable.length).toBeGreaterThan(0);
-    if (bundled) expect(durable).toBe(bundled);
-    else expect(durable).toBe(process.execPath);
+    const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
+    delete process.env.OPENCODEX_BUN_PATH;
+    try {
+      const bundled = bundledBunPath();
+      const durable = durableBunPath();
+      expect(typeof durable).toBe("string");
+      expect(durable.length).toBeGreaterThan(0);
+      if (bundled) expect(durable).toBe(bundled);
+      else expect(durable).toBe(process.execPath);
+    } finally {
+      if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = inheritedOverride;
+    }
   });
 });
