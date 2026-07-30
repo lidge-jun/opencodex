@@ -283,6 +283,7 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun scripts/release-notes.ts previous-release-tag");
     expect(workflow).toContain("bun scripts/release-notes.ts has-meaningful");
     expect(workflow).toContain("bun scripts/release-notes.ts join-carried");
+    expect(workflow).toContain("bun scripts/release-notes.ts credit-takeovers");
     // Preview notes must baseline any prior release (stable or preview), not preview-only.
     expect(workflow).toContain('bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"');
     expect(workflow).not.toMatch(
@@ -410,6 +411,7 @@ describe("GitHub Actions hardening", () => {
       "pulls.get",
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
+      "pulls.list",
       ...tail,
     ];
   }
@@ -715,12 +717,13 @@ describe("GitHub Actions hardening", () => {
     expect(script).not.toMatch(/issue_number:\s*\d/);
 
     // These are the only three mutating REST calls. A fourth is a new write
-    // nobody reviewed.
+    // nobody reviewed. `pulls.list` is a stacked-base read, not a write.
     const restWrites = [...script.matchAll(/github\.rest\.[\w.]+/g)]
       .map(match => match[0])
       .filter(
         name =>
           !name.endsWith(".get") &&
+          !name.endsWith(".list") &&
           !name.endsWith(".listComments") &&
           name !== "github.rest.repos.getCollaboratorPermissionLevel" &&
           name !== "github.rest.repos.compareCommitsWithBasehead",
@@ -1003,6 +1006,70 @@ describe("GitHub Actions hardening", () => {
       expect(draft.variables).toEqual({ pullRequestId: "PR_kwDOnode42" });
 
       // Wrong-base runs must fail the required check even when mutations succeed.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+    });
+
+    test("a stacked PR targeting another open PR head is not wrong-base", async () => {
+      const parentHead = "feature/parent-stack";
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: parentHead,
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Stacked child",
+          draft: false,
+        },
+        openPulls: [
+          {
+            number: 41,
+            head: {
+              ref: parentHead,
+              repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+            },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase());
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(callsTo(result, "graphql")).toEqual([]);
+      expect(result.logs.join(" ")).toContain("treating as stacked");
+      expect(result.logs.join(" ")).toContain("All PR quality gates passed");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a non-dev base with no open parent PR is still wrong-base", async () => {
+      const result = await run({
+        pr: { base: { ref: "feature/orphan" }, title: "Orphan stack", draft: false },
+        openPulls: [
+          {
+            number: 99,
+            head: {
+              ref: "feature/other",
+              repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+            },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "issues.createComment",
+        "pulls.update",
+        "issues.updateComment",
+        "graphql",
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          title: "[WRONG BRANCH] Orphan stack",
+        },
+      ]);
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 

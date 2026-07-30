@@ -6,7 +6,9 @@ import {
   joinCarriedPreviewNotes,
   matchingPreviewTag,
   matchingPreviewTags,
+  parseTakeoverSourcePr,
   previousReleaseNotesTag,
+  rewriteTakeoverCredits,
   selectNewestCarriedPreviewTag,
   stripCarriedReleaseNotes,
   stripGenerateNotesCompareLink,
@@ -254,5 +256,65 @@ describe("assembleReleaseNotes", () => {
     expect(notes).not.toContain("https://example/compare/a...b");
     expect(hasNonWhitespace("")).toBe(false);
     expect(stripGenerateNotesCompareLink("x\n**Full Changelog**: y")).toBe("x");
+  });
+});
+
+describe("parseTakeoverSourcePr", () => {
+  test("matches common maintainer-takeover title forms", () => {
+    expect(parseTakeoverSourcePr("feat(images): Grok image bridge (maintainer takeover of #424)")).toBe(424);
+    expect(parseTakeoverSourcePr("feat(codex): account pause (takeover #565)")).toBe(565);
+    expect(parseTakeoverSourcePr("feat x", "Maintainer takeover of #424.")).toBe(424);
+    expect(parseTakeoverSourcePr("feat x", "no mention")).toBeNull();
+  });
+});
+
+describe("rewriteTakeoverCredits", () => {
+  test("credits original author and keeps landing PR link", async () => {
+    const body = [
+      "## What's Changed",
+      "### New Features",
+      "* feat(images): Grok image bridge by @Wibias in https://github.com/lidge-jun/opencodex/pull/577",
+      "* feat(other): normal change by @Alice in https://github.com/lidge-jun/opencodex/pull/100",
+    ].join("\n");
+
+    const rewritten = await rewriteTakeoverCredits(
+      body,
+      async (pr) => {
+        if (pr === 577) {
+          return {
+            title: "feat(images): Grok image bridge (maintainer takeover of #424)",
+            body: "Credit: original feature work by @tizerluo on #424.",
+            authorLogin: "Wibias",
+          };
+        }
+        if (pr === 100) {
+          return { title: "feat(other): normal change", body: "", authorLogin: "Alice" };
+        }
+        return null;
+      },
+      async (source) => (source === 424 ? "tizerluo" : null),
+    );
+
+    expect(rewritten).toContain(
+      "* feat(images): Grok image bridge by @tizerluo (takeover by @Wibias) in https://github.com/lidge-jun/opencodex/pull/577",
+    );
+    expect(rewritten).toContain(
+      "* feat(other): normal change by @Alice in https://github.com/lidge-jun/opencodex/pull/100",
+    );
+  });
+
+  test("leaves line unchanged when original author matches landing author", async () => {
+    const line =
+      "* feat x by @Wibias in https://github.com/lidge-jun/opencodex/pull/10";
+    const rewritten = await rewriteTakeoverCredits(
+      line,
+      async () => ({
+        title: "feat x (takeover #9)",
+        body: "",
+        authorLogin: "Wibias",
+      }),
+      async () => "Wibias",
+    );
+    expect(rewritten).toBe(line);
   });
 });

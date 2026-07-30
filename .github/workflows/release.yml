@@ -393,6 +393,10 @@ jobs:
             pr_notes="$(gh api "${generate_notes_api[@]}" --jq '.body')"
             # Drop generate-notes' trailing compare link; we re-append it after the commit list.
             printf '%s\n' "$pr_notes" | sed '/^\*\*Full Changelog\*\*:/d' > "$delta_file"
+            bun scripts/release-notes.ts credit-takeovers \
+              --repo "$GITHUB_REPOSITORY" \
+              --in "$delta_file" \
+              --out "$delta_file"
           else
             # First release on this channel: never call generate-notes without previous_tag_name.
             # GitHub would baseline the newest repo tag, which may belong to the other channel.

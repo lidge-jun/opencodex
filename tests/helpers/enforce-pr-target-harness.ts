@@ -89,6 +89,11 @@ export type RunOptions = {
   failPermissionLookup?: boolean;
   /** Overrides for `compareCommitsWithBasehead` keyed by `basehead`. */
   compareByBasehead?: Record<string, { ahead_by: number; behind_by: number }>;
+  /**
+   * Open PRs returned by `pulls.list` (page 1). Used for stacked-base detection
+   * when this PR's base is another PR's head ref.
+   */
+  openPulls?: unknown[];
 };
 
 /**
@@ -121,8 +126,18 @@ const DEFAULT_PR = {
   merged: false,
   locked: false,
   html_url: "https://github.com/lidge-jun/opencodex/pull/42",
-  base: { ref: "dev", sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", label: "lidge-jun:dev" },
-  head: { ref: "feature", sha: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b", label: "contributor:feature" },
+  base: {
+    ref: "dev",
+    sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    label: "lidge-jun:dev",
+    repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+  },
+  head: {
+    ref: "feature",
+    sha: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
+    label: "contributor:feature",
+    repo: { name: "opencodex", owner: { login: "contributor" } },
+  },
   user: { login: "contributor", id: 67890, type: "User" },
   labels: [] as unknown[],
 };
@@ -408,7 +423,30 @@ export async function runEnforcePrTarget(
   const pr = {
     ...DEFAULT_PR,
     ...options.pr,
-    base: { ...DEFAULT_PR.base, ...(options.pr.base ?? {}) },
+    base: {
+      ...DEFAULT_PR.base,
+      ...(options.pr.base ?? {}),
+      repo: {
+        ...DEFAULT_PR.base.repo,
+        ...((options.pr.base as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.base.repo.owner,
+          ...((options.pr.base as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
+    head: {
+      ...DEFAULT_PR.head,
+      ...(options.pr.head ?? {}),
+      repo: {
+        ...DEFAULT_PR.head.repo,
+        ...((options.pr.head as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.head.repo.owner,
+          ...((options.pr.head as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
     user: { ...DEFAULT_PR.user, ...(options.pr.user ?? {}) },
   };
   // Deep-independent from `pr`, so nothing the script does to one can reach the
@@ -418,10 +456,34 @@ export async function runEnforcePrTarget(
   const eventPr = {
     ...DEFAULT_PR,
     ...source,
-    base: { ...DEFAULT_PR.base, ...(source.base ?? {}) },
+    base: {
+      ...DEFAULT_PR.base,
+      ...(source.base ?? {}),
+      repo: {
+        ...DEFAULT_PR.base.repo,
+        ...((source.base as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.base.repo.owner,
+          ...((source.base as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
+    head: {
+      ...DEFAULT_PR.head,
+      ...(source.head ?? {}),
+      repo: {
+        ...DEFAULT_PR.head.repo,
+        ...((source.head as { repo?: object } | undefined)?.repo ?? {}),
+        owner: {
+          ...DEFAULT_PR.head.repo.owner,
+          ...((source.head as { repo?: { owner?: object } } | undefined)?.repo?.owner ?? {}),
+        },
+      },
+    },
     user: { ...DEFAULT_PR.user, ...(source.user ?? {}) },
   };
   const pages: Comment[][] = options.commentPages ?? [options.comments ?? []];
+  const openPulls = options.openPulls ?? [];
 
   /**
    * Record the call, then either reject or return a plausible payload. Every
@@ -490,6 +552,11 @@ export async function runEnforcePrTarget(
     pulls: {
       get: (args: unknown) => respond("pulls.get", args, pr),
       update: (args: unknown) => respond("pulls.update", args, { ...pr }),
+      // Page 1 returns openPulls; later pages empty so paginate does not duplicate.
+      list: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond("pulls.list", args, page === 1 ? openPulls : []);
+      },
     },
     issues: {
       // Honours `page`, so a caller that skips `paginate` sees only page one —

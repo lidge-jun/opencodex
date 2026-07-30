@@ -10,6 +10,7 @@
  *   bun scripts/release-notes.ts matching-preview-tags <version>
  *   bun scripts/release-notes.ts previous-release-tag <version>
  *   bun scripts/release-notes.ts has-meaningful [body-file]
+ *   bun scripts/release-notes.ts credit-takeovers --repo <owner/name> --in <file> --out <file>
  *   bun scripts/release-notes.ts assemble --npm-metadata ... --out ...
  */
 
@@ -207,6 +208,69 @@ export function selectNewestCarriedPreviewTag(
   return newest;
 }
 
+/**
+ * Parse a maintainer-takeover source PR number from title/body text.
+ * Matches forms already used in-repo: `takeover of #N`, `takeover #N`,
+ * `maintainer takeover of #N` (case-insensitive).
+ */
+export function parseTakeoverSourcePr(title: string, body = ""): number | null {
+  const text = `${title}\n${body}`;
+  const match = /\b(?:maintainer\s+)?takeover(?:\s+of)?\s+#(\d+)\b/i.exec(text);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+const GENERATE_NOTES_PR_LINE =
+  /^(?<prefix>\* .+? by @)(?<author>[A-Za-z0-9-]+)(?<mid> in https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)(?<pr>\d+)(?<suffix>\s*)$/;
+
+export type TakeoverCreditLookup = {
+  title: string;
+  body: string;
+  authorLogin: string;
+};
+
+/**
+ * Rewrite generate-notes lines so maintainer-takeover PRs also credit the
+ * original PR creator: `by @Original (takeover by @Landing) in …/pull/P`.
+ */
+export async function rewriteTakeoverCredits(
+  notesBody: string,
+  resolveLanding: (prNumber: number) => Promise<TakeoverCreditLookup | null>,
+  resolveOriginalAuthor: (sourcePrNumber: number) => Promise<string | null>,
+): Promise<string> {
+  const lines = notesBody.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    const match = GENERATE_NOTES_PR_LINE.exec(line);
+    if (!match?.groups) {
+      out.push(line);
+      continue;
+    }
+    const landingPr = Number(match.groups.pr);
+    const landingAuthor = match.groups.author!;
+    const landing = await resolveLanding(landingPr);
+    if (!landing) {
+      out.push(line);
+      continue;
+    }
+    const sourcePr = parseTakeoverSourcePr(landing.title, landing.body);
+    if (sourcePr == null) {
+      out.push(line);
+      continue;
+    }
+    const original = await resolveOriginalAuthor(sourcePr);
+    if (!original || original.toLowerCase() === landingAuthor.toLowerCase()) {
+      out.push(line);
+      continue;
+    }
+    out.push(
+      `${match.groups.prefix}${original} (takeover by @${landingAuthor})${match.groups.mid}${match.groups.pr}${match.groups.suffix ?? ""}`,
+    );
+  }
+  return out.join("\n");
+}
+
 export function assembleReleaseNotes(input: {
   npmMetadata: string;
   carriedPreviewNotes?: string;
@@ -324,6 +388,79 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (cmd === "credit-takeovers") {
+    const args = new Map<string, string>();
+    for (let i = 0; i < rest.length; i += 1) {
+      const key = rest[i];
+      if (!key?.startsWith("--")) continue;
+      const value = rest[i + 1];
+      if (!value || value.startsWith("--")) {
+        console.error(`Missing value for ${key}`);
+        process.exit(1);
+      }
+      args.set(key.slice(2), value);
+      i += 1;
+    }
+    const repo = args.get("repo");
+    const inputPath = args.get("in");
+    const outPath = args.get("out");
+    if (!repo || !inputPath || !outPath) {
+      console.error("Usage: bun scripts/release-notes.ts credit-takeovers --repo <owner/name> --in <file> --out <file>");
+      process.exit(1);
+    }
+    const [owner, name] = repo.split("/");
+    if (!owner || !name || repo.split("/").length !== 2) {
+      console.error(`Invalid --repo value: ${repo}`);
+      process.exit(1);
+    }
+
+    async function ghJson(path: string): Promise<unknown | null> {
+      const proc = Bun.spawn(["gh", "api", path], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      if (exitCode !== 0) {
+        console.error(`gh api ${path} failed: ${stderr.trim() || `exit ${exitCode}`}`);
+        return null;
+      }
+      try {
+        return JSON.parse(stdout) as unknown;
+      } catch {
+        console.error(`gh api ${path} returned non-JSON`);
+        return null;
+      }
+    }
+
+    const body = await Bun.file(inputPath).text();
+    const rewritten = await rewriteTakeoverCredits(
+      body,
+      async (prNumber) => {
+        const data = await ghJson(`repos/${owner}/${name}/pulls/${prNumber}`);
+        if (!data || typeof data !== "object") return null;
+        const pr = data as { title?: unknown; body?: unknown; user?: { login?: unknown } };
+        if (typeof pr.title !== "string" || typeof pr.user?.login !== "string") return null;
+        return {
+          title: pr.title,
+          body: typeof pr.body === "string" ? pr.body : "",
+          authorLogin: pr.user.login,
+        };
+      },
+      async (sourcePrNumber) => {
+        const data = await ghJson(`repos/${owner}/${name}/pulls/${sourcePrNumber}`);
+        if (!data || typeof data !== "object") return null;
+        const pr = data as { user?: { login?: unknown } };
+        return typeof pr.user?.login === "string" ? pr.user.login : null;
+      },
+    );
+    await Bun.write(outPath, rewritten.endsWith("\n") ? rewritten : rewritten + "\n");
+    return;
+  }
+
   if (cmd === "assemble") {
     const args = new Map<string, string>();
     for (let i = 0; i < rest.length; i += 1) {
@@ -372,6 +509,7 @@ Usage:
   bun scripts/release-notes.ts matching-preview-tag <version>   # tags on stdin
   bun scripts/release-notes.ts matching-preview-tags <version>  # tags on stdin, oldest→newest
   bun scripts/release-notes.ts previous-release-tag <version>   # tags on stdin
+  bun scripts/release-notes.ts credit-takeovers --repo <owner/name> --in <file> --out <file>
   bun scripts/release-notes.ts assemble --npm-metadata ... --out ...`);
   process.exit(1);
 }
