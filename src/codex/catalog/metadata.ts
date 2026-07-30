@@ -123,6 +123,12 @@ export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels">): s
   return nativeOpenAiSlugs().filter(slug => !disabled.has(slug));
 }
 
+/** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
+export function desktopVisibleNativeSlugs(config: Pick<OcxConfig, "claudeCode" | "disabledModels">): string[] {
+  if (config.claudeCode?.desktopNativeModels === false) return [];
+  return visibleNativeSlugs(config);
+}
+
 export function nativeModelRows(config: Pick<OcxConfig, "disabledModels">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
   const disabled = disabledNativeSlugs(config);
   return NATIVE_OPENAI_MODELS.map(slug => {

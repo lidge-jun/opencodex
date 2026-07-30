@@ -228,6 +228,42 @@ export function normalizeServiceTiers(entry: RawEntry): RawEntry {
   return entry;
 }
 
+/** Codex catalog parser accepts only these input modality enum values. */
+export const CODEX_CATALOG_INPUT_MODALITIES = ["text", "image", "audio"] as const;
+
+export type CodexCatalogInputModality = typeof CODEX_CATALOG_INPUT_MODALITIES[number];
+
+const CODEX_CATALOG_INPUT_MODALITY_SET = new Set<string>(CODEX_CATALOG_INPUT_MODALITIES);
+
+/** Strip out-of-enum modalities (e.g. provider-advertised `video`) before Codex reads the catalog. */
+export function sanitizeCodexInputModalities(modalities: unknown): CodexCatalogInputModality[] {
+  if (!Array.isArray(modalities)) return ["text"];
+  const out: CodexCatalogInputModality[] = [];
+  for (const value of modalities) {
+    if (typeof value !== "string") continue;
+    const normalized = value.trim().toLowerCase();
+    if (!CODEX_CATALOG_INPUT_MODALITY_SET.has(normalized)) continue;
+    const modality = normalized as CodexCatalogInputModality;
+    if (!out.includes(modality)) out.push(modality);
+  }
+  return out.length > 0 ? out : ["text"];
+}
+
+/** Repair poisoned on-disk catalog rows so sync can rewrite a Codex-parseable file. */
+export function repairCatalogInputModalities(catalog: RawCatalog): boolean {
+  let changed = false;
+  for (const entry of catalog.models ?? []) {
+    if (!Array.isArray(entry.input_modalities)) continue;
+    const sanitized = sanitizeCodexInputModalities(entry.input_modalities);
+    const previous = entry.input_modalities as unknown[];
+    if (JSON.stringify(sanitized) !== JSON.stringify(previous)) {
+      entry.input_modalities = sanitized;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function ensureAutoCompactTokenLimit(entry: RawEntry): RawEntry {
   if (
     typeof entry.context_window === "number"
@@ -271,7 +307,9 @@ export function ensureStrictCatalogFields(
   if (typeof entry.supports_parallel_tool_calls !== "boolean") entry.supports_parallel_tool_calls = true;
   if (typeof entry.supports_image_detail_original !== "boolean") entry.supports_image_detail_original = false;
   if (!Array.isArray(entry.experimental_supported_tools)) entry.experimental_supported_tools = [];
-  if (!Array.isArray(entry.input_modalities) && !options.preserveExactInputModalities) {
+  if (Array.isArray(entry.input_modalities)) {
+    entry.input_modalities = sanitizeCodexInputModalities(entry.input_modalities);
+  } else if (!options.preserveExactInputModalities) {
     entry.input_modalities = ["text"];
   }
   const contextWindow = typeof entry.context_window === "number" && entry.context_window > 0 ? entry.context_window : 128000;
