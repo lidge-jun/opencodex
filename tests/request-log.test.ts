@@ -544,6 +544,12 @@ describe("request log metadata", () => {
     expect(combined.map(entry => entry.requestId)).toEqual(["c"]);
   });
 
+  test("filters logs by offset and limit", () => {
+    const logs = Array.from({ length: 5 }, (_, i) => log({ requestId: `r${i}`, provider: "openai", status: 200 }));
+    expect(filterRequestLogs(logs, new URLSearchParams("limit=2")).map(entry => entry.requestId)).toEqual(["r0", "r1"]);
+    expect(filterRequestLogs(logs, new URLSearchParams("offset=2&limit=2")).map(entry => entry.requestId)).toEqual(["r2", "r3"]);
+  });
+
   test("deferred JSON logging preserves response service tier before final log", async () => {
     const entries: RequestLogEntry[] = [];
     const logCtx = {
@@ -1250,7 +1256,7 @@ describe("request log restart hydrate", () => {
 
   test("hydrate keeps only the newest MAX_LOG_SIZE rows from a long usage.jsonl", () => {
     clearRequestLogsForTests();
-    const persisted: PersistedUsageEntry[] = Array.from({ length: 205 }, (_, i) => ({
+    const persisted: PersistedUsageEntry[] = Array.from({ length: 2005 }, (_, i) => ({
       requestId: `ocx-${i}`,
       timestamp: i,
       provider: "openai",
@@ -1259,10 +1265,10 @@ describe("request log restart hydrate", () => {
       durationMs: 1,
       usageStatus: "unreported" as const,
     }));
-    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(200);
+    expect(hydrateRequestLogsFromDisk(() => persisted)).toBe(2000);
     const ids = getRequestLogEntries().map(e => e.requestId);
     expect(ids[0]).toBe("ocx-5");
-    expect(ids.at(-1)).toBe("ocx-204");
+    expect(ids.at(-1)).toBe("ocx-2004");
   });
 
   test("hydrate swallows usage.jsonl read failures instead of crashing startup", () => {

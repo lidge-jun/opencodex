@@ -660,6 +660,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const pendingToolCalls: PendingToolCall[] = [];
       let toolCallSeq = 0;
       const flushToolCalls = function* (): Generator<AdapterEvent> {
+        if (pendingToolCalls.length > 0) sawOutput = true;
         for (const call of pendingToolCalls) {
           if (!call.id) call.id = `call_${++toolCallSeq}`;
           yield { type: "tool_call_start", id: call.id, name: call.name };
@@ -674,6 +675,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // explicit `[DONE]` sentinel OR a chunk carrying a non-null `finish_reason` (some
       // OpenAI-compatible providers omit `[DONE]` but do send finish_reason).
       let finishReason: string | undefined;
+      let sawOutput = false;
 
       // Single per-line handler shared by the streaming loop and the EOF residual-frame flush, so
       // a final frame is parsed identically wherever it lands (no duplicated, drift-prone parsing).
@@ -740,9 +742,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const delta = choices[0].delta;
         if (delta) {
           if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+            sawOutput = true;
             yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
           }
           if (typeof delta.content === "string" && delta.content.length > 0) {
+            sawOutput = true;
             yield { type: "text_delta", text: delta.content };
           }
 
@@ -806,7 +810,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // at end-of-generation). If NONE of those were seen, the stream was cut mid-flight — fail
         // closed so the bridge emits a classified response.failed rather than a silent truncation.
         const sawFinish = finishReason !== undefined;
-        if (!sawFinish && pendingUsage === undefined) {
+        if (!sawFinish && pendingUsage === undefined && !sawOutput) {
           debugProviderDiagnostic("openai-chat", "stream-truncated", {
             finishReason: finishReason ?? null,
             hadUsage: false,

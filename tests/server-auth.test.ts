@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { logsFromApiBody } from "./helpers/logs-api";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -1620,7 +1621,7 @@ describe("server local API auth", () => {
       ws.close();
 
       expect(seenAuth).toEqual(["Bearer old-access-token", "Bearer new-access-token"]);
-      const logs = await fetch(new URL("/api/logs?tail=2", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{ status: number }>;
+      const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=2", server.url), { headers: managementHeaders() }).then(r => r.json()));
       expect(logs.map(entry => entry.status)).toEqual([200, 200]);
     } finally {
       Date.now = originalNow;
@@ -1692,14 +1693,7 @@ describe("server local API auth", () => {
       await waitForTerminal();
       ws.close();
 
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{
-        status: number;
-        terminalStatus?: string;
-        closeReason?: string;
-        usageStatus?: string;
-        totalTokens?: number;
-        usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
-      }>;
+      const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()));
       expect(logs.at(-1)).toMatchObject({
         status: 200,
         terminalStatus: "completed",
@@ -2210,7 +2204,7 @@ describe("server local API auth", () => {
         consecutiveFailures: 3,
         lastFailureStatus: 502,
       });
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{ status: number; errorCode?: string; terminalStatus?: string; closeReason?: string }>;
+      const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()));
       expect(logs.at(-1)).toMatchObject({
         status: 502,
         errorCode: "upstream_server_error",
@@ -2266,14 +2260,7 @@ describe("server local API auth", () => {
 
       expect(response.status).toBe(200);
       await response.text();
-      const logs = await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()) as Array<{
-        status: number;
-        terminalStatus?: string;
-        closeReason?: string;
-        usageStatus?: string;
-        totalTokens?: number;
-        usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number; reasoningOutputTokens?: number };
-      }>;
+      const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()));
       expect(logs.at(-1)).toMatchObject({
         status: 200,
         terminalStatus: "completed",

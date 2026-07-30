@@ -130,13 +130,20 @@ function registryAllowsPrivateNetwork(name: string): boolean {
   return getProviderRegistryEntry(name)?.allowPrivateNetworkByDefault === true;
 }
 
+/** True when the provider config or registry default admits private/loopback destinations. */
+export function providerAllowsPrivateNetwork(
+  name: string,
+  provider: Pick<OcxProviderConfig, "allowPrivateNetwork">,
+): boolean {
+  return provider.allowPrivateNetwork === true || registryAllowsPrivateNetwork(name);
+}
+
 export function providerDestinationConfigError(name: string, provider: Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork">): string | null {
   const assessment = assessDestination(provider.baseUrl);
   if (!assessment) return null;
   if (assessment.kind === "public" || assessment.kind === "hostname") return null;
   if (assessment.kind === "metadata") return "baseUrl targets a blocked metadata endpoint";
-  if (registryAllowsPrivateNetwork(name)) return null;
-  if (provider.allowPrivateNetwork === true) return null;
+  if (providerAllowsPrivateNetwork(name, provider)) return null;
   return `baseUrl points to a ${assessment.detail}; set allowPrivateNetwork:true only for intentionally local/self-hosted providers`;
 }
 
@@ -174,7 +181,7 @@ export async function providerDestinationResolvedError(
   if (!hostname || isIP(hostname) !== 0 || hostname === "localhost" || hostname.endsWith(".localhost")) {
     return null; // literals and localhost are fully handled by the sync path
   }
-  if (registryAllowsPrivateNetwork(name) || provider.allowPrivateNetwork === true) return null;
+  if (providerAllowsPrivateNetwork(name, provider)) return null;
   let addresses: { address: string }[];
   try {
     addresses = await lookup(hostname, { all: true, verbatim: true });

@@ -252,6 +252,10 @@ describe("provider registry parity", () => {
       label: "Alibaba Coding Plan",
       baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
     });
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba")?.baseUrlChoices).toEqual([
+      { id: "intl", label: "International", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1" },
+      { id: "china", label: "China", baseUrl: "https://coding.dashscope.aliyuncs.com/v1" },
+    ]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"]).toMatchObject({
       label: "Alibaba Token Plan (Beijing)",
       adapter: "openai-chat",
@@ -479,7 +483,7 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }

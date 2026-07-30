@@ -12,11 +12,18 @@ async function collect(gen: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[
 }
 
 describe("openai-chat stream EOF fail-closed", () => {
-  test("truncated stream (no [DONE], no finish_reason) yields a terminal error, not a clean done", async () => {
+  test("truncated stream (no [DONE], no finish_reason) yields done when content was emitted", async () => {
     const response = new Response('data: {"choices":[{"delta":{"content":"par"}}]}\n\n');
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
     const last = events[events.length - 1];
-    expect(last.type).toBe("error");
+    expect(last.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
+  test("empty EOF without content still errors", async () => {
+    const response = new Response("");
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.at(-1)?.type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
@@ -128,11 +135,11 @@ describe("openai-chat stream EOF fail-closed", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
-  test("genuinely truncated stream WITHOUT a trailing newline still fails closed", async () => {
-    // Mid-content frame, no terminator, no newline — must remain a terminal error.
+  test("genuinely truncated stream WITHOUT a trailing newline completes when content was emitted", async () => {
+    // Mid-content frame, no terminator, no newline — content was yielded, so accept done.
     const response = new Response('data: {"choices":[{"delta":{"content":"par"}}]}');
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
-    expect(events.at(-1)?.type).toBe("error");
-    expect(events.some(e => e.type === "done")).toBe(false);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
   });
 });

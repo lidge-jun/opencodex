@@ -250,6 +250,36 @@ function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
   }
 }
 
+/** Normalize provider baseUrl paths ending in `/`, `/v1`, or `/v1/messages` to `{origin}/v1/messages`. */
+export function anthropicMessagesUrl(baseUrl: string): string {
+  try {
+    new URL(baseUrl);
+  } catch {
+    throw new Error(`anthropic provider has malformed baseUrl: ${baseUrl}`);
+  }
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const root = trimmed.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
+  return `${root}/v1/messages`;
+}
+
+function synthesizeToolUseId(): string {
+  return `toolu_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+function toolUseArguments(input: unknown): string {
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return "{}";
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch {
+      return JSON.stringify(trimmed);
+    }
+  }
+  return JSON.stringify(input ?? {});
+}
+
 function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
@@ -680,8 +710,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name)) };
       }
 
-      const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-      const url = `${base}/v1/messages`;
+      const url = anthropicMessagesUrl(provider.baseUrl);
       const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
       if (unresolvedPlaceholder) {
         throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
@@ -735,6 +764,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
+      let sawContent = false;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -773,8 +803,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "tool_use") {
-                  currentToolCallId = block.id ?? "";
+                  currentToolCallId = block.id ?? synthesizeToolUseId();
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
+                  sawContent = true;
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
@@ -787,19 +818,24 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 const delta = data.delta as Record<string, unknown> | undefined;
                 if (!delta) break;
                 if (delta.type === "text_delta" && typeof delta.text === "string") {
+                  sawContent = true;
                   yield { type: "text_delta", text: delta.text };
                 } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+                  sawContent = true;
                   yield { type: "thinking_delta", thinking: delta.thinking };
                 } else if (delta.type === "reasoning_delta" && typeof delta.reasoning === "string") {
                   // Some Anthropic-compatible reasoning models use `reasoning` names for the
                   // otherwise equivalent thinking block. Preserve it as raw reasoning and keep
                   // later text blocks independent.
+                  sawContent = true;
                   yield { type: "thinking_delta", thinking: delta.reasoning };
                 } else if (delta.type === "signature_delta" && typeof delta.signature === "string" && (currentBlockType === "thinking" || currentBlockType === "reasoning")) {
                   // Arrives once, just before the thinking block's content_block_stop; block-scoped
                   // so a stray signature on a non-thinking block can never be captured.
+                  sawContent = true;
                   yield { type: "thinking_signature", signature: delta.signature };
-                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
+                  sawContent = true;
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 }
                 break;
@@ -831,12 +867,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         }
       }
       if (!emittedDone) {
-        if (pendingStopReason !== undefined) {
+        if (pendingStopReason !== undefined || sawContent) {
           const stopReason = pendingStopReason === "max_tokens"
             ? "max_tokens"
             : pendingStopReason === "refusal" || pendingStopReason === "content_filter"
               ? "content_filter"
-              : undefined;
+              : pendingStopReason;
           emittedDone = true;
           yield {
             type: "done",
@@ -867,8 +903,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
             events.push({ type: "redacted_thinking", data: block.data });
           } else if (block.type === "tool_use") {
-            events.push({ type: "tool_call_start", id: block.id ?? "", name: toolNames.fromWire(block.name ?? "") });
-            events.push({ type: "tool_call_delta", arguments: JSON.stringify(block.input ?? {}) });
+            const id = block.id ?? synthesizeToolUseId();
+            events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
+            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
             events.push({ type: "tool_call_end" });
           }
         }

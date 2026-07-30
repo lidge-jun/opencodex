@@ -124,8 +124,13 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
-    const logs = filterRequestLogs(getRequestLogEntries(), url.searchParams);
-    return jsonResponse(logs.map(requestLogDto));
+    const all = getRequestLogEntries();
+    const logs = filterRequestLogs(all, url.searchParams);
+    return jsonResponse({
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      total: all.length,
+      logs: logs.map(requestLogDto),
+    });
   }
 
   if (url.pathname === "/api/debug" && req.method === "GET") {

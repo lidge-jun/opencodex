@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { logsFromApiBody } from "./helpers/logs-api";
 import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -286,7 +287,7 @@ async function postModelLogged(
 
 async function latestAttemptReceipts(config: OcxConfig) {
   const response = await management(config, "GET", "/api/logs?tail=1");
-  const logs = await response!.json() as Array<Record<string, unknown>>;
+  const logs = logsFromApiBody(await response!.json());
   const usage = readUsageEntries();
   return { log: logs[0]!, usage: usage.at(-1)! };
 }
@@ -493,7 +494,7 @@ describe("server combo failover 030 activation matrix", () => {
     clearRequestLogsForTests();
     expect(hydrateRequestLogsFromDisk()).toBe(1);
     const hydratedResponse = await management(config, "GET", "/api/logs?tail=1");
-    const hydrated = await hydratedResponse!.json() as Array<Record<string, unknown>>;
+    const hydrated = logsFromApiBody(await hydratedResponse!.json());
     expect(hydrated).toHaveLength(1);
     expectMappedReceipt(hydrated[0]!);
   });

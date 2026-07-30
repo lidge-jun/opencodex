@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { logsFromApiBody } from "./helpers/logs-api";
 import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -83,11 +84,7 @@ async function runUpstreamFailure(status: 401 | 403, body: unknown): Promise<{
     const payload = await response.json() as {
       error: { message?: string; type?: string; code?: string | null };
     };
-    const logs = await fetch(new URL("/api/logs?tail=1", proxy.url)).then(res => res.json()) as Array<{
-      status?: number;
-      errorCode?: string;
-      upstreamError?: string;
-    }>;
+    const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=1", proxy.url)).then(res => res.json()));
     return {
       path,
       responseStatus: response.status,

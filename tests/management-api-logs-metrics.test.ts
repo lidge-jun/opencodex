@@ -16,7 +16,10 @@ async function readLogs(): Promise<Array<Record<string, any>>> {
   const url = new URL("http://localhost/api/logs");
   const response = await handleManagementAPI(new Request(url), url, config);
   expect(response?.status).toBe(200);
-  return await response!.json() as Array<Record<string, any>>;
+  const body = await response!.json() as { logs?: Array<Record<string, any>>; timeZone?: string };
+  expect(typeof body.timeZone).toBe("string");
+  expect(body.timeZone!.length).toBeGreaterThan(0);
+  return body.logs ?? [];
 }
 
 function baseEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {

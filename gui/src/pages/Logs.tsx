@@ -280,12 +280,12 @@ function statusColor(status: number): string {
   return "var(--amber)";
 }
 
-function formatLogTimestamp(ts: number, localeTag?: string): string {
-  return new Date(ts).toLocaleTimeString(localeTag);
+function formatLogTimestamp(ts: number, localeTag?: string, timeZone?: string): string {
+  return new Date(ts).toLocaleTimeString(localeTag, timeZone ? { timeZone } : undefined);
 }
 
-function formatLogDateTime(ts: number, localeTag?: string): string {
-  return new Date(ts).toLocaleString(localeTag);
+function formatLogDateTime(ts: number, localeTag?: string, timeZone?: string): string {
+  return new Date(ts).toLocaleString(localeTag, timeZone ? { timeZone } : undefined);
 }
 
 function modelTitle(log: LogEntry): string {
@@ -333,6 +333,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const cachedLogs = readSessionListCache<LogEntry[]>(logsCacheKey(apiBase));
   const [logs, setLogs] = useState<LogEntry[]>(() => cachedLogs ?? []);
+  const [serverTimeZone, setServerTimeZone] = useState<string | undefined>();
   const [loading, setLoading] = useState(() => !(cachedLogs && cachedLogs.length > 0));
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -368,9 +369,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     // failures flicker between the error banner, empty state, and stale table.
     if (!silent) setLoading(true);
     try {
-      const res = await fetch(`${apiBase}/api/logs`);
+      const res = await fetch(`${apiBase}/api/logs?limit=2000`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      const next = await res.json() as LogEntry[];
+      const body = await res.json() as LogEntry[] | { logs?: LogEntry[]; timeZone?: string };
+      const next = Array.isArray(body) ? body : (body.logs ?? []);
+      if (!Array.isArray(body) && typeof body.timeZone === "string" && body.timeZone.trim()) {
+        setServerTimeZone(body.timeZone.trim());
+      }
       setLogs(next);
       writeSessionListCache(logsCacheKey(apiBase), next);
       setError(null);
@@ -591,7 +596,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
                >
-                 <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag)}</td>
+                 <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag, serverTimeZone)}</td>
                   <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
                     {(() => {
                       const tokenTotal = displayContextTokenTotal(log);
@@ -678,6 +683,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           detailInfo={detailInfo}
           localeCode={locale}
           localeTag={localeTag}
+          serverTimeZone={serverTimeZone}
           t={t}
           onClose={() => setDetail(null)}
           onFilterConversation={id => {
@@ -703,12 +709,13 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeCode, localeTag, t, onClose, onFilterConversation,
+  detail, detailInfo, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
   localeCode: string;
   localeTag?: string;
+  serverTimeZone?: string;
   t: TFn;
   onClose: () => void;
   onFilterConversation?: (conversationId: string) => void;
@@ -750,7 +757,7 @@ function LogDetailDialog({
         <section className="log-detail-section" aria-labelledby="log-detail-basic">
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
           <div className="log-detail-grid">
-            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag)}</span>
+            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag, serverTimeZone)}</span>
             <span className="muted">{t("logs.col.request")}</span>
             <span className="log-detail-request-row">
               <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>

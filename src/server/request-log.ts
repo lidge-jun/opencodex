@@ -126,7 +126,7 @@ export interface RequestLogEntry {
 }
 
 const requestLog: RequestLogEntry[] = [];
-const MAX_LOG_SIZE = 200;
+const MAX_LOG_SIZE = 2000;
 let requestLogSeq = 0;
 /** True after hydrateRequestLogsFromDisk ran once in this process. */
 let requestLogsHydratedFromDisk = false;
@@ -759,6 +759,17 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
   if (tailRaw) {
     const tail = Number.parseInt(tailRaw, 10);
     if (Number.isFinite(tail) && tail > 0) filtered = filtered.slice(-Math.min(tail, MAX_LOG_SIZE));
+  }
+  const offsetRaw = params.get("offset")?.trim();
+  const limitRaw = params.get("limit")?.trim();
+  if (limitRaw) {
+    const limit = Number.parseInt(limitRaw, 10);
+    const offset = offsetRaw ? Number.parseInt(offsetRaw, 10) : 0;
+    if (Number.isFinite(limit) && limit > 0) {
+      const capped = Math.min(limit, MAX_LOG_SIZE);
+      const start = Number.isFinite(offset) && offset > 0 ? offset : 0;
+      filtered = filtered.slice(start, start + capped);
+    }
   }
   return filtered;
 }
