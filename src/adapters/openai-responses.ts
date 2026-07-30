@@ -354,6 +354,61 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+/**
+ * Ensure every function tool exposes a valid object JSON Schema at its
+ * `parameters` root. Strict validators (e.g. DeepSeek) reject schemas whose
+ * root `type` is `null`, missing, or non-`"object"` with HTTP 400.
+ *
+ * Codex tools such as `codex_app__automation_update` arrive without a
+ * `parameters` field, which would otherwise serialize to a schema lacking the
+ * root `type`. Walks both top-level `tools` and Responses Lite
+ * `additional_tools[].tools`. Namespace grouping is flattened by earlier strip
+ * steps, so any function tool seen here is already top-level.
+ */
+function normalizeToolSchemas(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+
+  const fixFunctionParams = (tool: unknown): unknown => {
+    if (!isPlainObject(tool) || tool.type !== "function") return tool;
+    const params = isPlainObject(tool.parameters) ? { ...tool.parameters } : {};
+    let changed = false;
+    if (params.type !== "object") { params.type = "object"; changed = true; }
+    if (!isPlainObject(params.properties)) { params.properties = {}; changed = true; }
+    return changed ? { ...tool, parameters: params } : tool;
+  };
+
+  let changed = false;
+
+  // Top-level tools array.
+  if (Array.isArray(body.tools)) {
+    const tools = body.tools.map((t) => {
+      const fixed = fixFunctionParams(t);
+      if (fixed !== t) changed = true;
+      return fixed;
+    });
+    if (changed) body = { ...body, tools };
+  }
+
+  // Responses Lite `additional_tools` items embed their own tools arrays.
+  if (Array.isArray(body.input)) {
+    let inputChanged = false;
+    const input = body.input.map((item) => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      let innerChanged = false;
+      const innerTools = item.tools.map((t) => {
+        const fixed = fixFunctionParams(t);
+        if (fixed !== t) innerChanged = true;
+        return fixed;
+      });
+      if (innerChanged) { inputChanged = true; return { ...item, tools: innerTools }; }
+      return item;
+    });
+    if (inputChanged) { changed = true; body = { ...body, input }; }
+  }
+
+  return body;
+}
+
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 const REPAIRED_CALL_ID_PREFIX = "call_ocx_";
 const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_CALL_ID_PREFIX.length;
@@ -938,7 +993,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody)))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))));
       return {
         url,
         method: "POST",

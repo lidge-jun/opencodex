@@ -137,11 +137,24 @@ function allowedToolName(tool: unknown): string | undefined {
 function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
   if (!tools) return undefined;
   const out: OcxTool[] = [];
+  // Some tool definitions (e.g. Codex `codex_app__automation_update`) arrive
+  // without a `parameters` field or with `parameters: null`. When serialized,
+  // that produces a JSON Schema whose root `type` is `null` (or missing).
+  // Strict validators reject such schemas with HTTP 400
+  // ("schema must be a JSON Schema of 'type: \"object\"', got 'type: null'").
+  // Coerce every function tool's `parameters` to a valid object-schema root
+  // so all downstream adapters pass through cleanly.
+  const normalizeParameters = (raw: unknown): Record<string, unknown> => {
+    const p = isObj(raw) ? { ...raw } : {};
+    if (p.type !== "object") p.type = "object";
+    if (!isObj(p.properties)) p.properties = {};
+    return p;
+  };
   const pushFn = (t: Record<string, unknown>, namespace?: string) => {
     const tool: OcxTool = {
       name: t.name as string,
       description: (t.description as string) ?? "",
-      parameters: (t.parameters ?? {}) as Record<string, unknown>,
+      parameters: normalizeParameters(t.parameters),
     };
     if (t.strict !== undefined) tool.strict = t.strict as boolean;
     if (namespace) tool.namespace = namespace;
