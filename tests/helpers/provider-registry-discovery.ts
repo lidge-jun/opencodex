@@ -5,7 +5,7 @@ interface RegistryDiscoveryOverrides {
   preserveCustomDestination?: boolean;
 }
 
-/** Temporarily override registry-owned discovery policy and always clear its cached catalog. */
+/** Temporarily override registry-owned discovery policy with a clean cache before and after. */
 export async function withRegistryDiscovery<T>(
   providerId: string,
   spec: ProviderModelDiscoverySpec,
@@ -16,6 +16,7 @@ export async function withRegistryDiscovery<T>(
   if (!entry) throw new Error(`missing ${providerId} registry entry`);
   const originalDiscovery = entry.modelDiscovery;
   const originalPreserveCustomDestination = entry.preserveCustomDestination;
+  clearModelCache(providerId);
   entry.modelDiscovery = spec;
   if (overrides.preserveCustomDestination !== undefined) {
     entry.preserveCustomDestination = overrides.preserveCustomDestination;
