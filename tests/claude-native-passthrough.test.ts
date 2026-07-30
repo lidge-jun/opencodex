@@ -1,3 +1,4 @@
+import { logsFromApiBody } from "./helpers/logs-api";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -116,7 +117,7 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
     expect(hit.body).toEqual(claudeBody());
 
     // Request log: native provider tag + usage incl. cache detail from the SSE tap.
-    const logs = await (await fetch(new URL("/api/logs", server.url))).json() as any[];
+    const logs = logsFromApiBody(await (await fetch(new URL("/api/logs", server.url))).json());
     const row = logs.find(l => l.provider === "anthropic-native");
     expect(row).toBeDefined();
     expect(row.status).toBe(200);
@@ -168,10 +169,10 @@ test("native passthrough persists conversationId from metadata.user_id", async (
     expect(res.status).toBe(200);
     await res.text();
 
-    const logs = await (await fetch(new URL("/api/logs?tail=1", server.url))).json() as Array<{
+    const logs = logsFromApiBody<{
       provider?: string;
       conversationId?: string;
-    }>;
+    }>(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
     expect(logs).toHaveLength(1);
     expect(logs[0]?.provider).toBe("anthropic-native");
     expect(logs[0]?.conversationId).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
