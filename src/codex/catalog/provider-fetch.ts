@@ -324,7 +324,7 @@ function modelInputModalities(
       ?? capabilityRecord?.input_modalities,
     8,
     24,
-  )?.filter(value => value === "text" || value === "image" || value === "audio" || value === "video");
+  )?.filter(value => value === "text" || value === "image" || value === "audio");
   if (explicit && explicit.length > 0) return explicit;
   if (capabilityRecord?.vision === false) return ["text"];
   if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {

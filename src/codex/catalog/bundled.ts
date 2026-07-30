@@ -31,7 +31,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
+import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath, repairCatalogInputModalities } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
 import { resolveAndPersistCodexRuntime } from "../runtime";
@@ -219,6 +219,7 @@ export function loadCatalogForSync(path: string): RawCatalog | null {
   const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
   if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   const catalog = readCatalog(path);
+  if (catalog) repairCatalogInputModalities(catalog);
   if (catalog && findNativeTemplate(catalog)) return catalog;
   return readCatalog(catalogBackupPathFor(path))
     ?? (isDefaultCatalogPath(path) ? readCatalog(legacyCatalogBackupPath()) : null)
