@@ -103,6 +103,9 @@ export function createChatGptBrowserAdapter(
           ...(response.type === "tool_call" ? { stopReason: "tool_use", endTurn: false } : { endTurn: true }),
         });
       } catch (error) {
+        if (!(error instanceof ChatGptBrowserError)) {
+          console.error("[chatgpt-browser] unexpected runTurn failure:", error);
+        }
         const safe = error instanceof ChatGptBrowserError
           ? error
           : new ChatGptBrowserError("browser_failed");

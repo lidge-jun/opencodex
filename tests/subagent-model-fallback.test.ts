@@ -682,6 +682,34 @@ describe("subagent model fallback chain", () => {
     expect(parsed.modelId).toBe("gpt-5.6-sol");
   });
 
+  test("applySubagentModelFallback never rewrites ChatGPT Browser thread spawns", () => {
+    const config = cfg({
+      providers: {
+        ...cfg().providers,
+        "chatgpt-browser": {
+          adapter: "chatgpt-browser",
+          baseUrl: "https://chatgpt.com",
+          models: ["gpt-5.6-pro"],
+          defaultModel: "gpt-5.6-pro",
+        },
+      },
+    });
+    const parsed = {
+      modelId: "chatgpt-browser/gpt-5.6-pro",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "chatgpt-browser/gpt-5.6-pro" },
+    };
+    noteSubagentModelFailure(parsed.modelId, "quota exhausted", config);
+    expect(applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      config,
+    )).toBeNull();
+    expect(parsed.modelId).toBe("chatgpt-browser/gpt-5.6-pro");
+    expect(parsed._rawBody.model).toBe("chatgpt-browser/gpt-5.6-pro");
+  });
+
   test("applySubagentModelFallback can use per-agent model_fallback without global config", () => {
     const dir = codexHomeFixture();
     writeFileSync(join(dir, "agents", "executor.toml"), [

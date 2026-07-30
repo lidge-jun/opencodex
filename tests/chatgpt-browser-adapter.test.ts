@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +9,11 @@ import {
   buildOracleBrowserArgs,
   CHATGPT_BROWSER_MODEL_ID,
   ChatGptBrowserError,
+  assertOracleCompatible,
   oracleVersionIsCompatible,
   parseChatGptBrowserResponse,
   ORACLE_CHATGPT_PRO_MODEL,
+  resetOracleCompatibilityCacheForTests,
   runOracleBrowserTurn,
 } from "../src/adapters/chatgpt-browser-oracle";
 import { providerConfigSeed } from "../src/providers/derive";
@@ -221,6 +223,22 @@ describe("Oracle browser contract", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")("bounds and reaps a hung Oracle version probe", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ocx-oracle-probe-timeout-"));
+    const command = join(dir, "oracle");
+    try {
+      await writeFile(command, ["#!/bin/sh", "sleep 10", ""].join("\n"));
+      await chmod(command, 0o700);
+      resetOracleCompatibilityCacheForTests();
+      const started = performance.now();
+      await expect(assertOracleCompatible(command, { timeoutMs: 50 }))
+        .rejects.toMatchObject({ code: "oracle_missing" });
+      expect(performance.now() - started).toBeLessThan(2_000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("accepts only nonce-bound final answers or known tool calls", () => {
     const parsed = request();
     expect(parseChatGptBrowserResponse(
@@ -235,6 +253,23 @@ describe("Oracle browser contract", () => {
     expect(() => parseChatGptBrowserResponse(
       '{"nonce":"n","type":"tool_call","name":"shell","arguments":{}}', parsed, "n",
     )).toThrow(ChatGptBrowserError);
+    expect(() => parseChatGptBrowserResponse(
+      '{"nonce":"n","type":"tool_call","name":"read_file","arguments":{"path":42}}', parsed, "n",
+    )).toThrow(ChatGptBrowserError);
+    expect(() => parseChatGptBrowserResponse(
+      '{"nonce":"n","type":"tool_call","name":"read_file","arguments":{}}', parsed, "n",
+    )).toThrow(ChatGptBrowserError);
+  });
+
+  test("enforces named tool choices and fails when the named tool is unavailable", () => {
+    const named = request({ options: { toolChoice: { name: "read_file" } } });
+    expect(() => parseChatGptBrowserResponse(
+      '{"nonce":"n","type":"final","text":"Done"}', named, "n",
+    )).toThrow(ChatGptBrowserError);
+    expect(() => buildChatGptBrowserPrompt(request({
+      context: { messages: [], tools: [] },
+      options: { toolChoice: { name: "read_file" } },
+    }))).toThrow(ChatGptBrowserError);
   });
 });
 
@@ -278,14 +313,14 @@ describe("ChatGPT browser adapter", () => {
 
   test("preserves actionable fail-closed error categories", async () => {
     const cases = [
-      ["login_required", 401],
-      ["model_unavailable", 403],
-      ["quota_exhausted", 402],
-      ["timeout", 400],
-      ["oracle_missing", 503],
-      ["oracle_incompatible", 503],
+      ["login_required", 401, "browser login is required"],
+      ["model_unavailable", 403, "no fallback model was used"],
+      ["quota_exhausted", 402, "no fallback model was used"],
+      ["timeout", 400, "timed out"],
+      ["oracle_missing", 503, "oracle is not installed"],
+      ["oracle_incompatible", 503, "oracle 0.16.1 or newer"],
     ] as const;
-    for (const [code, status] of cases) {
+    for (const [code, status, messageFragment] of cases) {
       const events = await runAdapter(async () => { throw new ChatGptBrowserError(code); });
       const terminalEvents = withoutHeartbeats(events);
       expect(terminalEvents).toHaveLength(1);
@@ -296,7 +331,22 @@ describe("ChatGPT browser adapter", () => {
         errorType: "chatgpt_browser_error",
       });
       expect((terminalEvents[0] as Extract<AdapterEvent, { type: "error" }>).message.toLowerCase())
-        .toContain(code === "model_unavailable" || code === "quota_exhausted" ? "no fallback model was used" : "");
+        .toContain(messageFragment);
+    }
+  });
+
+  test("logs unexpected exceptions while keeping the client error generic", async () => {
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    const original = new Error("diagnostic sentinel");
+    try {
+      const events = withoutHeartbeats(await runAdapter(async () => { throw original; }));
+      expect(events[0]).toMatchObject({ code: "browser_failed", retryable: false });
+      expect(log).toHaveBeenCalledWith(
+        "[chatgpt-browser] unexpected runTurn failure:",
+        original,
+      );
+    } finally {
+      log.mockRestore();
     }
   });
 

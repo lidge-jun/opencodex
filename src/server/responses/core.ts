@@ -1333,11 +1333,14 @@ export async function handleResponses(
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
   const isChatGptBrowserRoute = route.provider.adapter === "chatgpt-browser";
 
-  if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
+  if ((adapter.name === "kiro" || isChatGptBrowserRoute)
+    && parsed.previousResponseId
+    && !parsed._previousResponseInputExpanded) {
+    const providerLabel = isChatGptBrowserRoute ? "ChatGPT Browser" : "Kiro";
     return formatErrorResponse(
       400,
       "invalid_request_error",
-      "Kiro continuation state is missing; start a new session instead of reusing this previous_response_id.",
+      `${providerLabel} continuation state is missing; start a new session instead of reusing this previous_response_id.`,
     );
   }
 

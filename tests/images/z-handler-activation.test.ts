@@ -147,7 +147,11 @@ function post(stream: boolean, tools: unknown[]): Promise<Response> {
   );
 }
 
-function postChatGptBrowser(input: unknown, tools: unknown[]): Promise<Response> {
+function postChatGptBrowser(
+  input: unknown,
+  tools: unknown[],
+  bodyOverrides: Record<string, unknown> = {},
+): Promise<Response> {
   const config = makeConfig();
   config.defaultProvider = "chatgpt-browser";
   config.providers["chatgpt-browser"] = {
@@ -162,7 +166,13 @@ function postChatGptBrowser(input: unknown, tools: unknown[]): Promise<Response>
     new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "chatgpt-browser/gpt-5.6-pro", input, stream: true, tools }),
+      body: JSON.stringify({
+        model: "chatgpt-browser/gpt-5.6-pro",
+        input,
+        stream: true,
+        tools,
+        ...bodyOverrides,
+      }),
     }),
     config,
     { model: "", provider: "" } as never,
@@ -171,6 +181,14 @@ function postChatGptBrowser(input: unknown, tools: unknown[]): Promise<Response>
 }
 
 describe("image bridge dispatch priority (handler activation)", () => {
+  test("ChatGPT Browser fails closed when local continuation replay state is missing", async () => {
+    const res = await postChatGptBrowser("continue", [], {
+      previous_response_id: "resp_evicted_browser_state",
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/ChatGPT Browser continuation state is missing/i);
+  });
+
   test("stream=true + image_generation tool → image bridge activates and returns SSE", async () => {
     imageBridgeRun = false; webSearchRun = false; mockWsPlan = undefined;
     const res = await post(true, [{ type: "image_generation" }]);

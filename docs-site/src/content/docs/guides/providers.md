@@ -23,7 +23,7 @@ uses the base model plus `reasoning.mode: "pro"`.
 
 `chatgpt-browser/gpt-5.6-pro` is an explicit opt-in route through a signed-in **standard ChatGPT**
 conversation. It never calls the Codex/Work backend or OpenAI API and never falls back to another
-model or account. OpenAI documents GPT-5.6 Sol Pro under standard ChatGPT's existing Pro/model
+model or account. OpenAI documents GPT-5.6 Pro under standard ChatGPT's existing Pro/model
 allowance, separately from the agentic pool shared by Codex and Work. See OpenAI's
 [GPT-5.6 in ChatGPT](https://help.openai.com/en/articles/20001354-gpt-56-in-chatgpt) and
 [Codex plan limits](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).

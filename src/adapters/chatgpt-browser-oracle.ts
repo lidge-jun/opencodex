@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fromJSONSchema, type ZodType } from "zod";
+import { terminateProcessTree } from "../lib/process-control";
 import { commandInvocation } from "../lib/win-exec";
 import {
   isAllowedToolChoice,
@@ -69,6 +71,7 @@ type BrowserTool = {
 const TOOL_DESCRIPTION_LIMIT = 240;
 const SCHEMA_ANNOTATION_KEYS = new Set(["description", "title", "examples", "$comment", "markdownDescription"]);
 const SCHEMA_MAP_KEYS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+const toolSchemaCache = new WeakMap<Record<string, unknown>, ZodType>();
 
 /** Keep validation-relevant JSON Schema while dropping prose that makes browser prompts enormous. */
 function compactToolSchema(value: unknown): unknown {
@@ -123,7 +126,10 @@ function browserTools(parsed: OcxParsedRequest): BrowserTool[] {
     if (isAllowedToolChoice(choice)) return toolAllowedByChoice(tool, new Set(choice.allowedTools));
     return true;
   });
-  if ((choice === "required" || (isAllowedToolChoice(choice) && choice.mode === "required")) && selected.length === 0) {
+  const choiceRequiresTool = choice === "required"
+    || (typeof choice === "object" && "name" in choice)
+    || (isAllowedToolChoice(choice) && choice.mode === "required");
+  if (choiceRequiresTool && selected.length === 0) {
     throw new ChatGptBrowserError("unsupported_content");
   }
   return selected.map(tool => ({
@@ -133,6 +139,19 @@ function browserTools(parsed: OcxParsedRequest): BrowserTool[] {
     freeform: tool.freeform === true,
     toolSearch: tool.toolSearch === true,
   }));
+}
+
+function toolArgumentsMatchSchema(schema: Record<string, unknown>, value: Record<string, unknown>): boolean {
+  try {
+    let validate = toolSchemaCache.get(schema);
+    if (!validate) {
+      validate = fromJSONSchema(schema as never);
+      toolSchemaCache.set(schema, validate);
+    }
+    return validate.safeParse(value).success;
+  } catch {
+    return false;
+  }
 }
 
 export function buildChatGptBrowserPrompt(parsed: OcxParsedRequest, nonce = randomUUID()): string {
@@ -215,6 +234,7 @@ export function parseChatGptBrowserResponse(
   const value = parseResponseJson(answerText);
   if (!plainRecord(value) || value.nonce !== nonce) throw new ChatGptBrowserError("protocol_error");
   const required = parsed.options.toolChoice === "required"
+    || (typeof parsed.options.toolChoice === "object" && "name" in parsed.options.toolChoice)
     || (isAllowedToolChoice(parsed.options.toolChoice) && parsed.options.toolChoice.mode === "required");
   if (value.type === "final") {
     if (required || typeof value.text !== "string" || !value.text.trim()) {
@@ -229,6 +249,9 @@ export function parseChatGptBrowserResponse(
   const selected = tools.find(tool => tool.name === value.name);
   if (!selected) throw new ChatGptBrowserError("protocol_error");
   if (selected.freeform && typeof value.arguments.input !== "string") {
+    throw new ChatGptBrowserError("protocol_error");
+  }
+  if (!toolArgumentsMatchSchema(selected.parameters, value.arguments)) {
     throw new ChatGptBrowserError("protocol_error");
   }
   return {
@@ -285,45 +308,62 @@ export function oracleVersionIsCompatible(output: string): boolean {
   return true;
 }
 
-const oracleCompatibilityCache = new Map<string, Promise<void>>();
+const oracleCompatibilityCache = new Set<string>();
+const ORACLE_VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 export function resetOracleCompatibilityCacheForTests(): void {
   oracleCompatibilityCache.clear();
 }
 
-export async function assertOracleCompatible(commandValue?: string): Promise<void> {
+export async function assertOracleCompatible(
+  commandValue?: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<void> {
   const command = resolveOracleCommand(commandValue);
-  const cached = oracleCompatibilityCache.get(command);
-  if (cached) return cached;
-  const check = (async () => {
-    const invocation = commandInvocation(command, ["--version"]);
-    let child: ReturnType<typeof Bun.spawn>;
-    try {
-      child = Bun.spawn([invocation.file, ...invocation.args], {
-        stdout: "pipe",
-        stderr: "pipe",
-        ...invocation.options,
-        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
-      });
-    } catch {
-      throw new ChatGptBrowserError("oracle_missing");
-    }
+  if (oracleCompatibilityCache.has(command)) return;
+  if (options.signal?.aborted) throw new ChatGptBrowserError("aborted");
+  const invocation = commandInvocation(command, ["--version"]);
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn([invocation.file, ...invocation.args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      ...invocation.options,
+      detached: process.platform !== "win32",
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+    });
+  } catch {
+    throw new ChatGptBrowserError("oracle_missing");
+  }
+  let aborted = false;
+  let timedOut = false;
+  let termination: Promise<void> | undefined;
+  const terminate = () => {
+    termination ??= terminateProcessTree(child.pid, "SIGTERM", 1_000).catch(() => {
+      try { child.kill("SIGKILL"); } catch { /* best-effort cleanup */ }
+    });
+  };
+  const onAbort = () => { aborted = true; terminate(); };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  const timeout = setTimeout(() => { timedOut = true; terminate(); }, options.timeoutMs ?? ORACLE_VERSION_PROBE_TIMEOUT_MS);
+  try {
+    if (options.signal?.aborted) onAbort();
     const [exitCode, stdout, stderr] = await Promise.all([
       child.exited,
       readProcessText(child.stdout),
       readProcessText(child.stderr),
     ]);
-    if (exitCode !== 0) throw new ChatGptBrowserError("oracle_missing");
+    if (termination) await termination;
+    if (aborted || options.signal?.aborted) throw new ChatGptBrowserError("aborted");
+    if (timedOut || exitCode !== 0) throw new ChatGptBrowserError("oracle_missing");
     if (!oracleVersionIsCompatible(`${stdout}\n${stderr}`)) {
       throw new ChatGptBrowserError("oracle_incompatible");
     }
-  })();
-  oracleCompatibilityCache.set(command, check);
-  try {
-    await check;
-  } catch (error) {
-    oracleCompatibilityCache.delete(command);
-    throw error;
+    oracleCompatibilityCache.add(command);
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", onAbort);
+    if (termination) await termination;
   }
 }
 
@@ -370,7 +410,7 @@ export async function runOracleBrowserTurn(
   if (options.signal?.aborted) throw new ChatGptBrowserError("aborted");
   const command = resolveOracleCommand(options.command);
   try {
-    await assertOracleCompatible(command);
+    await assertOracleCompatible(command, { signal: options.signal });
   } catch (error) {
     if (options.signal?.aborted) throw new ChatGptBrowserError("aborted");
     throw error;
@@ -383,15 +423,12 @@ export async function runOracleBrowserTurn(
   const outputPath = join(tempDir, "answer.md");
   let child: ReturnType<typeof Bun.spawn> | undefined;
   let aborted = false;
-  let hardKillTimer: ReturnType<typeof setTimeout> | undefined;
+  let termination: Promise<void> | undefined;
   const onAbort = () => {
     aborted = true;
-    try { child?.kill("SIGINT"); } catch { /* best-effort cancellation */ }
-    if (child && !hardKillTimer) {
-      hardKillTimer = setTimeout(() => {
-        try { child?.kill("SIGKILL"); } catch { /* best-effort hard cancellation */ }
-      }, 5_000);
-    }
+    if (child) termination ??= terminateProcessTree(child.pid, "SIGINT", 5_000).catch(() => {
+      try { child?.kill("SIGKILL"); } catch { /* best-effort hard cancellation */ }
+    });
   };
 
   try {
@@ -409,6 +446,7 @@ export async function runOracleBrowserTurn(
         stdout: "pipe",
         stderr: "pipe",
         ...invocation.options,
+        detached: process.platform !== "win32",
         env: {
           ...process.env,
           FORCE_COLOR: "0",
@@ -451,10 +489,14 @@ export async function runOracleBrowserTurn(
     return { answerText };
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
-    if (hardKillTimer) clearTimeout(hardKillTimer);
     // No-op after normal exit; guarantees early setup/write failures cannot orphan a browser
     // process that may otherwise keep the private output directory alive for the full timeout.
-    try { child?.kill("SIGKILL"); } catch { /* best-effort process cleanup */ }
+    if (child && child.exitCode === null) {
+      termination ??= terminateProcessTree(child.pid, "SIGTERM", 1_000).catch(() => {
+        try { child?.kill("SIGKILL"); } catch { /* best-effort process cleanup */ }
+      });
+    }
+    if (termination) await termination;
     if (child) await child.exited.catch(() => undefined);
     await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }

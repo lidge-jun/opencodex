@@ -186,6 +186,10 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Wraps the full Responses conversation and callable client tools in a nonce-bound JSON protocol.
   Tool names and validation-relevant JSON Schema are preserved while prose-only annotations are
   compacted so large Codex plugin inventories remain within the browser context window.
+- The visible ChatGPT composer receives that envelope as one user message. System and developer
+  labels inside it are advisory text, not transport-level roles, so this experimental adapter does
+  not provide the instruction-authority isolation of a native Responses API transport. Treat
+  untrusted repository or user content as prompt-injection-capable on this route.
   A reply becomes either final Markdown or one validated function/custom/tool-search call; unknown
   tools, bad nonces, malformed JSON, and invalid required-tool responses fail closed.
 - Retains local `previous_response_id` replay even when Codex sends `store:false`. For streaming

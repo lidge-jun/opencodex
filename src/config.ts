@@ -430,12 +430,35 @@ function resolveRuntimePortPath(): string {
 
 const warnedConfigFallbacks = new Set<string>();
 
+type OracleCommandNormalization =
+  | { ok: true; value: string | undefined }
+  | { ok: false; error: string };
+
+/** Validate and normalize oracleCommand identically at schema and management boundaries. */
+export function normalizeOracleCommandConfig(value: unknown): OracleCommandNormalization {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (typeof value !== "string" || !value.trim()) {
+    return { ok: false, error: "oracleCommand must be a nonblank string" };
+  }
+  if (/[\0\r\n]/.test(value)) {
+    return { ok: false, error: "oracleCommand must not contain NUL or line breaks" };
+  }
+  return { ok: true, value: value.trim() };
+}
+
+const oracleCommandSchema = z.unknown().transform((value, ctx): string | undefined => {
+  const normalized = normalizeOracleCommandConfig(value);
+  if (!normalized.ok) {
+    ctx.addIssue({ code: "custom", message: normalized.error });
+    return z.NEVER;
+  }
+  return normalized.value;
+});
+
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
-  oracleCommand: z.string().trim().min(1).refine(value => !/[\0\r\n]/.test(value), {
-    error: "oracleCommand must not contain NUL or line breaks",
-  }).optional(),
+  oracleCommand: oracleCommandSchema.optional(),
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   allowPrivateNetwork: z.boolean().optional(),
@@ -484,10 +507,8 @@ export function providerBaseUrlConfigError(baseUrl: string): string | null {
 }
 
 export function oracleCommandConfigError(value: unknown): string | null {
-  if (value === undefined) return null;
-  if (typeof value !== "string" || !value.trim()) return "oracleCommand must be a nonblank string";
-  if (/[\0\r\n]/.test(value)) return "oracleCommand must not contain NUL or line breaks";
-  return null;
+  const normalized = normalizeOracleCommandConfig(value);
+  return normalized.ok ? null : normalized.error;
 }
 
 function providerResponsesPathConfigError(responsesPath: string | undefined): string | null {

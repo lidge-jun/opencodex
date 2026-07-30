@@ -381,6 +381,8 @@ export function applySubagentModelFallback(
   nativeFallbackOnly = false,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
+  const primaryRoute = tryRouteFallbackModel(config, parsed.modelId);
+  if (primaryRoute?.provider.adapter === "chatgpt-browser") return null;
   const roleFallback = resolveAgentModelFallbackForPrimary(parsed.modelId, getCodexHome());
   const globalFallback = config.subagentModelFallback ?? [];
   if (globalFallback.length === 0 && roleFallback.length === 0) return null;

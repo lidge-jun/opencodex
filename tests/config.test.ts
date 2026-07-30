@@ -14,6 +14,7 @@ import {
   isOcxStartCommandLine,
   loadConfig,
   multiAgentGuidanceEnabled,
+  normalizeOracleCommandConfig,
   parsePidFile,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
@@ -140,6 +141,36 @@ describe("opencodex config defaults", () => {
       ok: true,
       config: expect.objectContaining({ hostname: "127.0.0.1" }),
     });
+  });
+
+  test("oracleCommand validation trims valid values and rejects line breaks and NUL consistently", () => {
+    const base = getDefaultConfig();
+    const candidate = {
+      ...base,
+      providers: {
+        ...base.providers,
+        browser: {
+          adapter: "chatgpt-browser",
+          baseUrl: "https://chatgpt.com",
+          oracleCommand: "  /opt/oracle/bin/oracle  ",
+        },
+      },
+    };
+    expect(normalizeOracleCommandConfig(candidate.providers.browser.oracleCommand)).toEqual({
+      ok: true,
+      value: "/opt/oracle/bin/oracle",
+    });
+    expect(validateConfigCandidate(candidate)).toMatchObject({
+      ok: true,
+      config: { providers: { browser: { oracleCommand: "/opt/oracle/bin/oracle" } } },
+    });
+    for (const invalid of ["oracle\n--flag", "oracle\r--flag", "oracle\0--flag"]) {
+      expect(normalizeOracleCommandConfig(invalid)).toMatchObject({ ok: false });
+      expect(validateConfigCandidate({
+        ...candidate,
+        providers: { browser: { ...candidate.providers.browser, oracleCommand: invalid } },
+      })).toMatchObject({ ok: false, error: expect.stringContaining("oracleCommand") });
+    }
   });
 
   test("config candidates validate Claude Code subagent effort levels", () => {

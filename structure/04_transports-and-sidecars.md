@@ -46,6 +46,9 @@ compacts prose-only tool-schema annotations, forces local continuation replay un
 `store:false`, and preflights the first meaningful event so a browser failure is returned as one HTTP
 error rather than a retried 200 stream. Unknown tools, malformed output, missing login, ineligible
 access, quota exhaustion, model drift, timeout, and missing/incompatible Oracle all fail closed.
+Because the visible composer accepts only a user message, encoded system/developer labels do not
+retain native Responses role authority. This experimental route must not be treated as an
+instruction-isolated transport when repository or user content is untrusted.
 
 This provider advertises text-only input, no hosted search, no parallel calls, and no reasoning
 picker. It is deliberately absent from `noVisionModels`: that flag would invoke the native OpenAI
@@ -53,7 +56,7 @@ vision sidecar and spend Codex/Work allowance before the browser turn. The same 
 the native web-search sidecar disabled.
 
 [Decision Log]
-- 목적과 의도: Expose GPT-5.6 Sol Pro only through the standard ChatGPT allowance while preserving explicit user opt-in and fail-closed routing.
+- 목적과 의도: Expose GPT-5.6 Pro only through the standard ChatGPT allowance while preserving explicit user opt-in and fail-closed routing.
 - 기존 구현 및 제약 조건: The canonical ChatGPT endpoint is `/backend-api/codex` and consumes Codex/Work usage; Pro is available only in standard ChatGPT and browser turns can take longer than the bridge watchdog.
 - 검토한 주요 대안: Relabel the Codex endpoint; call an undocumented backend API; use the separately billed OpenAI API; automate the visible standard ChatGPT UI through an isolated helper.
 - 선택한 방식: Delegate visible browser login/model confirmation/capture to audited Oracle semantics, require 0.16.1+, pin the standard ChatGPT URL, and validate a nonce-bound tool/final protocol.

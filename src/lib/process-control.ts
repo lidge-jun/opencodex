@@ -21,6 +21,46 @@ export function waitForExit(pid: number, timeoutMs: number): boolean {
   return !isProcessAlive(pid);
 }
 
+async function waitForExitAsync(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await Bun.sleep(50);
+  }
+  return !isProcessAlive(pid);
+}
+
+/** Terminate an isolated spawned process group/tree, then wait until the root exits. */
+export async function terminateProcessTree(
+  pid: number,
+  gracefulSignal: NodeJS.Signals = "SIGTERM",
+  graceMs = 5_000,
+): Promise<void> {
+  if (!Number.isInteger(pid) || pid <= 0 || !isProcessAlive(pid)) return;
+  if (process.platform === "win32") {
+    const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+    const killer = Bun.spawn([taskkill, "/PID", String(pid), "/T", "/F"], {
+      stdout: "ignore",
+      stderr: "ignore",
+      windowsHide: true,
+    });
+    const exitCode = await killer.exited;
+    if (exitCode !== 0 && isProcessAlive(pid)) {
+      throw new Error(`failed to terminate process tree ${pid}`);
+    }
+  } else {
+    try { process.kill(-pid, gracefulSignal); } catch {
+      try { process.kill(pid, gracefulSignal); } catch { /* process already exited */ }
+    }
+    if (!(await waitForExitAsync(pid, graceMs))) {
+      try { process.kill(-pid, "SIGKILL"); } catch {
+        try { process.kill(pid, "SIGKILL"); } catch { /* process already exited */ }
+      }
+    }
+  }
+  if (!(await waitForExitAsync(pid, 5_000))) throw new Error(`process ${pid} did not exit`);
+}
+
 /** Injectable seams so the graceful-stop flow is unit-testable without a live proxy. */
 export interface GracefulStopIo {
   fetchFn?: typeof fetch;
