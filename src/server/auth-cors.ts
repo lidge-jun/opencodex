@@ -70,22 +70,39 @@ export function isSameOriginAsRequest(req: Request, origin: string): boolean {
 }
 
 export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean {
-  function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
-    if (!cfg.corsAllowOrigins?.length) return false;
-    return cfg.corsAllowOrigins.some(allowed => {
-      try {
-        return new URL(allowed).origin === new URL(origin).origin;
-      } catch {
-        return allowed === origin;
-      }
-    });
-  }
   const origin = req.headers.get("Origin");
   if (!isApiAuthRequired(config)) {
     if (!isLoopbackRequestHost(req.headers.get("Host"))) return false;
     return !origin || isLoopbackOriginValue(origin) || isExtraAllowedOrigin(origin, config);
   }
   return !origin || isLoopbackOriginValue(origin) || isSameOriginAsRequest(req, origin) || isExtraAllowedOrigin(origin, config);
+}
+
+function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
+  if (!cfg.corsAllowOrigins?.length) return false;
+  return cfg.corsAllowOrigins.some(allowed => {
+    try {
+      return new URL(allowed).origin === new URL(origin).origin;
+    } catch {
+      return allowed === origin;
+    }
+  });
+}
+
+/** True when Origin and the process-derived origin share a host across http/https (TLS terminator). */
+function sameManagementHost(origin: string, requestOrigin: string): boolean {
+  try {
+    const left = new URL(origin);
+    const right = new URL(requestOrigin);
+    if (left.protocol !== "http:" && left.protocol !== "https:") return false;
+    if (right.protocol !== "http:" && right.protocol !== "https:") return false;
+    if (left.hostname.toLowerCase() !== right.hostname.toLowerCase()) return false;
+    // Same scheme with unequal origins means a port (or rare URL) mismatch — keep fail-closed.
+    // Cross-scheme only: browser https Origin vs process http Host behind a TLS terminator.
+    return left.protocol !== right.protocol;
+  } catch {
+    return false;
+  }
 }
 
 export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
@@ -106,7 +123,14 @@ export function isAllowedManagementOrigin(req: Request, config: OcxConfig): bool
   const requestOrigin = managementRequestOrigin(req, config);
   if (!requestOrigin) return false;
   const origin = req.headers.get("Origin");
-  return !origin || origin === requestOrigin;
+  if (!origin) return true;
+  if (origin === requestOrigin) return true;
+  // Explicit operator allowlist (documented reverse-proxy deployments).
+  if (isExtraAllowedOrigin(origin, config)) return true;
+  // TLS-terminating reverse proxy: browser sends https://host while the process sees http://host.
+  // Hostname match is enough; credentials still required by requireManagementAuth.
+  if (sameManagementHost(origin, requestOrigin)) return true;
+  return false;
 }
 
 export function browserSecurityHeaders(): Record<string, string> {
