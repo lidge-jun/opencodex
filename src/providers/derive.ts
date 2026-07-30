@@ -105,7 +105,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
-    authMode: entry.authKind === "local" ? undefined : entry.authKind,
+    // Keep local authentication explicit. The GUI and management API distinguish
+    // credential-free local helpers (including browser automation) from missing keys.
+    authMode: entry.authKind,
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
     ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),

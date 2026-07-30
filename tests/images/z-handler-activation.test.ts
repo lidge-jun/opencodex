@@ -35,6 +35,8 @@ let useRunTurnAdapter = false;
 let runTurnCalled = false;
 /** Controlled return value for the stubbed planWebSearch (truthy ⇒ web-search plan active). */
 let mockWsPlan: unknown = undefined;
+/** Spy: ChatGPT Browser must never resolve a native OpenAI sidecar. */
+let openAiSidecarResolveCalls = 0;
 
 let handleResponses: typeof import("../../src/server/responses")["handleResponses"];
 
@@ -101,6 +103,15 @@ beforeAll(async () => {
     shouldResolveOpenAiWebSearchSidecar: () => false,
   }));
 
+  const actualOpenAiSidecar = await import("../../src/providers/openai-sidecar");
+  mock.module("../../src/providers/openai-sidecar", () => ({
+    ...actualOpenAiSidecar,
+    resolveFirstUsableOpenAiSidecar: async () => {
+      openAiSidecarResolveCalls += 1;
+      throw new Error("unexpected OpenAI sidecar resolution");
+    },
+  }));
+
   ({ handleResponses } = await import("../../src/server/responses"));
 });
 
@@ -131,6 +142,29 @@ function post(stream: boolean, tools: unknown[]): Promise<Response> {
       body: JSON.stringify({ model: "fixture/model", input: "hello", stream, tools }),
     }),
     makeConfig(),
+    { model: "", provider: "" } as never,
+    {},
+  );
+}
+
+function postChatGptBrowser(input: unknown, tools: unknown[]): Promise<Response> {
+  const config = makeConfig();
+  config.defaultProvider = "chatgpt-browser";
+  config.providers["chatgpt-browser"] = {
+    adapter: "chatgpt-browser",
+    baseUrl: "https://chatgpt.com",
+    models: ["gpt-5.6-pro"],
+    liveModels: false,
+    // Adversarial user override: this must not re-enable the native vision sidecar.
+    noVisionModels: ["gpt-5.6-pro"],
+  };
+  return handleResponses(
+    new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "chatgpt-browser/gpt-5.6-pro", input, stream: true, tools }),
+    }),
+    config,
     { model: "", provider: "" } as never,
     {},
   );
@@ -209,6 +243,32 @@ describe("image bridge dispatch priority (handler activation)", () => {
       expect(res.headers.get("content-type")).toBe("text/event-stream");
     } finally {
       useRunTurnAdapter = false;
+    }
+  });
+
+  test("ChatGPT Browser bypasses native vision/search and paid media bridges even under adversarial config", async () => {
+    imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
+    openAiSidecarResolveCalls = 0;
+    useRunTurnAdapter = true;
+    mockWsPlan = { backend: "openai" };
+    try {
+      const res = await postChatGptBrowser([
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "describe this" },
+            { type: "input_image", image_url: "data:image/png;base64,YQ==" },
+          ],
+        },
+      ], [{ type: "web_search" }, { type: "image_generation" }]);
+      expect(res.status).toBe(200);
+      expect(openAiSidecarResolveCalls).toBe(0);
+      expect(webSearchRun).toBe(false);
+      expect(imageBridgeRun).toBe(false);
+      expect(runTurnCalled).toBe(true);
+    } finally {
+      useRunTurnAdapter = false;
+      mockWsPlan = undefined;
     }
   });
 });

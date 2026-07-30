@@ -8,9 +8,9 @@ import { hasLoopbackBaseUrl, type WorkspaceProvider } from "./catalog";
 
 export type ProviderKind = "cloud" | "local" | "selfHosted" | "login";
 
-/** Local runtime: explicit local auth mode or a loopback base URL. */
+/** Local runtime: a loopback endpoint. `authMode: local` only means no API credential. */
 export function isLocalProvider(item: WorkspaceProvider): boolean {
-  return item.authMode === "local" || hasLoopbackBaseUrl(item.baseUrl);
+  return hasLoopbackBaseUrl(item.baseUrl);
 }
 
 export const SELF_HOSTED_HINTS = ["ollama", "vllm", "lm-studio", "lmstudio", "litellm", "localai"];

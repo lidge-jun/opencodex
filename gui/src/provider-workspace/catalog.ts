@@ -134,14 +134,13 @@ export function isAccountProvider(name: string, p: WorkspaceProvider): boolean {
 
 /**
  * Free pricing (badge / filter / sort): `freeTier`, keyless free (`keyOptional`),
- * local runtimes, or loopback. Forward passthrough is NOT free — those are
+ * or loopback runtimes. Forward passthrough is NOT free — those are
  * account providers. Does **not** imply ready-without-key — use
  * `binProviderStatus` for readiness.
  */
 export function isFreeProvider(p: WorkspaceProvider): boolean {
   return p.freeTier === true
     || p.keyOptional === true
-    || p.authMode === "local"
     || hasLoopbackBaseUrl(p.baseUrl);
 }
 

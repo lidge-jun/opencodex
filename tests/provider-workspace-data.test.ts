@@ -114,7 +114,7 @@ describe("catalog: section membership", () => {
       keyless: prov({ keyOptional: true }),
       oauth: prov({ authMode: "oauth" }),
       forward: forwardProv(),
-      // Defensive-only: dev wire never emits authMode "local"; pair with loopback.
+      // Local auth is explicit; loopback determines the local-runtime badge/tier.
       local: prov({ authMode: "local", baseUrl: "http://localhost:11434/v1" }),
       loopback: prov({ baseUrl: "http://127.0.0.1:8000/v1" }),
       keyed: prov({ authMode: "key", hasApiKey: true }),
@@ -522,8 +522,9 @@ describe("provider kind classification (WP080a)", () => {
     expect(providerTier("myproxy", customForward)).toBe("paid");
   });
 
-  test("local: explicit authMode local or loopback base URL", () => {
-    expect(isLocalProvider(prov({ authMode: "local" }))).toBe(true);
+  test("local runtime kind comes from loopback, not credential-free local auth", () => {
+    expect(isLocalProvider(prov({ authMode: "local" }))).toBe(false);
+    expect(providerKind({ ...prov({ authMode: "local" }), name: "browser-helper" })).toBe("cloud");
     expect(isLocalProvider(prov({ baseUrl: "http://localhost:11434/v1" }))).toBe(true);
     expect(isLocalProvider(prov({ baseUrl: "http://[::1]:8000/v1" }))).toBe(true);
     expect(isLocalProvider(prov())).toBe(false);

@@ -16,7 +16,7 @@ src/
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
-├── adapters/           # seven wire adapters, shared guards/utilities, Cursor protobuf transport
+├── adapters/           # eight wire adapters, shared guards/utilities, runTurn transports
 ├── oauth/              # OAuth providers, API-key catalog, token store/refresh
 ├── usage/              # request usage extraction, JSONL logs, summaries, totals
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
@@ -63,8 +63,8 @@ src/
    безопасного пути через сайдкар нет, изображения удаляются, а не отправляются текстовому
    вышестоящему провайдеру.
 5. `server/adapter-resolve.ts` применяет переопределение wire-формата для конкретной модели и
-   конструирует один из семи адаптеров. Passthrough Responses ретранслирует нативное тело, Cursor
-   запускает свой двунаправленный транспорт `runTurn`, а транслирующие адаптеры выполняют
+   конструирует один из восьми адаптеров. Passthrough Responses ретранслирует нативное тело, Cursor
+   и ChatGPT Browser запускают транспорт `runTurn`, а транслирующие адаптеры выполняют
    build/fetch/parse запроса к вышестоящему провайдеру.
 6. Для маршрутизируемых моделей с hosted-инструментом `web_search` модуль `web-search/`
    предоставляет синтетическую функцию, выполняет настоящий поиск через сайдкар ChatGPT,

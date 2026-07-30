@@ -335,6 +335,25 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
       });
     }
+    if (prov.adapter === "chatgpt-browser") {
+      const started = Date.now();
+      try {
+        const check = deps.assertOracleCompatible
+          ?? (await import("../../adapters/chatgpt-browser-oracle")).assertOracleCompatible;
+        await check(prov.oracleCommand);
+        return jsonResponse({
+          ok: true,
+          latencyMs: Date.now() - started,
+          message: "Oracle is ready. ChatGPT login, GPT-5.6 Pro eligibility, and allowance are verified fail-closed on the first browser turn without spending quota in this health check.",
+        });
+      } catch (error) {
+        return jsonResponse({
+          ok: false,
+          latencyMs: Date.now() - started,
+          error: error instanceof Error ? error.message : "Oracle readiness check failed",
+        });
+      }
+    }
     if (prov.liveModels === false) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified" });
     }

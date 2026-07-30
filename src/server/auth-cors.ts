@@ -4,6 +4,7 @@ import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  oracleCommandConfigError,
   codexAutoStartEnabled,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
@@ -311,6 +312,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     return `provider ${name} must not include codexAccountMode`;
   }
   const typed = provider as unknown as OcxProviderConfig;
+  const oracleCommandError = oracleCommandConfigError(raw.oracleCommand);
+  if (oracleCommandError) return `provider ${name} ${oracleCommandError}`;
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
   const destinationError = providerDestinationConfigError(name, typed);

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import type { ManagementApiDeps } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(tmpdir(), "ocx-conn-test");
@@ -40,9 +41,9 @@ function baseConfig(providers: OcxConfig["providers"]): OcxConfig {
   return config;
 }
 
-async function probe(config: OcxConfig, name: string): Promise<{ status: number; body: Record<string, unknown> }> {
+async function probe(config: OcxConfig, name: string, deps: ManagementApiDeps = {}): Promise<{ status: number; body: Record<string, unknown> }> {
   const req = new Request(`http://127.0.0.1/api/providers/test?name=${name}`, { method: "POST" });
-  const res = await handleManagementAPI(req, new URL(req.url), config, {});
+  const res = await handleManagementAPI(req, new URL(req.url), config, deps);
   if (!res) throw new Error("handler returned no response");
   return { status: res.status, body: await res.json() as Record<string, unknown> };
 }
@@ -94,6 +95,25 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     const { body } = await probe(config, "staticprov");
     expect(body.ok).toBe(false);
     expect(String(body.error)).toContain("static catalog only");
+  });
+
+  test("ChatGPT browser reports Oracle readiness without spending a Pro turn", async () => {
+    let checkedCommand: string | undefined;
+    const config = baseConfig({
+      "chatgpt-browser": {
+        adapter: "chatgpt-browser",
+        baseUrl: "https://chatgpt.com",
+        liveModels: false,
+        models: ["gpt-5.6-pro"],
+        oracleCommand: "/opt/oracle/bin/oracle",
+      },
+    });
+    const { body } = await probe(config, "chatgpt-browser", {
+      assertOracleCompatible: async command => { checkedCommand = command; },
+    });
+    expect(checkedCommand).toBe("/opt/oracle/bin/oracle");
+    expect(body.ok).toBe(true);
+    expect(String(body.message)).toContain("without spending quota");
   });
 
   test("a fake key gets the upstream rejection, not a catalog-presence pass", async () => {

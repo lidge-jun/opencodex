@@ -15,7 +15,7 @@ src/
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
-├── adapters/           # 7개 wire adapter, 공통 guard/util, Cursor protobuf transport
+├── adapters/           # 8개 wire adapter, 공통 guard/util, runTurn transport
 ├── oauth/              # OAuth providers, API-key catalog, token store/refresh
 ├── usage/              # usage extraction, JSONL logs, summaries, totals
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
@@ -56,8 +56,8 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
    결정하고, 필요하면 프로바이더 OAuth를 갱신해 선택된 자격 증명을 route에 적용합니다.
 4. 본 요청 전에 `vision/`이 `noVisionModels` 모델용 이미지 설명을 만듭니다. 안전한 사이드카 경로가
    없으면 텍스트 전용 업스트림에 이미지를 보내지 않고 제거합니다.
-5. `server/adapter-resolve.ts`가 모델별 wire override를 적용하고 7개 어댑터 중 하나를 만듭니다.
-   Responses passthrough는 원본 body를 중계하고, Cursor는 양방향 `runTurn` transport를 사용하며,
+5. `server/adapter-resolve.ts`가 모델별 wire override를 적용하고 8개 어댑터 중 하나를 만듭니다.
+   Responses passthrough는 원본 body를 중계하고, Cursor와 ChatGPT Browser는 `runTurn` transport를 사용하며,
    나머지 변환형 어댑터는 업스트림 요청을 build/fetch/parse합니다.
 6. 라우팅 모델이 호스티드 `web_search`를 요청하면 `web-search/`가 합성 함수를 노출합니다. 실제 검색은
    ChatGPT 사이드카로 실행하고 결과를 라우팅 모델에 다시 넣으며, 설정된 횟수 안에서 반복합니다.

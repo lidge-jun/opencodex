@@ -33,6 +33,33 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+## Standard ChatGPT browser transport
+
+The opt-in `chatgpt-browser/gpt-5.6-pro` route is a `runTurn` adapter backed by Oracle 0.16.1+.
+OpenCodex launches the configured executable without a shell, forces browser mode against
+`https://chatgpt.com/`, selects Oracle's stable current-Pro alias with strict Pro confirmation, pipes
+the request on stdin, and accepts output only from a fresh private bounded file. The public model id
+is intentionally namespaced; bare `gpt-*` ids remain owned by the canonical `openai` Codex route.
+
+The adapter uses a nonce-bound JSON protocol for final text or one client-executed tool call. It
+compacts prose-only tool-schema annotations, forces local continuation replay under Codex's
+`store:false`, and preflights the first meaningful event so a browser failure is returned as one HTTP
+error rather than a retried 200 stream. Unknown tools, malformed output, missing login, ineligible
+access, quota exhaustion, model drift, timeout, and missing/incompatible Oracle all fail closed.
+
+This provider advertises text-only input, no hosted search, no parallel calls, and no reasoning
+picker. It is deliberately absent from `noVisionModels`: that flag would invoke the native OpenAI
+vision sidecar and spend Codex/Work allowance before the browser turn. The same isolation rule keeps
+the native web-search sidecar disabled.
+
+[Decision Log]
+- 목적과 의도: Expose GPT-5.6 Sol Pro only through the standard ChatGPT allowance while preserving explicit user opt-in and fail-closed routing.
+- 기존 구현 및 제약 조건: The canonical ChatGPT endpoint is `/backend-api/codex` and consumes Codex/Work usage; Pro is available only in standard ChatGPT and browser turns can take longer than the bridge watchdog.
+- 검토한 주요 대안: Relabel the Codex endpoint; call an undocumented backend API; use the separately billed OpenAI API; automate the visible standard ChatGPT UI through an isolated helper.
+- 선택한 방식: Delegate visible browser login/model confirmation/capture to audited Oracle semantics, require 0.16.1+, pin the standard ChatGPT URL, and validate a nonce-bound tool/final protocol.
+- 다른 대안 대신 이 방식을 선택한 이유: The other routes either violate the requested usage boundary, rely on undocumented direct calls, or silently change billing; Oracle already fails closed on Pro selection and session state.
+- 장점, 단점 및 영향: No Codex/Work or API fallback and actionable failures; in exchange, the route is experimental, UI-dependent, non-streaming until capture, text-only, and requires a local Oracle/Chrome installation.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in

@@ -875,6 +875,11 @@ export interface ResponsesItemIdRepairConfig {
 export interface OcxProviderConfig {
   adapter: string;
   /**
+   * Executable used by the experimental chatgpt-browser adapter. Defaults to
+   * OPENCODEX_ORACLE_COMMAND, then `oracle`. Passed directly to Bun.spawn without a shell.
+   */
+  oracleCommand?: string;
+  /**
    * Per-model wire override, keyed by the upstream native model id (after namespace
    * and combo resolution). A single gateway can front models that speak different
    * wires — Grok needs the Responses API for hosted web_search while a sibling model

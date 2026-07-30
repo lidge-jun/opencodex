@@ -13,7 +13,7 @@ src/
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
-├── adapters/           # 7つの wire adapter, 共通 guard/util, Cursor protobuf transport
+├── adapters/           # 8つの wire adapter, 共通 guard/util, runTurn transport
 ├── oauth/              # OAuth providers, API-key catalog, token store/refresh
 ├── usage/              # usage extraction, JSONL logs, summaries, totals
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
@@ -51,8 +51,8 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 2. `server/responses/core.ts` が展開し JSON を読みます。覚えておいた `previous_response_id` 入力があれば展開したのち `responses/parser.ts` に渡します。
 3. `router.ts` が通常のモデル id または `provider/model` id を解決します。続いて Codex アカウント affinity を決定し、必要ならプロバイダー OAuth を更新して選択された認証情報を route に適用します。
 4. 本リクエストの前に `vision/` が `noVisionModels` モデル用の画像説明を作ります。安全なサイドカー経路がないときはテキスト専用の上流に画像を送らず取り除きます。
-5. `server/adapter-resolve.ts` がモデル別の wire override を適用し、7つのアダプターのいずれかを作ります。
-   Responses passthrough は元の body を中継し、Cursor は双方向 `runTurn` transport を使い、
+5. `server/adapter-resolve.ts` がモデル別の wire override を適用し、8つのアダプターのいずれかを作ります。
+   Responses passthrough は元の body を中継し、Cursor と ChatGPT Browser は `runTurn` transport を使い、
    残りの変換型アダプターは上流リクエストを build/fetch/parse します。
 6. ルーティングモデルがホステッド `web_search` を要求すると `web-search/` が合成関数を公開します。実際の検索は ChatGPT サイドカーで実行し、結果をルーティングモデルに戻し、設定された回数の中で繰り返します。
 7. `bridge.ts` が Responses SSE または JSON を作ります。`server/request-log.ts` と `usage/` はレスポンスに触れずに終了ステータス、レイテンシー、プロバイダー/モデル、最善推定トークン使用量を記録します。

@@ -6,4 +6,4 @@ export { hasUnreadableEncryptedAgentTask, sanitizeEncryptedContentInPlace } from
 export { COMPACT_RESPONSE_MAX_BYTES, bufferCompactResponse, handleResponsesCompact } from "./responses/compact";
 export { disableResponsesRequestTimeout, safeHostLabel, fetchWithHeaderTimeout } from "./responses/fetch-helpers";
 export { sidecarOutcomeRecorder, isShadowSourceModel, codexLogAccountId, usesCodexForwardPoolAuth, codexForwardTerminalOutcomeRecorder, decodeRequestErrorResponse, buildComboChildHeaders, handleResponses, linkAbortSignal } from "./responses/core";
-export { adapterNeedsForcedContinuation } from "./responses/core";
+export { adapterNeedsErrorPreflight, adapterNeedsForcedContinuation } from "./responses/core";

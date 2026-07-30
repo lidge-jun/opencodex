@@ -298,8 +298,9 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
+| `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `chatgpt-browser`, `azure-openai` (or alias `azure`). |
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; newly promoted collision-safe key presets preserve an older same-named custom destination. See [Fixed provider endpoints](#fixed-provider-endpoints). |
+| `oracleCommand?` | `string` | **`chatgpt-browser` only.** Oracle executable path/name. Defaults to `OPENCODEX_ORACLE_COMMAND`, then `oracle`; it is executed directly without a shell. Requires Oracle 0.16.1+. |
 | `responsesPath?` | `string` | Optional relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no URL scheme, query, or fragment. When omitted, the adapter keeps its legacy `/v1/responses` URL construction. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |

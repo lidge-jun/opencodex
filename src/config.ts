@@ -433,6 +433,9 @@ const warnedConfigFallbacks = new Set<string>();
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  oracleCommand: z.string().trim().min(1).refine(value => !/[\0\r\n]/.test(value), {
+    error: "oracleCommand must not contain NUL or line breaks",
+  }).optional(),
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   allowPrivateNetwork: z.boolean().optional(),
@@ -477,6 +480,13 @@ export function providerBaseUrlConfigError(baseUrl: string): string | null {
   } catch {
     return "baseUrl must be a valid URL";
   }
+  return null;
+}
+
+export function oracleCommandConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !value.trim()) return "oracleCommand must be a nonblank string";
+  if (/[\0\r\n]/.test(value)) return "oracleCommand must not contain NUL or line breaks";
   return null;
 }
 

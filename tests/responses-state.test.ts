@@ -20,7 +20,11 @@ import {
   setResponseStateByteCapForTests,
   getStoredResponseBytesForTests,
 } from "../src/responses/state";
-import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../src/server/responses";
+import {
+  adapterNeedsErrorPreflight,
+  adapterNeedsForcedContinuation,
+  injectDeveloperMessage,
+} from "../src/server/responses";
 
 function feedInspector(
   inspector: ReturnType<typeof createSseInspector>,
@@ -492,12 +496,18 @@ describe("Responses previous_response_id state", () => {
       .toBe("cursor_conv_force_1");
   });
 
-  test("adapterNeedsForcedContinuation covers exactly kiro and cursor", () => {
+  test("adapterNeedsForcedContinuation covers adapters that require local replay state", () => {
     expect(adapterNeedsForcedContinuation("kiro")).toBe(true);
     expect(adapterNeedsForcedContinuation("cursor")).toBe(true);
+    expect(adapterNeedsForcedContinuation("chatgpt-browser")).toBe(true);
     expect(adapterNeedsForcedContinuation("openai")).toBe(false);
     expect(adapterNeedsForcedContinuation("claude")).toBe(false);
     expect(adapterNeedsForcedContinuation("")).toBe(false);
+  });
+
+  test("browser turns preflight terminal errors before committing a streaming response", () => {
+    expect(adapterNeedsErrorPreflight("chatgpt-browser")).toBe(true);
+    expect(adapterNeedsErrorPreflight("cursor")).toBe(false);
   });
 
   test("byte cap evicts oldest entries while the newest chain link survives", () => {

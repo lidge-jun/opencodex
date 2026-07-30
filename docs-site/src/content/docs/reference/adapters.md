@@ -1,6 +1,6 @@
 ---
 title: Adapters
-description: The seven provider adapters — what each targets, how it builds requests, and its quirks.
+description: The eight provider adapters — what each targets, how it builds requests, and its quirks.
 ---
 
 An **adapter** translates between opencodex's internal request/response model and one provider wire
@@ -172,6 +172,27 @@ advertised effort control on those models as proof of upstream-native reasoning 
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+
+## `chatgpt-browser` (experimental)
+
+**Targets:** the standard `https://chatgpt.com/` conversation UI with the visible Pro option.
+**Auth:** a local signed-in Chrome session managed by Oracle; no API key or Codex bearer is sent.
+
+- Uses `runTurn` and requires `@steipete/oracle` 0.16.1 or newer. Oracle is spawned without a shell;
+  the request travels on stdin and the final answer is read from a fresh private temporary file.
+- Invokes Oracle's stable current-Pro alias with explicit browser mode, standard ChatGPT URL, model
+  selection, and strict Pro effort confirmation. Wrong/unavailable model, login/session failure,
+  Pro allowance exhaustion, timeout, and missing/incompatible Oracle are distinct fail-closed errors.
+- Wraps the full Responses conversation and callable client tools in a nonce-bound JSON protocol.
+  Tool names and validation-relevant JSON Schema are preserved while prose-only annotations are
+  compacted so large Codex plugin inventories remain within the browser context window.
+  A reply becomes either final Markdown or one validated function/custom/tool-search call; unknown
+  tools, bad nonces, malformed JSON, and invalid required-tool responses fail closed.
+- Retains local `previous_response_id` replay even when Codex sends `store:false`. For streaming
+  requests, it waits for the first meaningful browser event before committing response headers so a
+  capture failure becomes one non-retryable HTTP error instead of an automatic duplicate submission.
+- Advertises text-only input with no effort picker, hosted search, parallel tool calls, or vision
+  sidecar. This keeps the route isolated from the Codex/Work agentic allowance.
 
 ## `azure-openai` (alias: `azure`)
 

@@ -208,10 +208,13 @@ export function deriveEntry(
     slug, display_name: slug, description: desc,
     shell_type: "shell_command", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
-    ...(isRouted ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
+    ...(isRouted && !slug.startsWith("chatgpt-browser/")
+      ? { web_search_tool_type: "text_and_image", supports_search_tool: true }
+      : isRouted ? { supports_search_tool: false } : {}),
   };
   if (isRouted) {
     applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    if (slug.startsWith("chatgpt-browser/")) entry.supports_parallel_tool_calls = false;
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

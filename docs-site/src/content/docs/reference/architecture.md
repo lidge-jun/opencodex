@@ -15,7 +15,7 @@ src/
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
 ├── codex/              # Codex config injection, catalog sync, auth/account integration
 ├── providers/          # provider metadata, API-key pool, quota and labels
-├── adapters/           # seven wire adapters, shared guards/utilities, Cursor protobuf transport
+├── adapters/           # eight wire adapters, shared guards/utilities, runTurn transports
 ├── oauth/              # OAuth providers, API-key catalog, token store/refresh
 ├── usage/              # request usage extraction, JSONL logs, summaries, totals
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
@@ -59,8 +59,8 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 4. Before the main call, `vision/` describes images for models in `noVisionModels`; if no safe
    sidecar path exists, images are removed rather than sent to a text-only upstream.
 5. `server/adapter-resolve.ts` applies any model-specific wire override and constructs one of the
-   seven adapters. Responses passthrough relays the native body, Cursor runs its bidirectional
-   `runTurn` transport, and translated adapters build/fetch/parse an upstream request.
+   eight adapters. Responses passthrough relays the native body, Cursor and ChatGPT Browser use
+   `runTurn` transports, and translated adapters build/fetch/parse an upstream request.
 6. For routed models with a hosted `web_search` tool, `web-search/` exposes a synthetic function,
    executes the real search through the ChatGPT sidecar, feeds results back to the routed model, and
    repeats within the configured loop limit.

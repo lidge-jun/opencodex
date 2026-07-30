@@ -1,5 +1,6 @@
 import { createAnthropicAdapter } from "../adapters/anthropic";
 import { createAzureAdapter } from "../adapters/azure";
+import { createChatGptBrowserAdapter } from "../adapters/chatgpt-browser";
 import { createCursorAdapter } from "../adapters/cursor";
 import { createGoogleAdapter } from "../adapters/google";
 import { createKiroAdapter } from "../adapters/kiro";
@@ -55,6 +56,8 @@ export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention
       return createAzureAdapter(providerConfig);
     case "cursor":
       return createCursorAdapter(providerConfig);
+    case "chatgpt-browser":
+      return createChatGptBrowserAdapter(providerConfig);
     case "mimo-free":
       return createMimoFreeAdapter(providerConfig);
     default:

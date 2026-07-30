@@ -156,7 +156,16 @@ import { guardTerminalEventStream } from "./terminal-guard";
  * Adapters whose continuation state must survive Codex's store:false requests.
  */
 export function adapterNeedsForcedContinuation(name: string): boolean {
-  return name === "kiro" || name === "cursor";
+  return name === "kiro" || name === "cursor" || name === "chatgpt-browser";
+}
+
+/**
+ * Browser UI turns may already have consumed allowance when they fail. Buffer heartbeats until
+ * the first meaningful event so a terminal error can be returned as an HTTP failure, which Codex
+ * will not misclassify as a disconnected 200 stream and automatically submit again.
+ */
+export function adapterNeedsErrorPreflight(name: string): boolean {
+  return name === "chatgpt-browser";
 }
 
 export function sidecarOutcomeRecorder(
@@ -1322,6 +1331,7 @@ export async function handleResponses(
   logCtx.providerAdapter = adapter.name;
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
+  const isChatGptBrowserRoute = route.provider.adapter === "chatgpt-browser";
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
     return formatErrorResponse(
@@ -1332,8 +1342,12 @@ export async function handleResponses(
   }
 
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
-  const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
-  const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
+  // chatgpt-browser must remain on the standard ChatGPT allowance. Suppress native OpenAI
+  // sidecars at the planning source even when a custom provider config opts into noVisionModels.
+  const needsOpenAiVision = !isChatGptBrowserRoute
+    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+  const needsOpenAiSearch = !isChatGptBrowserRoute
+    && shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
       openAiSidecar = await resolveFirstUsableOpenAiSidecar(
@@ -1357,11 +1371,13 @@ export async function handleResponses(
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main
   // call, so the text-only model can reason about it.
-  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
+  const visionPlan = isChatGptBrowserRoute
+    ? undefined
+    : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
     await describeImagesInPlace(parsed, visionPlan, openAiSidecar?.headers ?? selectedForwardHeaders, options.abortSignal, recordSidecarOutcome);
-  } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
+  } else if (!isChatGptBrowserRoute && modelInList(route.provider.noVisionModels, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
     stripImagesInPlace(parsed);
@@ -1787,11 +1803,15 @@ export async function handleResponses(
   //   - non-runTurn: web-search wins over image when both eligible (documented priority)
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
-  const wsPlan = !routedCompaction
+  const wsPlan = !routedCompaction && !isChatGptBrowserRoute
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
     : undefined;
-  const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
-  const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
+  const imgPlan = !routedCompaction && !isChatGptBrowserRoute
+    ? await planImageBridge(config, parsed, route.provider)
+    : undefined;
+  const vidPlan = !routedCompaction && !isChatGptBrowserRoute
+    ? await planVideoBridge(config, parsed, route.provider)
+    : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
   if ((imgPlan || vidPlan) && canRunWebSearch) {
     // Web search takes priority when both are active — the media bridge cannot run
@@ -1999,13 +2019,21 @@ export async function handleResponses(
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
-      if (options.comboAttempt) {
+      if (options.comboAttempt || adapterNeedsErrorPreflight(adapter.name)) {
         const preflight = await preflightAdapterEvents(eventSource);
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();
           const message = preflight.error?.message ?? "Adapter ended before producing a response";
-          return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          if (options.comboAttempt) {
+            return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          }
+          return formatErrorResponse(
+            preflight.error?.status ?? 502,
+            preflight.error?.errorType ?? "upstream_error",
+            redactSecretString(message),
+            { code: preflight.error?.code },
+          );
         }
         eventSource = preflight.stream;
       }

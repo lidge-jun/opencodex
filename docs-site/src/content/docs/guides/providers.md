@@ -19,6 +19,59 @@ The API route publishes 1,050,000 context / 922,000 max input metadata. Its
 `sol-pro`, `terra-pro`, and `luna-pro` virtual ids keep their selected public identity while the wire
 uses the base model plus `reasoning.mode: "pro"`.
 
+## GPT-5.6 Pro through standard ChatGPT (experimental)
+
+`chatgpt-browser/gpt-5.6-pro` is an explicit opt-in route through a signed-in **standard ChatGPT**
+conversation. It never calls the Codex/Work backend or OpenAI API and never falls back to another
+model or account. OpenAI documents GPT-5.6 Sol Pro under standard ChatGPT's existing Pro/model
+allowance, separately from the agentic pool shared by Codex and Work. See OpenAI's
+[GPT-5.6 in ChatGPT](https://help.openai.com/en/articles/20001354-gpt-56-in-chatgpt) and
+[Codex plan limits](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
+
+The adapter delegates visible browser login, strict Pro selection, submission, and final-response
+capture to [Oracle](https://github.com/steipete/oracle) 0.16.1 or newer:
+
+```bash
+npm install -g @steipete/oracle@^0.16.1
+
+# One-time browser-profile setup. Sign in if Oracle opens an unauthenticated window, then rerun.
+oracle --engine browser --browser-manual-login --browser-keep-browser \
+  --model gpt-5.5-pro --browser-thinking-time extended --wait -p "Reply only OK."
+
+ocx provider add chatgpt-browser --sync
+codex -m chatgpt-browser/gpt-5.6-pro
+```
+
+`gpt-5.5-pro` above is Oracle's stable alias for the current ChatGPT **Pro** picker entry; the
+OpenCodex-facing selector remains `gpt-5.6-pro`. The adapter forces browser mode, the standard
+`https://chatgpt.com/` surface, explicit model selection, and Pro effort confirmation before
+submission. Missing login, ineligible access, allowance exhaustion, model-picker drift, and capture
+failure are returned as distinct errors with no fallback or automatic retry.
+
+This is a `runTurn` adapter: it serializes the Responses conversation and client tools into a
+nonce-bound JSON protocol, waits for Oracle's captured result, then emits either final Markdown or
+one validated client tool call. Prose-only tool-schema annotations are compacted while callable
+names, JSON types, properties, enums, and required fields remain available. OpenCodex also retains
+`previous_response_id` state despite Codex's `store:false`, allowing tool results to continue in a
+fresh one-shot browser chat. Hosted web search and the OpenAI vision sidecar are deliberately disabled
+so this route cannot spend Codex/Work allowance. Image input is not supported.
+
+Browser failures are resolved before OpenCodex commits a streaming HTTP response. This prevents
+Codex from treating a failed 200 stream as disconnected and automatically submitting another regular
+Pro message. Because response headers wait for the first meaningful Oracle event, unusually long
+browser turns depend on the invoking client's header-wait tolerance.
+
+Set `providers.chatgpt-browser.oracleCommand` or `OPENCODEX_ORACLE_COMMAND` when `oracle` is not on
+`PATH`. The value is an executable path/name, not a shell command. `ocx provider test
+chatgpt-browser` checks the executable and minimum version without spending a Pro message; browser
+login, eligibility, and quota remain fail-closed checks on the first real turn.
+
+:::caution[Experimental browser automation]
+This integration depends on ChatGPT's web UI and may break when that UI changes. Review OpenAI's
+current terms and your organization policies before enabling it. Oracle stores its own local session
+artifacts and browser-profile state; protect them like other authenticated application data.
+:::
+
 If the built-in `openai` provider is missing or disabled, the dashboard Accounts picker and Codex
 Auth page can restore it: absent rows are created from the canonical preset, disabled canonical
 rows are re-enabled without replacing saved mode or model settings, and noncanonical `openai`
@@ -185,7 +238,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 53 built-in presets: 42 key-based, seven OAuth, three local, and the default
+opencodex ships 61 built-in presets: 49 key-based, seven OAuth, four local, and the default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it. Notable entries:
 

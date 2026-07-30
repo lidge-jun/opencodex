@@ -11,6 +11,7 @@ export interface ManagementApiDeps {
     action: StartupInstallAction,
     options?: { repair?: boolean },
   ) => Promise<{ message: string }>;
+  assertOracleCompatible?: (command?: string) => Promise<void>;
 }
 
 

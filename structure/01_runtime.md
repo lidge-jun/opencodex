@@ -70,6 +70,8 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 | `src/adapters/anthropic.ts` | Anthropic Messages bridge. |
 | `src/adapters/google.ts` | Gemini bridge. |
 | `src/adapters/azure.ts` | Azure OpenAI bridge. |
+| `src/adapters/chatgpt-browser.ts` | Experimental standard-ChatGPT Pro `runTurn` adapter and strict client-tool response protocol. |
+| `src/adapters/chatgpt-browser-oracle.ts` | Oracle version gate, browser invocation, bounded capture, cancellation, and fixed error classification. |
 
 Adapter output must stay in internal `AdapterEvent` form until `bridge.ts` converts it back to
 Responses SSE or WebSocket frames.
