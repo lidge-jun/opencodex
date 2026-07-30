@@ -105,6 +105,11 @@ Bun-native TypeScript on `dev` is the only runtime line. If native code
 returns, the expectation is an incremental module (for example Rust via N-API)
 landing on `dev`, not a second full-runtime branch.
 
+Stacked child pull requests that target another **open** PR's head branch are
+an intentional review workflow, not an alternate integration line. The
+**`enforce-target`** check skips the wrong-base gate for those children; after
+the parent lands or closes, retarget the child to `dev`.
+
 Rebase pull requests are welcome. Bringing a stale branch onto the current head
 is ordinary maintenance — open it as a normal pull request and name the source
 commits in the description.

@@ -414,7 +414,10 @@ async function main(argv: string[]): Promise<void> {
       process.exit(1);
     }
 
-    async function ghJson(path: string): Promise<unknown | null> {
+    async function ghJson(
+      path: string,
+      options: { allowNotFound?: boolean } = {},
+    ): Promise<unknown | null> {
       const proc = Bun.spawn(["gh", "api", path], {
         stdout: "pipe",
         stderr: "pipe",
@@ -425,14 +428,22 @@ async function main(argv: string[]): Promise<void> {
         proc.exited,
       ]);
       if (exitCode !== 0) {
-        console.error(`gh api ${path} failed: ${stderr.trim() || `exit ${exitCode}`}`);
-        return null;
+        const detail = stderr.trim() || `exit ${exitCode}`;
+        const notFound =
+          /\b404\b/i.test(detail) ||
+          /\bNot Found\b/i.test(detail) ||
+          /\bHTTP\s+404\b/i.test(detail);
+        if (options.allowNotFound && notFound) {
+          return null;
+        }
+        console.error(`gh api ${path} failed: ${detail}`);
+        process.exit(1);
       }
       try {
         return JSON.parse(stdout) as unknown;
       } catch {
         console.error(`gh api ${path} returned non-JSON`);
-        return null;
+        process.exit(1);
       }
     }
 
@@ -441,9 +452,15 @@ async function main(argv: string[]): Promise<void> {
       body,
       async (prNumber) => {
         const data = await ghJson(`repos/${owner}/${name}/pulls/${prNumber}`);
-        if (!data || typeof data !== "object") return null;
+        if (!data || typeof data !== "object") {
+          console.error(`Landing PR #${prNumber} lookup returned no object`);
+          process.exit(1);
+        }
         const pr = data as { title?: unknown; body?: unknown; user?: { login?: unknown } };
-        if (typeof pr.title !== "string" || typeof pr.user?.login !== "string") return null;
+        if (typeof pr.title !== "string" || typeof pr.user?.login !== "string") {
+          console.error(`Landing PR #${prNumber} is missing title or author login`);
+          process.exit(1);
+        }
         return {
           title: pr.title,
           body: typeof pr.body === "string" ? pr.body : "",
@@ -451,10 +468,21 @@ async function main(argv: string[]): Promise<void> {
         };
       },
       async (sourcePrNumber) => {
-        const data = await ghJson(`repos/${owner}/${name}/pulls/${sourcePrNumber}`);
-        if (!data || typeof data !== "object") return null;
+        // Missing source PRs leave the line unchanged; other lookup failures abort.
+        const data = await ghJson(`repos/${owner}/${name}/pulls/${sourcePrNumber}`, {
+          allowNotFound: true,
+        });
+        if (data === null) return null;
+        if (typeof data !== "object") {
+          console.error(`Source PR #${sourcePrNumber} lookup returned no object`);
+          process.exit(1);
+        }
         const pr = data as { user?: { login?: unknown } };
-        return typeof pr.user?.login === "string" ? pr.user.login : null;
+        if (typeof pr.user?.login !== "string") {
+          console.error(`Source PR #${sourcePrNumber} is missing author login`);
+          process.exit(1);
+        }
+        return pr.user.login;
       },
     );
     await Bun.write(outPath, rewritten.endsWith("\n") ? rewritten : rewritten + "\n");

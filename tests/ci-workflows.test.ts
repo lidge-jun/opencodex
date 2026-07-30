@@ -203,6 +203,7 @@ describe("GitHub Actions hardening", () => {
 
     // Least privilege + never cancel a publish mid-flight.
     expect(workflow).toContain("actions: read");
+    expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("timeout-minutes: 15");
@@ -284,6 +285,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun scripts/release-notes.ts has-meaningful");
     expect(workflow).toContain("bun scripts/release-notes.ts join-carried");
     expect(workflow).toContain("bun scripts/release-notes.ts credit-takeovers");
+    expect(workflow).toContain('if [ -s "$carried_file" ]; then');
+    expect(workflow).toContain('if [ -s "$delta_file" ]; then');
     // Preview notes must baseline any prior release (stable or preview), not preview-only.
     expect(workflow).toContain('bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"');
     expect(workflow).not.toMatch(
