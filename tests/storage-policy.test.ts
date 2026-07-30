@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   existsSync,
@@ -30,6 +30,15 @@ import {
   type CleanupResult,
   type ExecuteCleanupOptions,
 } from "../src/storage/cleanup";
+
+// seedHome() writes real files plus a sqlite fixture for every case it backs.
+// On a slow windows-latest runner those cases land at 6-8s against bun's 5s
+// default and fail deterministically (issue #727, run 30507689929) while a
+// faster runner passes the same code — locally the whole file is 144ms. The
+// sibling storage-cleanup suite already carries { timeout: 20_000 } /
+// { timeout: 30_000 } per case for exactly this reason; one file-level budget
+// covers every seedHome site here.
+setDefaultTimeout(30_000);
 
 const OLD = new Date("2026-01-01T00:00:00Z");
 const MID = new Date("2026-02-01T00:00:00Z");
