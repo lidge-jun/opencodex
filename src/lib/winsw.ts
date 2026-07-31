@@ -165,6 +165,12 @@ function runWinsw(args: string[]): string {
 
 /** `install /p` prompts for the service-account password on the console — stdin must be inherited. */
 function runWinswInteractive(args: string[]): void {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "WinSW install requires an interactive console to prompt for the service account password. "
+        + "Run `ocx service install --native` from an elevated Command Prompt or PowerShell window, not a hidden or piped session.",
+    );
+  }
   execFileSync(winswExePath(), args, { stdio: "inherit" });
 }
 

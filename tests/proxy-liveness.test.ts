@@ -75,6 +75,7 @@ describe("findLiveProxy", () => {
       readPidFn: () => null,
       readRuntimeFn: () => null,
       configFn: () => ({ port: 10100 }),
+      verifyPidFn: candidate => candidate,
       fetchFn: (async () => healthz(OURS)) as typeof fetch,
     });
 
@@ -98,6 +99,7 @@ describe("findLiveProxy", () => {
       readPidFn: () => null,
       readRuntimeFn: () => ({ pid: 4242, port: 58195, hostname: "::1" }),
       configFn: () => ({ port: 10100 }),
+      verifyPidFn: candidate => candidate,
       fetchFn: (async (url: string | URL | Request) => {
         urls.push(String(url));
         return healthz(OURS);
@@ -138,14 +140,14 @@ describe("findLiveProxy", () => {
   test("a runtime record whose healthz reports a different pid is rejected", async () => {
     const live = await findLiveProxy({
       readPidFn: () => 1111,
+      verifyPidFn: () => null,
       readRuntimeFn: () => ({ port: 58195 }),
       configFn: () => ({ port: 58195 }),
       fetchFn: (async () => healthz({ ...OURS, pid: 9999 })) as typeof fetch,
     });
 
-    // The runtime probe fails the pid check; the config fallback probes the same port
-    // without a pid expectation and adopts the reported live pid instead.
-    expect(live).toEqual({ pid: 9999, port: 58195, source: "config" });
+    // healthz-reported pids must pass identity verification before they become kill targets.
+    expect(live).toEqual({ pid: null, port: 58195, source: "config" });
   });
 
   test("a pidless legacy healthz never promotes an unverified cheap pid to a kill target", async () => {

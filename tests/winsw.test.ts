@@ -165,6 +165,13 @@ describe("winsw install flow", () => {
     expect(calls).toEqual([["interactive", "install", "/p"], ["verify"], ["run", "start"]]);
   });
 
+  test("install /p refuses non-interactive stdin instead of hanging", () => {
+    const winsw = readFileSync(new URL("../src/lib/winsw.ts", import.meta.url), "utf8");
+    const fn = winsw.slice(winsw.indexOf("function runWinswInteractive"), winsw.indexOf("function scQc()"));
+    expect(fn).toContain("process.stdin.isTTY");
+    expect(fn).toContain("interactive console");
+  });
+
   test("repair over an existing service rewrites assets and restarts without re-prompting", async () => {
     const calls: string[][] = [];
     await installWinswService(entry, {

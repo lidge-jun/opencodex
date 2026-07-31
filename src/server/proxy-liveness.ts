@@ -109,6 +109,13 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
     return verified === candidate ? verified : null;
   };
 
+  const verifiedReportedPid = (reported: number | null): number | null => {
+    if (reported === null) return null;
+    if (!Number.isSafeInteger(reported) || reported <= 0) return null;
+    const verified = verifyPidFn(reported);
+    return verified === reported ? verified : null;
+  };
+
   const pid = readPidFn();
   let probedPort: number | null = null;
   if (pid) {
@@ -136,7 +143,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
     // (its process dead, the port reused by a pidless legacy proxy) — synthesizing it
     // would hand destructive callers (stopProxy → kill fallback) a reusable pid.
     if (identity) {
-      return { pid: identity.pid ?? null, port: record.port, hostname: record.hostname, source: "runtime" };
+      return { pid: verifiedReportedPid(identity.pid), port: record.port, hostname: record.hostname, source: "runtime" };
     }
   }
 
@@ -145,7 +152,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   const identity = await proxyIdentityAt(port, { hostname: config.hostname }, io);
   if (identity) {
     return {
-      pid: identity.pid ?? killablePid(pid),
+      pid: verifiedReportedPid(identity.pid) ?? killablePid(pid),
       port,
       hostname: config.hostname,
       source: "config",
