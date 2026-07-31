@@ -72,11 +72,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       "Content-Type": "application/json",
       ...corsHeaders(req, config),
     };
-    try {
-      const { resolveCodexRuntime } = await import("../../codex/runtime");
-      const version = resolveCodexRuntime().runtime.version;
-      if (version) headers["x-opencodex-codex-version"] = version;
-    } catch { /* best-effort skew hint */ }
+    const { loadPersistedCodexRuntime } = await import("../../codex/runtime");
+    const version = loadPersistedCodexRuntime()?.selectedVersion;
+    if (version) headers["x-opencodex-codex-version"] = version;
     return new Response(JSON.stringify(catalog), { status: 200, headers });
   }
 

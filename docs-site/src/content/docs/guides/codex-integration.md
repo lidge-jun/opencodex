@@ -205,8 +205,11 @@ Remote Codex clients can fetch the same generated catalog over the management AP
 admission token as other `/api/*` routes):
 
 ```bash
+dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+tmp="$(mktemp "${dest}.XXXXXX")"
 curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+  "https://proxy.example.com/api/catalog" > "$tmp" \
+  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
 
