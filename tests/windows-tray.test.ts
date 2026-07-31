@@ -19,6 +19,7 @@ import {
 } from "../src/tray/windows";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const entry: WindowsTrayEntry = {
   bun: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\bun.exe",
@@ -257,8 +258,8 @@ describe("Windows tray packaging and command safety", () => {
   // round the sidebar route tests were fixed by DELETING their real `gh` spawn, because
   // spawning a binary was incidental to what those tests claimed. The distinction is
   // whether the wait is intrinsic to the assertion. Here it is; there it was not.
-  const PID_FILE_WAIT_MS = 20_000;
-  const TRAY_LAUNCH_TIMEOUT_MS = 45_000;
+  const PID_FILE_WAIT_MS = INTERNAL_DEADLINE_MS;
+  const TRAY_LAUNCH_TIMEOUT_MS = SPAWN_BUDGET_MS;
 
   test("launches the detached tray host without retaining the proxy listen socket", async () => {
     if (process.platform !== "win32") return;
