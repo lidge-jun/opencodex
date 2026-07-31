@@ -9,10 +9,12 @@ import { createResponsesPassthroughAdapter } from "../adapters/openai-responses"
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { providerModelWireDefault } from "../providers/registry";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
- * per-model override, then the provider's own adapter.
+ * per-model override, then a registry default for a mixed-wire provider, then the provider's
+ * own adapter.
  *
  * Safe to call more than once on its own output — the pin check does not look at the
  * current adapter, so a second pass cannot let an override displace a pin.
@@ -24,7 +26,12 @@ export function resolveWireProtocolOverride(providerName: string, modelId: strin
   }
   // Re-check the allow-list here, not just in the config validator: the file may have
   // been hand-edited, or written by a build that allowed more values.
-  const requested = providerConfig.modelAdapters?.[modelId];
+  const configured = providerConfig.modelAdapters?.[modelId];
+  // An explicit allowed override wins, including one naming the provider-wide adapter (the
+  // opt-out from a registry default). Invalid hand-edited values fall through to the default.
+  const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)
+    ? configured
+    : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED);
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter

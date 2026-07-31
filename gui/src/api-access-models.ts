@@ -7,8 +7,11 @@ export interface ExternalModelRow {
   custom?: boolean;
 }
 
+/** The inbound wires a client can speak to this proxy. */
+export type GatewayInboundProtocol = "responses" | "chat" | "messages";
+
 /** Inbound gateway protocols — not inferred from provider type. */
-export function gatewayInboundProtocols(claudeCodeEnabled: boolean): string[] {
+export function gatewayInboundProtocols(claudeCodeEnabled: boolean): GatewayInboundProtocol[] {
   return claudeCodeEnabled
     ? ["responses", "chat", "messages"]
     : ["responses", "chat"];

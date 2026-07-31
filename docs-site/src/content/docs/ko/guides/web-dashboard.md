@@ -32,7 +32,7 @@ bun run dev:gui
 | **시작 안전성** | 주입된 Codex 라우팅이 재부팅 후에도 유지되는지 서비스와 launcher shim 상태, 정확한 복구 명령과 함께 표시합니다. |
 | **Windows 트레이** | 로그인할 때 사용자 전용 트레이를 시작하고 프록시 시작·중지·재시작·대시보드·상태를 클릭으로 제어합니다. 트레이는 재시작 서비스가 아닙니다. |
 | **Codex 자동 시작** | 이미 설치된 Codex launcher shim이 `ocx ensure`를 실행하도록 허용합니다. 이 토글은 shim이나 백그라운드 서비스를 설치하지 않습니다. |
-| **Providers** | 프로바이더를 추가, 편집, 활성화/비활성화, 제거하고, 지원되는 OAuth 계정 풀과 API key 풀을 관리합니다. Claude(Anthropic) OAuth 풀에서는 로그인한 계정마다 자체 5시간·주간 한도 막대가 표시되며(사용량은 자격 증명 단위), 조회 실패 시 마지막 값을 유지하고 일시 불가 상태로 표시합니다. |
+| **Providers** | 프로바이더를 추가, 편집, 기본으로 설정(활성만), 활성화/비활성화, 제거하고, 지원되는 OAuth 계정 풀과 API key 풀을 관리합니다. 현재 기본 프로바이더를 제거하면 남아 있는 첫 번째 활성 프로바이더로 전환됩니다(있는 경우); 없으면 삭제가 거부되고 현재 기본이 유지됩니다. Claude(Anthropic) OAuth 풀에서는 로그인한 계정마다 자체 5시간·주간 한도 막대가 표시되며(사용량은 자격 증명 단위), 조회 실패 시 마지막 값을 유지하고 일시 불가 상태로 표시합니다. |
 | **Add provider** | 레지스트리 기반 프리셋에서 계정 로그인, API key 서비스, 로컬 서버, custom endpoint를 검색합니다. |
 | **Codex Auth** | ChatGPT/Codex 풀 계정을 추가하고, 다음 세션 계정을 선택하고, 5시간 / 주간 / 30일 할당량을 갱신하며, 할당량 자동 전환을 켜거나 끄고 1~100% 임계값과 일시적 실패 failover를 설정합니다. |
 | **Subagents** | `spawn_agent` override 목록에 네이티브 또는 라우팅 모델을 최대 5개까지 우선 노출합니다. |
@@ -107,7 +107,7 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 | `GET` / `PUT /api/sidecar-settings` | 검색/비전 사이드카 모델 설정을 읽거나 바꿉니다. |
 | `GET` / `PUT /api/injection-model` | 위임 가이드의 모델/강도, 가이드 토글, Codex 네이티브 서브에이전트 기본값 동기화 토글을 읽거나 바꿉니다. |
 | `GET` / `PUT /api/v2` | 서피스 모드, Codex 기능 플래그, v2 thread 상한을 읽거나 바꿉니다. |
-| `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | 프로바이더 목록 조회, 추가/교체, 활성화/비활성화, 제거. |
+| `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | 프로바이더 목록 조회, 추가/교체, 활성화/비활성화, 기본 설정, 제거. `PATCH`는 활성 프로바이더에 `{ "setDefault": true }`만 보냅니다. `POST`는 생성/교체 시 `setDefault`를 함께 보낼 수 있으며 역시 활성만 허용합니다. 현재 기본을 삭제하면 남아 있는 첫 번째 활성 프로바이더로 재지정됩니다(있는 경우); 없으면 `409`(`code: "last_provider"`)를 반환하고 현재 기본을 유지합니다. |
 | `GET /api/models` · `PUT /api/disabled-models` | 네이티브/라우팅 모델 행을 조회하고 공용 disabled model 목록을 갱신합니다. |
 | `GET /api/selected-models` · `PUT /api/model-visibility` | 프로바이더 allowlist를 읽고 개별 모델 또는 프로바이더 그룹의 최종 노출 상태를 원자적으로 변경합니다. |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | API key 및 OAuth 프로바이더 카탈로그를 읽습니다. |
@@ -115,7 +115,7 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 | `GET /api/codex-auth/accounts?refresh=1` | main 및 pool 계정을 조회하고 할당량을 강제로 갱신하며 main 계정의 `hasCredential` / terminal `needsReauth` 상태를 표시합니다. |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 다음 요청에 사용할 계정과 풀 라우팅 정책을 설정합니다. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 브라우저 로그인으로 pool 계정을 추가합니다. |
-| `GET /api/logs?tail=50&provider=...&status=5xx` | tail, 프로바이더, 정확한 상태 코드 또는 상태 등급으로 최근 요청 메타데이터를 조회합니다. |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | tail, 프로바이더, 정확한 상태 코드 또는 상태 등급으로 최근 요청 메타데이터를 조회합니다. `limit`/`offset`은 최신 행에서 과거 방향으로 페이지네이션합니다(`offset=0`이 최신 페이지). 응답은 `{ timeZone, total, logs }`이며 `total`은 페이지네이션 전 필터 일치 건수입니다. |
 | `GET` / `PUT /api/subagent-models` | `spawn_agent`에 우선 노출할 모델 5개를 읽거나 설정합니다. |
 | `POST /api/stop` | 프록시/서비스를 멈추고 네이티브 Codex를 복원한 뒤 종료합니다. |
 

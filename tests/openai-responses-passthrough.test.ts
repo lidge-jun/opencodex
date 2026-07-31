@@ -50,6 +50,80 @@ describe("OpenAI Responses key-auth URL construction", () => {
 });
 
 describe("OpenAI Responses passthrough sanitization", () => {
+  test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
+    const validParameters = {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          { type: "function", name: "missing_parameters" },
+          { type: "function", name: "missing_root_type", parameters: { properties: { query: { type: "string" } } } },
+          { type: "function", name: "valid_schema", parameters: validParameters },
+        ],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as { tools: { name: string; parameters: Record<string, unknown> }[] };
+
+    expect(body.tools).toEqual([
+      { type: "function", name: "missing_parameters", parameters: { type: "object" } },
+      {
+        type: "function",
+        name: "missing_root_type",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { type: "function", name: "valid_schema", parameters: validParameters },
+    ]);
+  });
+
+  test("normalizes additional_tools function schemas in the serialized raw body (#745)", () => {
+    const validParameters = {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [{
+          type: "additional_tools",
+          tools: [
+            { type: "function", name: "missing_parameters" },
+            { type: "function", name: "missing_root_type", parameters: { properties: { query: { type: "string" } } } },
+            { type: "function", name: "valid_schema", parameters: validParameters },
+          ],
+        }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      input: { type: string; tools: { name: string; parameters: Record<string, unknown> }[] }[];
+    };
+
+    expect(body.input[0].tools).toEqual([
+      { type: "function", name: "missing_parameters", parameters: { type: "object" } },
+      {
+        type: "function",
+        name: "missing_root_type",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { type: "function", name: "valid_schema", parameters: validParameters },
+    ]);
+  });
+
   test("model reasoning-summary opt-out strips unsupported delivery fields (#323)", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses",
@@ -1008,7 +1082,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
 
     expect(body.tools).toEqual([
-      { type: "function", name: "image_gen", parameters: {} },
+      { type: "function", name: "image_gen", parameters: { type: "object" } },
       { type: "image_generation" },
     ]);
   });

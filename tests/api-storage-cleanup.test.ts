@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -8,6 +8,10 @@ import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+// Windows CI under load can spend >5s just binding the proxy + previewing cleanup;
+// Bun's default test budget then fails the suite before the assertion runs.
+setDefaultTimeout(20_000);
 
 let testDir = "";
 let previousHome: string | undefined;

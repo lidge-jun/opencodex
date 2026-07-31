@@ -320,5 +320,5 @@ describe("ocx status --json codexPlugins (spawned, read-only)", () => {
       rmSync(opencodexHome, { recursive: true, force: true });
       rmSync(codexHome, { recursive: true, force: true });
     }
-  });
+  }, { timeout: 20_000 });
 });

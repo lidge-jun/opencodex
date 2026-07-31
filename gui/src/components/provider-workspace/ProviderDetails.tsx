@@ -52,6 +52,7 @@ export default function ProviderDetails({
   isDefault,
   onRemoveProvider,
   onSetDisabled,
+  onSetDefault,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
@@ -82,6 +83,7 @@ export default function ProviderDetails({
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
+  onSetDefault?: (name: string) => void;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
@@ -155,6 +157,11 @@ export default function ProviderDetails({
           </h2>
         </div>
         <div className="pws-detail-actions">
+          {!isDefault && !isDisabled && onSetDefault && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSetDefault(item.name)}>
+              {t("prov.setDefault")}
+            </button>
+          )}
           {onRemoveProvider && (
             <button
               type="button"

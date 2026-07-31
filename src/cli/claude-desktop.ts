@@ -10,7 +10,7 @@ import {
   type DesktopProfile,
 } from "../claude/desktop-profile";
 import { writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
-import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
+import { filterCatalogVisibleModels, desktopVisibleNativeSlugs } from "../codex/catalog";
 import { buildClaudeDesktopState, fetchAllModels } from "../server/management-api";
 import { findLiveProxy } from "../server/proxy-liveness";
 
@@ -42,7 +42,7 @@ async function applyProfile(profile: DesktopProfile, mode: Desktop3pConfigMode):
   }));
   const result = writeDesktop3pConfig(
     live?.port ?? config.port ?? 10100,
-    [...visibleNativeSlugs(config)],
+    [...desktopVisibleNativeSlugs(config)],
     routed,
     config.apiKeys?.[0]?.key,
     mode,

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -59,7 +59,7 @@ import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { AUTH_MATRIX, isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 import { buildApiAccessEndpoints } from "./api-access";
 
@@ -67,6 +67,45 @@ import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostR
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
+
+/**
+ * Parses a JSON object body, or null. Never throws: `await req.json()` rejects on
+ * a malformed body, which used to surface as a 500 from the key routes.
+ */
+async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed: unknown = await req.json();
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The single place key-name rules live. The config read schema is deliberately
+ * permissive so an existing config can never become unloadable; this is the write
+ * boundary that keeps new junk out. A non-string name used to reach `.trim()` and
+ * throw.
+ */
+function validateKeyName(
+  raw: unknown,
+  opts: { required: boolean },
+): { value: string } | { error: string } {
+  if (raw === undefined || raw === null) {
+    return opts.required ? { error: "name required" } : { value: "" };
+  }
+  if (typeof raw !== "string") return { error: "name must be a string" };
+  // Check the RAW string: trimming first would silently accept "deploy\n" by
+  // deleting the very character being rejected.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return { error: "invalid name" };
+  const value = raw.trim();
+  if (opts.required && !value) return { error: "name required" };
+  if (value.length > 64) return { error: "name too long" };
+  return { value };
+}
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
@@ -440,31 +479,66 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       requestHost: req.headers.get("host"),
       requestOrigin: req.headers.get("origin"),
     });
+    const { readApiKeyUsageRollup } = await import("./api-key-usage");
+    const { rollup, attributionSince } = await readApiKeyUsageRollup(keys.map(k => k.id));
     return jsonResponse({
-      keys: keys.map(k => ({ id: k.id, name: k.name, prefix: k.key.slice(0, 8) + "...", createdAt: k.createdAt })),
+      // 8 random hex past the fixed `ocx_data_` literal: enough to tell two keys
+      // apart in a list, with 128 bits of the tail still unrevealed. Masking only
+      // 8 characters showed `ocx_data...` for every key ever generated.
+      keys: keys.map(k => ({
+        id: k.id,
+        name: k.name,
+        prefix: k.key.slice(0, 17) + "...",
+        createdAt: k.createdAt,
+        usage: rollup.get(k.id) ?? { requests7d: 0, totalRequests: 0 },
+      })),
+      // Dataset-level and singular: it describes the usage log, not any one key.
+      ...(attributionSince ? { attributionSince } : {}),
+      authMatrix: AUTH_MATRIX,
       ...endpoints,
     }, 200, req, config);
   }
 
   if (url.pathname === "/api/keys" && req.method === "POST") {
-    const body = await req.json() as { name?: string };
-    const name = (body.name ?? "").trim() || "default";
-    // Generate key from provider keys hash + random salt
-    const providerKeys = Object.values(config.providers).map(p => p.apiKey ?? "").filter(Boolean).join("|");
-    const salt = crypto.randomUUID();
-    const hashInput = `${providerKeys}|${salt}|${Date.now()}`;
-    const hashBuf = new Bun.CryptoHasher("sha256").update(hashInput).digest();
-    const key = "ocx_data_" + Buffer.from(hashBuf).toString("hex").slice(0, 40);
-    const entry = { id: crypto.randomUUID(), name, key, createdAt: new Date().toISOString() };
+    const body = await readJsonBody(req);
+    if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
+    const nameField = validateKeyName(body.name, { required: false });
+    if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
+    const name = nameField.value || "default";
+    // A direct random draw. The previous derivation hashed every configured
+    // provider API key into the input, which was never needed for uniqueness and
+    // made this secret's safety argument depend on string concatenation rather
+    // than the RNG. 20 bytes is the same 40 hex characters as before, so nothing
+    // that pattern-matches the key shape changes.
+    const key = "ocx_data_" + randomBytes(20).toString("hex");
+    const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
     config.apiKeys = [...(config.apiKeys ?? []), entry];
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
   }
 
+  if (url.pathname === "/api/keys" && req.method === "PATCH") {
+    const body = await readJsonBody(req);
+    if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
+    if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
+    const nameField = validateKeyName(body.name, { required: true });
+    if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
+    const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
+    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
+    entry.name = nameField.value;
+    saveConfigPreservingClaudeCode(config);
+    // Never echo key material from a rename.
+    return jsonResponse({ id: entry.id, name: entry.name, createdAt: entry.createdAt }, 200, req, config);
+  }
+
   if (url.pathname === "/api/keys" && req.method === "DELETE") {
-    const body = await req.json() as { id?: string };
-    if (!body.id) return jsonResponse({ error: "id required" }, 400, req, config);
+    const body = await readJsonBody(req);
+    if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
+    if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
+    const before = (config.apiKeys ?? []).length;
     config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
+    // A stale id must not read as a successful revocation.
+    if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({ success: true }, 200, req, config);
   }

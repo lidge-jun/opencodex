@@ -174,16 +174,9 @@ export function sidecarOutcomeRecorder(
 
 
 
-export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-5.4-mini", "gpt-5.6-luna"] as const;
+import { isShadowSourceModel } from "../../lib/shadow-call";
 
-export function isShadowSourceModel(modelId: string, configured?: unknown): boolean {
-  if (modelId.includes("/")) return false;
-  const configuredStrings = Array.isArray(configured)
-    ? configured.filter((v): v is string => typeof v === "string" && v.trim() !== "")
-    : [];
-  const prefixes = configuredStrings.length > 0 ? configuredStrings : DEFAULT_SHADOW_SOURCE_MODELS;
-  return prefixes.some(prefix => modelId.startsWith(prefix.trim()));
-}
+export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";
 
 
 

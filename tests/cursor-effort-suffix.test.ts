@@ -60,10 +60,20 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/glm-5.2", "max")).toBe("glm-5.2-max");
   });
 
-  test("grok-4.5-fast preserves its explicit code-backed tiers", () => {
-    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-fast-medium");
-    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-fast-high");
-    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-fast-xhigh");
+  test("grok-4.5 uses current low/medium/high tiers and trailing Fast wire ids", () => {
+    expect(modelIdFor("cursor/grok-4.5", "low")).toBe("grok-4.5-low");
+    expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("grok-4.5-medium");
+    expect(modelIdFor("cursor/grok-4.5", "high")).toBe("grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5")).toBe("grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5-fast", "low")).toBe("grok-4.5-low-fast");
+    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-medium-fast");
+    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-high-fast");
+    // Codex-only upper tiers and an omitted effort clamp to Cursor's current top tier.
+    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-high-fast");
+    expect(modelIdFor("cursor/grok-4.5-fast")).toBe("grok-4.5-high-fast");
+    expect(cursorModelEffortLadder("grok-4.5")).toEqual(["low", "medium", "high"]);
+    expect(cursorModelEffortLadder("grok-4.5-fast")).toEqual(["low", "medium", "high"]);
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {

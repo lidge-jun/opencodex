@@ -206,10 +206,10 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           }));
           // "" instead of null: strict validators (xAI: "Each message must have at least one
           // content element", langchain#34140) reject content-less assistant history entries.
-          if (!chatMsg.content) chatMsg.content = "";
+          if (!chatMsg.content) chatMsg.content = emptyAssistantContent(provider);
         }
         if (chatMsg.reasoning_content !== undefined && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
-          chatMsg.content = "";
+          chatMsg.content = emptyAssistantContent(provider);
         }
         out.push(chatMsg);
         pendingToolCalls = wireToolCalls.map(({ tc, id }) => ({ id, name: namespacedToolName(tc.namespace, tc.name) }));
@@ -238,7 +238,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           const name = safeToolName(msg.toolName);
           out.push({
             role: "assistant",
-            content: "",
+            content: emptyAssistantContent(provider),
             tool_calls: [{
               id: toolCallId,
               type: "function",
@@ -370,6 +370,43 @@ function isKimiSchemaTarget(provider: OcxProviderConfig): boolean {
   } catch {
     return false;
   }
+}
+
+// Volcengine Ark regional endpoints. Ark validates an assistant message's text field as a
+// REQUIRED parameter and treats "" as absent, so a tool-call-only assistant in history 400s with
+// `MissingParameter: input.content.text` (#796). Every other OpenAI-compatible provider accepts
+// "", and xAI actively requires it ("Each message must have at least one content element"), so
+// the two contracts are in direct conflict and this cannot be a global change.
+const VOLCENGINE_ARK_HOSTNAMES = new Set([
+  "ark.cn-beijing.volces.com",
+  "ark.ap-southeast.volces.com",
+]);
+
+function isVolcengineArkTarget(provider: OcxProviderConfig): boolean {
+  try {
+    return VOLCENGINE_ARK_HOSTNAMES.has(new URL(provider.baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Placeholder content for an assistant history entry carrying only tool calls or reasoning.
+ *
+ * UNVERIFIED HYPOTHESIS for Ark. The reported error names `input.content.text`, a nested path,
+ * which suggests Ark wants the structured content form `[{type:"text",text:""}]` rather than a
+ * bare string — no string value, `""` or `" "`, exposes a `content.text` path at all. But Ark's
+ * published examples only show array content for MULTIMODAL USER input, never for an assistant
+ * history entry, so this shape is inferred from the error message and not confirmed by the docs
+ * or by a live request. The empty inner text at least adds no tokens either way.
+ *
+ * Confirm against a real Ark endpoint before relying on this; #796 records what is still missing.
+ *
+ * Every other provider keeps the bare `""`, which xAI's validator specifically requires ("Each
+ * message must have at least one content element"), so this cannot be applied globally.
+ */
+function emptyAssistantContent(provider: OcxProviderConfig): string | { type: "text"; text: string }[] {
+  return isVolcengineArkTarget(provider) ? [{ type: "text", text: "" }] : "";
 }
 
 /**
@@ -660,6 +697,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const pendingToolCalls: PendingToolCall[] = [];
       let toolCallSeq = 0;
       const flushToolCalls = function* (): Generator<AdapterEvent> {
+        // Do not treat flushed tool calls as user-facing output for the finish-less EOF
+        // fallback — incomplete tool args must stay on the truncation path.
         for (const call of pendingToolCalls) {
           if (!call.id) call.id = `call_${++toolCallSeq}`;
           yield { type: "tool_call_start", id: call.id, name: call.name };
@@ -674,6 +713,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // explicit `[DONE]` sentinel OR a chunk carrying a non-null `finish_reason` (some
       // OpenAI-compatible providers omit `[DONE]` but do send finish_reason).
       let finishReason: string | undefined;
+      // Only answer text enables the finish-less EOF fallback. Reasoning-only streams can be
+      // suppressed by hideThinkingSummary and must not complete as empty successful turns.
+      let sawUserFacingOutput = false;
 
       // Single per-line handler shared by the streaming loop and the EOF residual-frame flush, so
       // a final frame is parsed identically wherever it lands (no duplicated, drift-prone parsing).
@@ -743,6 +785,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
           }
           if (typeof delta.content === "string" && delta.content.length > 0) {
+            sawUserFacingOutput = true;
             yield { type: "text_delta", text: delta.content };
           }
 
@@ -800,21 +843,36 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (buffer.length > 0) {
           if ((yield* handleDataLine(buffer)) === "terminate") return;
         }
-        yield* flushToolCalls();
-        // Reader EOF. A graceful close shows at least one terminal signal: `[DONE]` (returns above),
-        // a non-null finish_reason (sawFinish), or a trailing usage chunk (providers emit usage only
-        // at end-of-generation). If NONE of those were seen, the stream was cut mid-flight — fail
-        // closed so the bridge emits a classified response.failed rather than a silent truncation.
+        // Reader EOF. Prefer failing closed before flushing pending tool calls so the bridge
+        // never sees a fabricated tool_call_end on a truncated mid-assembly stream.
+        //
+        // Checked BEFORE flushToolCalls(), because that helper emits tool_call_end and there is no
+        // taking it back: a half-assembled argument string would reach the client as a completed
+        // call. Tool calls are buffered here (unlike the Anthropic adapter, which forwards
+        // fragments live), so this adapter can still decide.
         const sawFinish = finishReason !== undefined;
-        if (!sawFinish && pendingUsage === undefined) {
+        if (!sawFinish && pendingToolCalls.length > 0) {
+          debugProviderDiagnostic("openai-chat", "stream-truncated", {
+            finishReason: null,
+            hadUsage: pendingUsage !== undefined,
+            pendingToolCalls: pendingToolCalls.length,
+          });
+          yield { type: "error", message: "upstream stream ended mid tool call without a terminal signal — possible truncation" };
+          return;
+        }
+        // Finish-less EOF is only safe when answer text was emitted. Reasoning-only / usage-only
+        // truncations must stay on the error path (hideThinkingSummary can suppress reasoning).
+        // Trailing usage alone is not a terminal signal for this adapter (#735 / restore #773).
+        if (!sawFinish && !sawUserFacingOutput) {
           debugProviderDiagnostic("openai-chat", "stream-truncated", {
             finishReason: finishReason ?? null,
-            hadUsage: false,
+            hadUsage: pendingUsage !== undefined,
           });
           yield { type: "error", message: "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation" };
           return;
         }
-        // Graceful close that omitted [DONE] but delivered finish_reason and/or final usage.
+        yield* flushToolCalls();
+        // Graceful close that omitted [DONE] but delivered finish_reason and/or answer text.
         const stopReason = finishReason === "length"
           ? "max_tokens"
           : finishReason === "content_filter"

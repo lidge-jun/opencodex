@@ -210,16 +210,86 @@ function secretEquals(actual: string, expected: string | undefined): boolean {
   return expectedBytes.length === actualBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
+/**
+ * Which admission a data-plane request used.
+ *
+ * `configured` carries the matched key's id so a request can be attributed to
+ * the key that opened it. The other two exist so an unattributed request is a
+ * stated fact rather than a missing field: neither has a configured entry to
+ * point at, and a sentinel string in the id would collide with a hand-edited
+ * entry that happens to be named `loopback`.
+ */
+export type DataPlaneAdmission =
+  | { kind: "configured"; keyId: string }
+  | { kind: "environment" }
+  | { kind: "loopback" };
+
+/**
+ * Which admission secret `token` is, or null when it is none of them.
+ *
+ * Identical comparisons in an identical order to the boolean form this replaces —
+ * `secretEquals` still length-guards before `timingSafeEqual`. The only
+ * difference is that the matched entry's id survives the loop instead of being
+ * discarded, which is what makes per-key attribution possible without touching
+ * the admission decision itself.
+ */
+export function resolveDataPlaneAdmissionSecret(token: string, config: OcxConfig): DataPlaneAdmission | null {
+  const actual = token.trim();
+  if (!actual) return null;
+  if (secretEquals(actual, configuredApiAuthToken(config))) return { kind: "environment" };
+  for (const k of config.apiKeys ?? []) {
+    if (secretEquals(actual, k.key)) return { kind: "configured", keyId: k.id };
+  }
+  return null;
+}
+
 /** Whether `token` is a data-plane admission secret. */
 export function isDataPlaneAdmissionSecret(token: string, config: OcxConfig): boolean {
-  const actual = token.trim();
-  if (!actual) return false;
-  if (secretEquals(actual, configuredApiAuthToken(config))) return true;
-  for (const k of config.apiKeys ?? []) {
-    if (secretEquals(actual, k.key)) return true;
-  }
-  return false;
+  return resolveDataPlaneAdmissionSecret(token, config) !== null;
 }
+
+/**
+ * Split an admission into the fields a log row records.
+ *
+ * `apiKeyId` is set only for a configured key. The other two kinds have no
+ * configured entry to name, and folding them into the id as sentinel strings
+ * would collide with a hand-edited entry that happens to be called `loopback` —
+ * ids are only validated as non-empty strings.
+ */
+export function admissionFields(admission: DataPlaneAdmission): {
+  admissionKind: DataPlaneAdmission["kind"];
+  apiKeyId?: string;
+} {
+  return admission.kind === "configured"
+    ? { admissionKind: "configured", apiKeyId: admission.keyId }
+    : { admissionKind: admission.kind };
+}
+
+export type ApiAuthDisposition = "required" | "accepted" | "rejected";
+
+export interface ApiAuthMatrixRow {
+  endpoint: string;
+  bearer: ApiAuthDisposition;
+  dedicated: ApiAuthDisposition;
+  xApiKey: ApiAuthDisposition;
+}
+
+/**
+ * Which headers each data-plane endpoint actually accepts, shipped to the GUI so
+ * it stops describing the rule from memory. The dashboard has been telling users
+ * that Chat Completions takes `Authorization: Bearer`, which this file has never
+ * allowed — that route uses the dedicated-header-only wrapper because
+ * `Authorization` there may belong to Codex Direct passthrough.
+ *
+ * It lives next to the wrappers it describes, and a test drives real requests
+ * against every cell rather than reading the table back to itself.
+ */
+export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
+  { endpoint: "/v1/responses", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
+  { endpoint: "/v1/chat/completions", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
+  { endpoint: "/v1/messages", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  { endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+];
 
 /** Whether `token` is the environment-provided management secret. */
 export function isManagementAdmissionSecret(token: string): boolean {
@@ -247,14 +317,23 @@ export function validateForwardAdmissionCredential(headers: Headers, config: Ocx
   if (bearer && isProxyAdmissionSecret(bearer, config)) throw new ForwardAdmissionCredentialError();
 }
 
-export function hasValidApiAuth(req: Request, config: OcxConfig): boolean {
-  if (!isApiAuthRequired(config)) return true;
+/**
+ * Resolving form of `hasValidApiAuth`: identical header precedence, identical
+ * decision, but it names the admission instead of collapsing it to a boolean.
+ */
+export function resolveApiAuth(req: Request, config: OcxConfig): DataPlaneAdmission | null {
+  // A loopback bind never reads a token at all, so there is no key to name.
+  if (!isApiAuthRequired(config)) return { kind: "loopback" };
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
     // Anthropic-SDK clients (Claude Code with ANTHROPIC_API_KEY) authenticate via x-api-key.
     || req.headers.get("x-api-key")?.trim();
-  if (!actual) return false;
-  return isDataPlaneAdmissionSecret(actual, config);
+  if (!actual) return null;
+  return resolveDataPlaneAdmissionSecret(actual, config);
+}
+
+export function hasValidApiAuth(req: Request, config: OcxConfig): boolean {
+  return resolveApiAuth(req, config) !== null;
 }
 
 export function requireApiAuth(req: Request, config: OcxConfig, _kind: "data-plane"): Response | null {
@@ -267,10 +346,17 @@ export function requireApiAuth(req: Request, config: OcxConfig, _kind: "data-pla
  * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
  * domains can never be confused.
  */
-export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
-  if (!isApiAuthRequired(config)) return null;
+export function resolveResponsesApiAuth(req: Request, config: OcxConfig): DataPlaneAdmission | null {
+  if (!isApiAuthRequired(config)) return { kind: "loopback" };
+  // Dedicated header ONLY. `Authorization` on these transports may belong to
+  // Codex Direct passthrough, and the two bearer domains must stay unconfusable.
   const actual = req.headers.get("x-opencodex-api-key")?.trim();
-  if (actual && isDataPlaneAdmissionSecret(actual, config)) return null;
+  if (!actual) return null;
+  return resolveDataPlaneAdmissionSecret(actual, config);
+}
+
+export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
+  if (resolveResponsesApiAuth(req, config)) return null;
   return formatErrorResponse(401, "authentication_error", "opencodex API key required");
 }
 

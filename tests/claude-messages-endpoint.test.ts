@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
+import { logsFromApiBody } from "./helpers/logs-api";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,9 +113,9 @@ test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", 
     // Request log regression (live smoke round 2): the tap must see the PRE-translation
     // Responses stream — the translated Anthropic stream has no response.completed, which
     // used to record a bogus 502 with no usage.
-    const logs = await (await fetch(new URL("/api/logs", server.url))).json() as {
+    const logs = logsFromApiBody<{
       status: number; model: string; usage?: { inputTokens: number; outputTokens: number }; usageStatus: string;
-    }[];
+    }>(await (await fetch(new URL("/api/logs", server.url))).json());
     const row = logs.find(l => l.model === "test-model" || l.model === "mock/test-model");
     expect(row).toBeDefined();
     expect(row!.status).toBe(200);

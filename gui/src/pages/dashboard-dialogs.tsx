@@ -5,6 +5,7 @@ import {
   type UpdateChannel,
 } from "./dashboard-shared";
 import type { useDashboardData } from "./use-dashboard-data";
+import { shadowSourceModelLabel } from "./shadow-call-source";
 
 type Dash = ReturnType<typeof useDashboardData>;
 
@@ -17,6 +18,7 @@ export function DashboardDialogs(d: Dash) {
     maHelpOpen, setMaHelpOpen, maHelpDialogRef,
     effortCapHelpOpen, setEffortCapHelpOpen, effortCapHelpDialogRef,
     shadowCallHelpOpen, setShadowCallHelpOpen, shadowCallHelpDialogRef,
+    shadowCall,
   } = d;
 
   return (
@@ -199,7 +201,7 @@ export function DashboardDialogs(d: Dash) {
             <button type="button" className="btn btn-ghost btn-icon" onClick={() => setShadowCallHelpOpen(false)} aria-label={t("common.close")}><IconX /></button>
           </div>
           <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
-            {t("dash.shadowCallTooltip")}
+            {t("dash.shadowCallTooltip", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}
           </div>
           <div className="modal-actions">
             <button type="button" className="btn btn-primary" onClick={() => setShadowCallHelpOpen(false)}>{t("common.ok")}</button>

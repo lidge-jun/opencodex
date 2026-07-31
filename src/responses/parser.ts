@@ -137,11 +137,15 @@ function allowedToolName(tool: unknown): string | undefined {
 function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
   if (!tools) return undefined;
   const out: OcxTool[] = [];
+  const normalizeParameters = (raw: unknown): Record<string, unknown> => {
+    if (isObj(raw) && raw.type === "object") return raw;
+    return { ...(isObj(raw) ? raw : {}), type: "object" };
+  };
   const pushFn = (t: Record<string, unknown>, namespace?: string) => {
     const tool: OcxTool = {
       name: t.name as string,
       description: (t.description as string) ?? "",
-      parameters: (t.parameters ?? {}) as Record<string, unknown>,
+      parameters: normalizeParameters(t.parameters),
     };
     if (t.strict !== undefined) tool.strict = t.strict as boolean;
     if (namespace) tool.namespace = namespace;

@@ -354,6 +354,47 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+function normalizeFunctionToolSchema(tool: unknown): unknown {
+  if (!isPlainObject(tool) || tool.type !== "function") return tool;
+  if (isPlainObject(tool.parameters) && tool.parameters.type === "object") return tool;
+  return {
+    ...tool,
+    parameters: { ...(isPlainObject(tool.parameters) ? tool.parameters : {}), type: "object" },
+  };
+}
+
+function normalizeToolSchemas(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+
+  const normalizeTools = (tools: unknown[]): unknown[] => {
+    let changed = false;
+    const normalized = tools.map((tool) => {
+      const fixed = normalizeFunctionToolSchema(tool);
+      if (fixed !== tool) changed = true;
+      return fixed;
+    });
+    return changed ? normalized : tools;
+  };
+
+  let normalizedBody = body;
+  if (Array.isArray(body.tools)) {
+    const tools = normalizeTools(body.tools);
+    if (tools !== body.tools) normalizedBody = { ...normalizedBody, tools };
+  }
+  if (Array.isArray(normalizedBody.input)) {
+    let inputChanged = false;
+    const input = normalizedBody.input.map((item) => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      const tools = normalizeTools(item.tools);
+      if (tools === item.tools) return item;
+      inputChanged = true;
+      return { ...item, tools };
+    });
+    if (inputChanged) normalizedBody = { ...normalizedBody, input };
+  }
+  return normalizedBody;
+}
+
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 const REPAIRED_CALL_ID_PREFIX = "call_ocx_";
 const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_CALL_ID_PREFIX.length;
@@ -938,7 +979,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody)))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))));
       return {
         url,
         method: "POST",

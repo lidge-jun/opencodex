@@ -250,6 +250,67 @@ function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
   }
 }
 
+/** Normalize provider baseUrl paths ending in `/`, `/v1`, or `/v1/messages` to `{origin}/v1/messages`. */
+export function anthropicMessagesUrl(baseUrl: string): string {
+  try {
+    new URL(baseUrl);
+  } catch {
+    throw new Error(`anthropic provider has malformed baseUrl: ${baseUrl}`);
+  }
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const root = trimmed.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
+  return `${root}/v1/messages`;
+}
+
+function synthesizeToolUseId(): string {
+  return `toolu_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+/**
+ * A tool_use id that a client can actually echo back. `??` only catches a missing
+ * field, so an Anthropic-compatible relay that sends `""` or `"   "` produced a
+ * call whose id round-trips as blank — the next turn then cannot pair the result
+ * with its call. Treat blank as absent and synthesize (#765).
+ */
+function usableToolUseId(id: unknown): string {
+  return typeof id === "string" && id.trim() ? id : synthesizeToolUseId();
+}
+
+function toolUseArguments(input: unknown): string {
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return "{}";
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch {
+      // A tool call's arguments must be a JSON object. Re-encoding an unparseable string as a
+      // JSON *string* is the double-encoding #765 reports: the caller then receives
+      // `"get weather"` where an object was required and the tool call is unusable either way.
+      // An empty object at least fails in the tool's own argument validation.
+      return "{}";
+    }
+  }
+  return JSON.stringify(input ?? {});
+}
+
+/**
+ * Whether arguments assembled from a stream's `input_json_delta` fragments are usable.
+ * A tool block that sent no fragments at all is fine — that is a no-argument call. Anything
+ * else has to parse, because unlike the non-stream path the fragments have already been
+ * forwarded to the client and cannot be repaired after the fact.
+ */
+function streamedToolArgumentsParse(assembled: string): boolean {
+  const trimmed = assembled.trim();
+  if (!trimmed) return true;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
@@ -680,8 +741,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name)) };
       }
 
-      const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-      const url = `${base}/v1/messages`;
+      const url = anthropicMessagesUrl(provider.baseUrl);
       const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
       if (unresolvedPlaceholder) {
         throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
@@ -732,6 +792,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let currentBlockType = "";
       let currentToolCallId = "";
       let currentToolCallName = "";
+      let currentToolCallJson = "";
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
@@ -773,8 +834,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "tool_use") {
-                  currentToolCallId = block.id ?? "";
+                  currentToolCallId = usableToolUseId(block.id);
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
+                  currentToolCallJson = "";
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
@@ -799,15 +861,33 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   // Arrives once, just before the thinking block's content_block_stop; block-scoped
                   // so a stray signature on a non-thinking block can never be captured.
                   yield { type: "thinking_signature", signature: delta.signature };
-                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
+                  // Forwarded immediately: the bridge maps each delta to a client-visible
+                  // response.function_call_arguments.delta frame, so withholding fragments until
+                  // block close would leave a started call showing empty arguments. A copy is kept
+                  // to validate the assembled payload at content_block_stop.
+                  currentToolCallJson += delta.partial_json;
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 }
                 break;
               }
               case "content_block_stop": {
                 if (currentBlockType === "tool_use") {
+                  // The non-stream path repairs an unparseable payload in toolUseArguments(); the
+                  // stream cannot, because the fragments are already downstream. Fail the turn
+                  // instead of ending a tool call whose arguments will not parse — the bridge's
+                  // terminal-error path cancels the open call (status incomplete) rather than
+                  // completing it before response.failed (#765).
+                  if (!streamedToolArgumentsParse(currentToolCallJson)) {
+                    yield {
+                      type: "error",
+                      message: "Anthropic stream sent malformed tool_use arguments (invalid JSON)",
+                    };
+                    return;
+                  }
                   yield { type: "tool_call_end" };
                   currentToolCallId = "";
+                  currentToolCallJson = "";
                 }
                 currentBlockType = "";
                 break;
@@ -831,12 +911,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         }
       }
       if (!emittedDone) {
+        // Fail closed on transport EOF. Compatible providers may omit message_stop after message_delta.stop_reason.
         if (pendingStopReason !== undefined) {
           const stopReason = pendingStopReason === "max_tokens"
             ? "max_tokens"
             : pendingStopReason === "refusal" || pendingStopReason === "content_filter"
               ? "content_filter"
-              : undefined;
+              : pendingStopReason;
           emittedDone = true;
           yield {
             type: "done",
@@ -867,8 +948,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
             events.push({ type: "redacted_thinking", data: block.data });
           } else if (block.type === "tool_use") {
-            events.push({ type: "tool_call_start", id: block.id ?? "", name: toolNames.fromWire(block.name ?? "") });
-            events.push({ type: "tool_call_delta", arguments: JSON.stringify(block.input ?? {}) });
+            const id = usableToolUseId(block.id);
+            events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
+            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
             events.push({ type: "tool_call_end" });
           }
         }

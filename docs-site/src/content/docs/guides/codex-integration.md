@@ -201,6 +201,22 @@ Add a display name from the CLI (the proxy syncs the catalog right away when liv
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+Remote Codex clients can fetch the same generated catalog over the management API (same
+admission token as other `/api/*` routes):
+
+```bash
+dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+tmp="$(mktemp "${dest}.XXXXXX")"
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
+  "https://proxy.example.com/api/catalog" > "$tmp" \
+  && mv "$tmp" "$dest"
+ocx sync-cache
+```
+
+The response is the raw `opencodex-catalog.json` document (no provider credentials). When
+available, the `x-opencodex-codex-version` header reports the Codex runtime version on the
+server so clients can spot version skew.
+
 You can also set or edit it through the management API (`POST /api/custom-models`,
 `PUT /api/custom-models/<id>` with a `displayName` string) and the web dashboard. A `/` is rejected
 because it would collide with the routed-slug separator.

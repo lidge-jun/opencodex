@@ -83,7 +83,7 @@ import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO, corsHeaders } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
@@ -97,6 +97,20 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // bypass this seam with a dynamic config import — doing so replaced a user's
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+
+  if (url.pathname === "/api/catalog" && req.method === "GET") {
+    const { readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
+    const catalog = readCatalog(readCodexCatalogPath());
+    if (!catalog) return jsonResponse({ error: "catalog not found" }, 404, req, config);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...corsHeaders(req, config),
+    };
+    const { loadPersistedCodexRuntime } = await import("../../codex/runtime");
+    const version = loadPersistedCodexRuntime()?.selectedVersion;
+    if (version) headers["x-opencodex-codex-version"] = version;
+    return new Response(JSON.stringify(catalog), { status: 200, headers });
+  }
 
   if (url.pathname === "/api/models" && req.method === "GET") {
     const models = await fetchAllModels(config);

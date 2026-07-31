@@ -455,6 +455,11 @@ export interface OcxClaudeCodeConfig {
   desktopProfile?: OcxClaudeDesktopProfile;
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
   desktopAutoApply?: boolean;
+  /**
+   * When false, omit `native/*` rows from Claude Desktop show/export/apply. Default: enabled.
+   * Routing-sidecar alias decoding is unchanged — only the Desktop model list writer.
+   */
+  desktopNativeModels?: boolean;
 }
 
 export type OcxClaudeDesktopFamily = "opus" | "fable" | "sonnet" | "haiku";
@@ -509,6 +514,18 @@ export interface OcxCustomModel {
   inputModalities?: string[];
   /** 추가 시각 (ISO 8601) */
   addedAt?: string;
+}
+
+/**
+ * A generated `ocx_` data-plane key. `key` is the secret itself and never leaves
+ * the server except in the one-time POST /api/keys response; every other surface
+ * sees only the masked prefix.
+ */
+export interface OcxApiKeyEntry {
+  id: string;
+  name: string;
+  key: string;
+  createdAt: string;
 }
 
 export interface OcxConfig {
@@ -670,7 +687,7 @@ export interface OcxConfig {
    */
   storageCleanupPolicy?: StorageCleanupPolicy;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
-  apiKeys?: Array<{ id: string; name: string; key: string; createdAt: string }>;
+  apiKeys?: OcxApiKeyEntry[];
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
   /** Restore an installed shim after a stable external Codex update replaces it. Default true. */

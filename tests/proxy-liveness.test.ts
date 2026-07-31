@@ -51,6 +51,70 @@ describe("proxyIdentityAt", () => {
     expect(await proxyIdentityAt(10100, { expectedPid: 1 }, { fetchFn: (async () => healthz(OURS)) as typeof fetch })).toBeNull();
     expect(await proxyIdentityAt(10100, {}, { fetchFn: (async () => { throw new Error("refused"); }) as typeof fetch })).toBeNull();
   });
+
+  test("retries transport failures and succeeds on a later attempt (#764)", async () => {
+    let calls = 0;
+    const sleeps: number[] = [];
+    const identity = await proxyIdentityAt(10100, {}, {
+      attempts: 3,
+      timeoutMs: 50,
+      sleepFn: async (ms) => { sleeps.push(ms); },
+      fetchFn: (async () => {
+        calls += 1;
+        if (calls < 3) throw new Error("timeout");
+        return healthz(OURS);
+      }) as typeof fetch,
+    });
+    expect(identity).toEqual({ pid: 4242 });
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([100, 100]);
+  });
+
+  test("does not retry a definitive foreign /healthz body", async () => {
+    let calls = 0;
+    const identity = await proxyIdentityAt(10100, {}, {
+      attempts: 3,
+      fetchFn: (async () => {
+        calls += 1;
+        return healthz({ ok: true });
+      }) as typeof fetch,
+    });
+    expect(identity).toBeNull();
+    expect(calls).toBe(1);
+  });
+
+  test("NaN attempts fall back to a single probe", async () => {
+    let calls = 0;
+    const identity = await proxyIdentityAt(10100, {}, {
+      attempts: Number.NaN,
+      fetchFn: (async () => {
+        calls += 1;
+        return healthz(OURS);
+      }) as typeof fetch,
+    });
+    expect(identity).toEqual({ pid: 4242 });
+    expect(calls).toBe(1);
+  });
+
+  test("honors an aggregate deadline across transport retries", async () => {
+    let calls = 0;
+    let clock = 1_000;
+    const identity = await proxyIdentityAt(10100, {}, {
+      attempts: 3,
+      timeoutMs: 1_500,
+      deadlineAt: 1_000 + 1_200,
+      nowFn: () => clock,
+      sleepFn: async () => { clock += 100; },
+      fetchFn: (async () => {
+        calls += 1;
+        clock += 1_500;
+        throw new Error("timeout");
+      }) as typeof fetch,
+    });
+    expect(identity).toBeNull();
+    // First attempt spends the budget; remaining retries must not fire.
+    expect(calls).toBe(1);
+  });
 });
 
 describe("findLiveProxy", () => {
@@ -75,6 +139,7 @@ describe("findLiveProxy", () => {
       readPidFn: () => null,
       readRuntimeFn: () => null,
       configFn: () => ({ port: 10100 }),
+      verifyPidFn: candidate => candidate,
       fetchFn: (async () => healthz(OURS)) as typeof fetch,
     });
 
@@ -98,6 +163,7 @@ describe("findLiveProxy", () => {
       readPidFn: () => null,
       readRuntimeFn: () => ({ pid: 4242, port: 58195, hostname: "::1" }),
       configFn: () => ({ port: 10100 }),
+      verifyPidFn: candidate => candidate,
       fetchFn: (async (url: string | URL | Request) => {
         urls.push(String(url));
         return healthz(OURS);
@@ -138,14 +204,14 @@ describe("findLiveProxy", () => {
   test("a runtime record whose healthz reports a different pid is rejected", async () => {
     const live = await findLiveProxy({
       readPidFn: () => 1111,
+      verifyPidFn: () => null,
       readRuntimeFn: () => ({ port: 58195 }),
       configFn: () => ({ port: 58195 }),
       fetchFn: (async () => healthz({ ...OURS, pid: 9999 })) as typeof fetch,
     });
 
-    // The runtime probe fails the pid check; the config fallback probes the same port
-    // without a pid expectation and adopts the reported live pid instead.
-    expect(live).toEqual({ pid: 9999, port: 58195, source: "config" });
+    // healthz-reported pids must pass identity verification before they become kill targets.
+    expect(live).toEqual({ pid: null, port: 58195, source: "config" });
   });
 
   test("a pidless legacy healthz never promotes an unverified cheap pid to a kill target", async () => {

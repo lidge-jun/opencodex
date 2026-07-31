@@ -5,6 +5,7 @@ import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
   QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
   ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+  ALIBABA_CODING_BASE_URL_CHOICES, ALIBABA_CODING_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
@@ -123,6 +124,12 @@ export interface ProviderRegistryEntry {
   defaultModel?: string;
   models?: string[];
   liveModels?: boolean;
+  /**
+   * Registry-only per-model wire defaults for mixed OpenAI-compatible gateways.
+   * These are intentionally not seeded into saved config: an explicit `modelAdapters`
+   * entry must remain distinguishable and must always win over a default.
+   */
+  modelWireDefaults?: Record<string, string>;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -796,7 +803,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, defaultModel: "gemini-3.6-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: false, defaultModel: "gemini-3.6-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -813,6 +820,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
     defaultModel: "deepseek-v4-flash",
     modelContextWindows: { "deepseek-v4-flash": 1_000_000, "deepseek-v4-pro": 1_000_000 },
+    // DeepSeek documents V4-Flash as a native Responses API model adapted for Codex. The
+    // API id is `deepseek-v4-flash`; `DeepSeek-V4-Flash-0731` is a release/version label.
+    modelWireDefaults: { "deepseek-v4-flash": "openai-responses" },
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
@@ -828,6 +838,27 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
+  {
+    id: "deepinfra",
+    label: "DeepInfra",
+    baseUrl: "https://api.deepinfra.com/v1/openai",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://deepinfra.com/dash/api_keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelDiscovery: {
+      // DeepInfra documents the OpenAI model catalog outside the chat-compatible `/v1/openai`
+      // namespace, so keep this destination registry-owned instead of deriving it from baseUrl.
+      url: "https://api.deepinfra.com/v1/models",
+      maxResponseBytes: 512 * 1024,
+      maxModels: 512,
+      filter: {
+        allOf: [{ path: ["metadata", "tags"], containsAny: ["chat"] }],
+      },
+    },
+    note: "OpenAI-compatible chat models only; live discovery excludes non-chat rows from DeepInfra's mixed model catalog.",
+  },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
   { id: "fireworks", label: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://fireworks.ai/account/api-keys" },
@@ -969,7 +1000,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
-  { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
+  { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: ALIBABA_CODING_INTL_BASE_URL, adapter: "openai-chat", authKind: "key", allowBaseUrlOverride: true, baseUrlChoices: ALIBABA_CODING_BASE_URL_CHOICES, dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
   {
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
@@ -1233,6 +1264,25 @@ export function providerMatchesRegistryTransport(
   if (provider.adapter !== entry.adapter) return false;
   if (provider.authMode !== undefined && provider.authMode !== "key") return false;
   return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
+}
+
+/**
+ * Resolve a registry-only default for a mixed-wire provider. Defaults only move a provider
+ * between the two OpenAI-shaped adapters and never override a provider configured on another
+ * wire. The resolver receives the allow-list so this helper cannot accidentally widen the
+ * adapter-selection boundary when a new registry entry is added.
+ */
+export function providerModelWireDefault(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+  allowedWires: ReadonlySet<string>,
+): string | undefined {
+  if (!allowedWires.has(provider.adapter)) return undefined;
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  const wire = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
 }
 
 /**

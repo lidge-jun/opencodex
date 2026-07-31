@@ -118,6 +118,23 @@ test("GET /api/grok includes candidates and the saved exclusion list", async () 
   }
 });
 
+test("GET /api/grok keeps native candidates when claudeCode.desktopNativeModels is false", async () => {
+  const config = loadConfig();
+  config.claudeCode = { desktopNativeModels: false };
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/api/grok", server.url));
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      candidates: Array<{ id: string; native: boolean }>;
+    };
+    expect(body.candidates.some(c => c.native)).toBe(true);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("POST /api/grok/apply reports no-grok-home as a policy skip, not an error", async () => {
   const server = startServer(0);
   try {

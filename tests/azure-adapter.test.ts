@@ -53,7 +53,10 @@ describe("Azure OpenAI adapter hardening", () => {
     };
 
     expect(body.input[0]?.tools).toEqual([
-      { type: "function", name: "image_gen__imagegen", parameters: {} },
+      // parameters gains an object root on the way out (#745): the passthrough normalizer
+      // runs on additional_tools too, so a schema declared as {} ships as {type:"object"}.
+      // What this test is about is the namespace lowering in the name.
+      { type: "function", name: "image_gen__imagegen", parameters: { type: "object" } },
     ]);
   });
 

@@ -55,7 +55,12 @@ describe("startup star prompt", () => {
   test("the star prompt only appears when gh can actually star", async () => {
     const prompt = await readText("src/cli/star-prompt.ts");
 
-    expect(prompt).toContain('spawnSync("gh", ["auth", "status"]');
+    // The invariant is that the prompt is gated on a real `gh auth status`
+    // check, not that the call is spelled a particular way. The call now goes
+    // through the shared Windows launcher (a bare `gh` spawn stalls on a `.cmd`
+    // shim), so assert the arguments and the resolver rather than the literal.
+    expect(prompt).toContain('ghInvocation(["auth", "status"])');
+    expect(prompt).toContain('commandInvocation("gh"');
     expect(prompt).toContain("if (!ghAvailable()) return;");
   });
 

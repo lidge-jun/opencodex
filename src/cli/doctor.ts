@@ -307,11 +307,45 @@ export type ConfiguredProxyDiagnostic = {
   detail: string;
 };
 
-function envReferenceName(value: string): string | null {
+export function envReferenceName(value: string): string | null {
   const braced = value.match(/^\$\{(\w+)\}$/);
   if (braced) return braced[1]!;
   const bare = value.match(/^\$(\w+)$/);
   return bare ? bare[1]! : null;
+}
+
+export type ProviderApiKeyDiagnostic = {
+  provider: string;
+  envName: string;
+  detail: string;
+};
+
+/** Warn when a key-auth provider's apiKey env reference resolves empty in this process. */
+export function collectProviderApiKeyDiagnostics(
+  providers: Record<string, { authMode?: string; apiKey?: string }> = readConfigDiagnostics().config.providers ?? {},
+  env: EnvMap = process.env,
+): ProviderApiKeyDiagnostic[] {
+  const resolveInEnv = (value: string): string | undefined => {
+    const name = envReferenceName(value);
+    if (!name) return value;
+    return env[name];
+  };
+  const rows: ProviderApiKeyDiagnostic[] = [];
+  for (const [provider, config] of Object.entries(providers)) {
+    if (config.authMode !== "key") continue;
+    const raw = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
+    if (!raw) continue;
+    const envName = envReferenceName(raw);
+    if (!envName) continue;
+    const resolved = resolveInEnv(raw);
+    if (resolved?.trim()) continue;
+    rows.push({
+      provider,
+      envName,
+      detail: `provider ${provider}: env reference ${envName} is unset or empty in this process`,
+    });
+  }
+  return rows;
 }
 
 export function collectConfiguredProxy(): ConfiguredProxyDiagnostic {
@@ -742,6 +776,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   console.log("\nConfigured proxy (value hidden)");
   console.log(`  ${configuredProxy.present ? "set    " : "unset  "} ${configuredProxy.key} (${configuredProxy.source}; ${configuredProxy.detail})`);
 
+  const providerApiKeys = collectProviderApiKeyDiagnostics(doctorConfig.providers);
+  console.log("\nProvider API keys (value hidden)");
+  if (providerApiKeys.length === 0) {
+    console.log("  ok     no empty env-referenced provider keys detected in this process");
+  } else {
+    for (const row of providerApiKeys) {
+      console.log(`  !!     ${row.detail}`);
+    }
+  }
+
   console.log("\nRunning proxy process proxy env (presence only)");
   if (runningProxyEnv.status === "not_running") {
     console.log("  --     no running ocx proxy process found");
@@ -825,6 +869,9 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     serviceViable: startup.serviceViable,
   });
   if (proxyDown) hints.push(proxyDown);
+  for (const row of providerApiKeys) {
+    hints.push(`${row.detail}. Set ${row.envName} in the shell that starts the proxy, or store a literal key in config (value hidden here).`);
+  }
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
   const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (!startup.rebootSafe) {

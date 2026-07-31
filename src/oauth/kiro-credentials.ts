@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
@@ -167,6 +167,77 @@ export function resolveKiroCliNativeSessionEntries(
     return [{ location: "kiro-cli-data", path: posix.join(home, "Library", "Application Support", "kiro-cli", "data.sqlite3") }];
   }
   return [{ location: "kiro-cli-linux-data", path: posix.join(home, ".local", "share", "kiro-cli", "data.sqlite3") }];
+}
+
+/**
+ * Resolve the absolute kiro-cli executable for spawn/login helpers.
+ *
+ * Pure + parameterized like `resolveKiroCliNativeSessionEntries` so Windows install layouts can be
+ * covered from any host. PATH remains the first choice; only when bare `kiro-cli` is missing do we
+ * fall back to the platform-native install directories next to the session database.
+ *
+ * Windows: official MSI installs to `C:\Program Files\Kiro-Cli\kiro-cli.exe`, while some local
+ * installs keep the binary next to `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`.
+ * macOS/Linux: prefer PATH, then the usual user-local bin directories.
+ */
+export function resolveKiroCliExecutable(
+  inputs: KiroCliNativeInputs & {
+    pathEntries?: string[];
+    exists?: (path: string) => boolean;
+    isFile?: (path: string) => boolean;
+  },
+): string {
+  const exists = inputs.exists ?? existsSync;
+  // A directory named `kiro-cli` on PATH satisfies existsSync and would then be handed to
+  // spawn(), which fails with EACCES at login instead of falling through to the next candidate.
+  // When a caller injects `exists` it owns the whole filesystem view, so the real stat would
+  // reject every synthetic path; such callers inject `isFile` too when they care about it.
+  const isFile = inputs.isFile ?? (inputs.exists ? () => true : ((path: string) => {
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }));
+  const pathEntries = inputs.pathEntries
+    ?? (inputs.env.PATH ?? inputs.env.Path ?? "").split(inputs.platform === "win32" ? ";" : ":")
+      .map(entry => entry.trim())
+      .filter(Boolean);
+
+  const pathCandidates = inputs.platform === "win32"
+    ? pathEntries.flatMap(entry => [
+        win32.join(entry, "kiro-cli.exe"),
+        win32.join(entry, "kiro-cli"),
+      ])
+    : pathEntries.map(entry => posix.join(entry, "kiro-cli"));
+
+  const installCandidates: string[] = [];
+  if (inputs.platform === "win32") {
+    const localBase = inputs.env.LOCALAPPDATA?.trim()
+      || (inputs.env.USERPROFILE?.trim() ? win32.join(inputs.env.USERPROFILE.trim(), "AppData", "Local") : "")
+      || win32.join(inputs.home, "AppData", "Local");
+    const programFiles = inputs.env["ProgramFiles"]?.trim() || "C:\\Program Files";
+    installCandidates.push(
+      win32.join(localBase, "Kiro-Cli", "kiro-cli.exe"),
+      win32.join(programFiles, "Kiro-Cli", "kiro-cli.exe"),
+    );
+  } else if (inputs.platform === "darwin") {
+    installCandidates.push(
+      posix.join(inputs.home, ".local", "bin", "kiro-cli"),
+      "/usr/local/bin/kiro-cli",
+      "/opt/homebrew/bin/kiro-cli",
+    );
+  } else {
+    installCandidates.push(
+      posix.join(inputs.home, ".local", "bin", "kiro-cli"),
+      "/usr/local/bin/kiro-cli",
+    );
+  }
+
+  for (const candidate of [...pathCandidates, ...installCandidates]) {
+    if (exists(candidate) && isFile(candidate)) return candidate;
+  }
+  return inputs.platform === "win32" ? "kiro-cli.exe" : "kiro-cli";
 }
 
 function nativeKiroCliSessionEntries(): Array<{ location: KiroCliNativeLocation; path: string }> {

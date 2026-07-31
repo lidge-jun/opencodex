@@ -137,9 +137,21 @@ token を入れる必要があります。
 x-opencodex-api-key: your-secret-token
 ```
 
-`Authorization: Bearer …` ヘッダーも許可します。起動後はダッシュボードで生成した `apiKeys` を環境変数
-token の代わりに使えます。すべての候補は timing side channel を防ぐため定数時間
-（`timingSafeEqual`）で比較します。
+受け付けるヘッダーはエンドポイントごとに異なります。常に使えるのは `x-opencodex-api-key` です:
+
+| エンドポイント | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | 不可 | **必須** | 不可 |
+| `/v1/chat/completions` | 不可 | **必須** | 不可 |
+| `/v1/messages` | 可 | 可 | 可 |
+| `/v1/models` | 可 | 可 | 可 |
+
+Responses と Chat Completions が専用ヘッダーのみを受け付けるのは、その 2 経路の `Authorization` が
+Codex Direct パススルーのものである可能性があり、2 つの bearer ドメインを混同できないためです。
+ダッシュボードの API タブもこの表をサーバーから受け取って描画するため、コードとずれません。
+
+起動後はダッシュボードで生成した `apiKeys` を環境変数 token の代わりに使えます。すべての候補は
+timing side channel を防ぐため定数時間（`timingSafeEqual`）で比較します。
 
 :::caution[LAN 公開]
 `0.0.0.0` にバインドするとプロキシと設定されたすべてのプロバイダー認証情報がローカルネットワークにさらされます。

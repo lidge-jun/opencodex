@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, truncateSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -23,6 +24,7 @@ import {
   REASONING_SUMMARY_DELIVERY_VALUES,
   type OcxClaudeCodeConfig,
   type OcxConfig,
+  type OcxApiKeyEntry,
   type OcxProviderConfig,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
@@ -666,6 +668,36 @@ const codexAccountNamespacesSchema = z.custom<Record<string, unknown>>(
   }
 }).pipe(z.record(z.string(), z.string()));
 
+/**
+ * Deliberately permissive. A user's config is not ours to invalidate: a strict
+ * entry fails the whole parse, and loadConfig's fallback then backs the file up
+ * and returns defaults — losing providers and pool accounts because one key name
+ * was too long. Length and charset rules live at the POST/PATCH boundary, where
+ * rejecting produces a 400 instead. `.passthrough()` keeps unknown per-key
+ * properties across a load -> mutate -> save round trip.
+ *
+ * Only `key` is load-bearing: admission compares that string and nothing else
+ * (src/server/auth-cors.ts isDataPlaneAdmissionSecret). So the secret is the one
+ * field that must be a usable string, and every piece of metadata around it
+ * degrades instead of taking the credential down with it. Dropping a working key
+ * because its `name` was hand-edited to a number would be a silent revocation —
+ * and on a remote bind, potentially a server that refuses to start.
+ *
+ * "Usable" matches admission exactly. The presented token is trimmed before the
+ * comparison but the stored value is not, so a key with surrounding whitespace
+ * can never match either form of itself. Keeping one would be worse than dropping
+ * it: `system-env.ts` and `cli/claude.ts` hand `apiKeys[0].key` to launched
+ * clients, so a junk first entry would mask a valid later one.
+ */
+const apiKeyEntrySchema = z.object({
+  key: z.string().refine(isUsableApiKeySecret),
+  // Degrades to "" here; every schema consumer then runs `normalizeApiKeyIds`,
+  // which fills it deterministically so the id is stable across loads.
+  id: z.string().catch(""),
+  name: z.string().catch(""),
+  createdAt: z.string().catch(""),
+}).passthrough();
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   // A blank hostname degrades to undefined rather than failing the parse. `getDefaultConfig()`
@@ -701,6 +733,23 @@ const configSchema = z.object({
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).
   experimentalRealtimeWsBaseUrl: z.string().optional().catch(undefined),
+  // Salvage element by element, and never fail the parse. Two spellings were
+  // measured on this zod version and both lose data:
+  //   `z.array(entry).catch(undefined)` -> one bad entry discards EVERY key
+  //   `z.array(z.unknown())`            -> a non-array value still raises
+  //                                        invalid_type, reaching the
+  //                                        backup-and-defaults repair path
+  // Starting from `unknown` is what makes both survivable. A key the user still
+  // has deployed must not be collateral damage for one bad neighbour, and on a
+  // remote bind an emptied array is worse than cosmetic: assertServerAuthConfig
+  // refuses to start without a data credential.
+  apiKeys: z.unknown().optional().transform(value => {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) return undefined;
+    return value
+      .filter(row => apiKeyEntrySchema.safeParse(row).success)
+      .map(row => apiKeyEntrySchema.parse(row) as OcxApiKeyEntry);
+  }),
 }).passthrough().superRefine((config, ctx) => {
   const claudeCode = (config as { claudeCode?: unknown }).claudeCode;
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
@@ -1016,6 +1065,97 @@ function warnDegradedHostname(rawParsed: unknown, validated: OcxConfig): void {
   }
 }
 
+/**
+ * The apiKeys schema salvages entry by entry rather than failing the parse, so a
+ * dropped key is otherwise invisible — and it will not be re-saved by the next
+ * mutation. Say so out loud. Compares the raw array against the validated one,
+ * the same shape as the degrade warnings above.
+ */
+/** One definition of "usable secret", shared by the schema and the warnings. */
+function isUsableApiKeySecret(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value === value.trim();
+}
+
+/**
+ * Give every salvaged key a stable, targetable id.
+ *
+ * Pure and deterministic on purpose. Two earlier spellings were wrong: minting a
+ * UUID inside the schema transform handed out a different id on every parse, and
+ * repairing-then-writing during `loadConfig` put a file write on the read path,
+ * where it could clobber a concurrent legitimate save with a stale snapshot.
+ *
+ * So the replacement id is derived from the entry's position, which is already
+ * how the file orders these rows: same file in, same ids out, no I/O and no
+ * randomness. It is not derived from the secret — a public identifier should
+ * never be a function of key material.
+ */
+function normalizeApiKeyIds(config: OcxConfig): OcxConfig {
+  const keys = config.apiKeys;
+  if (!keys?.length) return config;
+  // Reserve every explicit id BEFORE synthesizing any, or a synthetic
+  // `salvaged-1` assigned to row 1 would push a row that legitimately owns that
+  // id onto `salvaged-2`. An id the user already has is the one thing this
+  // repair must never take away.
+  const reserved = new Set<string>();
+  for (const entry of keys) {
+    if (entry.id) reserved.add(entry.id);
+  }
+  const taken = new Set<string>(reserved);
+  const kept = new Set<string>();
+  keys.forEach((entry, index) => {
+    // The first row holding an explicit id keeps it; later collisions are the
+    // ones that move.
+    if (entry.id && !kept.has(entry.id)) {
+      kept.add(entry.id);
+      return;
+    }
+    let candidate = `salvaged-${index + 1}`;
+    let suffix = 1;
+    while (taken.has(candidate)) candidate = `salvaged-${index + 1}-${++suffix}`;
+    entry.id = candidate;
+    taken.add(candidate);
+    kept.add(candidate);
+  });
+  return config;
+}
+
+function warnDegradedApiKeys(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).apiKeys;
+  if (raw === undefined) return;
+  if (!Array.isArray(raw)) {
+    console.warn(`⚠️  config.json apiKeys is not an array — ignoring it; generate a new key from the API tab`);
+    return;
+  }
+  const dropped = raw.length - (validated.apiKeys?.length ?? 0);
+  if (dropped > 0) {
+    console.warn(`⚠️  config.json apiKeys: skipped ${dropped} malformed entr${dropped === 1 ? "y" : "ies"} — the remaining keys still work`);
+  }
+  // Same-length repairs are invisible to the count above, and they are the ones
+  // that show up as a blank name or an unknown date in the dashboard. Say so.
+  const repaired = raw.filter(row => {
+    if (!row || typeof row !== "object") return false;
+    const entry = row as Record<string, unknown>;
+    // Must match the schema exactly: a row whose key is unusable was DROPPED, and
+    // saying "the key still works" about it would be a lie.
+    if (!isUsableApiKeySecret(entry.key)) return false;
+    return typeof entry.id !== "string" || !entry.id
+      || typeof entry.name !== "string"
+      || typeof entry.createdAt !== "string";
+  }).length;
+  if (repaired > 0) {
+    console.warn(`⚠️  config.json apiKeys: repaired metadata on ${repaired} entr${repaired === 1 ? "y" : "ies"} — the key still works, but its name or date may read as unknown`);
+  }
+  // A duplicate id is repaired too, and it is not visible in either count above.
+  const ids = raw.filter(row => row && typeof row === "object" && isUsableApiKeySecret((row as Record<string, unknown>).key))
+    .map(row => (row as Record<string, unknown>).id)
+    .filter((id): id is string => typeof id === "string" && !!id);
+  const duplicates = ids.length - new Set(ids).size;
+  if (duplicates > 0) {
+    console.warn(`⚠️  config.json apiKeys: ${duplicates} entr${duplicates === 1 ? "y" : "ies"} shared an id — reassigned so each key can be renamed and revoked on its own`);
+  }
+}
+
 const CLAUDE_SUBAGENT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 function isClaudeSubagentEffort(value: unknown): value is NonNullable<OcxClaudeCodeConfig["subagentEffort"]> {
@@ -1125,9 +1265,10 @@ export function loadConfig(): OcxConfig {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      const config = result.data as OcxConfig;
+      const config = normalizeApiKeyIds(result.data as OcxConfig);
       warnDegradedStreamMode(parsed, config);
       warnDegradedHostname(parsed, config);
+      warnDegradedApiKeys(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
       return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
@@ -1144,8 +1285,9 @@ export function loadConfig(): OcxConfig {
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
-      const config = retryResult.data as OcxConfig;
+      const config = normalizeApiKeyIds(retryResult.data as OcxConfig);
       warnDegradedHostname(parsed, config);
+      warnDegradedApiKeys(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
       return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
@@ -1253,7 +1395,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const boundaryError = blankHostnameError(value) ?? claudeSubagentEffortError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
-  if (result.success) return { ok: true, config: result.data as OcxConfig };
+  if (result.success) return { ok: true, config: normalizeApiKeyIds(result.data as OcxConfig) };
   return { ok: false, error: schemaDiagnosticsError(result.error) };
 }
 
@@ -1267,12 +1409,12 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
     const parsed = JSON.parse(raw);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      return validFileConfigDiagnostics(result.data as OcxConfig, parsed);
+      return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);
     }
 
     const retryResult = configSchema.safeParse(mergeConfigDefaults(parsed));
     if (retryResult.success) {
-      return validFileConfigDiagnostics(retryResult.data as OcxConfig, parsed);
+      return validFileConfigDiagnostics(normalizeApiKeyIds(retryResult.data as OcxConfig), parsed);
     }
 
     return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };

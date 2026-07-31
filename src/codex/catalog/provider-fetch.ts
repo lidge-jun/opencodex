@@ -345,6 +345,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
   const contextWindow =
     positiveSafeInteger(
       limits?.max_context_length,
+      metadata?.context_length,
       item.context_length,
       item.context_size,
       item.max_model_len,

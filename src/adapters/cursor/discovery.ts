@@ -1,4 +1,8 @@
-import { CANONICAL_EFFORT_SUFFIXES, cursorModelEffortLadder } from "./effort-map";
+import {
+  CANONICAL_EFFORT_SUFFIXES,
+  cursorModelEffortLadder,
+  cursorWireModelIdWithEffort,
+} from "./effort-map";
 
 export interface CursorModelInfo {
   id: string;
@@ -66,14 +70,20 @@ function stripCursorWirePrefix(id: string): string {
 
 /**
  * True when a configured Cursor base model should remain exposed after live GetUsableModels filtering.
- * Live ids are full effort-suffixed variants (`claude-4.6-opus-high`); base ids match exactly or by prefix.
+ * Live ids are full effort-suffixed variants (`claude-4.6-opus-high`); base ids match exactly, the
+ * ordinary `{base}-{effort}` form, or Cursor's current `{base-without-fast}-{effort}-fast` form.
  */
 export function isCursorModelAvailableForAccount(modelId: string, liveIds: readonly string[]): boolean {
   return liveIds.some(raw => {
     const id = stripCursorWirePrefix(raw);
     if (id === modelId) return true;
-    const effortPrefix = `${modelId}-`;
-    return id.startsWith(effortPrefix) && CANONICAL_EFFORT_SUFFIXES.has(id.slice(effortPrefix.length));
+    for (const effort of CANONICAL_EFFORT_SUFFIXES) {
+      if (
+        id === `${modelId}-${effort}` ||
+        id === cursorWireModelIdWithEffort(modelId, effort)
+      ) return true;
+    }
+    return false;
   });
 }
 

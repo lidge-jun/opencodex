@@ -44,6 +44,8 @@ export interface SettingsData {
   codexAutoStart: boolean;
   port: number;
   hostname: string;
+  /** IANA zone of the machine running the proxy, used to render log timestamps (#725). */
+  timeZone?: string;
   startupHealth?: {
     status: "native" | "protected" | "at-risk";
     routingKind: "native" | "opencodex-local" | "custom-local" | "custom-remote" | "unknown";
@@ -59,7 +61,7 @@ export interface SidecarPatch {
   webSearch?: { backend?: SidecarBackend | null; model?: string };
   vision?: { backend?: SidecarBackend | null; model?: string };
 }
-export interface ShadowCallData { enabled: boolean; model: string }
+export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
 export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
 export type UpdateChannel = "latest" | "preview";
 export type Installer = "npm" | "bun" | "source";

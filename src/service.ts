@@ -6,10 +6,11 @@
  * restore it via the command.
  */
 import { execFileSync, execSync } from "node:child_process";
+import { findLiveProxy, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";
+import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
@@ -17,7 +18,6 @@ import { isWslRuntime } from "./codex/home";
 import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
-import { findLiveProxy } from "./server/proxy-liveness";
 import { randomUUID } from "node:crypto";
 import {
   ELEVATION_REQUEST_TIMEOUT_MS,
@@ -1428,7 +1428,38 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
  * scheduler backend first; on failure the machine is left with NO service (explicitly
  * reported) — never a silent fallback to the scheduler.
  */
+/** Refuse WinSW when the interactive user is a Microsoft account (SCM cannot authenticate it). */
+export function assertWindowsNativeServiceAccountSupported(): void {
+  if (process.platform !== "win32") return;
+  const source = readWindowsPrincipalSource();
+  if (source?.toLowerCase() === "microsoftaccount") {
+    throw new Error(
+      "The native (WinSW) service backend cannot run under a Microsoft-account Windows login. "
+        + "Keep the Task Scheduler backend (`ocx service install`) or sign in with a local/domain account before `ocx service install --native`.",
+    );
+  }
+}
+
+function readWindowsPrincipalSource(): string | null {
+  if (process.platform !== "win32") return null;
+  const ps = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!existsSync(ps)) return null;
+  try {
+    const out = execFileSync(ps, [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(Get-LocalUser -Name $env:USERNAME -ErrorAction SilentlyContinue).PrincipalSource",
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 async function installWindowsNative(): Promise<void> {
+  assertWindowsNativeServiceAccountSupported();
   recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
@@ -1463,11 +1494,49 @@ async function installWindowsNative(): Promise<void> {
   writeServiceInstallState("native");
 }
 function startWindows(): void { schtasks(["/run", "/tn", TASK]); }
-function stopWindows(): void { try { schtasks(["/end", "/tn", TASK]); } catch { /* not running */ } }
+
+export function isWindowsSchedulerEndBenign(error: unknown): boolean {
+  const detail = schtasksErrorDetail(error).toLowerCase();
+  return detail.includes("no running instance")
+    || detail.includes("not currently running")
+    || detail.includes("0x41330");
+}
+
+/**
+ * End the scheduler task. "Already stopped" is success; other `/end` failures are
+ * swallowed so callers can still run tracked-proxy + live-proxy cleanup.
+ *
+ * Do not key a restart-window wait on `/end` failure: the #764 case is an `/end`
+ * that *succeeds* while the wrapper survives and respawns. That verification lives
+ * on the stop-verification path (poll across the restart window), not here.
+ */
+export function stopWindows(): void {
+  try {
+    schtasks(["/end", "/tn", TASK]);
+  } catch (error) {
+    if (isWindowsSchedulerEndBenign(error)) return;
+  }
+}
 function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]); } catch { return ""; } }
 function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TASK, "/xml"]); } catch { return ""; } }
 function uninstallWindows(): void {
-  try { schtasks(["/delete", "/tn", TASK, "/f"]); } catch { /* absent */ }
+  const probe = probeWindowsSchedulerTask(TASK);
+  if (probe.status === "present") {
+    try {
+      schtasks(["/delete", "/tn", TASK, "/f"]);
+    } catch (error) {
+      throw new Error(`Failed to delete Task Scheduler task ${TASK}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const afterDelete = probeWindowsSchedulerTask(TASK);
+    if (afterDelete.status === "present") {
+      throw new Error(`Task Scheduler task ${TASK} is still present after delete — refusing to remove service assets. Retry from an elevated shell.`);
+    }
+    if (afterDelete.status === "unknown") {
+      throw new Error(`Task Scheduler task ${TASK} presence could not be verified after delete — refusing to remove service assets.`);
+    }
+  } else if (probe.status === "unknown") {
+    throw new Error(`Task Scheduler task ${TASK} presence could not be verified — refusing to remove service assets.`);
+  }
   if (existsSync(windowsServiceScriptPath())) unlinkSync(windowsServiceScriptPath());
   if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());
   if (existsSync(windowsTaskXmlPath())) unlinkSync(windowsTaskXmlPath());
@@ -1626,18 +1695,88 @@ function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
 
 type TrackedProxyCleanupResult = "none" | "stale" | "stopped";
 
+function verifiedKillTarget(pid: number | null | undefined): number | null {
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return null;
+  const verified = verifyPidIdentity(pid);
+  return verified === pid ? verified : null;
+}
+
+/**
+ * Whether a proxy is still answering after the service manager claimed to stop it.
+ *
+ * `ops.stop()` reports the outcome of the STOP COMMAND, not of the process. A Windows scheduler
+ * task whose wrapper survives `schtasks /end` respawns its child a few seconds later, so a stop
+ * that returned success can still leave a live proxy — and `ocx service stop` then restored
+ * native Codex on top of a running one (#764). The tracked-pid cleanup does not catch it either:
+ * the respawned child writes a different pid, or none this process knows about.
+ *
+ * Probed rather than assumed, and bounded. The respawn risk is specific to a supervisor that can
+ * restart its child — the Windows scheduler wrapper — so only that case pays the restart window.
+ * Everywhere else a single probe answers the question, because nothing is going to bring the
+ * proxy back after `launchctl unload` or `systemctl stop`. Making every platform wait 7s on a
+ * stop that already succeeded would trade one bug for a worse everyday one.
+ */
+export async function proxyStillLiveAfterStop(deps: {
+  findProxy?: () => Promise<{ port: number } | null>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** Whether the stopped supervisor can respawn its child; only then is polling worth the wait. */
+  canRespawn?: boolean;
+} = {}): Promise<{ port: number } | null> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const now = deps.now ?? Date.now;
+  const canRespawn = deps.canRespawn ?? process.platform === "win32";
+  const deadline = now() + (canRespawn ? 7000 : 0);
+  // Single-shot (non-respawn) still needs one full SERVICE_STOP_LIVENESS budget; respawn
+  // polling shares the outer deadline so multi-candidate discovery cannot overrun it.
+  const findProxy = deps.findProxy ?? (() => {
+    const probeDeadline = canRespawn
+      ? deadline
+      : now() + (SERVICE_STOP_LIVENESS.timeoutMs! * SERVICE_STOP_LIVENESS.attempts! + 250);
+    return findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: probeDeadline, nowFn: now });
+  });
+  for (;;) {
+    try {
+      const live = await findProxy();
+      if (live) return live;
+    } catch {
+      // A probe failure is not proof the proxy is gone; keep polling until the deadline.
+    }
+    if (now() >= deadline) return null;
+    await sleep(1000);
+  }
+}
+
 async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
+  let stopped = false;
   const pid = readPid();
-  if (!pid) return "none";
-  if (!isProcessAlive(pid)) {
+  const trackedKillPid = verifiedKillTarget(pid);
+  if (trackedKillPid !== null && isProcessAlive(trackedKillPid)) {
+    await stopProxy(trackedKillPid);
+    removePid(trackedKillPid);
+    removeRuntimePort(trackedKillPid);
+    stopped = true;
+  } else if (pid) {
     removePid(pid);
     removeRuntimePort(pid);
-    return "stale";
   }
-  await stopProxy(pid);
-  removePid(pid);
-  removeRuntimePort(pid);
-  return "stopped";
+  // Orphan recovery: the pid file can be missing/stale while the service wrapper keeps
+  // a live proxy running — mirror `ocx stop`'s identity-checked findLiveProxy fallback.
+  // Cap multi-candidate discovery so stop cleanup cannot hang for three full retry budgets.
+  const live = await findLiveProxy({
+    ...SERVICE_STOP_LIVENESS,
+    deadlineAt: Date.now() + 7000,
+  });
+  const liveKillPid = verifiedKillTarget(live?.pid);
+  if (liveKillPid !== null) {
+    await stopProxy(liveKillPid);
+    removePid(liveKillPid);
+    removeRuntimePort(liveKillPid);
+    stopped = true;
+  }
+  if (stopped) return "stopped";
+  if (pid) return "stale";
+  return "none";
 }
 
 async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {
@@ -1945,13 +2084,29 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       ops.start();
       console.log("✅ service started.");
       break;
-    case "stop":
+    case "stop": {
       assertServiceEnvironmentMatchesInstall();
       // Only stop what is actually installed. The unguarded call ran a real `launchctl unload`
       // (and its Windows/Linux twins) even with nothing installed.
-      if (ops.status() !== null || isServiceInstalled()) ops.stop();
+      if (ops.status() !== null || isServiceInstalled()) {
+        ops.stop();
+      }
       await stopTrackedProxyForServiceCommand();
       {
+        // Verify rather than trust the stop command: a surviving wrapper respawns its child
+        // seconds later, and restoring native Codex on top of a live proxy is the failure #764
+        // reports as "stop reports success without stopping the proxy".
+        const survivor = await proxyStillLiveAfterStop();
+        if (survivor) {
+          console.error(
+            `❌ service stop did not take effect: a proxy is still listening on port ${survivor.port}.`
+            + "\nNative Codex was NOT restored, because doing so while the proxy is running leaves"
+            + " both pointing at each other. Check for a second service backend (`ocx service status`)"
+            + " or a manually started proxy, then re-run `ocx service stop`.",
+          );
+          process.exitCode = 1;
+          break;
+        }
         const restore = restoreNativeCodex();
         if (restore.success) console.log("✅ service stopped + native Codex restored.");
         else console.error(`⚠️ service stopped, but native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` (or check $CODEX_HOME/config.toml) before using native Codex.`);
@@ -1962,6 +2117,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         else if (!grok.ok) console.error(`⚠️  ${grok.message}`);
       }
       break;
+    }
     case "status": {
       if (process.platform === "win32" && backend === "scheduler") {
         console.log(await inspectWindowsSchedulerServiceStatus());
@@ -2007,3 +2163,4 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       process.exit(1);
   }
 }
+

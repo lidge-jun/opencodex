@@ -144,9 +144,21 @@ token을 넣어야 합니다.
 x-opencodex-api-key: your-secret-token
 ```
 
-`Authorization: Bearer …` 헤더도 허용합니다. 시작 후에는 대시보드에서 생성한 `apiKeys`를 환경 변수
-token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막기 위해 상수 시간
-(`timingSafeEqual`)으로 비교합니다.
+받는 헤더는 엔드포인트마다 다릅니다. 항상 되는 건 `x-opencodex-api-key` 하나입니다:
+
+| 엔드포인트 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | 안 됨 | **필수** | 안 됨 |
+| `/v1/chat/completions` | 안 됨 | **필수** | 안 됨 |
+| `/v1/messages` | 가능 | 가능 | 가능 |
+| `/v1/models` | 가능 | 가능 | 가능 |
+
+Responses와 Chat Completions가 전용 헤더만 받는 이유는, 그 두 경로의 `Authorization`이 Codex Direct
+패스스루의 것일 수 있어서입니다. 두 bearer 영역이 헷갈리면 안 됩니다. 대시보드 API 탭도 이 표를
+서버에서 받아 그리기 때문에 코드와 어긋날 수 없습니다.
+
+시작 후에는 대시보드에서 생성한 `apiKeys`를 환경 변수 token 대신 쓸 수 있습니다. 모든 후보는
+timing side channel을 막기 위해 상수 시간(`timingSafeEqual`)으로 비교합니다.
 
 :::caution[LAN 노출]
 `0.0.0.0`에 바인드하면 프록시와 설정된 모든 프로바이더 자격 증명이 로컬 네트워크에 노출됩니다.

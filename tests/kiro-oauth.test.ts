@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, runLogin } from "../src/oauth";
-import { inspectKiroCliSqlite, loginKiro, readKiroCliSqlite, refreshKiroToken, resolveKiroApiRegion, resolveKiroProfileArn, resolveKiroRegion, settleKiroLoginTransaction } from "../src/oauth/kiro";
+import { inspectKiroCliSqlite, kiroCliInstallGuidance, loginKiro, readKiroCliSqlite, refreshKiroToken, resolveKiroApiRegion, resolveKiroProfileArn, resolveKiroRegion, settleKiroLoginTransaction } from "../src/oauth/kiro";
 
 // Windows CI cold runners take 5-7s for the real SQLite create/inspect cycles here
 // (same flake class as 810fa115); the default 5s harness timeout is too tight.
@@ -161,6 +161,12 @@ function seedCustomTokenDb(path: string, rows: Array<[string, Record<string, unk
 }
 
 describe("kiro oauth — import-first", () => {
+  test("Kiro CLI install guidance uses PowerShell on Windows and keeps the Unix command elsewhere", () => {
+    expect(kiroCliInstallGuidance("win32")).toContain("irm 'https://cli.kiro.dev/install.ps1' | iex");
+    expect(kiroCliInstallGuidance("win32")).not.toContain("curl -fsSL https://cli.kiro.dev/install | bash");
+    expect(kiroCliInstallGuidance("darwin")).toContain("curl -fsSL https://cli.kiro.dev/install | bash");
+  });
+
   test("readKiroCliSqlite imports access+refresh from auth_kv", () => {
     seedKiroCliDb({ access_token: "aoa-abc", refresh_token: "rt-1", expires_at: "2099-01-01T00:00:00Z" });
     const t = readKiroCliSqlite();

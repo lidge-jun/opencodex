@@ -44,6 +44,12 @@ export interface PersistedUsageEntry {
   provider: string;
   model: string;
   surface?: "claude" | "claude-desktop" | "grok";
+  /** Matched configured key id; absent for environment/loopback admissions and
+   *  for every row written before attribution existed. */
+  apiKeyId?: string;
+  admissionKind?: "configured" | "environment" | "loopback";
+  /** The inbound wire, not the client product — see `surface`. */
+  inboundProtocol?: "responses" | "chat" | "messages";
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
@@ -92,6 +98,24 @@ const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>
  */
 export function isKnownUsageSurface(value: unknown): value is NonNullable<PersistedUsageEntry["surface"]> {
   return typeof value === "string" && KNOWN_USAGE_SURFACES.has(value as NonNullable<PersistedUsageEntry["surface"]>);
+}
+
+const KNOWN_ADMISSION_KINDS = new Set<NonNullable<PersistedUsageEntry["admissionKind"]>>([
+  "configured", "environment", "loopback",
+]);
+
+const KNOWN_INBOUND_PROTOCOLS = new Set<NonNullable<PersistedUsageEntry["inboundProtocol"]>>([
+  "responses", "chat", "messages",
+]);
+
+/** Same closed-set discipline as `isKnownUsageSurface`: an old or corrupted row
+ *  carrying an unexpected value drops the field instead of poisoning the enum. */
+export function isKnownAdmissionKind(value: unknown): value is NonNullable<PersistedUsageEntry["admissionKind"]> {
+  return typeof value === "string" && KNOWN_ADMISSION_KINDS.has(value as NonNullable<PersistedUsageEntry["admissionKind"]>);
+}
+
+export function isKnownInboundProtocol(value: unknown): value is NonNullable<PersistedUsageEntry["inboundProtocol"]> {
+  return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
 export function usageLogPath(): string {
@@ -263,6 +287,11 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+/** Test seam: the normalization branch old rows take is worth asserting directly. */
+export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
+  return normalizeUsageEntry(entry);
+}
+
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   return {
@@ -271,6 +300,15 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     provider: entry.provider,
     model: entry.model,
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+    ...(typeof entry.apiKeyId === "string" && entry.apiKeyId.trim()
+      // Deliberately NOT capped. `capMetadataString` protects free-form metadata
+      // from unbounded growth, but this is a lookup key: truncating it makes the
+      // persisted id stop matching the configured one, and the rollup silently
+      // reports zero for a key that is very much in use.
+      ? { apiKeyId: entry.apiKeyId }
+      : {}),
+    ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
+    ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),

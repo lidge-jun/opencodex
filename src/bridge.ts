@@ -63,6 +63,23 @@ function responseError(status: number, type: string, message: string): OcxErrorP
   return classifyError(status, type, message);
 }
 
+/**
+ * Whether assembled function-call arguments are usable JSON.
+ * An empty buffer is valid (no-arg tools send no deltas). Non-empty must parse —
+ * once fragments have been streamed to the client they cannot be repaired the way
+ * non-stream adapters degrade a bad payload to `{}`.
+ */
+function toolCallArgumentsUsable(args: string): boolean {
+  const trimmed = args.trim();
+  if (!trimmed) return true;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>): { httpStatus: number; error: OcxErrorPayload } {
   if (event.status === undefined && event.errorType === undefined && event.code === undefined) {
     return adapterFailureFromMessage(event.message);
@@ -417,6 +434,39 @@ export function bridgeToResponsesSSE(
         currentToolCall = null;
       };
 
+      // Terminal-error / incomplete path for an open tool call (#765 remainder).
+      // Closing via closeCurrentToolCall() would emit function_call_arguments.done and
+      // status:"completed" BEFORE response.failed — the client still sees an issued call.
+      // Cancel instead: no *.done argument frames, status:"incomplete" (same pattern as an
+      // in-flight web_search_call closing as "failed"). Args still serialize as "{}" when
+      // empty so echoed items cannot poison the next turn with JSON.parse("").
+      const failCurrentToolCall = () => {
+        if (!currentToolCall) return;
+        const argsStr = currentToolCall.args || "{}";
+        const item = currentToolCall.toolSearch
+          ? {
+              type: "tool_search_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, execution: "client",
+              arguments: parseArgsObj(currentToolCall.args), status: "incomplete",
+            }
+          : currentToolCall.freeform
+          ? {
+              type: "custom_tool_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              input: freeformInput(currentToolCall.args), status: "incomplete",
+            }
+          : {
+              type: "function_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              arguments: argsStr, status: "incomplete",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+            };
+        emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
+        finishedItems.push(item as OutputItem);
+        outputIndex++;
+        currentToolCall = null;
+      };
+
       // Finalize an open web-search cell. `status` is "completed" on a normal end, or "failed" when
       // the stream terminates (error/incomplete) while a search was still in flight, so Codex never
       // leaves a "Searching the web" spinner spinning forever.
@@ -437,8 +487,12 @@ export function bridgeToResponsesSSE(
 
       // RC1: guarantee the Responses stream always ends with exactly one terminal event. Set true
       // when a done/error/catch terminal is emitted; if the adapter generator returns without one
-      // we synthesize response.completed below, so Codex never hits the parser's
+      // we synthesize a terminal below, so Codex never hits the parser's
       // "stream closed before response.completed" (responses.rs) -> ApiError::Stream.
+      // That synthesized terminal is response.incomplete with reason "adapter_eof", NOT
+      // response.completed: a generator that returns without a terminal event is a truncated
+      // stream, and reporting it as a clean finish is the failure mode this whole path exists
+      // to avoid. The comment said "completed" long after the code stopped doing that.
       let terminated = false;
       let firstOutputReported = false;
       const reportFirstOutput = (event: AdapterEvent): void => {
@@ -653,6 +707,32 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "tool_call_end": {
+              // Fragments already streamed cannot be repaired. Refuse to complete a function call
+              // whose assembled arguments do not parse — cancel the item and fail the turn so the
+              // client never sees status:"completed" for unusable args (#765 stream remainder).
+              if (
+                currentToolCall
+                && !currentToolCall.freeform
+                && !currentToolCall.toolSearch
+                && !toolCallArgumentsUsable(currentToolCall.args)
+              ) {
+                failCurrentToolCall();
+                const failure = responseError(
+                  502,
+                  "upstream_error",
+                  "upstream stream produced malformed tool call arguments",
+                );
+                emit("response.failed", {
+                  response: {
+                    ...responseSnapshot("failed", finishedItems),
+                    error: failure,
+                    last_error: failure,
+                  },
+                });
+                reportTerminal("failed");
+                terminalEvent = true;
+                break;
+              }
               closeCurrentToolCall();
               break;
             }
@@ -749,7 +829,7 @@ export function bridgeToResponsesSSE(
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
-              if (currentToolCall) closeCurrentToolCall();
+              if (currentToolCall) failCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               flushHiddenReasoningEnvelope();
               options?.onUsage?.(event.usage);
@@ -773,7 +853,7 @@ export function bridgeToResponsesSSE(
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
-              if (currentToolCall) closeCurrentToolCall();
+              if (currentToolCall) failCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               const failure = adapterFailureFromEvent(event);
               if (event.usage) options?.onUsage?.(event.usage);
@@ -803,6 +883,7 @@ export function bridgeToResponsesSSE(
       } catch (err) {
         if (!terminated) {
           flushHiddenRawReasoning();
+          if (currentToolCall) failCurrentToolCall();
           if (currentWebSearch) closeCurrentWebSearch("failed", []);
           emit("response.failed", {
             response: {
@@ -832,7 +913,7 @@ export function bridgeToResponsesSSE(
         if (currentReasoning) closeCurrentReasoning();
         if (currentRawReasoning) closeCurrentRawReasoning();
         flushHiddenRawReasoning();
-        if (currentToolCall) closeCurrentToolCall();
+        if (currentToolCall) failCurrentToolCall();
         if (currentWebSearch) closeCurrentWebSearch("failed", []);
         options?.onUsage?.(undefined);
         emit("response.incomplete", {
@@ -872,7 +953,7 @@ export function bridgeToResponsesSSE(
             if (currentReasoning) closeCurrentReasoning();
             if (currentRawReasoning) closeCurrentRawReasoning();
             flushHiddenRawReasoning();
-            if (currentToolCall) closeCurrentToolCall();
+            if (currentToolCall) failCurrentToolCall();
             if (currentWebSearch) closeCurrentWebSearch("failed", []);
             emit("response.incomplete", {
               response: {
@@ -1021,7 +1102,7 @@ export function buildResponseJSON(
     });
     currentRawReasoning = "";
   };
-  const flushToolCall = () => {
+  const flushToolCall = (status: "completed" | "incomplete" = "completed") => {
     if (!currentToolCallId) return;
     const mapped = options?.toolNsMap?.get(currentToolCallName);
     const realName = mapped?.name ?? currentToolCallName;
@@ -1032,19 +1113,19 @@ export function buildResponseJSON(
       output.push({
         type: "tool_search_call", id: `tsc_${uuid()}`,
         call_id: currentToolCallId, execution: "client",
-        arguments: parseArgsObj(currentToolCallArgs), status: "completed",
+        arguments: parseArgsObj(currentToolCallArgs), status,
       });
     } else if (freeform) {
       output.push({
         type: "custom_tool_call", id: `ctc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
-        input: freeformInput(currentToolCallArgs), status: "completed",
+        input: freeformInput(currentToolCallArgs), status,
       });
     } else {
       output.push({
         type: "function_call", id: `fc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
-        arguments: currentToolCallArgs || "{}", status: "completed",
+        arguments: currentToolCallArgs || "{}", status,
         ...(ns ? { namespace: ns } : {}),
       });
     }
@@ -1110,6 +1191,23 @@ export function buildResponseJSON(
         currentToolCallArgs += e.arguments;
         break;
       case "tool_call_end":
+        if (!toolCallArgumentsUsable(currentToolCallArgs) && currentToolCallId) {
+          // Mirror the streaming path: refuse to complete unusable arguments.
+          const mapped = options?.toolNsMap?.get(currentToolCallName);
+          const realName = mapped?.name ?? currentToolCallName;
+          const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
+          const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+          if (!freeform && !toolSearch) {
+            flushToolCall("incomplete");
+            errorEvent = {
+              type: "error",
+              message: "upstream stream produced malformed tool call arguments",
+              status: 502,
+              errorType: "upstream_error",
+            };
+            break;
+          }
+        }
         flushToolCall();
         break;
       case "web_search_call_begin":
@@ -1155,7 +1253,8 @@ export function buildResponseJSON(
   flushText(cleanDone && !errorEvent && !incompleteEvent ? "final_answer" : undefined);
   flushSummaryReasoning();
   flushRawReasoning();
-  flushToolCall();
+  // Open tool call on a failed/incomplete turn must not land as status:"completed".
+  if (currentToolCallId) flushToolCall(errorEvent || incompleteEvent ? "incomplete" : "completed");
   // A truncated turn must never be installed as replacement history: emit the
   // compaction item only when the turn actually completed (#422).
   if (
