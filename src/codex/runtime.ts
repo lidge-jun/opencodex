@@ -502,7 +502,16 @@ export function resolveAndPersistCodexRuntime(
   deps: ResolveCodexRuntimeDeps = {},
 ): ResolveCodexRuntimeResult {
   const result = resolveCodexRuntime(deps);
-  if (result.runtime.command && result.runtime.source !== "fallback") {
+  // Only WRITE when the selection actually changed. persistCodexRuntime() clears the
+  // in-process resolve memo and persistedRuntimeCacheStamp() folds `updatedAt` into the
+  // cache key, so an unconditional rewrite made every caller re-run the ~1s
+  // `codex --version` probe even when the resolved runtime was byte-identical.
+  const persistedRuntime = loadPersistedCodexRuntime(deps);
+  const selectionUnchanged = persistedRuntime !== null
+    && persistedRuntime.command === result.runtime.command
+    && persistedRuntime.source === result.runtime.source
+    && (persistedRuntime.selectedVersion ?? null) === (result.runtime.version ?? null);
+  if (result.runtime.command && result.runtime.source !== "fallback" && !selectionUnchanged) {
     try {
       persistCodexRuntime(result.runtime, deps);
     } catch (error) {

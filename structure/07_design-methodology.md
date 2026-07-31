@@ -10,13 +10,15 @@ follow the PABCD Catalog Discovery stage ordering (CATALOG-DESIGN-FIRST-01):
 3. **Backend wiring derived last**: API endpoints, data structures, and state management
    are consequences of the above, not independent decisions.
 
-This is the design-first invariant from the PABCD Initiative
-(`pabcd_initiative/skills/dev-pabcd/references/catalog-discovery.yaml`). It ensures
-design coherence across surfaces without requiring a runtime interview engine — opencodex
-is infrastructure plumbing, not a product-creation tool, so this is process discipline
-for contributors, not a runtime feature.
+This is a design-first rule for contributors, not a runtime feature: opencodex is infrastructure
+plumbing, not a product-creation tool, so surface coherence is enforced by review rather than by an
+interview engine. The rule stands on its own; it does not depend on an external document.
 
 ## Existing surfaces and their design direction
+
+The surfaces below are examples chosen to show the design direction, not an inventory; the current
+surface list lives in `gui/src/app-routing.ts` and
+[`05_gui-and-management-api.md`](05_gui-and-management-api.md).
 
 | Surface | Current design | Notes |
 |---|---|---|
@@ -31,7 +33,6 @@ surfaces, run through all 3 stages in order.
 
 ## Reference
 
-- Canonical source: `pabcd_initiative/skills/dev-pabcd/references/catalog-discovery.yaml`
 - Design methodology: Product-Personality-Selection (dev-uiux-design §1)
 - 6 design dials: mood, lightness, density, shape, typography, motion
 - 7 axes total: design → domain → feature/data/security/ops/cost (derived)

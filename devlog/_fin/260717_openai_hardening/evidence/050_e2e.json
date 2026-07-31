@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "verdict": "PASS",
+  "publicNetworkFallback": false,
+  "httpCases": 6,
+  "websocketTurns": 4,
+  "compactCases": 4,
+  "canonicalUrls": [
+    "https://api.openai.com/v1/responses",
+    "https://api.openai.com/v1/responses/compact",
+    "https://chatgpt.com/backend-api/codex/responses",
+    "https://chatgpt.com/backend-api/codex/responses/compact"
+  ],
+  "migrationRestore": "PASS",
+  "virtualIdentity": "PASS",
+  "reverseInsertionOrder": "PASS",
+  "realClaudeStateUnchanged": true
+}

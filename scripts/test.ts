@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 export interface IsolatedTestEnvironment {
@@ -21,6 +21,11 @@ export function createIsolatedTestEnvironment(
     root,
     env: {
       ...baseEnv,
+      // Captured BEFORE HOME is overwritten: once the child starts with a rewritten
+      // HOME, `homedir()` returns the sandbox, so this hand-off is the only way the
+      // real-home write guard can still know which path to protect.
+      // (devlog 260730_codex_rs_upstream_v2_live_handoff/070.)
+      OCX_REAL_HOME: baseEnv.OCX_REAL_HOME ?? homedir(),
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,

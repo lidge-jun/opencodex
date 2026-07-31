@@ -547,6 +547,17 @@ export interface OcxConfig {
    */
   injectionEffort?: string;
   /**
+   * Explicit sideband websocket base for realtime/live joins, mirroring upstream's
+   * `experimental_realtime_ws_base_url`. The value is a ROOT (or a recognized
+   * `/realtime`, `/realtime/calls/<id>`, `/live/<id>` endpoint form, which is
+   * stripped back to the root); `/v1` is appended during normalization. Intended
+   * for local development against a fake realtime server — plaintext `http`/`ws`
+   * is accepted only for loopback hosts, and URL userinfo is rejected; both
+   * failures close to the canonical `https://api.openai.com/v1`. Configured by
+   * editing this file; there is deliberately no management-API or GUI surface.
+   */
+  experimentalRealtimeWsBaseUrl?: string;
+  /**
    * Model ids the user has EXCLUDED from the Grok Build managed block. Absent or empty
    * means "everything visible", which is the historical behaviour — so an existing
    * config keeps the fence it already had.

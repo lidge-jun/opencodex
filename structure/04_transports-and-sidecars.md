@@ -73,6 +73,13 @@ then forwards the decoded JSON without rewriting Codex's edit schema. Each paid 
 one upstream attempt; client cancellation aborts the upstream and pool-only failures update the
 existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
+When the OpenAI credential path is unavailable or its authentication fails, `generations` (not
+`edits`) may fall back to Google Antigravity if that provider is logged in. The fallback is
+credential-driven: it exists so an image request reaches a real upstream answer rather than dying on a
+local credential error, and it does not apply when the caller selected an explicit keyed custom
+provider, because a configured pool owns its own authentication failure rather than hiding it behind
+separately billed generation.
+
 On non-loopback binds, data-plane authentication and origin policy cover both Images routes. An
 explicit keyed Images provider accepts the proxy admission secret as either an OpenAI-style bearer
 or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
@@ -114,19 +121,24 @@ conflicts with `modelSupportsReasoningSummaries: false` for the same model.
 
 ## Claude Desktop config-library resolution
 
-The Desktop profile writer and management status probe share
-`resolveDesktop3pConfigLibraryPath`. Explicit opencodex and Claude user-data overrides win; otherwise
-the resolver follows Electron's platform user-data convention under the `Claude` application
-directory. The retired hardcoded `Claude-3p` path is neither read nor migrated implicitly, so the
-status endpoint cannot report a self-consistent file that Desktop never sees.
+The Desktop profile writer and the management status probe share
+`resolveDesktop3pConfigLibraryPath`. The resolver reproduces Desktop's own rule rather than a guess:
+an explicit `CLAUDE_USER_DATA_DIR` (or the opencodex override) wins; on Windows
+`%LOCALAPPDATA%\Claude-3p` wins; otherwise the Electron user-data path gains a `-3p` suffix if it
+does not already have one. `configLibrary` is appended to that root.
+
+`Claude-3p` is Desktop's real directory name, assembled at runtime from `"Claude" + "-3p"`, which is
+why searching the app bundle for the literal string finds nothing. It is not a legacy path to migrate
+away from. Resolution stays a pure function of (env, platform, home) so the Windows branch is
+testable on any host: stubbing `process.platform` does not propagate to `os.platform()` under Bun.
 
 [Decision Log]
-- 목적과 의도: Make the generated Claude Desktop profile land in the directory the installed Desktop application actually reads and keep dashboard status consistent with that write target.
-- 기존 구현 및 제약 조건: Both callers duplicated a macOS-only `Claude-3p` fallback, which made their internal status agree while Electron used `Claude/configLibrary`; users may also set explicit profile roots.
-- 검토한 주요 대안: Rename only the CLI fallback; scan both directories; move or delete legacy files automatically; centralize a cross-platform resolver.
-- 선택한 방식: Centralize override-aware macOS, Windows, and Linux resolution and use it for both write and status paths without destructive migration.
-- 다른 대안 대신 이 방식을 선택한 이유: One resolver prevents drift, platform defaults match Electron, and leaving the legacy directory untouched avoids deleting user data or guessing which copy should win.
-- 장점, 단점 및 영향: New applies become visible to Desktop on every supported platform; old `Claude-3p` files remain harmless and users with nonstandard layouts must use the documented override.
+- 목적과 의도: 생성된 Claude Desktop 프로필이 설치된 Desktop이 실제로 읽는 디렉터리에 떨어지고, 대시보드 상태가 그 쓰기 대상과 일치하게 한다.
+- 기존 구현 및 제약 조건: 두 호출자가 경로 계산을 각자 복제했고, Desktop이 실제로 참조하는 `CLAUDE_USER_DATA_DIR`와 Windows `LOCALAPPDATA` 분기가 빠져 있었다(#539). 사용자가 프로필 루트를 직접 지정하는 경우도 있다.
+- 검토한 주요 대안: `-3p` 접미사를 구버전 잔재로 보고 제거; 두 디렉터리를 모두 스캔; 레거시 파일을 자동 이전; 크로스플랫폼 해석기를 한 곳에 둔다.
+- 선택한 방식: Desktop 번들의 해석 규칙을 그대로 이식한 override 인지 해석기를 한 곳에 두고, 쓰기 경로와 상태 조회가 같은 함수를 쓴다.
+- 다른 대안 대신 이 방식을 선택한 이유: `-3p`는 Desktop의 정상 동작이므로 제거는 회귀였다. 해석기를 한 곳에 두면 두 호출자의 드리프트가 불가능해지고, 파괴적 이전 없이 상태와 쓰기 대상이 일치한다.
+- 장점, 단점 및 영향: 지원 플랫폼 전부에서 apply 결과가 Desktop에 보인다. 비표준 레이아웃 사용자는 문서화된 override를 써야 하고, 해석기는 Desktop 번들의 규칙 변경을 따라가야 한다.
 
 ## Cursor Native Exec
 
@@ -423,17 +435,43 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
+## Transport inventory
+
+The sections above cover the transports with load-bearing invariants. The rest of the transport
+surface is listed here so a maintainer can find the owner without grepping:
+
+| Transport | Owner | Invariant worth knowing |
+| --- | --- | --- |
+| Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
+| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. |
+| Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
+| Anthropic image ingress | `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts` | Oversized or unsupported images are normalized or rejected before reaching upstream. |
+| Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |
+| Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts` | Thread continuity is the point: a retry must not start a new Cursor thread. |
+| Claude Messages | `src/server/claude-messages.ts` | Routed translation, a native Anthropic passthrough branch, and `count_tokens`. |
+| Chat Completions inbound | `src/server/chat-completions.ts`, `src/chat/` | Inbound translation onto the same routing pipeline. |
+| Hosted search relay | `src/server/search.ts` | Direct relay; distinct from the web-search sidecar loop below. |
+| Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
+| GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
+| API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
+| Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
+| Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |
+
 ## Sidecars
 
-Web search and vision sidecars only run when the mode-aware `openai` forward ChatGPT authority
-exists and the main request needs that capability.
+Web search and vision sidecars run only when the main request needs that capability and a usable
+sidecar authority exists. Both have two possible backends, but they select differently:
 
-There is one deterministic `openai` sidecar candidate; its current account mode owns credential
-selection. API-key OpenAI is not a ChatGPT forward sidecar candidate.
+| Sidecar | Backend selection | Default model | Activation |
+| --- | --- | --- | --- |
+| `web-search/` | Explicit configuration only: unset always resolves to the OpenAI forward path. Anthropic is never auto-selected from credential availability — doing so once sent OpenAI model ids to the Anthropic API. | `gpt-5.6-luna` (OpenAI), `claude-sonnet-5` (Anthropic) | Hosted `web_search` requested by a non-passthrough routed model. |
+| `vision/` | Explicit configuration wins for both backends. Only an unset backend auto-selects: Anthropic when a usable Anthropic OAuth provider exists, otherwise the OpenAI forward authority. An explicitly selected backend whose authority is unavailable produces no plan rather than falling back. | `claude-sonnet-5` (Anthropic), `gpt-5.4-mini` (OpenAI) | Input contains images for a model listed in `noVisionModels`. |
 
-| Sidecar | Default model | Activation |
-| --- | --- | --- |
-| `web-search/` | `gpt-5.6-luna` | Hosted `web_search` requested by a non-passthrough routed model. |
-| `vision/` | `gpt-5.4-mini` | Input contains images for a model listed in `noVisionModels`. |
+The asymmetry is in the unset case only: vision may describe an image with whichever model can see
+it, while a hosted search tool is tied to a provider-specific tool contract, so search never infers
+Anthropic from credentials alone.
+
+On the OpenAI path there is one deterministic `openai` sidecar candidate and its current account mode
+owns credential selection; API-key OpenAI is not a ChatGPT forward sidecar candidate.
 
 Sidecar failures must degrade to text markers or skipped capability, not abort the main request.

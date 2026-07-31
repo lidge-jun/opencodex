@@ -1,0 +1,638 @@
+From 74e8ce557dbbe7b03f264f05f435869475f1ce02 Mon Sep 17 00:00:00 2001
+From: modumaru <modumaru@example.com>
+Date: Wed, 15 Jul 2026 06:30:07 +0900
+Subject: [PATCH] fix(gui): add OAuth manual redirect URL / code paste fallback
+
+Wire GUI login to the same onManualCodeInput path the CLI uses so xAI
+(and other browser OAuth providers) can finish when the loopback callback
+is unreachable. Adds POST /api/oauth/login/code, dashboard paste UI, and
+focused regression tests.
+
+Closes #131
+---
+ gui/src/components/AddProviderModal.tsx |  72 +++++++++++++++-
+ gui/src/i18n/de.ts                      |   6 ++
+ gui/src/i18n/en.ts                      |   6 ++
+ gui/src/i18n/ko.ts                      |   6 ++
+ gui/src/i18n/zh.ts                      |   6 ++
+ gui/src/pages/Providers.tsx             |  75 +++++++++++++++--
+ gui/src/styles.css                      |   5 +-
+ src/oauth/callback-server.ts            |   6 +-
+ src/oauth/index.ts                      |  78 +++++++++++++++++
+ src/server/management-api.ts            |  13 +++
+ tests/oauth-manual-code.test.ts         | 106 ++++++++++++++++++++++++
+ 11 files changed, 369 insertions(+), 10 deletions(-)
+ create mode 100644 tests/oauth-manual-code.test.ts
+
+diff --git a/gui/src/components/AddProviderModal.tsx b/gui/src/components/AddProviderModal.tsx
+index 8ded7774..e42004f5 100644
+--- a/gui/src/components/AddProviderModal.tsx
++++ b/gui/src/components/AddProviderModal.tsx
+@@ -48,6 +48,9 @@ export default function AddProviderModal({
+   const [oauthSupported, setOauthSupported] = useState<string[]>([]);
+   const [oauthBusy, setOauthBusy] = useState(false);
+   const [oauthMsg, setOauthMsg] = useState("");
++  const [manualCode, setManualCode] = useState("");
++  const [manualCodeBusy, setManualCodeBusy] = useState(false);
++  const [manualCodeMsg, setManualCodeMsg] = useState("");
+   const [presets, setPresets] = useState<Preset[]>(FALLBACK_PRESETS);
+   const searchRef = useRef<HTMLInputElement>(null);
+   const aliveRef = useRef(true);
+@@ -122,6 +125,8 @@ export default function AddProviderModal({
+   const loginOAuth = async (providerId: string) => {
+     setOauthBusy(true);
+     setOauthMsg("");
++    setManualCode("");
++    setManualCodeMsg("");
+     try {
+       const res = await fetch(`${apiBase}/api/oauth/login`, {
+         method: "POST",
+@@ -157,6 +162,32 @@ export default function AddProviderModal({
+     }
+   };
+ 
++  const submitManualCode = async (providerId: string) => {
++    const input = manualCode.trim();
++    if (!input || manualCodeBusy) return;
++    setManualCodeBusy(true);
++    setManualCodeMsg("");
++    try {
++      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ provider: providerId, input }),
++      });
++      const data = await res.json().catch(() => ({}));
++      if (!aliveRef.current) return;
++      if (!res.ok) {
++        setManualCodeMsg(data.error || "Could not submit code");
++        return;
++      }
++      setManualCode("");
++      setManualCodeMsg("Code submitted — finishing login…");
++    } catch {
++      if (aliveRef.current) setManualCodeMsg("Network error — is the proxy running?");
++    } finally {
++      if (aliveRef.current) setManualCodeBusy(false);
++    }
++  };
++
+   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
+   const isCustom = preset?.id === "custom";
+   const isLocal = form?.authMode === "local";
+@@ -213,8 +244,47 @@ export default function AddProviderModal({
+                 </div>
+               )}
+               {oauthMsg && <div style={{ fontSize: 12, color: /error|update|timed/.test(oauthMsg) ? "var(--amber)" : "var(--accent-hover)" }}>{oauthMsg}</div>}
++              {oauthBusy && (
++                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
++                  <div className="muted" style={{ fontSize: 12 }}>
++                    If the browser cannot reach this machine, paste the final redirect URL or authorization code:
++                  </div>
++                  <div style={{ display: "flex", gap: 8 }}>
++                    <input
++                      className="input"
++                      type="text"
++                      autoComplete="off"
++                      spellCheck={false}
++                      value={manualCode}
++                      onChange={e => setManualCode(e.target.value)}
++                      onKeyDown={e => {
++                        if (e.key === "Enter" && preset.oauthProvider) {
++                          e.preventDefault();
++                          void submitManualCode(preset.oauthProvider);
++                        }
++                      }}
++                      placeholder="Paste redirect URL or code"
++                      disabled={manualCodeBusy}
++                      style={{ flex: 1, fontSize: 12 }}
++                    />
++                    <button
++                      className="btn btn-ghost"
++                      type="button"
++                      disabled={manualCodeBusy || !manualCode.trim() || !preset.oauthProvider}
++                      onClick={() => preset.oauthProvider && void submitManualCode(preset.oauthProvider)}
++                    >
++                      {manualCodeBusy ? "Submitting…" : "Submit"}
++                    </button>
++                  </div>
++                  {manualCodeMsg && (
++                    <div style={{ fontSize: 12, color: /error|Could not|Network/.test(manualCodeMsg) ? "var(--amber)" : "var(--accent-hover)" }}>
++                      {manualCodeMsg}
++                    </div>
++                  )}
++                </div>
++              )}
+               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+-                <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "key" }); setOauthMsg(""); }}>Use an API key instead</button>
++                <button className="link-btn" onClick={() => { setForm({ ...form, authMode: "key" }); setOauthMsg(""); setManualCode(""); setManualCodeMsg(""); }}>Use an API key instead</button>
+                 <div style={{ flex: 1 }} />
+                 <button className="btn btn-ghost" onClick={back}>Back</button>
+               </div>
+diff --git a/gui/src/i18n/de.ts b/gui/src/i18n/de.ts
+index 1ae66882..441bec15 100644
+--- a/gui/src/i18n/de.ts
++++ b/gui/src/i18n/de.ts
+@@ -123,6 +123,12 @@ export const de = {
+   "prov.loginWith": "Anmelden mit {provider}",
+   "prov.waitingBrowser": "Warten auf Browser…",
+   "prov.didntOpen": "Hat sich nicht geöffnet? Hier klicken",
++  "prov.pasteRedirect": "Redirect-URL oder Code einfügen",
++  "prov.pasteRedirectHint": "Wenn der Browser diesen Rechner nicht erreichen kann, füge hier die endgültige Redirect-URL (oder den Autorisierungscode) ein.",
++  "prov.pasteSubmit": "Senden",
++  "prov.pasteSubmitting": "Wird gesendet…",
++  "prov.pasteOk": "Code gesendet — Anmeldung wird abgeschlossen…",
++  "prov.pasteFail": "Code konnte nicht gesendet werden: {error}",
+   "prov.port": "Port",
+   "prov.default": "Standard",
+   "prov.loadingConfig": "Lädt…",
+diff --git a/gui/src/i18n/en.ts b/gui/src/i18n/en.ts
+index 80f0ff5e..67953db4 100644
+--- a/gui/src/i18n/en.ts
++++ b/gui/src/i18n/en.ts
+@@ -129,6 +129,12 @@ export const en = {
+   "prov.loginWith": "Login with {provider}",
+   "prov.waitingBrowser": "Waiting for browser…",
+   "prov.didntOpen": "Didn't open? Click here",
++  "prov.pasteRedirect": "Paste redirect URL or code",
++  "prov.pasteRedirectHint": "If the browser cannot reach this machine, paste the final redirect URL (or authorization code) here.",
++  "prov.pasteSubmit": "Submit",
++  "prov.pasteSubmitting": "Submitting…",
++  "prov.pasteOk": "Code submitted — finishing login…",
++  "prov.pasteFail": "Could not submit code: {error}",
+   "prov.port": "Port",
+   "prov.default": "Default",
+   "prov.loadingConfig": "Loading…",
+diff --git a/gui/src/i18n/ko.ts b/gui/src/i18n/ko.ts
+index f683e534..7ffaac6a 100644
+--- a/gui/src/i18n/ko.ts
++++ b/gui/src/i18n/ko.ts
+@@ -129,6 +129,12 @@ export const ko: Record<TKey, string> = {
+   "prov.loginWith": "{provider} 로 로그인",
+   "prov.waitingBrowser": "브라우저 대기 중…",
+   "prov.didntOpen": "안 열렸나요? 여기를 클릭하세요",
++  "prov.pasteRedirect": "리다이렉트 URL 또는 코드 붙여넣기",
++  "prov.pasteRedirectHint": "브라우저가 이 기기에 연결되지 못하면, 최종 리다이렉트 URL(또는 인증 코드)을 여기에 붙여넣으세요.",
++  "prov.pasteSubmit": "제출",
++  "prov.pasteSubmitting": "제출 중…",
++  "prov.pasteOk": "코드를 제출했습니다 — 로그인 완료 중…",
++  "prov.pasteFail": "코드 제출 실패: {error}",
+   "prov.port": "포트",
+   "prov.default": "기본값",
+   "prov.loadingConfig": "불러오는 중…",
+diff --git a/gui/src/i18n/zh.ts b/gui/src/i18n/zh.ts
+index 617e9b98..716de472 100644
+--- a/gui/src/i18n/zh.ts
++++ b/gui/src/i18n/zh.ts
+@@ -129,6 +129,12 @@ export const zh: Record<TKey, string> = {
+   "prov.loginWith": "使用 {provider} 登录",
+   "prov.waitingBrowser": "等待浏览器…",
+   "prov.didntOpen": "没有打开？点击这里",
++  "prov.pasteRedirect": "粘贴重定向 URL 或授权码",
++  "prov.pasteRedirectHint": "如果浏览器无法访问本机，请在此粘贴最终重定向 URL（或授权码）。",
++  "prov.pasteSubmit": "提交",
++  "prov.pasteSubmitting": "提交中…",
++  "prov.pasteOk": "已提交代码 — 正在完成登录…",
++  "prov.pasteFail": "无法提交代码：{error}",
+   "prov.port": "端口",
+   "prov.default": "默认",
+   "prov.loadingConfig": "加载中…",
+diff --git a/gui/src/pages/Providers.tsx b/gui/src/pages/Providers.tsx
+index 126ed7ef..cfcb8b70 100644
+--- a/gui/src/pages/Providers.tsx
++++ b/gui/src/pages/Providers.tsx
+@@ -39,6 +39,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReport>>({});
+   const [busy, setBusy] = useState<string | null>(null);
+   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string } | null>(null);
++  const [manualCode, setManualCode] = useState("");
++  const [manualCodeBusy, setManualCodeBusy] = useState(false);
++  const [manualCodeMsg, setManualCodeMsg] = useState("");
+   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
+   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
+   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
+@@ -244,6 +247,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+     setBusy(provider);
+     setStatus("");
+     setLoginInfo(null);
++    setManualCode("");
++    setManualCodeMsg("");
+     try {
+       const res = await fetch(`${apiBase}/api/oauth/login`, {
+         method: "POST",
+@@ -252,10 +257,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+       });
+       const data = await res.json();
+       if (!res.ok) { notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false); return; }
+-      // The server opens the browser itself (popup-safe). Show the URL/device code as a fallback.
++      // The server opens the browser itself (popup-safe). Show the URL + paste fallback.
+       if (data.url || data.instructions) setLoginInfo({ provider, url: data.url, instructions: data.instructions });
+       const baselineCount = accountSets[provider]?.accounts.length ?? 0;
+-      // Poll until the loopback callback (or device flow) completes.
++      // Poll until the loopback callback (or device flow / manual paste) completes.
+       for (let i = 0; i < 150 && aliveRef.current; i++) {
+         await new Promise(r => setTimeout(r, 2000));
+         const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).then(r => r.json()).catch(() => null);
+@@ -269,12 +274,19 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+           setOauthStatus(prev => ({ ...prev, [provider]: s }));
+           notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+           setLoginInfo(null);
++          setManualCode("");
++          setManualCodeMsg("");
+           fetchConfig();
+           fetchAccountSets(Object.keys(accountSets).includes(provider) ? Object.keys(accountSets) : [...Object.keys(accountSets), provider]);
+           fetchProviderQuotas(true);
+           break;
+         }
+-        if (s.error) { setOauthStatus(prev => ({ ...prev, [provider]: s })); notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false); break; }
++        if (s.error) {
++          setOauthStatus(prev => ({ ...prev, [provider]: s }));
++          notify(t("prov.loginError", { provider: oauthLabel(provider), error: s.error }), false);
++          setLoginInfo(null);
++          break;
++        }
+       }
+     } catch {
+       notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+@@ -283,6 +295,32 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+     }
+   };
+ 
++  /** Paste redirect URL / auth code when the browser cannot hit the loopback callback. */
++  const submitManualCode = async (provider: string) => {
++    const input = manualCode.trim();
++    if (!input || manualCodeBusy) return;
++    setManualCodeBusy(true);
++    setManualCodeMsg("");
++    try {
++      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ provider, input }),
++      });
++      const data = await res.json().catch(() => ({}));
++      if (!res.ok) {
++        setManualCodeMsg(t("prov.pasteFail", { error: data.error || res.statusText }));
++        return;
++      }
++      setManualCode("");
++      setManualCodeMsg(t("prov.pasteOk"));
++    } catch {
++      setManualCodeMsg(t("prov.pasteFail", { error: "network error" }));
++    } finally {
++      if (aliveRef.current) setManualCodeBusy(false);
++    }
++  };
++
+   const logoutOAuth = async (provider: string) => {
+     await fetch(`${apiBase}/api/oauth/logout?provider=${provider}`, { method: "POST" }).catch(() => {});
+     setOauthStatus(prev => ({ ...prev, [provider]: { loggedIn: false } }));
+@@ -381,10 +419,35 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+                     </button>
+                   )}
+                 </span>
+-                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions) && (
++                {loginInfo?.provider === p && (loginInfo.url || loginInfo.instructions || isBusy) && (
+                   <span className="oauth-login-hint muted">
+-                    {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal />{t("prov.didntOpen")}</a>}
+-                    {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
++                    <span className="oauth-login-hint-links">
++                      {loginInfo.url && <a href={loginInfo.url} target="_blank" rel="noreferrer" className="link-btn" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><IconExternal />{t("prov.didntOpen")}</a>}
++                      {loginInfo.instructions && <span>{loginInfo.instructions}</span>}
++                    </span>
++                    <span className="oauth-login-paste">
++                      <input
++                        className="input"
++                        type="text"
++                        autoComplete="off"
++                        spellCheck={false}
++                        value={manualCode}
++                        onChange={e => setManualCode(e.target.value)}
++                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void submitManualCode(p); } }}
++                        placeholder={t("prov.pasteRedirect")}
++                        aria-label={t("prov.pasteRedirect")}
++                        disabled={manualCodeBusy}
++                      />
++                      <button
++                        className="btn btn-ghost btn-sm"
++                        type="button"
++                        disabled={manualCodeBusy || !manualCode.trim()}
++                        onClick={() => void submitManualCode(p)}
++                      >
++                        {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
++                      </button>
++                    </span>
++                    <span style={{ fontSize: 11 }}>{manualCodeMsg || t("prov.pasteRedirectHint")}</span>
+                   </span>
+                 )}
+               </div>
+diff --git a/gui/src/styles.css b/gui/src/styles.css
+index 53c523df..82a7c88c 100644
+--- a/gui/src/styles.css
++++ b/gui/src/styles.css
+@@ -647,7 +647,10 @@ select.input { appearance: none; }
+ .oauth-status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; min-width: 0; }
+ .oauth-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+ .oauth-actions { display: inline-flex; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; }
+-.oauth-login-hint { grid-column: 1 / -1; font-size: 12px; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
++.oauth-login-hint { grid-column: 1 / -1; font-size: 12px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
++.oauth-login-hint-links { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
++.oauth-login-paste { display: flex; gap: 8px; align-items: center; width: 100%; }
++.oauth-login-paste .input { flex: 1; min-width: 0; font-size: 12px; padding: 6px 10px; }
+ 
+ /* responsive: compact sticky top bar (menu + brand + stop) with the desktop sidebar
+    reused as an off-canvas drawer — 10 destinations no longer fit an always-visible
+diff --git a/src/oauth/callback-server.ts b/src/oauth/callback-server.ts
+index c544378f..3736cfd1 100644
+--- a/src/oauth/callback-server.ts
++++ b/src/oauth/callback-server.ts
+@@ -239,8 +239,10 @@ export abstract class OAuthCallbackFlow {
+               .then((input): CallbackResult | null => {
+                 const parsed = parseCallbackInput(input);
+                 if (!parsed.code) return null;
+-                if (expectedState && parsed.state !== expectedState) return null;
+-                return { code: parsed.code, state: parsed.state ?? "" };
++                // Redirect URLs carry state — require a match. A raw authorization code has no
++                // state; accept it in-process (same PKCE session) so CLI/GUI paste fallback works.
++                if (parsed.state !== undefined && expectedState && parsed.state !== expectedState) return null;
++                return { code: parsed.code, state: parsed.state ?? expectedState };
+               })
+               .catch((): CallbackResult | null => null),
+           ]);
+diff --git a/src/oauth/index.ts b/src/oauth/index.ts
+index 206a8308..28a2aa86 100644
+--- a/src/oauth/index.ts
++++ b/src/oauth/index.ts
+@@ -362,10 +362,81 @@ export async function runLogin(provider: string, ctrl: OAuthController, opts?: L
+  * GUI async login: start the flow, return the auth URL EARLY (the flow keeps running in the
+  * background until the callback server captures the redirect), with a concurrency guard and an
+  * error surfaced via getLoginStatus().
++ *
++ * Manual fallback: when the browser cannot reach the loopback callback (remote GUI, SSH, blocked
++ * localhost), the GUI can POST the final redirect URL or authorization code via
++ * submitManualLoginCode(), which feeds OAuthController.onManualCodeInput.
+  */
+ const loginState = new Map<string, { error?: string; done: boolean }>();
+ const loginAbort = new Map<string, AbortController>();
+ 
++/** Pending paste for a login in progress: either a waiter or a stashed early submission. */
++interface ManualCodeSlot {
++  pendingInput?: string;
++  resolve?: (value: string) => void;
++}
++const loginManual = new Map<string, ManualCodeSlot>();
++
++function clearManualCodeSlot(provider: string): void {
++  loginManual.delete(provider);
++}
++
++function ensureManualCodeSlot(provider: string): ManualCodeSlot {
++  let slot = loginManual.get(provider);
++  if (!slot) {
++    slot = {};
++    loginManual.set(provider, slot);
++  }
++  return slot;
++}
++
++/** Wait for a GUI/CLI paste of the OAuth redirect URL or code (or return a stashed early submit). */
++function waitForManualLoginCode(provider: string, signal: AbortSignal): Promise<string> {
++  if (signal.aborted) {
++    return Promise.reject(new Error(`OAuth callback cancelled: ${signal.reason}`));
++  }
++  const slot = ensureManualCodeSlot(provider);
++  if (slot.pendingInput !== undefined) {
++    const value = slot.pendingInput;
++    slot.pendingInput = undefined;
++    return Promise.resolve(value);
++  }
++  return new Promise<string>((resolve, reject) => {
++    const onAbort = () => {
++      if (slot.resolve === resolve) slot.resolve = undefined;
++      reject(new Error(`OAuth callback cancelled: ${signal.reason}`));
++    };
++    signal.addEventListener("abort", onAbort, { once: true });
++    slot.resolve = (value: string) => {
++      signal.removeEventListener("abort", onAbort);
++      if (slot.resolve === resolve) slot.resolve = undefined;
++      resolve(value);
++    };
++  });
++}
++
++/**
++ * Feed a pasted redirect URL or authorization code into an in-progress GUI login.
++ * Returns ok:false when no login is waiting (or input is empty). Invalid pastes are accepted
++ * here and re-prompted by the OAuth callback loop if they cannot be parsed / fail state checks.
++ */
++export function submitManualLoginCode(provider: string, input: string): { ok: true } | { ok: false; error: string } {
++  const trimmed = input.trim();
++  if (!trimmed) return { ok: false, error: "empty code" };
++  const st = loginState.get(provider);
++  if (!st || st.done) return { ok: false, error: "no login in progress" };
++  const slot = ensureManualCodeSlot(provider);
++  if (slot.resolve) {
++    const resolve = slot.resolve;
++    slot.resolve = undefined;
++    resolve(trimmed);
++  } else {
++    // Race: GUI may POST before the flow reaches onManualCodeInput — stash for the waiter.
++    slot.pendingInput = trimmed;
++  }
++  return { ok: true };
++}
++
+ export interface OAuthAccountSummary { id: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
+ 
+ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
+@@ -400,6 +471,7 @@ export function oauthLoginSummary(): Array<{ provider: string; loggedIn: boolean
+ export function clearLoginState(provider: string): void {
+   loginAbort.get(provider)?.abort("cleared");
+   loginAbort.delete(provider);
++  clearManualCodeSlot(provider);
+   loginState.delete(provider);
+ }
+ 
+@@ -409,6 +481,7 @@ export function cancelLoginFlow(provider: string): boolean {
+   if (!ctrl && (!existing || existing.done)) return false;
+   ctrl?.abort("cancelled");
+   loginAbort.delete(provider);
++  clearManualCodeSlot(provider);
+   loginState.set(provider, { done: true, error: "Login cancelled" });
+   return true;
+ }
+@@ -420,6 +493,7 @@ export async function startLoginFlow(provider: string, opts?: LoginOpts): Promis
+   if (existing && !existing.done) {
+     throw new Error(`A login for ${provider} is already in progress`);
+   }
++  clearManualCodeSlot(provider);
+   loginState.set(provider, { done: false });
+   const abort = new AbortController();
+   loginAbort.set(provider, abort);
+@@ -431,12 +505,15 @@ export async function startLoginFlow(provider: string, opts?: LoginOpts): Promis
+         resolve({ url, instructions });
+       },
+       onProgress: () => {},
++      // GUI fallback when the browser cannot hit the loopback callback server.
++      onManualCodeInput: () => waitForManualLoginCode(provider, abort.signal),
+       signal: abort.signal,
+     };
+     // Background: runLogin persists the credential + upserts the provider entry to disk config.
+     runLogin(provider, ctrl, opts)
+       .then(() => {
+         loginAbort.delete(provider);
++        clearManualCodeSlot(provider);
+         loginState.set(provider, { done: true });
+         // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
+         // resolve so the GUI call returns instead of hanging.
+@@ -444,6 +521,7 @@ export async function startLoginFlow(provider: string, opts?: LoginOpts): Promis
+       })
+       .catch((e: unknown) => {
+         loginAbort.delete(provider);
++        clearManualCodeSlot(provider);
+         const msg = e instanceof Error ? e.message : String(e);
+         loginState.set(provider, { done: true, error: msg });
+         if (!urlResolved) reject(e);
+diff --git a/src/server/management-api.ts b/src/server/management-api.ts
+index 668ede79..b4ed8671 100644
+--- a/src/server/management-api.ts
++++ b/src/server/management-api.ts
+@@ -16,6 +16,7 @@ import {
+   isOAuthProvider,
+   listOAuthProviders,
+   startLoginFlow,
++  submitManualLoginCode,
+   upsertOAuthProvider,
+ } from "../oauth";
+ import { removeCredential } from "../oauth/store";
+@@ -1043,6 +1044,18 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
+     }
+   }
+ 
++  // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)
++  // when the browser cannot reach the loopback callback (remote/SSH/blocked localhost).
++  if (url.pathname === "/api/oauth/login/code" && req.method === "POST") {
++    const body = await req.json().catch(() => ({})) as { provider?: string; input?: string; code?: string };
++    const provider = (body.provider ?? "").trim().toLowerCase();
++    if (!isOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
++    const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
++    const result = submitManualLoginCode(provider, input);
++    if (!result.ok) return jsonResponse({ error: result.error }, 409);
++    return jsonResponse({ ok: true });
++  }
++
+   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
+     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+     return jsonResponse(getLoginStatus(provider));
+diff --git a/tests/oauth-manual-code.test.ts b/tests/oauth-manual-code.test.ts
+new file mode 100644
+index 00000000..200c14ae
+--- /dev/null
++++ b/tests/oauth-manual-code.test.ts
+@@ -0,0 +1,106 @@
++import { afterEach, beforeEach, describe, expect, test } from "bun:test";
++import { existsSync, mkdirSync, rmSync } from "node:fs";
++import { join } from "node:path";
++import {
++  cancelLoginFlow,
++  clearLoginState,
++  startLoginFlow,
++  submitManualLoginCode,
++} from "../src/oauth";
++import { parseCallbackInput } from "../src/oauth/callback-server";
++
++const TEST_DIR = join(import.meta.dir, ".tmp-oauth-manual-code-test");
++let previousOpencodexHome: string | undefined;
++
++describe("OAuth manual login code fallback", () => {
++  beforeEach(() => {
++    previousOpencodexHome = process.env.OPENCODEX_HOME;
++    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
++    mkdirSync(TEST_DIR, { recursive: true });
++    process.env.OPENCODEX_HOME = TEST_DIR;
++    clearLoginState("xai");
++  });
++
++  afterEach(() => {
++    cancelLoginFlow("xai");
++    clearLoginState("xai");
++    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
++    else process.env.OPENCODEX_HOME = previousOpencodexHome;
++    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
++  });
++
++  test("parseCallbackInput extracts code/state from redirect URL", () => {
++    expect(parseCallbackInput("http://127.0.0.1:56121/callback?code=abc&state=xyz")).toEqual({
++      code: "abc",
++      state: "xyz",
++    });
++  });
++
++  test("parseCallbackInput accepts raw authorization code", () => {
++    expect(parseCallbackInput("  raw-auth-code  ")).toEqual({ code: "raw-auth-code", state: undefined });
++  });
++
++  test("submitManualLoginCode rejects when no login is in progress", () => {
++    expect(submitManualLoginCode("xai", "http://127.0.0.1/callback?code=a&state=b")).toEqual({
++      ok: false,
++      error: "no login in progress",
++    });
++  });
++
++  test("submitManualLoginCode rejects empty input", () => {
++    expect(submitManualLoginCode("xai", "   ")).toEqual({ ok: false, error: "empty code" });
++  });
++
++  test("submitManualLoginCode accepts paste while GUI login is waiting", async () => {
++    // startLoginFlow will try real xAI discovery; stub fetch for discovery + hang the wait.
++    const originalFetch = globalThis.fetch;
++    let authUrlSeen = false;
++    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
++      const url = String(input);
++      if (url.includes("openid-configuration")) {
++        return new Response(
++          JSON.stringify({
++            authorization_endpoint: "https://auth.x.ai/authorize",
++            token_endpoint: "https://auth.x.ai/oauth/token",
++          }),
++          { status: 200, headers: { "Content-Type": "application/json" } },
++        );
++      }
++      if (url.includes("oauth/token")) {
++        // Should not be reached in this unit test (we cancel before exchange).
++        return new Response(JSON.stringify({ error: "unexpected" }), { status: 400 });
++      }
++      return originalFetch(input, init);
++    }) as typeof fetch;
++
++    try {
++      const started = startLoginFlow("xai", { forceLogin: true });
++      // Wait until onAuth resolves with a URL (flow is waiting for callback/manual paste).
++      const result = await Promise.race([
++        started,
++        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("startLoginFlow timed out")), 10_000)),
++      ]);
++      expect(result.url).toContain("https://auth.x.ai/authorize");
++      authUrlSeen = true;
++
++      // Early paste (may land before onManualCodeInput is registered) must be accepted.
++      const submit = submitManualLoginCode(
++        "xai",
++        "http://127.0.0.1:56121/callback?code=test-code&state=will-likely-mismatch",
++      );
++      // State mismatch means the callback loop will discard and re-wait — still ok:true from the API.
++      // A raw code (no state) is always accepted into the waiter.
++      expect(submit.ok || submit.error === "no login in progress").toBe(true);
++
++      // Raw code path: guaranteed to be stashed/delivered without state checks at submit time.
++      const raw = submitManualLoginCode("xai", "manual-auth-code-only");
++      expect(raw).toEqual({ ok: true });
++    } finally {
++      globalThis.fetch = originalFetch;
++      cancelLoginFlow("xai");
++      clearLoginState("xai");
++    }
++
++    expect(authUrlSeen).toBe(true);
++  });
++});

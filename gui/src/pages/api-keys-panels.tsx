@@ -13,6 +13,7 @@ import {
   type ApiKeyEntry,
   type ModelTestState,
 } from "./api-keys-utils";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 
 function EndpointUrl({ url }: { url: string }) {
   return (
@@ -368,9 +369,11 @@ export function ApiKeysModelsPanel({
         aria-label={t("api.modelsSearch")}
       />
       {modelsLoading ? (
-        <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsLoading")}</p>
+        <DataSurfaceSkeleton label={t("api.modelsLoading")} rows={3} />
       ) : modelsLoadFailed ? (
-        <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsLoadFailed")}</p>
+        // The page-level notice owns the persistent announcement and retry surface. Keeping this
+        // panel mounted preserves the query field without adding a second live error region.
+        null
       ) : filteredModels.length === 0 ? (
         <p className="muted small" style={{ marginTop: "0.75rem" }}>{t("api.modelsEmpty")}</p>
       ) : (

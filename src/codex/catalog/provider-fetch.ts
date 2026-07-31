@@ -324,7 +324,12 @@ function modelInputModalities(
       ?? capabilityRecord?.input_modalities,
     8,
     24,
-  )?.filter(value => value === "text" || value === "image" || value === "audio" || value === "video");
+  )?.filter(value => (
+    // Codex parses `input_modalities` as a closed enum of text | image | audio. A provider that
+    // advertises anything else (zenmux reports "video") must not reach the catalog: Codex rejects
+    // the whole file, so plugins, apps and MCP servers all stop loading over one model's metadata.
+    value === "text" || value === "image" || value === "audio"
+  ));
   if (explicit && explicit.length > 0) return explicit;
   if (capabilityRecord?.vision === false) return ["text"];
   if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {

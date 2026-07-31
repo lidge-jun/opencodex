@@ -24,7 +24,6 @@ export interface AccountPoolStrategyControlsProps {
    * "Rotation strategy". The select keeps its aria-label, so the accessible name
    * survives while the duplicated on-screen text disappears.
    */
-  strategyLabelHidden?: boolean;
   onStrategyChange(strategy: AccountPoolStrategy): void;
   onStickyDraftChange(value: string): void;
   /** Optional draft overrides React state when steppers commit in the same tick as a draft change. */
@@ -40,7 +39,6 @@ export default function AccountPoolStrategyControls({
   disabled = false,
   strategySelectId = "account-pool-strategy",
   stickyInputId = "account-pool-sticky-limit",
-  strategyLabelHidden = false,
   onStrategyChange,
   onStickyDraftChange,
   onStickyCommit,
@@ -53,28 +51,40 @@ export default function AccountPoolStrategyControls({
 
   return (
     <div className="account-pool-strategy-controls">
-      <div className="field">
-        <span
-          className={strategyLabelHidden ? "sr-only" : "field-label"}
-          id={`${strategySelectId}-label`}
-        >
-          {t("accountPool.strategy")}
-        </span>
-        <Select
-          id={strategySelectId}
-          value={strategy}
-          options={strategyOptions}
-          disabled={disabled}
-          label={t("accountPool.strategy")}
-          style={{ width: "100%", display: "block" }}
-          onChange={(next) => onStrategyChange(next as AccountPoolStrategy)}
-        />
+      {/*
+        Canonical setting row: name and explanation on the left, control on the right. The old
+        shape put an sr-only label above a full-width select, so the screen showed an unnamed
+        picker under a card title.
+
+        Both descriptions are kept deliberately. They answer different questions — the first
+        what the setting does, the second what happens to threads that are already running —
+        and collapsing them to one line silently drops the answer about account affinity.
+      */}
+      <div className="setting-row">
+        <div className="setting-label">
+          <span className="title" id={`${strategySelectId}-label`}>{t("accountPool.strategy")}</span>
+          <span className="desc">{t("accountPool.strategyDesc")}</span>
+          <span className="desc">{t("accountPool.strategyHint")}</span>
+        </div>
+        <div className="setting-controls">
+          <Select
+            id={strategySelectId}
+            value={strategy}
+            options={strategyOptions}
+            disabled={disabled}
+            label={t("accountPool.strategy")}
+            onChange={(next) => onStrategyChange(next as AccountPoolStrategy)}
+          />
+        </div>
       </div>
-      <div className="card-sub">{t("accountPool.strategyHint")}</div>
       {strategy === "round-robin" && (
-        <label className="field" htmlFor={stickyInputId}>
-          <span className="field-label">{t("accountPool.stickyLimit")}</span>
-          <span className="codex-auto-switch-input-wrap">
+        <div className="setting-row">
+          <label className="setting-label" htmlFor={stickyInputId}>
+            <span className="title">{t("accountPool.stickyLimit")}</span>
+            <span className="desc">{t("accountPool.stickyLimitHelp")}</span>
+          </label>
+          <div className="setting-controls">
+            <span className="codex-auto-switch-input-wrap">
             <input
               id={stickyInputId}
               className="input mono codex-auto-switch-input"
@@ -111,9 +121,9 @@ export default function AccountPoolStrategyControls({
                 onStickyCommit(next);
               }}
             />
-          </span>
-          <div className="card-sub">{t("accountPool.stickyLimitHelp")}</div>
-        </label>
+            </span>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -3,12 +3,16 @@
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
-`~/.codex`. The managed files are:
+`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. An explicitly
+set path that is unreadable or not a directory is an error, not a fallback: silently using a
+different home than the operator named would write provider state where nobody is looking for it.
+The managed files are:
 
 ```text
 $CODEX_HOME/config.toml
 $CODEX_HOME/opencodex.config.toml
 $CODEX_HOME/opencodex-catalog.json
+$CODEX_HOME/opencodex-journal.json
 $CODEX_HOME/models_cache.json
 ```
 
@@ -53,9 +57,43 @@ are consumed incrementally and at most 512 stale files are attempted per process
 - 다른 대안 대신 이 방식을 선택한 이유: It repairs known remnants without broad authority over unrelated temp files or active writers.
 - 장점, 단점 및 영향: Old dead-PID files are reclaimed automatically; locked or conservatively classified files remain for a later retry.
 
+## Config surface
+
+`src/types.ts` is the shape and `src/config.ts` is the loader; neither is reproduced here. What
+matters for maintainers is which groups exist and who resolves them:
+
+| Group | Keys | Resolution rule |
+| --- | --- | --- |
+| Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
+| Routing | `defaultProvider`, `providers`, per-provider `selectedModels` | Explicit `provider/model` wins over `defaultProvider`. |
+| Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue` | Catalog state is derived; config only records intent. |
+| Transport | stream mode, timeouts, proxy settings, `websockets` | `streamMode` persists in config.json because Windows services do not inherit shell env. |
+| Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
+| Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`05_gui-and-management-api.md`](05_gui-and-management-api.md). |
+
+Env values are resolved through `src/config.ts`, so a config value naming an env var never persists
+the secret itself.
+
 ## Config injection
 
-`src/codex/inject.ts` inserts root-level keys and an opencodex provider table:
+`src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
+keeps its native provider id, which decides whether existing thread history still resolves.
+
+**Loopback (default).** A single marker-owned root override, no provider table:
+
+```toml
+model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+openai_base_url = "http://127.0.0.1:10100/v1"
+```
+
+Codex keeps the native `openai` provider id, so new threads stay under that identity instead of
+being re-tagged. History that an earlier legacy injection re-tagged as `opencodex` is migrated back
+to `openai` once, as restore machinery — a no-op when there is nothing to migrate. A user-owned root
+`openai_base_url` is preserved instead of overwritten, and that case also blocks managed sub-agent
+defaults rather than fighting the user for ownership.
+
+**API auth header (non-loopback).** The built-in `openai` provider cannot carry the
+`x-opencodex-api-key` env header, so this form re-tags the root provider and appends the table:
 
 ```toml
 model_provider = "opencodex"
@@ -63,13 +101,15 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
-base_url = "http://127.0.0.1:10100/v1"
+base_url = "http://<host>:<port>/v1"
 wire_api = "responses"
 requires_openai_auth = true
+env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
 ```
 
-Root TOML keys must be written before the first `[table]`. Re-injection strips stale opencodex
-blocks, stale root context-window overrides, and stale opencodex catalog paths before rewriting.
+Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of
+both shapes — opencodex blocks, injected root base-url overrides, stale root context-window
+overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue.
 
 Native Codex sub-agent defaults are a separate, explicit opt-in. When
 `syncCodexSubagentDefaults` is true and `injectionModel` is set, injection writes marker-owned
@@ -84,7 +124,19 @@ provider managers own that routing configuration, and replacing their provider i
 otherwise intact Codex sessions. This ownership check must run before catalog/cache refresh,
 journal creation, and the background history migration guardian.
 
-`supports_websockets = true` is appended only when `websocketsEnabled(config)` returns true.
+`supports_websockets = true` is appended to the provider table only when `websocketsEnabled(config)`
+returns true.
+
+## Codex-home diagnostics
+
+Some Codex-home conditions are reported rather than repaired, because repairing them would overwrite
+a deliberate user choice:
+
+- Bundled-plugin marketplace state on Windows (`src/codex/plugins-doctor.ts`), surfaced by
+  `ocx status`.
+- Project-level Codex config that bypasses managed routing
+  (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
+  override.
 
 ## Profile and fast tier
 

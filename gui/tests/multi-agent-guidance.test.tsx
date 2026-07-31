@@ -1,10 +1,16 @@
+/**
+ * These controls moved from the Dashboard to the Subagents tab. The behaviour under test is
+ * unchanged — guidance and the native-default opt-in stay independent, and a model must be
+ * selected before the opt-in is usable — so the suite follows the component.
+ */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { en } from "../src/i18n/en";
-import { DashboardInjectionPanel } from "../src/pages/dashboard-overview-sections";
-import type { useDashboardData } from "../src/pages/use-dashboard-data";
+import { LanguageProvider } from "../src/i18n/provider";
+import SubagentDelegationSection from "../src/components/subagents-workspace/SubagentDelegationSection";
+import type { SubagentDelegationSectionProps } from "../src/components/subagents-workspace/SubagentDelegationSection";
 
 const globals = ["document", "window", "navigator", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], PropertyDescriptor | undefined>;
@@ -13,7 +19,7 @@ let host: HTMLElement;
 let root: Root | null = null;
 let requests: unknown[] = [];
 
-type Dash = ReturnType<typeof useDashboardData>;
+type Props = SubagentDelegationSectionProps;
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(
@@ -49,38 +55,41 @@ afterEach(async () => {
   }
 });
 
-function dash(overrides: Partial<Dash> = {}): Dash {
+function props(overrides: Partial<Props> = {}): Props {
   return {
-    t: (key: keyof typeof en) => en[key],
-    injectionModel: "anthropic/claude-sonnet-5",
-    injectionEffort: "high",
-    injectionEfforts: ["low", "medium", "high"],
-    injectionAvailable: [{ provider: "anthropic", model: "claude-sonnet-5", namespaced: "anthropic/claude-sonnet-5" }],
-    injectionSaving: false,
-    multiAgentGuidanceEnabled: false,
-    syncCodexSubagentDefaults: true,
-    saveInjection: async (patch) => { requests.push(patch); },
+    model: "anthropic/claude-sonnet-5",
+    effort: "high",
+    efforts: ["low", "medium", "high"],
+    available: [{ provider: "anthropic", model: "claude-sonnet-5", namespaced: "anthropic/claude-sonnet-5" }],
+    saving: false,
+    guidanceEnabled: false,
+    syncCodexDefaults: true,
+    onSave: (patch) => { requests.push(patch); },
     ...overrides,
-  } as unknown as Dash;
+  };
 }
 
-async function mount(d: Dash) {
+async function mount(p: Props) {
   // ReactDOM must observe the happy-dom globals installed by beforeEach. A static
   // import binds to the prior document state and corrupts sibling suites.
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    root.render(<DashboardInjectionPanel apiBase="" d={d} />);
+    root.render(
+      <LanguageProvider>
+        <SubagentDelegationSection {...p} />
+      </LanguageProvider>,
+    );
   });
 }
 
 test("renders independent guidance and native-default controls with editable selection", async () => {
-  await mount(dash());
+  await mount(props());
 
   const model = host.querySelector<HTMLButtonElement>('button[role="combobox"][aria-label="Sub-agent delegation"]')!;
   const effort = host.querySelector<HTMLButtonElement>('button[role="combobox"][aria-label="Reasoning effort"]')!;
-  const defaults = host.querySelector<HTMLButtonElement>('button[aria-label="Use as native Codex subagent defaults"]')!;
-  const guidance = host.querySelector<HTMLButtonElement>('button[aria-label="OpenCodex multi-agent guidance"]')!;
+  const defaults = host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.syncCodexSubagentDefaults"]}"]`)!;
+  const guidance = host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.multiAgentGuidance"]}"]`)!;
 
   expect(model.disabled).toBe(false);
   expect(effort.disabled).toBe(false);
@@ -91,26 +100,24 @@ test("renders independent guidance and native-default controls with editable sel
 });
 
 test("requires a selected model before enabling native Codex subagent defaults", async () => {
-  await mount(dash({
-    injectionModel: "",
-    injectionEffort: "",
-    injectionEfforts: [],
-    syncCodexSubagentDefaults: false,
+  await mount(props({
+    model: "",
+    effort: "",
+    efforts: [],
+    syncCodexDefaults: false,
   }));
 
   const model = host.querySelector<HTMLButtonElement>('button[role="combobox"][aria-label="Sub-agent delegation"]')!;
-  const defaults = host.querySelector<HTMLButtonElement>('button[aria-label="Use as native Codex subagent defaults"]')!;
+  const defaults = host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.syncCodexSubagentDefaults"]}"]`)!;
   expect(model.disabled).toBe(false);
   expect(defaults.disabled).toBe(true);
 });
 
 test("sends the native-default opt-in independently from guidance", async () => {
-  await mount(dash({
-    syncCodexSubagentDefaults: false,
-  }));
+  await mount(props({ syncCodexDefaults: false }));
 
   await act(async () => {
-    host.querySelector<HTMLButtonElement>('button[aria-label="Use as native Codex subagent defaults"]')!.click();
+    host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.syncCodexSubagentDefaults"]}"]`)!.click();
     await Promise.resolve();
   });
 
@@ -118,7 +125,7 @@ test("sends the native-default opt-in independently from guidance", async () => 
 });
 
 test("sends model clearing through the shared save path", async () => {
-  await mount(dash());
+  await mount(props());
 
   const model = host.querySelector<HTMLButtonElement>('button[role="combobox"][aria-label="Sub-agent delegation"]')!;
   await act(async () => { model.click(); });

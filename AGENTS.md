@@ -22,42 +22,39 @@ Bun-native TypeScript with no separate server compile step.
   changing shared subsystems.
 - `scripts/` — release and maintenance tooling; `scripts/release.ts` is the
   release authority.
-- `devlog/` — maintainer-only planning and investigation notes. This is a
-  **private submodule** (`lidge-jun/opencodex-internal`), not a directory of
-  this repository. See "The `devlog` submodule" below.
+- `devlog/` — planning and investigation notes, tracked in this repository. See
+  "The `devlog` directory" below for what may and may not go there.
 
 Read the nearest nested `AGENTS.md` before changing files in a scoped
 directory (`src/`, `gui/`, `docs-site/`, `scripts/`, `.github/`).
 
-## The `devlog` submodule
+## The `devlog` directory
 
-Planning notes, triage matrices, and investigation artifacts live in the private
-`lidge-jun/opencodex-internal` repository, wired in as the `devlog` submodule.
-They quote live infrastructure state, provider behaviour, unfixed defects, and
-internal triage reasoning, so a public clone should carry the runtime and its
-docs and nothing else.
+Planning notes, triage matrices, and investigation artifacts live in `devlog/`,
+tracked like any other documentation. There is no submodule and no private
+mirror. It was a private submodule until the pointer churn outgrew its value:
+1723 commits touched the gitlink, and `dev`, `preview`, and `main` each carried a
+different pointer, so every branch move and promotion dragged a diff.
 
-The pointer is deliberately **loose**, so a missing or stale `devlog` can never
-fail a check:
+- `devlog/_plan/` — units still open, one directory per unit, decade-numbered
+  docs.
+- `devlog/_fin/` — closed units, moved here once a terminal outcome is recorded.
+  A `_fin` unit is a record of work already visible in public git history.
+- `devlog/_chase/` — external reference material for parity comparisons.
+  Reference *clones* are gitignored: they are third-party source carrying their
+  own licenses and have no business in this repository's history.
 
-- `.gitmodules` declares `ignore = dirty`, `update = none`, and `shallow = true`.
-  A dirty or moved submodule working tree does not show up in `git status` on
-  the parent, and `git submodule update` will not touch it unless asked
-  explicitly.
-- No workflow checks it out. `actions/checkout` runs without `submodules:`, so
-  CI clones the public tree only and the private URL is never resolved.
-- Nothing in the build, test, typecheck, or privacy-scan path reads from
-  `devlog/`. Contributors without access see an empty directory and every gate
-  still passes.
-- `devlog/` stays listed in `.gitignore` for the working tree; the submodule
-  gitlink is tracked, its contents are not.
+Nothing in the build, typecheck, or test path reads from `devlog/`, so a
+contributor who ignores it entirely still passes every gate. `privacy:scan` does
+read it — that is deliberate, and it is what makes a public devlog safe rather
+than merely visible.
 
-Two rules keep it that way. Never commit anything under `devlog/` to *this*
-repository — commit inside the submodule, then update the pointer here as a
-separate commit. And never nest a git repository inside the submodule: a
-`160000` gitlink in a tree that CI does not initialize breaks
-`actions/checkout` for every contributor, which is exactly what happened before
-this split.
+Two mechanical guards in `tests/repo-hygiene.test.ts` back this up: no `160000`
+gitlink may be tracked anywhere, and neither the vendored reference clones nor
+the security triage excised before publication may reappear in the index. Both
+were driven red once to prove they are not vacuous. The gitlink assertion exists
+because a gitlink in a tree CI does not initialize breaks `actions/checkout` for
+every contributor, which happened twice.
 
 ## Security working notes
 
@@ -67,9 +64,23 @@ or bypass reasoning, reproduction steps for an unfixed defect, and
 pre-disclosure patch plans.
 
 Use `.tmp/` in the working tree (already gitignored) or a `mktemp -d` path.
-`devlog/` is **not** an acceptable location, and neither is a private
-repository: both get cloned across machines and CI, both outlive the embargo,
-and neither history is practical to purge afterwards.
+`devlog/` is **not** an acceptable location — it is a public directory in a
+public repository, so anything committed there is disclosed the moment it is
+pushed, and the history is not practical to purge afterwards. A private
+repository is not acceptable either: it gets cloned across machines and CI and
+outlives the embargo.
+
+**This binds maintainers exactly as it binds contributors and agents.** The rule
+has been violated by maintainer-authored triage before: two units of open
+security review accumulated under `devlog/_plan/` and had to be excised before
+this directory could be published. Seniority is not an exemption, and "it is
+only in the private half" is no longer a thing that exists.
+
+The test to apply before writing a security note into `devlog/`: **is there
+already a public diff that reveals this weakness?** If the fix has shipped, the
+writeup discloses nothing new and belongs in `_fin/`. If it has not, the note is
+pre-disclosure material and goes to scratch. That distinction is why closed
+hardening records stay in the tree while open triage does not.
 
 Only the published outcome reaches a repository — the fix itself, its
 regression test, the release note, the advisory once it is public. Draft the

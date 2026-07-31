@@ -1,6 +1,0 @@
-[submodule "devlog"]
-	path = devlog
-	url = https://github.com/lidge-jun/opencodex-internal.git
-	ignore = dirty
-	update = none
-	shallow = true

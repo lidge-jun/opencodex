@@ -17,6 +17,7 @@ import { isWslRuntime } from "./codex/home";
 import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
+import { findLiveProxy } from "./server/proxy-liveness";
 import { randomUUID } from "node:crypto";
 import {
   ELEVATION_REQUEST_TIMEOUT_MS,
@@ -426,6 +427,70 @@ export type WindowsSchedulerTaskProbe =
   | { status: "present" }
   | { status: "absent" }
   | { status: "unknown"; detail: string };
+
+export type WindowsSchedulerProxyProbe =
+  | { status: "running"; port: number }
+  | { status: "not-running" }
+  | { status: "unknown" };
+
+/**
+ * Render Task Scheduler status without exposing localized `schtasks` table output.
+ * The task probe answers installation state; the identity-checked health probe answers
+ * runtime state. Keep probe details out of this user-facing line because they can contain
+ * incorrectly decoded, locale-specific command output.
+ */
+export function formatWindowsSchedulerServiceStatus(
+  task: WindowsSchedulerTaskProbe,
+  proxy: WindowsSchedulerProxyProbe,
+): string {
+  if (task.status === "present") {
+    if (proxy.status === "running") {
+      return `✅ service installed (Task Scheduler); OpenCodex proxy running on port ${proxy.port}.`;
+    }
+    if (proxy.status === "not-running") {
+      return "⚠️  service installed (Task Scheduler); OpenCodex proxy not running.";
+    }
+    return "⚠️  service installed (Task Scheduler); OpenCodex proxy status unknown.";
+  }
+  if (task.status === "absent") {
+    if (proxy.status === "running") {
+      return `❌ service not installed (Task Scheduler); OpenCodex proxy is running independently on port ${proxy.port}.`;
+    }
+    if (proxy.status === "unknown") {
+      return "❌ service not installed (Task Scheduler); OpenCodex proxy status unknown.";
+    }
+    return "❌ service not installed (Task Scheduler).";
+  }
+  if (proxy.status === "running") {
+    return `⚠️  Task Scheduler registration unknown; OpenCodex proxy running on port ${proxy.port}.`;
+  }
+  if (proxy.status === "not-running") {
+    return "⚠️  service status unknown (Task Scheduler query failed); OpenCodex proxy not running.";
+  }
+  return "⚠️  service status unknown (Task Scheduler and proxy checks failed).";
+}
+
+export async function inspectWindowsSchedulerServiceStatus(io: {
+  probeTask?: () => WindowsSchedulerTaskProbe;
+  findProxy?: () => Promise<{ port: number } | null>;
+} = {}): Promise<string> {
+  let task: WindowsSchedulerTaskProbe;
+  try {
+    task = (io.probeTask ?? probeWindowsSchedulerTask)();
+  } catch (error) {
+    task = { status: "unknown", detail: schtasksErrorDetail(error) };
+  }
+
+  let proxy: WindowsSchedulerProxyProbe;
+  try {
+    const live = await (io.findProxy ?? findLiveProxy)();
+    proxy = live ? { status: "running", port: live.port } : { status: "not-running" };
+  } catch {
+    proxy = { status: "unknown" };
+  }
+
+  return formatWindowsSchedulerServiceStatus(task, proxy);
+}
 
 function schtasksErrorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -1898,8 +1963,12 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       }
       break;
     case "status": {
-      const s = ops.status();
-      console.log(s ? `✅ running:\n${s}` : "❌ service not installed/running.");
+      if (process.platform === "win32" && backend === "scheduler") {
+        console.log(await inspectWindowsSchedulerServiceStatus());
+      } else {
+        const s = ops.status();
+        console.log(s ? `✅ running:\n${s}` : "❌ service not installed/running.");
+      }
       console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
       break;
     }
