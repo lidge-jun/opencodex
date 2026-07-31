@@ -299,7 +299,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
-| `baseUrl` | `string` | Upstream API base URL. Built-in providers with a fixed endpoint ignore it — see [Fixed provider endpoints](#fixed-provider-endpoints). |
+| `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; newly promoted collision-safe key presets preserve an older same-named custom destination. See [Fixed provider endpoints](#fixed-provider-endpoints). |
 | `responsesPath?` | `string` | Optional relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no URL scheme, query, or fragment. When omitted, the adapter keeps its legacy `/v1/responses` URL construction. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
@@ -307,7 +307,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. When `liveModels` is `false`, these are the only discovered models. |
-| `liveModels?` | `boolean` | Fetch the provider's live `/models` catalog on start/sync (default `true`). Set `false` to use only configured `models`. |
+| `liveModels?` | `boolean` | Fetch the provider's live model catalog on start/sync (default `true`). Built-in presets may use a trusted registry URL/query/filter; custom providers default to `${baseUrl}/models`. Set `false` to use only configured `models`. |
 | `selectedModels?` | `string[]` | Catalog allowlist applied after discovery. A non-empty list exposes only those ids to Codex; empty/omitted exposes all discovered models. |
 | `contextWindow?` | `number` | Provider-wide Codex-visible context-window cap for routed catalog entries. Live metadata below this value is kept. |
 | `modelContextWindows?` | `Record<string,number>` | Model-specific context-window caps. These override `contextWindow` for matching model ids and never raise smaller live metadata. |
@@ -351,13 +351,16 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 ### Fixed provider endpoints
 
 Routing resolves a provider's endpoint before any adapter sees it, and for most built-in
-providers the registry's own endpoint wins over a `baseUrl` in your config. Three kinds of entry
+providers the registry's own endpoint wins over a `baseUrl` in your config. Four kinds of entry
 keep the configured URL at this stage:
 
 - providers that opt into an override — `ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud`
   and `alibaba-token-plan-intl`;
 - providers whose registry endpoint is a template you fill in, such as `azure-openai` and
   `cloudflare-ai-gateway`;
+- newly promoted fixed API-key presets that protect name collisions: if an older same-named
+  custom provider points somewhere else, it remains custom instead of sending that key to the new
+  registry host;
 - providers you define yourself, which are not in the registry at all.
 
 Adapters may adjust the resolved URL afterward. The `kiro` adapter, for example, follows the API
@@ -520,6 +523,12 @@ want Codex to see only the models pinned in `models`:
 
 When `liveModels` is `false` and `models` is empty or omitted, opencodex exposes no routed models
 for that provider.
+
+Live discovery rejects a response before caching when it exceeds 4 MiB or 2,000 raw model rows.
+Built-in presets may lower either limit and filter mixed catalogs to chat-eligible rows. An
+oversized or malformed response follows the normal stale/configured fallback path, while
+ineligible rows are excluded. A valid result with zero eligible rows remains an authoritative
+empty catalog; OpenCodex never silently truncates an over-limit response.
 
 Use `selectedModels` for a different purpose: discovery still runs, but only the selected ids are
 published to Codex's catalog and `/v1/models`. The dashboard's full model list remains available so

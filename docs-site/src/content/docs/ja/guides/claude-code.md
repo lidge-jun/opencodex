@@ -68,8 +68,8 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 受け付けるため、opencodex はルーティングモデルを安定で元に戻せるエイリアスとして公開します。
 
 | 画面 | 形式 | 例 |
- --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| --- | --- | --- |
+| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) または `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3 桁の base36 ハッシュ) | `claude-opus-4-8-ncb` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
@@ -81,10 +81,14 @@ Claude Desktop のフッターピッカーで実行中の 3P 会話のモデル�
 `/model <id>` を使用してください。OpenCodex はピッカーの状態を直接参照できず、各リクエストに
 含まれるモデル ID をルーティングします。結果は **Logs → requestedModel** で確認できます。
 
-**エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。model には
-`/` を含められません。読みやすい形式で表現できないルートはハッシュエイリアスに置き換えます。モデル
-ID には `--` を含め**られます**(解析時は最初の `--` だけを基準に分割します)。`--` を含む
-ネイティブスラッグはハッシュ形式に置き換えます。
+**エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。
+`/` も `~` も含まない plain な model ID は v1 接頭辞 `claude-ocx-…` のままです。`/` または `~` を含む
+model ID は v2 接頭辞 `claude-ocx2-…` で発行し、エスケープします(`/` → `~s`、`~` → `~t`)。例:
+`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+v1 エイリアスはリテラルにデコードします(歴史的に model ID に含まれていた 2 文字列 `~s` / `~t` も保持)。
+v2 エイリアスはエスケープを展開します。読みやすい形式で表現できないルートはハッシュエイリアスに
+置き換えます。モデル ID には `--` を含め**られます**(解析時は最初の `--` だけを基準に分割します)。
+`--` を含むネイティブスラッグはハッシュ形式に置き換えます。
 
 **モデル解決順序:** `[1m]` 標識の削除 → 読みやすいエイリアスのデコード → Desktop ハッシュエイリアスのデコード →
 `modelMap` の完全一致 → 日付を削除した値との一致(`-20250514` 削除) → パススルー順です。

@@ -50,15 +50,14 @@ export function laneView<T extends LaneModel>(models: T[], search: string, limit
 }
 
 /**
- * Which families start folded when the user has expressed no preference yet.
+ * Default family fold: every family starts collapsed so model lists open on demand.
  *
- * Data-driven rather than a fixed list: every model can be assigned to any family, so
- * hard-coding "only Opus is open" would be wrong the moment someone fills Sonnet. On a
- * fresh install this still yields "Opus open, three empty families folded", which is the
- * shape the vertical stack was designed around.
+ * This supersedes the earlier "fold only the empty families" rule. Keeping Opus open by
+ * default made the vertical stack taller than the viewport once a family filled up, so the
+ * page now opens compact and every list is one click away.
  */
 export function defaultCollapsedFamilies(counts: Readonly<Record<string, number>>): Set<string> {
-  return new Set(Object.keys(counts).filter(family => counts[family] === 0));
+  return new Set(Object.keys(counts));
 }
 
 /**

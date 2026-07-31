@@ -25,7 +25,18 @@ export function settingsPollMayCommit(
     && started.mutation === current.mutation;
 }
 
-/** Snapshot + bump request epochs before issuing any poll fetches. */
+/** Snapshot + bump one request epoch before issuing a poll fetch. */
+export function beginPollEpoch(
+  request: { current: number },
+  mutation: { current: number },
+): SettingsPollEpoch {
+  return {
+    request: ++request.current,
+    mutation: mutation.current,
+  };
+}
+
+/** Snapshot + bump request epochs before issuing paired settings/shadow poll fetches. */
 export function beginPollEpochs(refs: {
   settingsRequest: { current: number };
   settingsMutation: { current: number };
@@ -36,19 +47,22 @@ export function beginPollEpochs(refs: {
   shadow: SettingsPollEpoch;
 } {
   return {
-    settings: {
-      request: ++refs.settingsRequest.current,
-      mutation: refs.settingsMutation.current,
-    },
-    shadow: {
-      request: ++refs.shadowRequest.current,
-      mutation: refs.shadowMutation.current,
-    },
+    settings: beginPollEpoch(refs.settingsRequest, refs.settingsMutation),
+    shadow: beginPollEpoch(refs.shadowRequest, refs.shadowMutation),
   };
 }
 
 export type StartupHealthStatus = "native" | "protected" | "at-risk" | "error";
 
+/**
+ * Map a startup-health API payload to the dashboard chip status.
+ *
+ * `diagnosticStale` means the server is still refreshing (SWR fallback / expired TTL).
+ * That is NOT a hard read failure — collapsing it to "error" shows the misleading
+ * "Could not read startup protection" chip whenever the 30s cache misses.
+ * Keep the payload status (the cache already forces at-risk for local-proxy routing
+ * when stale). Reserve "error" for fetchStartupHealth hard failures only.
+ */
 export function mapStartupHealthProbe(data: {
   status?: unknown;
   diagnosticStale?: unknown;
@@ -56,20 +70,22 @@ export function mapStartupHealthProbe(data: {
   const status = data.status;
   const valid = status === "native" || status === "protected" || status === "at-risk";
   if (!valid) return null;
-  return data.diagnosticStale === true ? "error" : status;
+  return status;
 }
 
 /**
- * Settings may only seed startup health while it is still unknown.
- * After `/api/startup-health` has produced a value, it stays authoritative.
+ * Settings may only seed startup health while it is still unknown or a hard error.
+ * After `/api/startup-health` has produced a real status, it stays authoritative.
  */
 export function seedStartupHealthFromSettings(
   previous: StartupHealthStatus | null,
   seeded: { status: "native" | "protected" | "at-risk"; diagnosticStale: boolean } | null | undefined,
 ): StartupHealthStatus | null {
-  if (previous !== null) return previous;
-  if (!seeded) return null;
-  return seeded.diagnosticStale ? "error" : seeded.status;
+  if (!seeded) return previous;
+  // A prior hard "error" (or unknown) may be replaced by a settings seed; a real
+  // status from the dedicated probe must not be overwritten.
+  if (previous !== null && previous !== "error") return previous;
+  return seeded.status;
 }
 
 /** Single owner cadence for project-config diagnostics (ms). */

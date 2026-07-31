@@ -151,7 +151,7 @@ token の代わりに使えます。すべての候補は timing side channel �
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（または別名 `azure`）のいずれか。 |
-| `baseUrl` | `string` | 上流 API base URL。 |
+| `baseUrl` | `string` | 上流 API base URL。固定 endpoint を持つ大半の組み込み provider は一致しない URL を無視します。新しく追加された衝突保護付き API-key preset は、以前からある同名 custom provider の送信先を維持します。[固定プロバイダーのエンドポイント](#固定プロバイダーのエンドポイント)を参照してください。 |
 | `responsesPath?` | `string` | `key` 認証の `openai-responses` リクエストに使う任意の相対 resource path。`/` で始め、URL scheme、query、fragment を含めてはいけません。省略時は従来の `/v1/responses` URL 構築を維持します。 |
 | `disabled?` | `boolean` | 設定はディスクに残すがルーティングとモデル/カタログ一覧から除外します。 |
 | `apiKey?` | `string` | API キーまたはリクエスト時に解釈する `${ENV_VAR}` / `$ENV_VAR` 参照。 |
@@ -159,7 +159,7 @@ token の代わりに使えます。すべての候補は timing side channel �
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 複数キーを納める pool。`apiKey` はアクティブ項目を反映します。各項目には `id`、`key`、選択 `label`、選択数値 `addedAt` があります。 |
 | `defaultModel?` | `string` | 明示的なモデルなしでこのプロバイダーを選んだときに使うモデル。 |
 | `models?` | `string[]` | seed/fallback モデル一覧。`liveModels` が `false` ならここにあるモデルだけが発見されます。 |
-| `liveModels?` | `boolean` | 起動/同期時にプロバイダーのリアルタイム `/models` カタログを取得します（デフォルト `true`）。`false` なら設定された `models` だけを使います。 |
+| `liveModels?` | `boolean` | 起動/同期時にプロバイダーのライブモデルカタログを取得します（デフォルト `true`）。組み込み preset は registry の信頼済み URL・クエリ・フィルターを使用でき、カスタム provider は `${baseUrl}/models` がデフォルトです。`false` なら設定された `models` だけを使います。 |
 | `selectedModels?` | `string[]` | モデル発見後に適用するカタログ allowlist。空でなければその id だけを Codex に公開し、空または省略なら発見したモデルをすべて公開します。 |
 | `contextWindow?` | `number` | ルーティングカタログ項目に表示するプロバイダー単位の context-window cap。リアルタイム metadata がより小さければそのままにします。 |
 | `modelContextWindows?` | `Record<string,number>` | モデル別 context-window cap。一致するモデルでは `contextWindow` より優先し、より小さいリアルタイム metadata を上げません。 |
@@ -191,6 +191,29 @@ token の代わりに使えます。すべての候補は timing side channel �
 | `mcpServers?` | `Record<string,CursorMcpServerConfig>` | **Cursor 専用。** stdio で起動する、または Streamable HTTP で接続する MCP server。フィールドは下で説明します。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | **Cursor 専用。** 外部 computer-use/record-screen コマンド。フィールドは下で説明します。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor アダプター専用。** Cursor サーバーが指示したローカル `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` 実行を許可する opt-in escape hatch。デフォルト `false` なのでリモート Cursor メッセージが Codex の承認と sandbox を迂回できません。下記 [Cursor プロバイダー](#cursor-プロバイダー-adapter-cursor) 参照。 |
+
+### 固定プロバイダーのエンドポイント
+
+ルーティングは、adapter がリクエストを受け取る前に provider の endpoint を解決します。大半の
+組み込み provider では、config の `baseUrl` より registry の endpoint が優先されます。この段階で
+設定 URL を維持するのは次の 4 種類です。
+
+- override を明示的に許可する provider: `ollama`、`vllm`、`lm-studio`、`litellm`、
+  `qwen-cloud`、`alibaba-token-plan-intl`。
+- registry endpoint が入力用 template の provider（`azure-openai`、`cloudflare-ai-gateway` など）。
+- 同名衝突を保護する新しい固定 API-key preset。以前からある同名 custom provider が別の送信先を
+  指している場合、その送信先を維持し、key を新しい registry host へ送りません。
+- registry に存在せず、ユーザーが独自に定義した provider。
+
+その後も adapter が解決済み URL を調整する場合があります。たとえば `kiro` adapter は canonical な
+`runtime.{region}.kiro.dev` host に対して、import した credential の API region を使います。adapter
+ごとの規則は [Adapters](/ja/reference/adapters/) を参照してください。
+
+ルーティングが設定済み `baseUrl` を破棄すると opencodex は警告を出します。registry endpoint は完全に
+表示し、設定 URL は origin だけを表示します。path は credential 情報を含む可能性があるため記録しません。
+不要な `baseUrl` を削除するか、目的の URL と endpoint が一致する provider を選んでください。地域別
+サービスでは正しい項目を使ってください。`alibaba-token-plan` は北京に固定され、
+`alibaba-token-plan-intl` は国際 endpoint の override を許可します。
 
 ## Cursor プロバイダー（`adapter: "cursor"`）
 
@@ -246,6 +269,11 @@ Codex の承認と sandbox ルールを迂回する Cursor ネイティブロー
 
 一部のプロバイダーはリアルタイムモデルカタログが非常に大きいか遅いです。Codex に `models` で固定したモデルだけ
 見せるには `liveModels` を `false` に設定してください。
+
+ライブ discovery は 4 MiB または 2,000 件の生モデル行を超える応答をキャッシュ前に拒否します。
+組み込み preset は上限をさらに下げ、混在カタログをチャット対応行だけに絞れます。超過または
+不正な応答は stale/static fallback に戻り、不適格な行は除外されます。有効な応答に適格な行が
+なければ権威ある空カタログとなり、上限超過の応答が暗黙に切り詰められることはありません。
 
 `liveModels` が `false` で `models` が空または省略されると opencodex はそのプロバイダーのルーティング
 モデルを 1 つも公開しません。

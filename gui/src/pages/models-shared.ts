@@ -64,8 +64,7 @@ export const THREAD_OPTIONS = [4, 8, 16, 32, 64, 128, 256, 500, 1000];
 export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
 export const PAGE = 60; // rows rendered per provider before a "show more"
 
-export const COLLAPSED_KEY_V1 = "ocx-models-collapsed:v1";
-export const COLLAPSED_KEY_LEGACY = "ocx-models-collapsed";
+export const COLLAPSED_KEY_V2 = "ocx-models-collapsed:v2";
 export const COMBOS_OPEN_KEY_V1 = "ocx-models-combos-open:v1";
 export const COMBOS_OPEN_KEY_LEGACY = "ocx-models-combos-open";
 
@@ -98,18 +97,24 @@ export function activeModelOptions(
   return options;
 }
 
-export function readCollapsedProviders(storage: StorageLike = localStorage): Set<string> {
+/** `null` = no preference yet → caller should default to all groups collapsed. */
+export function readCollapsedProviders(storage: StorageLike = localStorage): Set<string> | null {
   try {
-    const saved = storage.getItem(COLLAPSED_KEY_V1) ?? storage.getItem(COLLAPSED_KEY_LEGACY);
-    return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
+    // v2 only — older keys defaulted to "all open".
+    const saved = storage.getItem(COLLAPSED_KEY_V2);
+    if (saved === null) return null;
+    const parsed = JSON.parse(saved) as unknown;
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((value): value is string => typeof value === "string"))
+      : null;
   } catch {
-    return new Set();
+    return null;
   }
 }
 
 export function writeCollapsedProviders(collapsed: Set<string>, storage: StorageLike = localStorage): void {
   try {
-    storage.setItem(COLLAPSED_KEY_V1, JSON.stringify([...collapsed]));
+    storage.setItem(COLLAPSED_KEY_V2, JSON.stringify([...collapsed]));
   } catch {
     /* quota / private-mode */
   }

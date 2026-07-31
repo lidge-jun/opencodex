@@ -75,11 +75,11 @@ test("toggleInSet adds and removes without mutating its input", () => {
   expect(original.has("opus")).toBe(true);
 });
 
-test("only empty families fold by default", () => {
+test("all families fold by default", () => {
   expect([...defaultCollapsedFamilies({ opus: 23, fable: 0, sonnet: 0, haiku: 0 })].toSorted())
-    .toEqual(["fable", "haiku", "sonnet"]);
-  // Once a user fills another family it must stop folding — a fixed list would be wrong here.
+    .toEqual(["fable", "haiku", "opus", "sonnet"]);
   expect([...defaultCollapsedFamilies({ opus: 12, fable: 0, sonnet: 4, haiku: 0 })].toSorted())
-    .toEqual(["fable", "haiku"]);
-  expect(defaultCollapsedFamilies({ opus: 1, fable: 1, sonnet: 1, haiku: 1 }).size).toBe(0);
+    .toEqual(["fable", "haiku", "opus", "sonnet"]);
+  expect([...defaultCollapsedFamilies({ opus: 1, fable: 1, sonnet: 1, haiku: 1 })].toSorted())
+    .toEqual(["fable", "haiku", "opus", "sonnet"]);
 });

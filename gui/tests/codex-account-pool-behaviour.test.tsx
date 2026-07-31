@@ -298,7 +298,7 @@ test("subscribing never fabricates a server read", async () => {
 
   // And a real load does reach the subscriber.
   await act(async () => { await seen.current!.load(); });
-  expect(received).toEqual([80]);
+  expect(received).toEqual([{ activeCodexAccountId: null, autoSwitchThreshold: 80 }]);
 });
 
 test("a mutation updates the one shared controller state", async () => {

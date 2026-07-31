@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { getTrackedCodexWebSocketCountForAccount } from "../src/codex/websocket-registry";
@@ -36,7 +37,16 @@ import { configuredAdminToken } from "../src/lib/admin-secrets";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
-const TEST_DIR = join(import.meta.dir, ".tmp-server-auth-test");
+// A per-run directory, not a fixed path. This used to be
+// join(import.meta.dir, ".tmp-server-auth-test"), the exact same literal that
+// management-provider-validation.test.ts also declared, and both files delete and
+// recreate it while pointing OPENCODEX_HOME there. `bun test --isolate` gives each file
+// its own module registry but shares one process and one filesystem, so whichever run was
+// mid-test when the other wiped the directory lost its config and credentials and started
+// answering 401 where the test expected the upstream's original 400. That also breaks two
+// concurrent runs of THIS file alone, which a rename could not fix. mkdtempSync matches the
+// isolation convention already used by tests/helpers/isolated-codex-home.ts.
+const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-server-auth-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function config(hostname?: string): OcxConfig {

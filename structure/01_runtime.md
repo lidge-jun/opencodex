@@ -73,3 +73,15 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 
 Adapter output must stay in internal `AdapterEvent` form until `bridge.ts` converts it back to
 Responses SSE or WebSocket frames.
+
+Live model discovery is bounded and registry-driven through `src/providers/model-discovery.ts`.
+Custom providers keep the conventional `${baseUrl}/models` request; canonical presets may select a
+trusted URL/path/query and declarative eligibility filter without persisting that policy into user
+config. A response is rejected before caching when it exceeds 4 MiB, contains more than 2,000 raw
+rows, has a malformed OpenAI list envelope, or includes an invalid model id. Tests use fixtures and
+must never depend on live provider endpoints. Newly promoted fixed key presets opt into
+`preserveCustomDestination`, so an older same-named custom provider keeps its configured adapter,
+destination, and key boundary instead of being silently canonicalized onto the new host. Fixed
+OAuth presets resolve discovery against the same canonical registry transport as normal routing
+before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
+OAuth bearer token.

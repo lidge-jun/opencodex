@@ -14,6 +14,8 @@ import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 const origHome = process.env.HOME;
+const origLocalAppData = process.env.LOCALAPPDATA;
+const origUserProfile = process.env.USERPROFILE;
 const origRegion = process.env.KIRO_REGION;
 const origApiRegion = process.env.KIRO_API_REGION;
 const origArn = process.env.KIRO_PROFILE_ARN;
@@ -24,8 +26,12 @@ let tmp: string;
 
 beforeEach(() => {
   // isolate: empty HOME so no kiro-cli SQLite is read; deterministic region.
+  // The native store resolves per-platform (issue #710) and win32 prefers LOCALAPPDATA/USERPROFILE
+  // over HOME, so an empty HOME alone would no longer keep a Windows runner off its real profile.
   tmp = mkdtempSync(join(tmpdir(), "kiro-adapter-"));
   process.env.HOME = tmp;
+  process.env.LOCALAPPDATA = join(tmp, "AppData", "Local");
+  process.env.USERPROFILE = tmp;
   process.env.OPENCODEX_HOME = tmp;
   process.env.KIRO_REGION = "us-east-1";
   delete process.env.KIRO_API_REGION;
@@ -35,6 +41,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+  if (origLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = origLocalAppData;
+  if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
   if (origRegion === undefined) delete process.env.KIRO_REGION; else process.env.KIRO_REGION = origRegion;
   if (origApiRegion === undefined) delete process.env.KIRO_API_REGION; else process.env.KIRO_API_REGION = origApiRegion;
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN; else process.env.KIRO_PROFILE_ARN = origArn;
@@ -52,7 +60,12 @@ function parsedWith(messages: unknown[], tools?: unknown[], modelId = "claude-so
 }
 
 function seedKiroCliMetadata(profileArn: string, region: string): void {
-  const dir = join(tmp, "Library", "Application Support", "kiro-cli");
+  // Host-resolved layout (issue #710): mirrors resolveKiroCliNativeSessionEntries.
+  const dir = process.platform === "win32"
+    ? join(tmp, "AppData", "Local", "Kiro-Cli")
+    : process.platform === "darwin"
+      ? join(tmp, "Library", "Application Support", "kiro-cli")
+      : join(tmp, ".local", "share", "kiro-cli");
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "data.sqlite3"));
   db.run("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)");
@@ -825,6 +838,65 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
 
     expect(content).toBe(KIRO_TOOL_RESULT_CARRIER_MESSAGE);
     expect(content).not.toContain("<thinking_mode>");
+  });
+
+  // issue #543: Claude Code sends a mid-turn steer (queued_command) as text riding the same
+  // user turn as the pending tool_result. Proxy filler must never precede that instruction.
+  test("a mid-turn steering message is the current turn without proxy carrier filler", async () => {
+    const steer = "STOP editing module A. Use kiro/gpt-5.6-sol instead.";
+    const messages = [
+      { role: "user", content: "Refactor module A." },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "ls" } }] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "bash", content: "file list", isError: false },
+      { role: "user", content: steer },
+    ];
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages, [bashTool]));
+    const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
+
+    // The human instruction is the whole content: the carrier sentence must be ABSENT, not
+    // merely moved after it (a startsWith assertion would pass with filler appended).
+    expect(current.content).toBe(steer);
+    expect(current.content).not.toContain(KIRO_TOOL_RESULT_CARRIER_MESSAGE);
+    // The tool result still rides along structurally, so no information is lost.
+    expect(current.userInputMessageContext.toolResults).toEqual([
+      { content: [{ text: "file list" }], status: "success", toolUseId: "call-1" },
+    ]);
+  });
+
+  test("mid-turn steering reaches Kiro identically for opus-5 and opus-4.8", async () => {
+    // The #543 reporter observed opus-4.8 honoring mid-turn steers while opus-5 ignored them on
+    // the same proxy build. Pin that our request construction does not differ between the two
+    // beyond model identity and opus-5's native effort field, so a future model-conditional
+    // regression on this path is caught here rather than in a user's session.
+    const steer = "Stop and switch approach now.";
+    const messages = [
+      { role: "user", content: "Start the task." },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "ls" } }] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "bash", content: "out", isError: false },
+      { role: "user", content: steer },
+    ];
+    const build = async (modelId: string) => {
+      const { body } = await createKiroAdapter(provider).buildRequest({
+        ...parsedWith(messages, [bashTool], modelId),
+        options: { reasoning: "high" },
+      });
+      return JSON.parse(body);
+    };
+    const opus5 = await build("claude-opus-5");
+    const opus48 = await build("claude-opus-4.8");
+
+    for (const payload of [opus5, opus48]) {
+      const current = payload.conversationState.currentMessage.userInputMessage;
+      expect(current.content).toBe(steer);
+      expect(current.userInputMessageContext.toolResults).toEqual([
+        { content: [{ text: "out" }], status: "success", toolUseId: "call-1" },
+      ]);
+    }
+    // Only the native-effort field may differ; opus-4.8 also gets no emulated thinking tags
+    // here because tool-result turns skip that injection.
+    expect(opus5.additionalModelRequestFields).toEqual({ output_config: { effort: "high" } });
+    expect(opus48.additionalModelRequestFields).toBeUndefined();
+    expect(opus48.conversationState.currentMessage.userInputMessage.content).not.toContain("<thinking_mode>");
   });
 
   test("gpt-5.6-sol sends native reasoning while legacy models keep labeled emulation", async () => {

@@ -15,8 +15,8 @@
  *  7. hasApiKey === true             -> ready  (key-auth with credential present)
  *  8. everything else                -> needsSetup
  *
- * Live-auth overlay: `applyActiveAccountReauth` may demote ready → needs-setup
- * when the active account needs reauth (config binning rules above unchanged).
+ * Live-auth overlay: `applyActiveAccountReauth` tags ready providers that
+ * need reauth without moving them out of the ready section (avoids rail flash).
  *
  * Tiers (three-way, interview 2026-07-17): "accounts" (the canonical OpenAI forward
  * provider), "free" (free pricing), "paid" (everything else). Accounts wins
@@ -219,8 +219,9 @@ export function buildProviderWorkspace(
 
 /**
  * Live-auth overlay: when the active account for a provider needs reauth,
- * demote that provider from ready → needs-setup. Inactive-only reauth is
- * ignored (caller must only set true for the active account).
+ * tag that provider with `activeNeedsReauth` without moving it between
+ * ready/needs-setup. Config-based section membership stays stable on first
+ * paint so live discovery cannot flash a resort of the rail.
  */
 export function applyActiveAccountReauth(
   sections: WorkspaceSections,
@@ -233,18 +234,14 @@ export function applyActiveAccountReauth(
   );
   if (demote.size === 0) return sections;
 
-  const stillReady: WorkspaceItem[] = [];
-  const needsSetup = [...sections.needsSetup];
-  for (const item of sections.ready) {
-    if (demote.has(item.name)) {
-      const demoted: WorkspaceItem = { ...item, activeNeedsReauth: true };
-      delete demoted.tier;
-      needsSetup.push(demoted);
-    } else {
-      stillReady.push(item);
-    }
-  }
-  return { ready: stillReady, needsSetup, disabled: sections.disabled };
+  const tag = (items: WorkspaceItem[]): WorkspaceItem[] =>
+    items.map(item => (demote.has(item.name) ? { ...item, activeNeedsReauth: true } : item));
+
+  return {
+    ready: tag(sections.ready),
+    needsSetup: tag(sections.needsSetup),
+    disabled: sections.disabled,
+  };
 }
 
 /** Canonical status string for a single provider — config plus optional live-auth overlay. */

@@ -32,6 +32,7 @@ on:
 permissions:
   contents: write # create the matching GitHub Release + version tag after npm publish
   actions: read # verify the release commit already passed Cross-platform CI
+  pull-requests: read # credit-takeovers looks up landing/source PR authors via gh api
   id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
 
 concurrency:
@@ -397,6 +398,22 @@ jobs:
             # First release on this channel: never call generate-notes without previous_tag_name.
             # GitHub would baseline the newest repo tag, which may belong to the other channel.
             echo "::notice::No previous channel tag; skipping generate-notes (commits-only notes)"
+          fi
+
+          # Rewrite takeover credits on both carried preview notes and the since-preview
+          # delta. Carried bodies may predate this helper and would otherwise keep
+          # landing-author-only attribution on stable releases.
+          if [ -s "$carried_file" ]; then
+            bun scripts/release-notes.ts credit-takeovers \
+              --repo "$GITHUB_REPOSITORY" \
+              --in "$carried_file" \
+              --out "$carried_file"
+          fi
+          if [ -s "$delta_file" ]; then
+            bun scripts/release-notes.ts credit-takeovers \
+              --repo "$GITHUB_REPOSITORY" \
+              --in "$delta_file" \
+              --out "$delta_file"
           fi
 
           if [ -n "$notes_range_start" ]; then

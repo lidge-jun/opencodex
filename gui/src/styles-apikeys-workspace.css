@@ -1,0 +1,652 @@
+/* ============================================================================
+   apikeys-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: apikeys-workspace-  |  widgets: awi-
+   Uses only design tokens from styles.css. No gradients.
+
+   Default: natural page scroll (responsive).
+   Dense viewport-lock layout only on large desktops (see bottom).
+   ============================================================================ */
+
+.main-inner:has(.apikeys-workspace-shell) {
+  max-width: 1280px;
+  padding: 16px 28px 32px;
+  box-sizing: border-box;
+}
+
+.api-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0;
+}
+
+.api-page .page-head {
+  margin-bottom: 2px;
+}
+
+.api-page .page-sub {
+  /* Keep air under the auth blurb before Active keys / Generate. */
+  margin: 0 0 1.15rem;
+}
+
+.api-page > .notice {
+  margin-bottom: 0.85rem;
+}
+
+.api-page .apikeys-workspace-shell {
+  margin-top: 0.15rem;
+}
+
+.apikeys-workspace-shell {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: apikeys-workspace;
+}
+
+.apikeys-workspace-root {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  align-items: start;
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.apikeys-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-3);
+  min-width: 0;
+}
+
+.apikeys-workspace-rail-header {
+  display: flex;
+  align-items: baseline;
+}
+
+.apikeys-workspace-rail-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.apikeys-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  max-height: min(420px, 50vh);
+}
+
+.apikeys-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  width: 100%;
+  min-height: 46px;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+  transition: background var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.apikeys-workspace-rail-row:hover {
+  background: var(--surface);
+}
+
+.apikeys-workspace-rail-row--selected {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.apikeys-workspace-rail-row:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -2px;
+}
+
+.apikeys-workspace-rail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
+}
+
+.apikeys-workspace-rail-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption);
+  line-height: var(--leading-ui);
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.apikeys-workspace-rail-empty {
+  font-size: 12px;
+  padding: 8px 4px;
+  color: var(--muted);
+}
+
+/* ── Main ─────────────────────────────────────────────── */
+
+.apikeys-workspace-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 var(--space-2);
+}
+
+.awi-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.awi-detail-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.awi-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 14px;
+}
+
+.awi-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  align-items: start;
+  column-gap: var(--space-3);
+  row-gap: var(--space-3);
+  padding-top: 0;
+}
+
+.awi-overview-left,
+.awi-overview-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.awi-overview-left > .panel,
+.awi-overview-right > .panel {
+  margin-top: 0 !important;
+}
+
+.awi-overview-left > .panel {
+  flex: 0 0 auto;
+}
+
+.awi-overview .api-panel {
+  padding: 18px;
+  gap: 10px;
+}
+
+.awi-overview .api-auth-list {
+  gap: 8px;
+}
+
+.awi-overview .api-endpoints {
+  margin-top: 4px;
+}
+
+.awi-overview-left > .panel > p.muted.small {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.awi-overview-right > .panel:not(.api-models-panel) {
+  flex: 0 0 auto;
+}
+
+.awi-overview-right > .api-models-panel {
+  display: flex;
+  flex-direction: column;
+  /* Non-desktop fallback only — desktop media query clears this. */
+  max-height: min(34rem, 70vh);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.awi-overview-right .api-models-panel > .input,
+.awi-overview-right .api-models-panel > .api-panel-head,
+.awi-overview-right .api-models-panel > .muted {
+  flex: 0 0 auto;
+}
+
+/* Flat table — scroll inside the panel, no nested bordered box. */
+.awi-overview-right .api-models-panel > .api-models-scroll {
+  margin-top: 0.5rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  box-shadow: inset 0 -14px 14px -14px color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+/* Usage examples: collapsed by default. Curl blocks must not trap wheel scroll. */
+.awi-usage-fold .api-example-copy-btn.ocx-tooltip,
+.awi-usage-fold .api-example-copy-btn {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Inside the fold: no vertical clip — column/page scrolls when hovering examples. */
+.awi-usage-fold .api-example-pre {
+  min-height: 0;
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior: auto;
+  white-space: pre;
+  font-size: var(--text-label);
+  line-height: var(--leading-relaxed);
+  padding: 9px 11px;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.awi-usage-fold,
+.awi-inline-fold {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0;
+  min-width: 0;
+}
+
+.awi-usage-fold > summary,
+.awi-inline-fold > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 14px;
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  user-select: none;
+}
+
+.awi-usage-fold > summary::-webkit-details-marker,
+.awi-inline-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.awi-usage-fold > summary::before,
+.awi-inline-fold > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 0.45em;
+  margin-right: 0.55em;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(-45deg);
+  translate: 0 -1px;
+  vertical-align: middle;
+}
+
+.awi-usage-fold[open] > summary::before,
+.awi-inline-fold[open] > summary::before {
+  transform: rotate(45deg);
+  translate: 0 -2px;
+}
+
+.awi-usage-fold-body,
+.awi-inline-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* Let the page/column scroll — don't clip examples inside a nested max-height. */
+.awi-usage-fold-body {
+  overflow: visible;
+}
+
+.awi-usage-example {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.awi-usage-example + .awi-usage-example {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft, var(--border));
+}
+
+.awi-usage-example-title {
+  margin: 0;
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+.awi-inline-fold-body .api-auth-list {
+  margin: 8px 0 0;
+}
+
+.awi-inline-fold-body > .muted.small {
+  margin: 8px 0 0;
+}
+
+.awi-overview-left > .api-generate-panel,
+.awi-overview-left > .api-newkey-panel {
+  margin-top: 0;
+}
+
+.awi-section {
+  margin-bottom: 20px;
+}
+
+.awi-section-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 8px 0;
+}
+
+.awi-kv {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.awi-kv-row {
+  display: flex;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.awi-kv-row dt {
+  flex-shrink: 0;
+  width: 130px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.awi-kv-row dd {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.awi-kv-row dd code {
+  font-size: 0.8rem;
+}
+
+.awi-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.awi-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
+  cursor: pointer;
+  padding: 6px 12px 6px 8px;
+  margin: 0;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+
+.awi-back:hover {
+  background: var(--raised-hover, var(--surface));
+  border-color: var(--faint);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.awi-back:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.awi-back-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  transform: rotate(180deg);
+  color: var(--muted);
+}
+
+.awi-detail-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.awi-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+/* Keep @container and @media stacking rules in sync when changing breakpoints. */
+
+@container apikeys-workspace (max-width: 980px) {
+  .awi-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container apikeys-workspace (max-width: 720px) {
+  .apikeys-workspace-root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .apikeys-workspace-rail {
+    border-right: none;
+    padding-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: var(--space-3);
+  }
+  .apikeys-workspace-rail-list {
+    max-height: 220px;
+  }
+  .apikeys-workspace-main {
+    padding: var(--space-2) 0 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .main-inner:has(.apikeys-workspace-shell) {
+    padding: 16px 18px 32px;
+  }
+  .apikeys-workspace-root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .apikeys-workspace-rail {
+    border-right: none;
+    padding-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: var(--space-3);
+  }
+  .apikeys-workspace-rail-list {
+    max-height: 220px;
+  }
+  .apikeys-workspace-main {
+    padding: var(--space-2) 0 0;
+  }
+  .awi-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+  Desktop: fill the viewport. Models card stretches to the bottom (with
+  main-inner bottom padding as spacing). Left column scrolls so expanded
+  usage examples are not clipped mid-panel.
+*/
+@media (min-width: 1100px) and (min-height: 700px) {
+  .main-inner:has(.apikeys-workspace-shell) {
+    height: 100dvh;
+    min-height: 0;
+    padding: 16px 28px 20px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  .api-page {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .api-page .page-head,
+  .api-page .page-sub,
+  .api-page > .notice {
+    flex: 0 0 auto;
+  }
+
+  .api-page .apikeys-workspace-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .api-page .apikeys-workspace-root {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    align-items: stretch;
+  }
+
+  .apikeys-workspace-rail {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .apikeys-workspace-rail-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  .apikeys-workspace-main {
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .awi-overview {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    align-items: stretch;
+    overflow: hidden;
+    row-gap: var(--space-3);
+  }
+
+  .awi-overview-left {
+    min-height: 0;
+    height: 100%;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    gap: var(--space-3);
+    /* Keep expanded usage examples from sitting flush against the clip edge. */
+    padding-bottom: 2.75rem;
+  }
+
+  .awi-overview-right {
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .awi-overview-right > .api-models-panel {
+    flex: 1 1 auto;
+    align-self: stretch;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .awi-overview-right .api-models-panel > .api-models-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .awi-overview-left > .awi-usage-fold {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .awi-usage-fold .api-example-pre {
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+}

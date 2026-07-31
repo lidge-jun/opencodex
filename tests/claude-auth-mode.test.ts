@@ -124,8 +124,8 @@ test("auto-absent emits both the marker and the host assertion", () => {
   expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
 });
 
-// A user-exported API key is auth: detection sees it through the base-env binding,
-// so no proxy token is injected and no auth-conflict warning is provoked.
+// A user-exported API key is auth: detection sees it through the sanitized launch-env
+// binding, so no proxy token is injected and no auth-conflict warning is provoked.
 test("an exported ANTHROPIC_API_KEY keeps the token slot untouched", () => {
   const env = buildClaudeEnv(
     cfg(), 10100,
@@ -145,6 +145,89 @@ test("manual proxy injects the marker even when auth is present", () => {
 test("manual subscription withholds the marker even when auth is absent", () => {
   const env = buildClaudeEnv(cfg({ authMode: "subscription" }), 10100, {}, {}, { authDetect: fileAuth("absent") });
   expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// #701 — project dotenv must not outrank a claude.ai subscription.
+//
+// Bun auto-loads `.env`/`.env.local` before any opencodex code runs, so process.env alone
+// cannot tell ambient pollution from a real shell export. The Node launcher runs BEFORE
+// that and records which slots already existed; these tests drive that marker directly.
+// An absent marker means provenance is unknowable, so behavior must not change.
+const PRE_BUN = "OCX_PRE_BUN_ANTHROPIC_ENV";
+
+// The reported failure: auto mode, healthy claude.ai login, key only from the dotenv.
+test("auto mode drops an Anthropic key that only Bun's dotenv introduced", () => {
+  const env = buildClaudeEnv(
+    cfg(), 10100,
+    { ANTHROPIC_API_KEY: "sk-ant-dotenv", [PRE_BUN]: "" },
+    {},
+    { authDetect: fileAuth("present") },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(env[PRE_BUN]).toBeUndefined();
+});
+
+// A real shell export must still win — that is auto-mode API-key auth, which is supported.
+test("a shell-exported Anthropic key survives the dotenv strip", () => {
+  const env = buildClaudeEnv(
+    cfg(), 10100,
+    { ANTHROPIC_API_KEY: "sk-ant-user", [PRE_BUN]: "ANTHROPIC_API_KEY" },
+    {},
+    { authDetect: fileAuth("present") },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user");
+  expect(env[PRE_BUN]).toBeUndefined();
+});
+
+test("explicit subscription mode also drops a dotenv-only credential", () => {
+  const env = buildClaudeEnv(
+    cfg({ authMode: "subscription" }), 10100,
+    { ANTHROPIC_API_KEY: "sk-ant-dotenv", ANTHROPIC_AUTH_TOKEN: "token-from-dotenv", [PRE_BUN]: "" },
+    {},
+    { authDetect: fileAuth("present") },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+});
+
+// The admission key is opencodex's own gate, not user auth: it is injected after the strip.
+test("the configured admission key survives the dotenv strip", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    { ANTHROPIC_API_KEY: "sk-ant-dotenv", [PRE_BUN]: "" },
+    {},
+    { authDetect: fileAuth("present") },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+});
+
+// Without the launcher marker (direct `bun src/cli/index.ts`, or an older launcher)
+// provenance is unknowable, so an inherited key keeps its current meaning.
+test("without the launcher marker an inherited key is left alone", () => {
+  const env = buildClaudeEnv(
+    cfg(), 10100,
+    { ANTHROPIC_API_KEY: "sk-ant-user" },
+    {},
+    { authDetect: fileAuth("present") },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user");
+});
+
+// Stripping the key must ALSO flip detection to absent so the proxy marker is injected.
+// Binding detection to the pre-strip base left this user with no credential and no marker.
+test("a stripped dotenv key lets detection fall through to the proxy marker", () => {
+  const env = buildClaudeEnv(
+    cfg(), 10100,
+    { ANTHROPIC_API_KEY: "sk-ant-dotenv", [PRE_BUN]: "" },
+    {},
+    { authDetect: fileAuth("absent") },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe(PROXY_MARKER);
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
 });
 
 // ---------------------------------------------------------------------------

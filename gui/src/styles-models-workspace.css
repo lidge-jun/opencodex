@@ -127,14 +127,14 @@
   align-items: center;
   column-gap: clamp(var(--space-3), 2vw, var(--space-6));
   row-gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
   min-width: 0;
 }
 
 .models-shadow-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   flex-wrap: nowrap;
 }
@@ -215,9 +215,147 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   max-width: 100%;
+}
+
+/* ── Spacing rhythm (tight within clusters, loose between sections) ──
+   Keep spacing in CSS classes — inline px floods Impeccable’s page scan. */
+
+.models-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-provider-card {
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+.models-provider-body {
+  padding: var(--space-3) var(--space-4);
+}
+
+.models-provider-body > .input {
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+
+.models-provider-hint {
+  margin: 0 0 var(--space-2);
+  max-width: var(--prose-measure);
+}
+
+.models-chip {
+  display: inline-block;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.models-chip--tip {
+  margin-bottom: var(--space-1);
+}
+
+.models-model-row {
+  padding: var(--space-2) 0;
+}
+
+.models-show-more {
+  margin-top: var(--space-2);
+}
+
+.models-segmented {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft, var(--raised));
+  padding: var(--space-1);
+  gap: var(--space-1);
+}
+
+.models-segmented .btn {
+  border-radius: var(--radius-pill);
+  min-width: 64px;
+  padding: var(--space-1-5) var(--space-3);
+  border: none;
+}
+
+.models-cap-row {
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.models-custom-summary {
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.models-order-hint {
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  max-width: var(--prose-measure);
+}
+
+.models-order-hint > svg {
+  flex-shrink: 0;
+  margin-top: var(--space-0-5);
+}
+
+.models-collapse-controls {
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+}
+
+.models-combos-card {
+  margin-bottom: var(--space-3);
+}
+
+.models-combos-empty-head {
+  padding: var(--space-3);
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.models-combos-add {
+  padding: var(--space-2) var(--space-3) var(--space-3) calc(var(--space-8) + var(--space-0-5));
+  gap: var(--space-2);
+  text-decoration: none;
+}
+
+.models-help-link {
+  margin-top: var(--space-3);
+}
+
+.models-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-field-row {
+  gap: var(--space-2);
+}
+
+.models-modality-option {
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+/* Beat .row { gap: 10px } (defined later in styles.css). */
+.row.models-model-row,
+.row.models-cap-row,
+.row.models-custom-summary,
+.row.models-order-hint,
+.row.models-collapse-controls,
+.row.models-combos-empty-head,
+.row.models-combos-add,
+.row.models-field-row,
+.row.models-modality-option {
+  gap: var(--space-2);
 }
 
 /* ── Responsive ───────────────────────────────────────── */

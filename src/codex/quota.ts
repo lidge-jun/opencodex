@@ -1,3 +1,7 @@
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFile, getConfigDir } from "../config";
+
 export type StoredAccountQuota = {
   weeklyPercent?: number;
   monthlyPercent?: number;
@@ -6,6 +10,20 @@ export type StoredAccountQuota = {
   resetCredits?: number;
   updatedAt: number;
 };
+
+/** Disk snapshot under OPENCODEX_HOME — usage percents only (no emails/tokens). */
+const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
+/** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
+const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
+const QUOTA_PERSIST_DEBOUNCE_MS = 250;
+
+type QuotaDiskFile = {
+  version: 1;
+  quotas: Record<string, StoredAccountQuota>;
+};
+
+let diskHydrated = false;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 export type WhamUsageResponse = {
   email?: string | null;
@@ -120,6 +138,7 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     next.resetCredits = quota.resetCredits;
     accountQuota.set(accountId, next);
+    schedulePersistAccountQuotas();
     return;
   }
 
@@ -145,6 +164,7 @@ export function setAccountQuotaFromParsed(
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
 
   accountQuota.set(accountId, next);
+  schedulePersistAccountQuotas();
 }
 
 export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQuota, "updatedAt"> | null {
@@ -235,19 +255,74 @@ export function updateAccountQuota(
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
   accountQuota.set(accountId, quota);
+  schedulePersistAccountQuotas();
+}
+
+function hydrateAccountQuotasFromDisk(): void {
+  if (diskHydrated) return;
+  diskHydrated = true;
+  try {
+    const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
+    if (!existsSync(path)) return;
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as QuotaDiskFile;
+    if (!parsed || parsed.version !== 1 || !parsed.quotas || typeof parsed.quotas !== "object") return;
+    const now = Date.now();
+    for (const [accountId, quota] of Object.entries(parsed.quotas)) {
+      if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
+      if (now - quota.updatedAt > QUOTA_DISK_MAX_AGE_MS) continue;
+      if (!accountQuota.has(accountId)) accountQuota.set(accountId, quota);
+    }
+  } catch {
+    // Corrupt/missing cache must never block routing or the dashboard.
+  }
+}
+
+function schedulePersistAccountQuotas(): void {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      const quotas: Record<string, StoredAccountQuota> = {};
+      for (const [accountId, quota] of accountQuota.entries()) {
+        quotas[accountId] = quota;
+      }
+      const body: QuotaDiskFile = { version: 1, quotas };
+      atomicWriteFile(join(getConfigDir(), QUOTA_CACHE_FILENAME), `${JSON.stringify(body)}\n`);
+    } catch {
+      // Best-effort persistence only.
+    }
+  }, QUOTA_PERSIST_DEBOUNCE_MS);
 }
 
 export function getAccountQuota(accountId: string): StoredAccountQuota | null {
+  hydrateAccountQuotasFromDisk();
   return accountQuota.get(accountId) ?? null;
 }
 
 export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuota]> {
+  hydrateAccountQuotasFromDisk();
   return accountQuota.entries();
 }
 
 export function clearAccountQuota(accountId?: string): void {
-  if (accountId) accountQuota.delete(accountId);
-  else accountQuota.clear();
+  if (accountId) {
+    accountQuota.delete(accountId);
+    schedulePersistAccountQuotas();
+    return;
+  }
+  accountQuota.clear();
+  diskHydrated = false;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  try {
+    const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
+    if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // Best-effort; memory is already cleared.
+  }
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {

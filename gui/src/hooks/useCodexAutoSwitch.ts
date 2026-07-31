@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_AUTO_SWITCH_THRESHOLD,
   autoSwitchThresholdReadDisposition,
+  extractAutoSwitchThresholdPayload,
   normalizeAutoSwitchThreshold,
   parseEnabledAutoSwitchThreshold,
   planAutoSwitchToggleWrite,
@@ -10,8 +11,11 @@ import {
 import type { AutoSwitchFeedback } from "../components/CodexAutoSwitchSetting";
 
 export interface CodexAutoSwitchController {
-  threshold: number | null;
+  /** Always a number — seeded with the default so the card never waits on /active. */
+  threshold: number;
   draft: string;
+  /** False until /active (or hydrate) confirms server state — blocks writes of the seed default. */
+  hydrated: boolean;
   saving: boolean;
   loadError: boolean;
   feedback: AutoSwitchFeedback;
@@ -35,12 +39,15 @@ export function useCodexAutoSwitch(
     invalid: string;
   },
 ): CodexAutoSwitchController {
-  const [threshold, setThreshold] = useState<number | null>(null);
-  const [draft, setDraftState] = useState("");
+  // Seed immediately — paint chrome with the default, but block writes until /active confirms.
+  const [threshold, setThreshold] = useState(DEFAULT_AUTO_SWITCH_THRESHOLD);
+  const [draft, setDraftState] = useState(String(DEFAULT_AUTO_SWITCH_THRESHOLD));
+  const [hydrated, setHydrated] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<AutoSwitchFeedback>(null);
-  const thresholdRef = useRef<number | null>(null);
+  const thresholdRef = useRef(DEFAULT_AUTO_SWITCH_THRESHOLD);
+  const hydratedRef = useRef(false);
   const lastEnabledRef = useRef(DEFAULT_AUTO_SWITCH_THRESHOLD);
   const editingRef = useRef(false);
   const savingRef = useRef(false);
@@ -51,6 +58,8 @@ export function useCodexAutoSwitch(
 
   const apply = useCallback((next: number) => {
     thresholdRef.current = next;
+    hydratedRef.current = true;
+    setHydrated(true);
     setThreshold(next);
     if (next > 0) lastEnabledRef.current = next;
     setDraftState(String(next > 0 ? next : lastEnabledRef.current));
@@ -99,12 +108,13 @@ export function useCodexAutoSwitch(
   }, []);
 
   const beginServerRead = useCallback((): number => {
-    if (thresholdRef.current === null) setLoadError(false);
+    if (!hydratedRef.current) setLoadError(false);
     return revisionRef.current;
   }, []);
 
   const acceptServerRead = useCallback((value: unknown, startedRevision: number) => {
     setLoadError(false);
+    const thresholdValue = extractAutoSwitchThresholdPayload(value);
     const disposition = autoSwitchThresholdReadDisposition(
       editingRef.current,
       savingRef.current,
@@ -112,27 +122,25 @@ export function useCodexAutoSwitch(
       revisionRef.current,
     );
     if (disposition === "defer") {
-      deferredServerValueRef.current = normalizeAutoSwitchThreshold(value);
+      deferredServerValueRef.current = normalizeAutoSwitchThreshold(thresholdValue);
     } else if (disposition === "apply") {
-      queueOrApply(normalizeAutoSwitchThreshold(value));
+      queueOrApply(normalizeAutoSwitchThreshold(thresholdValue));
     }
   }, [queueOrApply]);
 
   /**
-   * Seed the threshold from a value another surface already fetched. Applies ONLY while
+   * Seed from a value another surface already fetched. Applies ONLY while
    * uninitialized, so it can never disturb a draft, a pending save, or a newer read.
-   * Needed because tabs mount and unmount their panels: a panel that appears after the
-   * controller's load finished would otherwise render "Loading" until the next poll.
    */
   const hydrateServerValue = useCallback((value: unknown) => {
-    if (thresholdRef.current !== null) return;
+    if (hydratedRef.current) return;
     if (editingRef.current || savingRef.current) return;
     setLoadError(false);
-    apply(normalizeAutoSwitchThreshold(value));
+    apply(normalizeAutoSwitchThreshold(extractAutoSwitchThresholdPayload(value)));
   }, [apply]);
 
   const rejectServerRead = useCallback(() => {
-    if (thresholdRef.current === null) setLoadError(true);
+    if (!hydratedRef.current) setLoadError(true);
   }, []);
 
   const save = useCallback(async (
@@ -167,7 +175,7 @@ export function useCodexAutoSwitch(
   const rejectDraft = useCallback(() => {
     editingRef.current = false;
     const current = thresholdRef.current;
-    if (!reconcileDeferred() && current !== null) {
+    if (!reconcileDeferred()) {
       setDraftState(String(current > 0 ? current : lastEnabledRef.current));
     }
     showFeedback(messages.invalid, true);
@@ -178,7 +186,7 @@ export function useCodexAutoSwitch(
     cancelledDraftRef.current = true;
     clearFeedback();
     const current = thresholdRef.current;
-    if (!reconcileDeferred() && current !== null) {
+    if (!reconcileDeferred()) {
       setDraftState(String(current > 0 ? current : lastEnabledRef.current));
     }
   }, [clearFeedback, reconcileDeferred]);
@@ -188,8 +196,9 @@ export function useCodexAutoSwitch(
       cancelledDraftRef.current = false;
       return true;
     }
+    // Never PUT the paint-time default before /active confirms the real value.
+    if (!hydratedRef.current || savingRef.current) return false;
     const current = thresholdRef.current;
-    if (current === null || savingRef.current) return false;
     editingRef.current = false;
     const next = parseEnabledAutoSwitchThreshold(draft);
     if (next === null) {
@@ -204,8 +213,8 @@ export function useCodexAutoSwitch(
   }, [draft, reconcileDeferred, rejectDraft, save]);
 
   const toggle = useCallback(async (): Promise<boolean> => {
+    if (!hydratedRef.current || savingRef.current) return false;
     const current = thresholdRef.current;
-    if (current === null || savingRef.current) return false;
     editingRef.current = false;
     const plan = planAutoSwitchToggleWrite(current, draft, lastEnabledRef.current);
     const ok = await save(plan.threshold, current);
@@ -216,6 +225,7 @@ export function useCodexAutoSwitch(
   }, [draft, save]);
 
   const setDraft = useCallback((value: string) => {
+    if (!hydratedRef.current) return;
     editingRef.current = true;
     cancelledDraftRef.current = false;
     clearFeedback();
@@ -234,6 +244,7 @@ export function useCodexAutoSwitch(
   return {
     threshold,
     draft,
+    hydrated,
     saving,
     loadError,
     feedback,

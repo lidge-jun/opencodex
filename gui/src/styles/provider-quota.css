@@ -15,10 +15,16 @@
   gap: 3px;
 }
 
-.quota-stacked {
+.quota-stacked,
+.quota-stacked--pending {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 64px;
+}
+
+.quota-stacked-row--skeleton .quota-stacked-bar-row {
+  min-height: 18px;
 }
 
 .quota-stacked-row {

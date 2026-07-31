@@ -6,6 +6,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 import { type ComboItem, parseComboList } from "../combo-workspace-data";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
   buildProviderModelGroups,
   type ConfiguredProviderSummary,
@@ -42,22 +43,36 @@ import {
 } from "./models-shared";
 import { EmptyProviderHint } from "./models-provider-hints";
 
+type CachedModelsPage = {
+  models: ModelRow[];
+  providers: ConfiguredProviderSummary[];
+  selectedModels: ProviderModelMap;
+  disabled: string[];
+  contextCaps: Record<string, number>;
+  contextCapValue: number;
+};
+
 export default function Models({ apiBase }: { apiBase: string }) {
   const t: TFn = useT();
-  const [models, setModels] = useState<ModelRow[]>([]);
-  const [providers, setProviders] = useState<ConfiguredProviderSummary[]>([]);
-  const [disabled, setDisabled] = useState<Set<string>>(new Set());
-  const [selectedModels, setSelectedModels] = useState<ProviderModelMap | null>(null);
+  const cacheKey = `ocx.models.catalog.v1:${apiBase}`;
+  const cached = readSessionListCache<CachedModelsPage>(cacheKey);
+  const hasCacheRef = useRef(Boolean(cached));
+  const [models, setModels] = useState<ModelRow[]>(() => cached?.models ?? []);
+  const [providers, setProviders] = useState<ConfiguredProviderSummary[]>(() => cached?.providers ?? []);
+  const [disabled, setDisabled] = useState<Set<string>>(() => new Set(cached?.disabled ?? []));
+  const [selectedModels, setSelectedModels] = useState<ProviderModelMap | null>(() => cached?.selectedModels ?? null);
   const [search, setSearch] = useState<Record<string, string>>({});
   const [limit, setLimit] = useState<Record<string, number>>({});
-  const [contextCaps, setContextCaps] = useState<Record<string, number>>({});
-  const [contextCapValue, setContextCapValue] = useState(350_000);
+  const [contextCaps, setContextCaps] = useState<Record<string, number>>(() => cached?.contextCaps ?? {});
+  const [contextCapValue, setContextCapValue] = useState(() => cached?.contextCapValue ?? 350_000);
   const [customCap, setCustomCap] = useState("");
   const [showCustom, setShowCustom] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsedProviders);
+  const initialCollapsed = readCollapsedProviders();
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => initialCollapsed ?? new Set());
+  const needsDefaultCollapseRef = useRef(initialCollapsed === null);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !cached);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const loadGenerationRef = useRef(0);
@@ -159,6 +174,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
     if (loadPendingRef.current && !force) return false;
     loadPendingRef.current = true;
     const generation = ++loadGenerationRef.current;
+    // Soft refresh: keep last-good catalog painted while revalidating.
+    if (!hasCacheRef.current) setLoading(true);
     try {
       const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
         fetch(`${apiBase}/api/models`),
@@ -175,26 +192,36 @@ export default function Models({ apiBase }: { apiBase: string }) {
         throw new Error("models payload missing");
       }
       if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
-      void loadV2(); // best-effort, independent of the models fetch
-      void loadShadowCall();
       const nextGroups = buildProviderModelGroups(data, providerData);
       setSelectedProvider(prev => (
         prev !== null && !nextGroups.some(group => group.provider === prev)
           ? null
           : prev
       ));
-      setModels(data);
-      setProviders(providerData);
-      setDisabled(collectDisabledNamespaced(data));
-      setSelectedModels(selectionData);
+      const nextDisabled = collectDisabledNamespaced(data);
       const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
         ? capsData.value
         : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
+      const nextCapValue = value !== undefined ? value : 350_000;
+      const nextCaps = capsData.caps ?? {};
+      setModels(data);
+      setProviders(providerData);
+      setDisabled(nextDisabled);
+      setSelectedModels(selectionData);
       if (value !== undefined) setContextCapValue(value);
-      setContextCaps(capsData.caps ?? {});
+      setContextCaps(nextCaps);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, {
+        models: data,
+        providers: providerData,
+        selectedModels: selectionData,
+        disabled: [...nextDisabled],
+        contextCaps: nextCaps,
+        contextCapValue: nextCapValue,
+      } satisfies CachedModelsPage);
       return true;
     } catch {
-      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current)) {
+      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current) && !hasCacheRef.current) {
         setOk(false); setStatus(t("models.loadFail"));
       }
       return false;
@@ -204,7 +231,23 @@ export default function Models({ apiBase }: { apiBase: string }) {
         setLoading(false);
       }
     }
-  }, [apiBase, loadShadowCall, loadV2, t]);
+  }, [apiBase, cacheKey, t]);
+
+  // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadShadowCall();
+      void loadV2();
+    }, 0);
+    const timer = window.setInterval(() => {
+      if (!v2BusyRef.current) void loadV2();
+    }, 10000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(timer);
+    };
+  }, [loadShadowCall, loadV2]);
+
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       void load();
@@ -227,6 +270,20 @@ export default function Models({ apiBase }: { apiBase: string }) {
     () => buildProviderModelGroups(models, providers),
     [models, providers],
   );
+
+  // One-shot default collapse. It stays an effect on `groups` so CACHED groups collapse
+  // immediately on first paint, even when revalidation is slow or fails; moving it into
+  // the load() success path would render cached providers expanded and leave them
+  // expanded whenever the refresh errors.
+  useEffect(() => {
+    if (!needsDefaultCollapseRef.current) return;
+    if (groups.length === 0) return;
+    needsDefaultCollapseRef.current = false;
+    const all = new Set(groups.map(group => group.provider));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCollapsed(all);
+    writeCollapsedProviders(all);
+  }, [groups]);
 
   const effectiveVisibleCount = useMemo(() => {
     if (!selectedModels) return 0;
@@ -562,7 +619,24 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
-  if (loading) return <div className="row muted"><span className="spin" /> {t("models.loading")}</div>;
+  // Cold start only: with a session seed the workspace paints immediately and revalidates quietly.
+  if (loading && !selectedModels) {
+    return (
+      <>
+        <div className="models-control-top-row">
+          <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
+            <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
+            <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
+            <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
+            <div className="models-shadow-model-slot">
+              <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+            </div>
+          </div>
+        </div>
+        <div className="row muted"><span className="spin" /> {t("models.loading")}</div>
+      </>
+    );
+  }
   if (!selectedModels) {
     return <Notice tone="err">{t("models.loadFail")}</Notice>;
   }
@@ -610,7 +684,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
        );
      };
     return (
-      <div key={provider} className="card models-provider-card" style={{ marginBottom: 8, overflow: "hidden" }}>
+      <div key={provider} className="card models-provider-card">
        <div className={`row group-head models-provider-head${isCollapsed ? "" : " open"}`}>
           <button
             type="button"
@@ -621,7 +695,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           >
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
           <span className="text-body font-semibold">{provider}</span>
-          {isNative && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.nativeGroupLabel")}</span>}
+          {isNative && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
              className="badge badge-amber"
@@ -638,7 +712,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
                <button
                  type="button"
                  className="btn btn-ghost btn-sm text-caption"
-                 style={{ padding: "2px 8px" }}
                  onClick={(e) => {
                    e.stopPropagation();
                    setCustomModalMode("add");
@@ -656,8 +729,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
                  aria-haspopup="dialog"
                >+</button>
              )}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)} style={{ padding: "2px 8px" }}>{t("models.allOn")}</button>
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)} style={{ padding: "2px 8px" }}>{t("models.allOff")}</button>
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
              {!isNative && <>
                <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
                <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
@@ -665,15 +738,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
            </div>
         </div>
         {!isCollapsed && (
-          <div style={{ padding: "6px 12px" }}>
-            {isNative && <p className="muted text-label" style={{ margin: "2px 0 6px" }}>{t("models.nativeHint")}</p>}
+          <div className="models-provider-body">
+            {isNative && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
             {rows.length === 0 && (
               <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}
             {rows.length > PAGE / 2 && (
               <input
                 className="input"
-                style={{ width: "100%", marginBottom: 6 }}
                 placeholder={t("models.search")}
                 value={search[provider] ?? ""}
                 onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
@@ -694,15 +766,15 @@ export default function Models({ apiBase }: { apiBase: string }) {
                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoveredModel(null);
                    }}
                  >
-                   <div className="row" style={{ padding: "5px 0" }}>
+                   <div className="row models-model-row">
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
                      {m.custom && (
-                       <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
+                       <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
                        </span>
                      )}
-                     {m.contextCapped && <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                     {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                    </div>
                    {hoveredModel?.namespaced === m.namespaced && (() => {
                      const r = hoveredModel.rect;
@@ -725,7 +797,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                          <div className="model-tip-id">{m.native ? m.id : m.namespaced}</div>
                          {m.displayName && <div className="model-tip-display">{m.displayName}</div>}
                          {m.custom && (
-                           <span className="muted mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)", display: "inline-block", marginBottom: 4 }}>
+                           <span className="models-chip models-chip--tip muted mono text-caption">
                              {t("models.customBadge")}
                            </span>
                          )}
@@ -789,8 +861,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                <button
                  type="button"
                  onClick={() => setLimit(prev => ({ ...prev, [provider]: shown + PAGE }))}
-                 className="btn btn-ghost btn-sm"
-                 style={{ marginTop: 4 }}
+                 className="btn btn-ghost btn-sm models-show-more"
                >{t("models.showMore", { n: remaining })}</button>
              )}
            </div>
@@ -806,7 +877,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const controlsBlock = (
     <>
       <div className="models-control-top-row">
-        <div className="models-shadow-row row muted text-control">
+        <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
           <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
@@ -818,7 +889,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         {v2 && (
           <div className="models-v2-mode-row row">
             <span className="muted text-control">{t("models.v2Label")}</span>
-            <div className="segmented" role="radiogroup" aria-label={t("models.v2Label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+            <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
               {(["v1", "default", "v2"] as const).map(mode => (
                 <button
                   key={mode}
@@ -826,7 +897,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   role="radio"
                   aria-checked={(v2.multiAgentMode ?? "default") === mode}
                   className={`btn btn-sm${(v2.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                  style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
+                  style={{ background: (v2.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
                   disabled={v2Busy}
                   onClick={() => void setMultiAgentMode(mode)}
                 >
@@ -899,7 +970,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
         </div>
       )}
 
-      <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+      <div className="row models-cap-row">
         <span className="muted text-control">{t("models.contextCapLabel")}</span>
         <Select
           value={showCustom ? CUSTOM_OPTION : (CAP_OPTION_SET.has(contextCapValue) ? String(contextCapValue) : CUSTOM_OPTION)}
@@ -937,16 +1008,16 @@ export default function Models({ apiBase }: { apiBase: string }) {
         const customCount = models.filter(m => m.custom).length;
         if (customCount === 0) return null;
         return (
-          <div className="row muted text-label" style={{ gap: 6, marginBottom: 8 }}>
-            <span className="mono text-caption" style={{ padding: "1px 6px", border: "1px solid var(--border)", borderRadius: "var(--radius-pill)" }}>
+          <div className="row muted text-label models-custom-summary">
+            <span className="models-chip mono text-caption">
               {t("models.customSummary", { count: customCount })}
             </span>
           </div>
         );
       })()}
 
-      <div className="row muted text-label leading-body" style={{ alignItems: "flex-start", gap: 8, marginBottom: 12, maxWidth: "80ch" }}>
-        <IconInfo width={15} height={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
+      <div className="row muted text-label leading-body models-order-hint">
+        <IconInfo width={15} height={15} aria-hidden="true" />
         <span>{t("models.orderHint")}</span>
       </div>
     </>
@@ -955,9 +1026,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const combosBlock = (
     <>
      {combos !== null && !combosError && combos.length === 0 && (
-       <div className="card models-combos-card" style={{ marginBottom: 10 }}>
-         <div className="row" style={{ padding: "10px 12px", justifyContent: "space-between", gap: 8 }}>
-           <div className="row" style={{ gap: 8, minWidth: 0 }}>
+       <div className="card models-combos-card">
+         <div className="row models-combos-empty-head">
+           <div className="row models-field-row" style={{ minWidth: 0 }}>
              <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
              <strong>{t("nav.combos")}</strong>
              <span className="muted text-label">{t("models.combosEmpty")}</span>
@@ -967,14 +1038,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
        </div>
      )}
      {combos !== null && !combosError && combos.length > 0 && (
-       <div className="card models-combos-card" style={{ marginBottom: 10 }}>
-         <div className={`row group-head${combosOpen ? " open" : ""}`} style={{ gap: 8 }}>
+       <div className="card models-combos-card">
+         <div className={`row group-head models-field-row${combosOpen ? " open" : ""}`}>
            <button
              type="button"
-             className="row"
+             className="row models-field-row"
              aria-expanded={combosOpen}
              onClick={toggleCombosOpen}
-             style={{ flex: 1, gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", minWidth: 0 }}
+             style={{ flex: 1, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", minWidth: 0 }}
            >
              <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0, transform: combosOpen ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
              <IconShuffle width={14} height={14} aria-hidden="true" style={{ flexShrink: 0 }} />
@@ -991,7 +1062,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                  <span className="muted text-label">{c.strategy} · {c.targets.length}</span>
                </div>
              ))}
-             <a className="row muted" href="#combos" style={{ padding: "8px 12px 10px 34px", gap: 6, textDecoration: "none" }}>
+             <a className="row muted models-combos-add" href="#combos">
                + {t("models.combosAdd")}
              </a>
            </div>
@@ -1002,7 +1073,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   );
 
   const collapseControls = (
-    <div className="row" style={{ gap: 6, margin: "2px 0 10px" }}>
+    <div className="row models-collapse-controls">
       <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
         <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
       </button>
@@ -1034,7 +1105,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
             <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
               {t("models.v2Help")}
             </div>
-            <div style={{ marginTop: 12 }}>
+            <div className="models-help-link">
               <a className="text-control" href="https://opencodex.me/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
                 {t("models.v2DocsLink")}
               </a>
@@ -1075,8 +1146,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
             {customError && <Notice tone="err">{customError}</Notice>}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div className="models-field-stack">
+              <label className="text-label models-field">
                 {t("models.customFieldModelId")}
                 <input
                   className="input"
@@ -1088,7 +1159,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 />
               </label>
 
-              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label className="text-label models-field">
                 {t("models.customFieldDisplayName")}
                 <input
                   className="input"
@@ -1099,9 +1170,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 />
               </label>
 
-              <label className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label className="text-label models-field">
                 {t("models.customFieldContext")}
-                <div className="row" style={{ gap: 6 }}>
+                <div className="row models-field-row">
                   <Select
                     value={customFormShowCustomCtx ? CUSTOM_OPTION : customFormContextWindow}
                     options={[
@@ -1141,11 +1212,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 </div>
               </label>
 
-              <div className="text-label" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div className="text-label models-field">
                 {t("models.customFieldModalities")}
-                <div className="row" style={{ gap: 8 }}>
+                <div className="row models-field-row">
                   {(["text", "image", "audio"] as const).map(mod => (
-                    <label key={mod} className="row" style={{ gap: 4, cursor: "pointer" }}>
+                    <label key={mod} className="row models-modality-option">
                       <input
                         type="checkbox"
                         checked={customFormModalities.includes(mod)}
@@ -1260,10 +1331,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
           {controlsBlock}
           {combosBlock}
           {collapseControls}
-          {
-            // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
-            visibleGroups.map(group => renderGroup(group))
-          }
+          <div className="models-provider-list">
+            {
+              // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
+              visibleGroups.map(group => renderGroup(group))
+            }
+          </div>
           {groups.length === 0 && emptyStateBlock}
         </section>
       </div>

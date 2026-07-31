@@ -31,8 +31,8 @@ afterEach(() => {
 });
 
 function renderSetting(
-  threshold: number | null,
-  draft = threshold === null ? "" : String(threshold),
+  threshold: number,
+  draft = String(threshold > 0 ? threshold : 80),
   saving = false,
   loadError = false,
   feedback: { tone: "ok" | "err"; message: string } | null = null,
@@ -133,17 +133,45 @@ describe("Codex account auto-switch threshold", () => {
     expect(html).not.toContain('type="number"');
   });
 
-  test("does not expose an actionable placeholder before hydration", () => {
-    const loading = renderSetting(null);
-    expect(loading).toContain("Loading…");
-    expect(loading).toContain('aria-busy="true"');
-    expect(loading).not.toContain('type="number"');
-    expect(loading).not.toContain('aria-pressed=');
+  test("paints controls immediately with the default threshold (no loading placeholder)", () => {
+    const html = renderSetting(DEFAULT_AUTO_SWITCH_THRESHOLD);
+    expect(html).toContain('type="number"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).not.toContain("Loading…");
+    expect(html).not.toContain('aria-busy="true"');
+  });
 
-    const failed = renderSetting(null, "", false, true);
+  test("blocks interaction until hydrated without hiding chrome", () => {
+    const html = renderToStaticMarkup(
+      <LanguageProvider>
+        <AutoSwitchSetting
+          threshold={DEFAULT_AUTO_SWITCH_THRESHOLD}
+          draft={String(DEFAULT_AUTO_SWITCH_THRESHOLD)}
+          hydrated={false}
+          saving={false}
+          loadError={false}
+          feedback={null}
+          onDraftChange={() => {}}
+          onEditingChange={() => {}}
+          onCommit={async () => true}
+          onCancel={() => {}}
+          onToggle={async () => true}
+          onRetry={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(html).toContain('type="number"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('readOnly=""');
+    expect(html).toContain('disabled=""');
+    expect(html).not.toContain("Loading…");
+  });
+
+  test("surfaces load failure without hiding the toggle", () => {
+    const failed = renderSetting(DEFAULT_AUTO_SWITCH_THRESHOLD, String(DEFAULT_AUTO_SWITCH_THRESHOLD), false, true);
     expect(failed).toContain("Automatic switching setting could not be loaded.");
     expect(failed).toContain("Retry");
-    expect(failed).not.toContain('type="number"');
+    expect(failed).toContain('aria-pressed="true"');
   });
 
   test("keeps the focused input present but read-only while a write is pending", () => {

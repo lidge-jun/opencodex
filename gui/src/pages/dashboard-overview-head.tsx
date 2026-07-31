@@ -11,6 +11,8 @@ export function DashboardOverviewHead({
   health,
   providers,
   usage30d,
+  usageLoading,
+  healthLoading,
   startupHealth,
   projectConfigWarnings,
   maMode,
@@ -19,7 +21,7 @@ export function DashboardOverviewHead({
   maHelpOpen,
   setMaHelpOpen,
   switchMaMode,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode">) {
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode">) {
   const t = useT();
   const online = health?.status === "ok";
 
@@ -61,16 +63,16 @@ export function DashboardOverviewHead({
               </div>
             </div>
           </div>
-          <div className="stat">
+          <div className="stat" aria-busy={healthLoading || undefined}>
             <div className="label">{t("dash.status")}</div>
             <div className="value" style={{ display: "flex", alignItems: "center", gap: 9, color: online ? "var(--green)" : "var(--red)" }}>
               <span className={`dot ${online ? "dot-green" : "dot-red"}`} />{online ? t("dash.online") : t("dash.offline")}
             </div>
           </div>
-          <div className="stat"><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
-          <div className="stat"><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
-          <div className="stat"><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
-          <div className="stat">
+          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
+          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
+          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
+          <div className="stat" aria-busy={usageLoading || undefined}>
             <div className="label">{t("dash.tokens30d")}</div>
             <div className="value mono">{usage30d && usage30d.summary.requests > 0 ? formatTokens(usage30d.summary.totalTokens, locale) : "—"}</div>
             <div className="muted text-label dash-stat-coverage">

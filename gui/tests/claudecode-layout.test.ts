@@ -1,22 +1,23 @@
 import { expect, test } from "bun:test";
 
-test("ClaudeCode renders the single stacked layout (no workspace rail)", async () => {
+test("ClaudeCode renders the denser workspace rail layout", async () => {
   const page = await Bun.file(new URL("../src/pages/ClaudeCode.tsx", import.meta.url)).text();
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
-  // The Claude nav entry now mounts a Code/Desktop tab wrapper; ClaudeCode itself is
-  // mounted by that wrapper, still as one stacked page.
+  // The Claude nav entry mounts a Code/Desktop tab wrapper; ClaudeCode itself is
+  // the Code tab body with a section rail to cut scroll.
   const claude = await Bun.file(new URL("../src/pages/Claude.tsx", import.meta.url)).text();
 
-  expect(page).not.toContain("claudecode-workspace");
-  expect(page).not.toContain("ccw-body");
-  expect(page).not.toContain("selectedSection");
-  expect(page).not.toContain("claude.workspace.settings");
+  expect(page).toContain("claudecode-workspace");
+  expect(page).toContain("ccw-body");
+  expect(page).toContain("selectedSection");
+  expect(page).toContain("claude.workspace.settings");
 
   expect(app).toContain("<Claude apiBase={API_BASE} />");
-  expect(claude).toContain("<ClaudeCode apiBase={apiBase} />");
+  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} />");
+  expect(claude).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={tab === \"desktop\"} />");
 });
 
-test("ClaudeCode stacked layout mounts every section in order", async () => {
+test("ClaudeCode workspace sections remain available in source order", async () => {
   const src = await Bun.file(new URL("../src/pages/ClaudeCode.tsx", import.meta.url)).text();
 
   const order = [

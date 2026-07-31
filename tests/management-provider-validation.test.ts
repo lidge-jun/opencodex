@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { getTrackedCodexWebSocketCountForAccount } from "../src/codex/websocket-registry";
@@ -41,7 +42,11 @@ setDefaultTimeout(60_000);
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
-const TEST_DIR = join(import.meta.dir, ".tmp-server-auth-test");
+// A per-run directory, not a fixed path. The 665b65643 split copied server-auth.test.ts's
+// ".tmp-server-auth-test" literal verbatim, so both files deleted and recreated the same
+// directory while pointing OPENCODEX_HOME at it. See the comment in server-auth.test.ts for
+// the full failure mode; mkdtempSync also covers two concurrent runs of this file alone.
+const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-validation-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 function config(hostname?: string): OcxConfig {

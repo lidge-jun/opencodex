@@ -149,6 +149,17 @@ describe("startup install elevation retry", () => {
     expect(finalizeMock).not.toHaveBeenCalled();
   });
 
+  test("does not elevate service repair even with create-access-denied marker", async () => {
+    failCli(`Windows access denied while running Task Scheduler.\n${WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER}`);
+    await expect(runStartupInstallAction("install-service", { repair: true })).rejects.toThrow(
+      WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER,
+    );
+    expect(finalizeMock).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalled();
+    const argv = execFileMock.mock.calls[0]![1] as string[];
+    expect(argv.slice(-2)).toEqual(["service", "repair"]);
+  });
+
   test("does not elevate on non-Windows platforms", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     failCli(`Windows access denied while running Task Scheduler.\n${WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER}`);

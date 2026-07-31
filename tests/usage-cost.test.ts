@@ -103,18 +103,35 @@ describe("normalizeCostTokens", () => {
 });
 
 describe("resolveMatchedPrice", () => {
-  // WP7: claude-opus-5 is exposed by three providers but missing from the jawcode
+  // WP7: claude-opus-5 is exposed by three providers but was missing from the jawcode
   // bundle, so it resolved to null and Logs rendered an em dash instead of a cost.
   // The model-level vendor fallback only searches jawcode metadata, never overlays,
-  // so each exposing provider needs its own row.
-  test("claude-opus-5 resolves to the user-derived Opus 4.6 price on every exposing provider", () => {
-    for (const provider of ["anthropic", "cursor", "kiro"]) {
+  // so each exposing provider needed its own row.
+  //
+  // Upstream has since published an `anthropic/claude-opus-5` row at the SAME numbers the
+  // maintainer derived (5 / 25 / 0.5 / 6.25), so that provider is now sourced from jawcode
+  // and reads `verified` instead of `verified-derived`. cursor and kiro have no jawcode row
+  // of their own and still come from the overlay, which is why the overlay must stay.
+  // The price is identical either way — only the provenance moved, and it moved forward.
+  test("claude-opus-5 resolves to the Opus 4.6 price on every exposing provider", () => {
+    const COST4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+
+    const anthropic = resolveMatchedPrice("anthropic", "claude-opus-5");
+    expect(anthropic).toMatchObject({
+      provider: "anthropic",
+      modelId: "claude-opus-5",
+      cost4: COST4,
+      source: "jawcode",
+      status: "verified",
+    });
+
+    for (const provider of ["cursor", "kiro"]) {
       const price = resolveMatchedPrice(provider, "claude-opus-5");
       expect(price).not.toBeNull();
       expect(price).toMatchObject({
         provider,
         modelId: "claude-opus-5",
-        cost4: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        cost4: COST4,
         source: "expected",
         status: "verified-derived",
       });

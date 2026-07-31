@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ComboWorkspace from "../components/ComboWorkspace";
 import {
   type ComboItem,
@@ -7,6 +7,7 @@ import {
   toPutBody,
 } from "../combo-workspace-data";
 import { hideRedundantChatGptForwardProviders } from "../provider-workspace/catalog";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
 
@@ -27,6 +28,12 @@ type ProviderDto = {
   authMode?: string;
 };
 type ConfigDto = { providers?: Record<string, ProviderDto> };
+type CachedCombosPage = {
+  combos: ComboItem[];
+  providers: ProviderOption[];
+  models: ModelOption[];
+  cataloguedComboIds: string[];
+};
 
 function responseError(data: unknown): string | undefined {
   if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
@@ -39,16 +46,24 @@ function responseSucceeded(data: unknown): boolean {
     && (data as { success?: unknown }).success === true;
 }
 
+function seedCombos(cacheKey: string): CachedCombosPage | null {
+  return readSessionListCache<CachedCombosPage>(cacheKey);
+}
+
 export default function Combos({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [combos, setCombos] = useState<ComboItem[]>([]);
-  const [providers, setProviders] = useState<ProviderOption[]>([]);
-  const [models, setModels] = useState<ModelOption[]>([]);
-  const [cataloguedComboIds, setCataloguedComboIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `ocx.combos.workspace.v1:${apiBase}`;
+  const [combos, setCombos] = useState<ComboItem[]>(() => seedCombos(cacheKey)?.combos ?? []);
+  const [providers, setProviders] = useState<ProviderOption[]>(() => seedCombos(cacheKey)?.providers ?? []);
+  const [models, setModels] = useState<ModelOption[]>(() => seedCombos(cacheKey)?.models ?? []);
+  const [cataloguedComboIds, setCataloguedComboIds] = useState<ReadonlySet<string>>(
+    () => new Set(seedCombos(cacheKey)?.cataloguedComboIds ?? []),
+  );
+  const [loading, setLoading] = useState(() => !seedCombos(cacheKey));
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [adding, setAdding] = useState(false);
+  const hasCacheRef = useRef(Boolean(seedCombos(cacheKey)));
 
   const notify = (msg: string, ok: boolean) => {
     setStatus(msg);
@@ -65,7 +80,9 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timer);
   }, [status, statusOk]);
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (opts?: { notifyOnFail?: boolean }) => {
+    // Soft refresh: keep last-good workspace painted while revalidating.
+    if (!hasCacheRef.current) setLoading(true);
     try {
       const [combosRes, configRes, modelsRes] = await Promise.all([
         fetch(`${apiBase}/api/combos`),
@@ -85,22 +102,22 @@ export default function Combos({ apiBase }: { apiBase: string }) {
           ? (modelsRaw as { models: unknown[] }).models
           : [];
 
-      setCombos(parseComboList(combosJson));
+      const nextCombos = parseComboList(combosJson);
+      setCombos(nextCombos);
 
       const allProviders = configJson.providers ?? {};
       // Collapse canonical forward aliases only in the new-member picker. Validation keeps
       // every configured provider id, including legacy chatgpt members already in a combo.
       const visibleProviders = hideRedundantChatGptForwardProviders(allProviders);
-      setProviders(
-        Object.entries(allProviders).map(([name, p]) => ({
-          name,
-          disabled: !!p.disabled,
-          hiddenFromPicker: !Object.hasOwn(visibleProviders, name),
-          authMode: p.authMode,
-          adapter: p.adapter,
-          baseUrl: p.baseUrl,
-        })),
-      );
+      const nextProviders = Object.entries(allProviders).map(([name, p]) => ({
+        name,
+        disabled: !!p.disabled,
+        hiddenFromPicker: !Object.hasOwn(visibleProviders, name),
+        authMode: p.authMode,
+        adapter: p.adapter,
+        baseUrl: p.baseUrl,
+      }));
+      setProviders(nextProviders);
 
       const fromApi: ModelOption[] = [];
       const catalogued = new Set<string>();
@@ -144,12 +161,19 @@ export default function Combos({ apiBase }: { apiBase: string }) {
       }
 
       setModels(fromApi);
+      hasCacheRef.current = true;
+      writeSessionListCache(cacheKey, {
+        combos: nextCombos,
+        providers: nextProviders,
+        models: fromApi,
+        cataloguedComboIds: [...catalogued],
+      } satisfies CachedCombosPage);
     } catch {
-      notify(t("cws.loadFailed"), false);
+      if (!hasCacheRef.current || opts?.notifyOnFail) notify(t("cws.loadFailed"), false);
     } finally {
       setLoading(false);
     }
-  }, [apiBase, t]);
+  }, [apiBase, cacheKey, t]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -211,7 +235,10 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     }
   };
 
-  if (loading && combos.length === 0) {
+  // Cold start only — cached empty lists paint the workspace immediately. `loading`
+  // already encodes that: it initializes to !seedCombos(cacheKey) and a refresh only
+  // sets it when the cache is empty, so reading the ref during render was redundant.
+  if (loading) {
     return (
       <div className="combos-workspace-shell">
         {status && (
@@ -240,7 +267,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
           models={models}
           cataloguedComboIds={cataloguedComboIds}
           loading={loading}
-          onRefresh={() => { void fetchAll(); }}
+          onRefresh={() => { void fetchAll({ notifyOnFail: true }); }}
           onSave={saveCombo}
           onRemove={removeCombo}
           onAdd={() => setAdding(true)}

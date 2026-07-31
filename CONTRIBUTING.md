@@ -10,25 +10,17 @@ Thanks for helping with opencodex.
 
 ## Branches
 
-- `dev` — default integration target for pull requests.
-- `dev2-go` — parallel integration line for the Go native port (`go/`, the
-  native runtime entrypoint, and the Go release-asset tooling). Open for pull
-  requests alongside `dev`. Send work here only when it belongs to the Go port;
-  anything else goes to `dev`. The automated check accepts both targets and
-  cannot tell them apart, so scope is settled in review.
+- `dev` — the only integration target for pull requests.
 - `main` — releases only; moves by maintainer-controlled promotion from `dev`.
 - `preview` — prerelease train.
 
-While the project moves its primary runtime to the Go native port, `dev2-go`
-has to keep receiving everything that lands on `dev`. Nothing changes for
-contributors: keep opening pull requests against `dev`. After merging, a
-maintainer rebases the work onto `dev2-go` and ports whatever needs a Go
-counterpart, and the item is finished only once both lines carry it. See
-[`MAINTAINERS.md`](./MAINTAINERS.md) for the full rule.
+The `dev2-go` Go native-port line has been retired. Its history is archived at
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive),
+and everything now goes to `dev`. See [`MAINTAINERS.md`](./MAINTAINERS.md) for
+the reasoning.
 
-Porting and rebase pull requests are welcome: carrying a fix across integration
-lines, or rebasing a stale branch onto the current head, is normal
-contribution. Note the source commits in the description.
+Rebase pull requests are welcome: bringing a stale branch onto the current head
+is normal contribution. Note the source commits in the description.
 
 Agent-facing repository and review rules live in [`AGENTS.md`](./AGENTS.md).
 

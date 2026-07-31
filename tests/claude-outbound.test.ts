@@ -13,6 +13,12 @@ function sse(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function dataOnlySse(data: Record<string, unknown>): string {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+const DONE_SSE = "data: [DONE]\n\n";
+
 function streamFrom(text: string): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -97,6 +103,113 @@ describe("claude outbound SSE", () => {
     // monotonic block indexes
     const startIndexes = events.filter(e => e.name === "content_block_start").map(e => e.data.index);
     expect(startIndexes).toEqual([0, 1, 2]);
+  });
+
+  test("data-only Responses frames infer event names from payload types", async () => {
+    const upstream = [
+      dataOnlySse({ type: "response.created", response: { id: "resp_data_only", status: "in_progress" } }),
+      dataOnlySse({ type: "response.output_text.delta", delta: "data-only stream" }),
+      dataOnlySse({
+        type: "response.completed",
+        response: { status: "completed", usage: { input_tokens: 8, output_tokens: 2 } },
+      }),
+      DONE_SSE,
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.map(e => e.name)).toEqual([
+      "message_start", "ping",
+      "content_block_start", "content_block_delta", "content_block_stop",
+      "message_delta", "message_stop",
+    ]);
+    expect(events.find(e => e.name === "content_block_delta")!.data.delta).toEqual({
+      type: "text_delta",
+      text: "data-only stream",
+    });
+    expect(events.find(e => e.name === "message_delta")!.data).toMatchObject({
+      delta: { stop_reason: "end_turn" },
+      usage: { input_tokens: 8, output_tokens: 2 },
+    });
+  });
+
+  test("explicit and data-only Responses frames can interleave", async () => {
+    const upstream = [
+      sse("response.created", { response: { id: "resp_mixed", status: "in_progress" } }),
+      dataOnlySse({ type: "response.output_text.delta", delta: "mixed stream" }),
+      sse("response.completed", { response: { status: "completed" } }),
+      DONE_SSE,
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.find(e => e.name === "content_block_delta")!.data.delta).toEqual({
+      type: "text_delta",
+      text: "mixed stream",
+    });
+    expect(events.at(-1)!.name).toBe("message_stop");
+  });
+
+  test("data-only Responses frames survive non-streaming aggregation", async () => {
+    const upstream = [
+      dataOnlySse({ type: "response.output_text.delta", delta: "data-only message" }),
+      dataOnlySse({
+        type: "response.completed",
+        response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3 } },
+      }),
+      DONE_SSE,
+    ].join("");
+
+    const anthropicSse = responsesSseToAnthropicSse(streamFrom(upstream), "m");
+    const message = await collectAnthropicMessage(anthropicSse, "m");
+    expect(message).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "data-only message" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 5, output_tokens: 3 },
+    });
+  });
+
+  test("explicit event names override payload types and untyped data-only frames stay ignored", async () => {
+    const upstream = [
+      dataOnlySse({ delta: "must stay ignored" }),
+      sse("response.output_text.delta", { type: "response.ignored", delta: "visible" }),
+      sse("response.completed", {
+        type: "response.output_text.delta",
+        delta: "must not override the explicit terminal event",
+        response: { status: "completed" },
+      }),
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    const textDeltas = events
+      .filter(e => e.name === "content_block_delta" && e.data.delta?.type === "text_delta")
+      .map(e => e.data.delta.text);
+    expect(textDeltas).toEqual(["visible"]);
+    expect(events.at(-1)!.name).toBe("message_stop");
+  });
+
+  test("data-only [DONE] without a Responses terminal frame still fails closed", async () => {
+    const upstream = [
+      dataOnlySse({ type: "response.output_text.delta", delta: "partial" }),
+      DONE_SSE,
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.some(e => e.name === "message_stop")).toBe(false);
+    expect(events.find(e => e.name === "content_block_delta")!.data.delta).toEqual({
+      type: "text_delta",
+      text: "partial",
+    });
+    expect(events.at(-1)).toMatchObject({
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "overloaded_error",
+          message: "upstream stream ended before a terminal frame (truncated response)",
+        },
+      },
+    });
   });
 
   test("failed -> error event with taxonomy type", async () => {

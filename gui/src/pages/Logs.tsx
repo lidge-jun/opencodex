@@ -6,16 +6,25 @@ import { hashLogConversationQuery, matchesLogConversationId } from "../log-conve
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
 import { speedLabel } from "./logs-speed-label";
+import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
+import { logMatchesSurface } from "./logs-surface-filter";
+
+function logsCacheKey(apiBase: string): string {
+  return `ocx.logs.list.v1:${apiBase}`;
+}
 
 interface UsageBreakdown {
   inputTokens: number;
   outputTokens: number;
+  /** Absolute active-context snapshot after the response (stateful providers such as Kiro). */
+  contextTotalTokens?: number;
   totalTokens?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
@@ -99,7 +108,7 @@ export interface LogEntry {
   timestamp: number;
   model: string;
   provider: string;
-  surface?: "claude";
+  surface?: LogSurface;
   conversationId?: string;
   requestedEffort?: string;
   effectiveEffort?: string;
@@ -137,6 +146,9 @@ function tokensTitle(log: LogEntry, t: TFn): string | undefined {
   ];
   if (split.read !== undefined) parts.push(`${t("logs.tokens.cacheRead")}=${split.read}`);
   if (split.write !== undefined) parts.push(`${t("logs.tokens.cacheWrite")}=${split.write}`);
+  if (typeof log.usage.contextTotalTokens === "number") {
+    parts.push(`${t("logs.tokens.contextTotal")}=${log.usage.contextTotalTokens}`);
+  }
   if (typeof log.usage.reasoningOutputTokens === "number") parts.push(`${t("logs.tokens.reasoning")}=${log.usage.reasoningOutputTokens}`);
   if (log.usageStatus === "estimated") parts.push(t("logs.tokens.estimatedNote"));
   if (log.usageStatus === "estimated" && split.read === undefined && split.write === undefined) {
@@ -152,6 +164,23 @@ function displayTokenTotal(log: LogEntry): number | undefined {
   const baseTotal = log.usage.inputTokens + log.usage.outputTokens;
   const explicitTotal = log.usage.totalTokens ?? log.totalTokens;
   return typeof explicitTotal === "number" ? Math.max(explicitTotal, baseTotal) : baseTotal;
+}
+
+/**
+ * Row/detail display total that also honors an absolute context checkpoint.
+ *
+ * Stateful providers (Kiro) report per-attempt usage only, so their per-request total stays
+ * small while the real active context grows. `contextTotalTokens` is that absolute snapshot.
+ *
+ * NEVER SUM THIS ACROSS REQUESTS. A checkpoint is not a per-request delta: adding it up over
+ * a conversation counts the same context once per request and inflates aggregates wildly.
+ * Aggregate rollups must keep using `displayTokenTotal`.
+ */
+function displayContextTokenTotal(log: LogEntry): number | undefined {
+  const base = displayTokenTotal(log);
+  const contextTotal = log.usage?.contextTotalTokens;
+  if (typeof contextTotal !== "number") return base;
+  return Math.max(base ?? 0, contextTotal) || undefined;
 }
 
 /** Cache read/write split; recovers reads from legacy rows that stored read+write combined. */
@@ -302,25 +331,34 @@ function summarizeFilteredLogs(entries: LogEntry[]): {
 
 export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedLogs = readSessionListCache<LogEntry[]>(logsCacheKey(apiBase));
+  const [logs, setLogs] = useState<LogEntry[]>(() => cachedLogs ?? []);
+  const [loading, setLoading] = useState(() => !(cachedLogs && cachedLogs.length > 0));
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
-  const [surfaceFilter, setSurfaceFilter] = useState<"all" | "claude" | "codex">("all");
+  const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const hasLogsRef = useRef(Boolean(cachedLogs?.length));
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
   // so refresh/bookmark/back-forward keep the tab choice.
   const [tab, setTab] = useState<LogsTab>(readTabFromHash);
+  // Lazy-mount Debug on first visit, then keep it mounted so switch toggles
+  // and Logs↔Debug hops do not remount (avoids settings/log refetch storms).
+  const [debugMounted, setDebugMounted] = useState(() => readTabFromHash() === "debug");
 
   useEffect(() => {
     const onHash = () => setTab(readTabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (tab === "debug") setDebugMounted(true);
+  }, [tab]);
 
   const selectTab = selectLogsTab;
 
@@ -332,7 +370,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     try {
       const res = await fetch(`${apiBase}/api/logs`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      setLogs(await res.json());
+      const next = await res.json() as LogEntry[];
+      setLogs(next);
+      writeSessionListCache(logsCacheKey(apiBase), next);
       setError(null);
     } catch (cause) {
       if (silent) return;
@@ -345,11 +385,16 @@ export default function Logs({ apiBase }: { apiBase: string }) {
 
   useEffect(() => {
     if (tab !== "logs") return;
-    void fetchLogs();
+    // Re-entering the Logs tab keeps held rows; only cold mounts flash loading.
+    void fetchLogs({ silent: hasLogsRef.current });
     if (!autoRefresh) return;
     const interval = setInterval(() => void fetchLogs({ silent: true }), 2000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLogs, tab]);
+
+  useEffect(() => {
+    hasLogsRef.current = logs.length > 0;
+  }, [logs.length]);
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
   const conversationQuery = conversationFilter.trim();
@@ -367,8 +412,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   }, [conversationQuery]);
 
   const filteredLogs = logs.filter(log => (
-    (surfaceFilter === "all"
-      || (surfaceFilter === "claude" ? log.surface === "claude" : log.surface !== "claude"))
+    logMatchesSurface(log, surfaceFilter)
     && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
   ));
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
@@ -392,7 +436,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       <div className="page-head">
         <h2>{t("nav.logs")}</h2>
         {tab === "logs" && (
-          <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <label className="muted text-control logs-auto-refresh">
             <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
             {t("logs.autoRefresh")}
           </label>
@@ -427,34 +471,43 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         </button>
       </div>
 
-      {tab === "debug" && (
-        <div role="tabpanel" id="logs-panel-debug" aria-labelledby="logs-tab-debug">
-          <Debug apiBase={apiBase} embedded />
+      {debugMounted && (
+        <div
+          role="tabpanel"
+          id="logs-panel-debug"
+          aria-labelledby="logs-tab-debug"
+          hidden={tab !== "debug"}
+        >
+          <Debug apiBase={apiBase} embedded active={tab === "debug"} />
         </div>
       )}
 
-      {tab === "logs" && (
-      <div role="tabpanel" id="logs-panel-logs" aria-labelledby="logs-tab-logs">
+      <div
+        role="tabpanel"
+        id="logs-panel-logs"
+        aria-labelledby="logs-tab-logs"
+        hidden={tab !== "logs"}
+      >
       <p className="page-sub">{t("logs.subtitle")}</p>
 
-      <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+      <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
-        <div className="segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
-          {(["all", "claude", "codex"] as const).map(surface => (
+        <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
+          {(["all", "claude", "codex", "grok"] as const).map(surface => (
             <button
               key={surface}
               type="button"
               role="radio"
               aria-checked={surfaceFilter === surface}
               className={`btn btn-sm${surfaceFilter === surface ? " btn-primary" : " btn-ghost"}`}
-              style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
+              style={{ background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
               onClick={() => setSurfaceFilter(surface)}
             >
               {t(`logs.filter.surface.${surface}`)}
             </button>
           ))}
         </div>
-        <label className="muted text-control" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <label className="muted text-control logs-filter-field">
           {t("logs.filter.conversation.label")}
           <input
             type="search"
@@ -463,7 +516,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             onChange={e => setConversationFilter(e.target.value)}
             placeholder={t("logs.filter.conversation.placeholder")}
             aria-label={t("logs.filter.conversation.label")}
-            style={{ minWidth: 220, maxWidth: 360 }}
           />
         </label>
         {conversationQuery && (
@@ -474,7 +526,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       </div>
 
       {conversationTotals && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="logs-conversation-totals">
           <Notice tone="ok">
             {t("logs.conversation.totals", {
               requests: conversationTotals.requests,
@@ -508,9 +560,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <EmptyState title={t("logs.noRequests")} />
       ) : (
         <>
-        <div ref={scrollContainerRef} className="tbl-wrap" style={{ overflowY: "auto", maxHeight: "calc(100vh - 260px)" }}>
+        <div ref={scrollContainerRef} className="tbl-wrap logs-table-wrap">
           <table className="tbl logs-table">
-            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "var(--surface)" }}>
+            <thead>
              <tr>
                <th>{t("logs.col.time")}</th>
                 <th className="num log-col-tokens">{t("logs.col.tokens")}</th>
@@ -527,7 +579,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             <tbody>
               {paddingTop > 0 && (
                 <tr>
-                  <td colSpan={10} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingTop }} />
                 </tr>
               )}
               {virtualRows.map(virtualRow => {
@@ -542,11 +594,11 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                  <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag)}</td>
                   <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
                     {(() => {
-                      const tokenTotal = displayTokenTotal(log);
+                      const tokenTotal = displayContextTokenTotal(log);
                       const { read, write } = cacheSplit(log);
                       return tokenTotal !== undefined
                         ? (
-                            <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                            <span className="logs-stack-end">
                               <span>{log.usageStatus === "estimated" ? "~" : ""}{formatTokens(tokenTotal, locale)}</span>
                               {(read !== undefined && read > 0) && (
                                 <span className="muted text-caption leading-tight">
@@ -575,14 +627,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                     {formatEstimatedUsd(log.displayMetrics?.cost, localeTag)}
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log)}>
-                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                   <span className="logs-model-cell">
                     <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
-                      {log.surface === "claude" && <span className="badge badge-accent">{t("logs.badge.claude")}</span>}
+                      {(log.surface === "claude" || log.surface === "claude-desktop") && (
+                        <span className="badge badge-accent">{t("logs.badge.claude")}</span>
+                      )}
+                      {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
                   <td className="mono log-reasoning-cell" title={reasoningWire}>
-                    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                    <span className="logs-stack-start">
                       <span>{effortLabel(log)}</span>
                       {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
                     </span>
@@ -608,7 +663,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
               })}
               {paddingBottom > 0 && (
                 <tr>
-                  <td colSpan={10} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingBottom }} />
                 </tr>
               )}
             </tbody>
@@ -632,7 +687,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         />
       )}
       </div>
-      )}
     </>
   );
 }
@@ -687,7 +741,7 @@ function LogDetailDialog({
         <div className="modal-head">
           <h3 id="log-detail-title">
             <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
-            {detailInfo && <span style={{ marginLeft: 8 }}>{detailInfo.label}</span>}
+            {detailInfo && <span className="logs-detail-info">{detailInfo.label}</span>}
           </h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
         </div>
@@ -846,7 +900,13 @@ function LogDetailDialog({
             <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{tokenSplit.read !== undefined ? formatTokens(tokenSplit.read, localeCode) : "\u2014"}</span>
             <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{tokenSplit.write !== undefined ? formatTokens(tokenSplit.write, localeCode) : "\u2014"}</span>
             <span className="muted">{t("logs.tokens.reasoning")}</span><span className="mono">{detail.usage?.reasoningOutputTokens !== undefined ? formatTokens(detail.usage.reasoningOutputTokens, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayTokenTotal(detail) !== undefined ? formatTokens(displayTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayContextTokenTotal(detail) !== undefined ? formatTokens(displayContextTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            {detail.usage?.contextTotalTokens !== undefined && (
+              <>
+                <span className="muted">{t("logs.tokens.contextTotal")}</span>
+                <span className="mono">{formatTokens(detail.usage.contextTotalTokens, localeCode)}</span>
+              </>
+            )}
           </div>
           {detail.usageStatus === "estimated" && (
             <p className="log-detail-notes-line muted">{t("logs.tokens.estimatedNote")}</p>

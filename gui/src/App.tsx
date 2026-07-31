@@ -300,8 +300,8 @@ export default function App() {
             {page === "startup" && <Startup apiBase={API_BASE} />}
             {page === "providers" && <Providers apiBase={API_BASE} />}
             {page === "models" && <Models apiBase={API_BASE} />}
-            {page === "combos" && <Combos apiBase={API_BASE} />}
-            {page === "subagents" && <Subagents apiBase={API_BASE} />}
+            {page === "combos" && <Combos key={API_BASE} apiBase={API_BASE} />}
+            {page === "subagents" && <Subagents key={API_BASE} apiBase={API_BASE} />}
             {page === "logs" && <Logs apiBase={API_BASE} />}
             {page === "usage" && <Usage apiBase={API_BASE} />}
             {page === "storage" && <Storage apiBase={API_BASE} />}

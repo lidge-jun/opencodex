@@ -498,7 +498,11 @@ export function buildKiroPayload(
       if (!priorCalls.has(toolUseId)) {
         throw new Error(`Kiro history contains an orphaned tool result for call ${JSON.stringify(tr.toolCallId)}`);
       }
-      pushUser(KIRO_TOOL_RESULT_CARRIER_MESSAGE, images, [{
+      // Carrier text is a placeholder for an OTHERWISE EMPTY tool-result turn, not a prefix.
+      // Passing it here would push proxy filler AHEAD of a human instruction that Claude Code
+      // sends in the same turn (mid-turn steering / queued_command, issue #543), burying the
+      // newest user intent behind boilerplate. Backfill below only when nothing else speaks.
+      pushUser("", images, [{
         content: [{ text: resultText }],
         status: tr.isError ? "error" : "success",
         toolUseId,
@@ -516,6 +520,16 @@ export function buildKiroPayload(
       images: [],
       toolResults: [],
     });
+  }
+
+  // Give tool-result turns a carrier sentence ONLY when they carry no other text. This runs
+  // before the pop below so the current turn is covered too: skipping it there would ship an
+  // empty current content, which validateKiroConversationState accepts (tool results count as
+  // payload) and would therefore fail silently.
+  for (const turn of turns) {
+    if (turn.kind === "user" && !turn.content.trim() && turn.toolResults.length > 0) {
+      turn.content = KIRO_TOOL_RESULT_CARRIER_MESSAGE;
+    }
   }
 
   const currentTurn = turns.pop();

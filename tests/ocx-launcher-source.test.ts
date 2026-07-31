@@ -22,4 +22,16 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(source).toContain('if (explicit === "preview" || explicit === "latest") return explicit;');
     expect(source).not.toMatch(/if \(tagIndex !== -1 && process\.argv\[tagIndex \+ 1\]\) return process\.argv/);
   });
+
+  // #701: the launcher is the only place that still knows whether an Anthropic credential
+  // came from a real shell export or from a project dotenv, because Node does not
+  // auto-load `.env` while the Bun child does. Losing this half silently returns the
+  // proxy to billing a subscriber's API key from an ambient file, and the runtime half in
+  // src/cli/claude.ts would keep passing its own unit tests while doing nothing.
+  test("the Bun child receives the pre-Bun Anthropic provenance marker", () => {
+    expect(source).toContain("const preBunAnthropicSlots = [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\"]");
+    expect(source).toContain("OCX_PRE_BUN_ANTHROPIC_ENV: preBunAnthropicSlots.join(\",\")");
+    // The marker must be computed from the launcher's OWN env, before Bun's dotenv load.
+    expect(source).toContain("typeof process.env[name] === \"string\" && process.env[name] !== \"\"");
+  });
 });

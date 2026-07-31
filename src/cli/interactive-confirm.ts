@@ -25,7 +25,11 @@ export interface InteractiveConfirmOptions {
   output?: NodeJS.WriteStream;
 }
 
-const REVERSE = "\x1b[7m";
+// The highlight sets an explicit black-on-white pair rather than bare reverse
+// video (\x1b[7m). Reverse alone inherits whatever foreground colour is in
+// effect, so on some themes the selected label rendered as black text on a black
+// block and the choice became invisible.
+const REVERSE = "\x1b[30;47m";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 const CLEAR_LINE = "\r\x1b[K";

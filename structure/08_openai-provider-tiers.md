@@ -3,7 +3,7 @@
 This current contract supersedes the provider-identity and account-selection sections of
 `devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
 earlier three-tier implementation. The replacement contract and its verification evidence live in
-`devlog/_plan/260717_openai_single_provider_option` until that unit is archived.
+`devlog/_fin/260717_openai_single_provider_option`.
 
 ## Public provider contract
 

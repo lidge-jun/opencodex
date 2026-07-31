@@ -149,7 +149,7 @@ x-opencodex-api-key: your-secret-token
 | Field | Type | 含义 |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（或别名 `azure`）之一。 |
-| `baseUrl` | `string` | 上游 API base URL。端点固定的内置 provider 会忽略它 —— 见[固定的 provider 端点](#固定的-provider-端点)。 |
+| `baseUrl` | `string` | 上游 API base URL。大多数固定端点的内置 provider 会忽略不一致的地址；新加入且启用冲突保护的 API-key preset 会保留旧有同名 custom provider 的目标。见[固定的 provider 端点](#固定的-provider-端点)。 |
 | `responsesPath?` | `string` | `key` 认证的 `openai-responses` 请求可选相对 resource path。必须以 `/` 开头，且不得包含 URL scheme、query 或 fragment。省略时保留原有的 `/v1/responses` URL 构造。 |
 | `disabled?` | `boolean` | 配置保留在磁盘上，但从路由和模型/目录列表排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
@@ -157,7 +157,7 @@ x-opencodex-api-key: your-secret-token
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key pool。`apiKey` 映射当前活动条目；每项包含 `id`、`key`、可选 `label` 和可选数字 `addedAt`。 |
 | `defaultModel?` | `string` | 选中该 provider 但未指定明确模型时使用的模型。 |
 | `models?` | `string[]` | seed/fallback 模型列表。`liveModels` 为 `false` 时，只会发现这些模型。 |
-| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时 `/models` 目录（默认 `true`）。设为 `false` 时只使用配置的 `models`。 |
+| `liveModels?` | `boolean` | 启动/同步时获取 provider 的实时模型目录（默认 `true`）。内置 preset 可使用 registry 中受信任的 URL、查询参数和过滤规则；自定义 provider 默认请求 `${baseUrl}/models`。设为 `false` 时只使用配置的 `models`。 |
 | `selectedModels?` | `string[]` | 模型发现后应用的目录 allowlist。非空时只向 Codex 暴露这些 id；为空或省略时暴露所有发现的模型。 |
 | `contextWindow?` | `number` | 路由目录条目的 provider 级 Codex 可见 context-window cap。实时 metadata 更小时保留实时值。 |
 | `modelContextWindows?` | `Record<string,number>` | 模型级 context-window cap。匹配模型时优先于 `contextWindow`，且不会抬高更小的实时 metadata。 |
@@ -195,11 +195,13 @@ x-opencodex-api-key: your-secret-token
 ### 固定的 provider 端点
 
 路由会在任何 adapter 介入之前解析 provider 的端点；对大多数内置 provider 而言，registry 自带的端点
-优先于你在配置里写的 `baseUrl`。在这一步保留配置 URL 的只有三类：
+优先于你在配置里写的 `baseUrl`。在这一步保留配置 URL 的有四类：
 
 - 显式开启覆盖的 provider —— `ollama`、`vllm`、`lm-studio`、`litellm`、`qwen-cloud` 和
   `alibaba-token-plan-intl`；
 - registry 端点本身是待填模板的 provider，例如 `azure-openai` 和 `cloudflare-ai-gateway`；
+- 新加入并启用同名冲突保护的固定 API-key preset：若旧有同名 custom provider 指向其他地址，
+  它会继续作为 custom provider 使用原目标，不会把 key 发往新 registry host；
 - 你自己定义的 provider，它们根本不在 registry 中。
 
 之后 adapter 仍可能调整已解析的 URL。例如 `kiro` adapter 在 host 为标准
@@ -281,6 +283,11 @@ MCP、屏幕录制和 computer-use 使用独立的 `mcpServers` / `desktopExecut
 
 部分 provider 的实时模型目录非常大或很慢。若只想让 Codex 看到 `models` 中固定的模型，请把
 `liveModels` 设为 `false`。
+
+实时发现响应超过 4 MiB 或包含超过 2,000 条原始模型记录时，会在缓存前被拒绝。内置 preset
+还可以降低这些上限，并把混合目录过滤为可用于聊天的模型。超限或格式错误的响应会沿用陈旧缓存/
+静态配置回退，不合格的记录则被排除。若合法响应中没有合格记录，结果仍是权威的空目录；超限响应
+不会被静默截断。
 
 当 `liveModels` 为 `false` 且 `models` 为空或省略时，opencodex 不会为该 provider 暴露任何
 路由模型。

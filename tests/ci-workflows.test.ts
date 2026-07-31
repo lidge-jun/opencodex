@@ -31,8 +31,14 @@ describe("GitHub Actions hardening", () => {
   test("cross-platform CI keeps bounded jobs and immutable action references", async () => {
     const workflow = await readText(".github/workflows/ci.yml");
 
-    expect(count(workflow, "timeout-minutes: 12")).toBe(1);
+    // The cross-platform `test` job sits at 20 minutes: a green Windows run measured
+    // 11.8 min against 4.6 on Linux, and the previous 12-minute ceiling left ~12s of
+    // margin, so runner variance rather than the code decided the verdict (#717).
+    // `npm-global-smoke` stays at 8; it finishes in 1-2 minutes.
+    expect(count(workflow, "timeout-minutes: 20")).toBe(1);
     expect(count(workflow, "timeout-minutes: 8")).toBe(1);
+    // Both jobs must stay bounded — an unbounded job can hang a queue for hours.
+    expect(count(workflow, "timeout-minutes:")).toBe(2);
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
@@ -41,16 +47,15 @@ describe("GitHub Actions hardening", () => {
   });
 
   test("PR checks reach every branch the target gate accepts", async () => {
-    // These two lists have to move together with enforce-pr-target.yml. The
-    // gate now accepts dev2-go, and a PR that passes the gate but triggers no
-    // checks is worse than one that is blocked: it looks reviewable and has
-    // nothing behind it. Pin the pull_request branch lists to the gate's
-    // allow-list plus main.
+    // These two lists have to move together with enforce-pr-target.yml. A PR
+    // that passes the gate but triggers no checks is worse than one that is
+    // blocked: it looks reviewable and has nothing behind it. Pin the
+    // pull_request branch lists to the gate's allow-list plus main.
     const gate = await readText(".github/workflows/enforce-pr-target.yml");
     const allowed = gate.match(/const ALLOWED_BASES = \[([^\]]*)\];/);
     expect(allowed).not.toBeNull();
     const bases = [...(allowed?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
-    expect(bases).toEqual(["dev", "dev2-go"]);
+    expect(bases).toEqual(["dev"]);
 
     for (const path of [".github/workflows/ci.yml", ".github/workflows/service-lifecycle.yml"]) {
       const workflow = Bun.YAML.parse(await readText(path)) as {
@@ -58,7 +63,7 @@ describe("GitHub Actions hardening", () => {
       };
       const trigger = workflow.on?.pull_request ?? {};
       const branches = (trigger.branches as string[] | undefined) ?? [];
-      expect([...branches].sort()).toEqual(["dev", "dev2-go", "main"]);
+      expect([...branches].sort()).toEqual(["dev", "main"]);
 
       // Narrowing a default is a mutation that deletes nothing. Omitting
       // `types` means opened + synchronize + reopened; writing
@@ -74,9 +79,9 @@ describe("GitHub Actions hardening", () => {
       }
     }
 
-    // The push trigger is deliberately narrower: dev2-go is an integration
-    // line, not a release-promotion source, and release.yml gates on main and
-    // preview. Widening this one would put dev2-go into that path.
+    // The push trigger stays pinned to the release-relevant lines: release.yml
+    // gates on main and preview, so widening this one would pull an unrelated
+    // branch into that path.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -198,6 +203,7 @@ describe("GitHub Actions hardening", () => {
 
     // Least privilege + never cancel a publish mid-flight.
     expect(workflow).toContain("actions: read");
+    expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("timeout-minutes: 15");
@@ -278,6 +284,9 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun scripts/release-notes.ts previous-release-tag");
     expect(workflow).toContain("bun scripts/release-notes.ts has-meaningful");
     expect(workflow).toContain("bun scripts/release-notes.ts join-carried");
+    expect(workflow).toContain("bun scripts/release-notes.ts credit-takeovers");
+    expect(workflow).toContain('if [ -s "$carried_file" ]; then');
+    expect(workflow).toContain('if [ -s "$delta_file" ]; then');
     // Preview notes must baseline any prior release (stable or preview), not preview-only.
     expect(workflow).toContain('bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"');
     expect(workflow).not.toMatch(
@@ -405,6 +414,7 @@ describe("GitHub Actions hardening", () => {
       "pulls.get",
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
+      "pulls.list",
       ...tail,
     ];
   }
@@ -617,7 +627,7 @@ describe("GitHub Actions hardening", () => {
     // The allow-list is the gate's whole policy, so it is pinned by value and
     // not just by shape: a widened list is the one edit that opens every base
     // at once while every behavioural scenario below still passes.
-    expect(script).toMatch(/const ALLOWED_BASES = \["dev", "dev2-go"\];/);
+    expect(script).toMatch(/const ALLOWED_BASES = \["dev"\];/);
     expect(script).toMatch(/const DEFAULT_BASE = "dev";/);
 
     // Every mutation targets the PR the event fired for. `pull_number` is the
@@ -710,12 +720,13 @@ describe("GitHub Actions hardening", () => {
     expect(script).not.toMatch(/issue_number:\s*\d/);
 
     // These are the only three mutating REST calls. A fourth is a new write
-    // nobody reviewed.
+    // nobody reviewed. `pulls.list` is a stacked-base read, not a write.
     const restWrites = [...script.matchAll(/github\.rest\.[\w.]+/g)]
       .map(match => match[0])
       .filter(
         name =>
           !name.endsWith(".get") &&
+          !name.endsWith(".list") &&
           !name.endsWith(".listComments") &&
           name !== "github.rest.repos.getCollaboratorPermissionLevel" &&
           name !== "github.rest.repos.compareCommitsWithBasehead",
@@ -788,19 +799,6 @@ describe("GitHub Actions hardening", () => {
       // Reads only. If a rewrite adds a write here, it appears in this list.
       expect(methodsOf(result)).toEqual(readsAllowedBase());
       expect(result.logs.join(" ")).toContain("All PR quality gates passed");
-    });
-
-    test("a PR targeting dev2-go is left completely alone, exactly like dev", async () => {
-      // The whole point of the allow-list. dev2-go is the Go native-port
-      // integration line; before this change the gate prefixed and drafted
-      // every PR aimed at it, and GitHub refuses to merge a draft — so the
-      // line existed but nothing could land on it.
-      const result = await run({ pr: { base: { ref: "dev2-go" }, title: "Port the runtime entry", draft: false } });
-
-      expect(methodsOf(result)).toEqual(readsAllowedBase());
-      expect(result.logs.join(" ")).toContain("All PR quality gates passed");
-      // No comment either. Silence is the acceptance signal.
-      expect(callsTo(result, "issues.createComment")).toEqual([]);
     });
 
     const HEAD_SHA = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
@@ -888,10 +886,11 @@ describe("GitHub Actions hardening", () => {
 
     test("every base outside the allow-list is still blocked", async () => {
       // Widening a list is a one-token edit, and the danger is widening it too
-      // far. These four are the bases a contributor actually reaches for:
-      // the release branch, its old name, the prerelease train, and a topic
-      // branch. None of them is an integration line.
-      for (const ref of ["main", "master", "preview", "feature/x"]) {
+      // far. These are the bases a contributor actually reaches for: the
+      // release branch, its old name, the prerelease train, the retired Go
+      // native-port line, and a topic branch. None of them is an integration
+      // line any more — `dev` is the only one.
+      for (const ref of ["main", "master", "preview", "dev2-go", "feature/x"]) {
         const result = await run({ pr: { base: { ref }, title: "Add a thing", draft: false } });
 
         expect(methodsOf(result)).toEqual(readsWrongBase([
@@ -907,14 +906,13 @@ describe("GitHub Actions hardening", () => {
       }
     });
 
-    test("a PR retargeted from main to dev2-go is restored, not left prefixed", async () => {
-      // The migration case the allow-list creates: `wrongBase` now goes false
-      // for two bases, so the restoration path has to fire for dev2-go the
-      // same way it fires for dev. If it does not, a contributor who follows
-      // the bot's own instruction ends up with a permanently renamed, drafted
-      // PR and no state left to explain it.
+    test("a PR retargeted from main to dev is restored, not left prefixed", async () => {
+      // A contributor who follows the bot's own instruction must end up with
+      // their original title and ready state back. If the restoration path
+      // does not fire, they are left with a permanently renamed, drafted PR
+      // and no state to explain it.
       const result = await run({
-        pr: { base: { ref: "dev2-go" }, draft: true, title: "[WRONG BRANCH] Port the runtime entry" },
+        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Port the runtime entry" },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
@@ -928,12 +926,12 @@ describe("GitHub Actions hardening", () => {
       ]);
       const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
       expect(cleared.body).toContain('"active":false');
-      // The confirmation names where the PR actually went, not a hard-coded
-      // default — otherwise it tells a dev2-go contributor they landed on dev.
-      expect(cleared.body).toContain("now targets `dev2-go`");
+      // The confirmation names where the PR actually went, read from the live
+      // PR rather than assumed.
+      expect(cleared.body).toContain("now targets `dev`");
     });
 
-    test("a PR moved from dev2-go back to main is enforced again from a cleared state", async () => {
+    test("a PR moved from dev back to main is enforced again from a cleared state", async () => {
       // The other half of the round trip. After a restoration the marker is
       // inactive, so a move back out has to build fresh state rather than
       // reuse the cleared one, and must not stack a second prefix.
@@ -959,19 +957,17 @@ describe("GitHub Actions hardening", () => {
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 
-    test("the wrong-target explanation lists every allowed base and names the default", async () => {
-      // Two branches are legitimate and only one is the default, so listing
-      // them without ranking them sends ordinary contributions to the Go port
-      // line. The instruction has to say which one to pick and why the other
-      // exists.
+    test("the wrong-target explanation names the one allowed base", async () => {
+      // `dev` is the only integration line, so the instruction has to name it
+      // without offering an alternative the gate would then reject.
       const result = await run({
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
       });
       const commentBody = lastEnforcerCommentBody(result);
 
-      expect(commentBody).toContain("must target one of `dev` or `dev2-go`");
+      expect(commentBody).toContain("must target one of `dev`");
       expect(commentBody).toContain("Please retarget this PR to `dev`");
-      expect(commentBody).toContain("only for scoped Go native-port work");
+      expect(commentBody).not.toContain("dev2-go");
     });
 
     test("a PR targeting main is prefixed, drafted, and explained — and nothing else", async () => {
@@ -1013,6 +1009,113 @@ describe("GitHub Actions hardening", () => {
       expect(draft.variables).toEqual({ pullRequestId: "PR_kwDOnode42" });
 
       // Wrong-base runs must fail the required check even when mutations succeed.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+    });
+
+    test("a stacked PR targeting another open PR head is not wrong-base", async () => {
+      const parentHead = "feature/parent-stack";
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: parentHead,
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Stacked child",
+          draft: false,
+        },
+        openPulls: [
+          {
+            number: 41,
+            head: {
+              ref: parentHead,
+              repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+            },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase());
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(callsTo(result, "graphql")).toEqual([]);
+      expect(result.logs.join(" ")).toContain("treating as stacked");
+      expect(result.logs.join(" ")).toContain("All PR quality gates passed");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a stacked parent found on open-PR page two is still exempt", async () => {
+      const parentHead = "feature/parent-page-two";
+      const filler = Array.from({ length: 100 }, (_, i) => ({
+        number: 1000 + i,
+        head: {
+          ref: `feature/filler-${i}`,
+          repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+        },
+      }));
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: parentHead,
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Stacked child beyond page one",
+          draft: false,
+        },
+        openPullPages: [
+          filler,
+          [
+            {
+              number: 41,
+              head: {
+                ref: parentHead,
+                repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+              },
+            },
+          ],
+        ],
+      });
+
+      const listPages = callsTo(result, "pulls.list").map(
+        (args) => Number((args as { page?: number }).page ?? 1),
+      );
+      expect(listPages).toEqual([1, 2]);
+      expect(methodsOf(result).filter((m) => m === "pulls.list")).toHaveLength(2);
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(result.logs.join(" ")).toContain("treating as stacked");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a non-dev base with no open parent PR is still wrong-base", async () => {
+      const result = await run({
+        pr: { base: { ref: "feature/orphan" }, title: "Orphan stack", draft: false },
+        openPulls: [
+          {
+            number: 99,
+            head: {
+              ref: "feature/other",
+              repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+            },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "issues.createComment",
+        "pulls.update",
+        "issues.updateComment",
+        "graphql",
+        "issues.updateComment",
+        "issues.updateComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          title: "[WRONG BRANCH] Orphan stack",
+        },
+      ]);
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
     });
 
@@ -1145,15 +1248,15 @@ describe("GitHub Actions hardening", () => {
       expect(lastEnforcerCommentBody(wrongTarget)).not.toContain("currently targets `dev`");
 
       // The corrected-path sentence: the event still carries the old wrong
-      // base, the live PR is on dev2-go. Naming the event's base here tells the
+      // base, the live PR is on dev. Naming the event's base here tells the
       // author their retarget did not take.
       const corrected = await run({
-        pr: { base: { ref: "dev2-go" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         eventPayload: { base: { ref: "main" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: false, titlePrefixedByBot: true })],
       });
       const [edited] = callsTo(corrected, "issues.updateComment") as [{ body: string }];
-      expect(edited.body).toContain("now targets `dev2-go`");
+      expect(edited.body).toContain("now targets `dev`");
       expect(edited.body).not.toContain("now targets `main`");
     });
 
@@ -1298,11 +1401,9 @@ describe("GitHub Actions hardening", () => {
       // Addressed to the PR author, so GitHub actually notifies them.
       expect(commentBody).toContain("@someone-else");
       // Names every branch involved, so the instruction is actionable without
-      // context: where the PR is now, where it should go, and the one other
-      // base that is legitimate but not the default.
+      // context: where the PR is now and where it should go.
       expect(commentBody).toContain("`main`");
       expect(commentBody).toContain("`dev`");
-      expect(commentBody).toContain("`dev2-go`");
       // Points at the documentation rather than assuming the reader knows.
       expect(commentBody).toContain("https://lidge-jun.github.io/opencodex/contributing/");
       // And carries the state the next run needs.

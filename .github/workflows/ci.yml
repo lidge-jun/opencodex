@@ -2,7 +2,7 @@ name: Cross-platform CI
 
 on:
   pull_request:
-    branches: [main, dev, dev2-go]
+    branches: [main, dev]
     paths:
       - "src/**"
       - "bin/**"
@@ -48,9 +48,17 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # The Windows full suite now completes near the old 8-minute ceiling; leave
-    # enough room for the privacy/build smokes instead of cancelling a green run.
-    timeout-minutes: 12
+    # Windows dominates this matrix: on run 30459554635 the same suite took
+    # ubuntu 4.6min / macos 5.6min / windows 11.8min. Against the previous
+    # 12-minute ceiling that left ~12s of headroom, so runner variance decided
+    # the result rather than the code under review — #711's rerun finished at
+    # 11.8min and passed while #653's was killed at 12.0min (issue #717).
+    # A cancelled job renders as `fail` in `gh pr checks`, so that flakiness
+    # reads as a broken PR. 20 minutes keeps a green Windows run green with
+    # real margin; it is not a licence for the suite to grow into it. If
+    # Windows approaches this ceiling too, fix the 2.5x platform gap instead
+    # of raising the number again.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

@@ -77,7 +77,7 @@ opencodex 会将已路由模型公开为稳定且可逆的别名：
 
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `claude-ocx-<provider>--<model>`（plain）或 `claude-ocx2-…`（escaped） | `claude-ocx-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字符 base36 哈希） | `claude-opus-4-8-ncb` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
@@ -88,9 +88,13 @@ user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 哈�
 `/model <id>`。OpenCodex 无法读取选择器状态，只会路由每个请求实际携带的模型 ID；可在
 **Logs → requestedModel** 中确认结果。
 
-**别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`；model 不得包含
-`/`。易读形式无法表达的路由会回退到哈希别名。模型 ID **可以**包含 `--`（解析时只按第一个
-`--` 拆分）；包含 `--` 的原生 slug 会回退到哈希形式。
+**别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`。
+不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `claude-ocx-…`。包含 `/` 或 `~` 的 model ID
+会使用 v2 前缀 `claude-ocx2-…` 并转义（`/` → `~s`，`~` → `~t`），例如
+`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` / `~t` 会被保留）；v2 别名会展开转义。
+易读形式无法表达的路由会回退到哈希别名。模型 ID **可以**包含 `--`（解析时只按第一个 `--` 分割）；
+含 `--` 的原生 slug 会回退到哈希形式。
 
 **模型解析顺序：**移除 `[1m]` 标记 → 解码易读别名 → 解码 Desktop 哈希别名 →
 `modelMap` 精确匹配 → 移除日期后的匹配（移除 `-20250514`）→ 透传。

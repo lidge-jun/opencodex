@@ -158,7 +158,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai`(또는 별칭 `azure`) 중 하나. |
-| `baseUrl` | `string` | 업스트림 API base URL. |
+| `baseUrl` | `string` | 업스트림 API base URL. 고정 endpoint를 쓰는 대부분의 기본 제공 provider는 일치하지 않는 URL을 무시합니다. 새로 승격된 충돌 보호 API-key preset은 기존의 같은 이름 custom provider 목적지를 유지합니다. [고정 프로바이더 엔드포인트](#고정-프로바이더-엔드포인트)를 참조하세요. |
 | `responsesPath?` | `string` | `key` 인증 `openai-responses` 요청에 사용할 선택적 상대 resource path. `/`로 시작해야 하며 URL scheme, query, fragment를 포함할 수 없습니다. 생략하면 기존 `/v1/responses` URL 구성을 유지합니다. |
 | `disabled?` | `boolean` | 설정은 디스크에 남기되 라우팅과 모델/카탈로그 목록에서 제외합니다. |
 | `apiKey?` | `string` | API 키 또는 요청 시점에 해석할 `${ENV_VAR}` / `$ENV_VAR` 참조. |
@@ -166,7 +166,7 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 여러 키를 담는 pool. `apiKey`는 활성 항목을 반영합니다. 각 항목에는 `id`, `key`, 선택 `label`, 선택 숫자 `addedAt`이 있습니다. |
 | `defaultModel?` | `string` | 명시적인 모델 없이 이 프로바이더를 선택했을 때 쓸 모델. |
 | `models?` | `string[]` | seed/fallback 모델 목록. `liveModels`가 `false`이면 여기 있는 모델만 발견됩니다. |
-| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 `/models` 카탈로그를 가져옵니다(기본 `true`). `false`이면 설정된 `models`만 사용합니다. |
+| `liveModels?` | `boolean` | 시작/동기화 시 프로바이더의 실시간 모델 카탈로그를 가져옵니다(기본 `true`). 기본 제공 preset은 registry의 신뢰된 URL·쿼리·필터를 사용할 수 있고, 사용자 지정 provider는 `${baseUrl}/models`가 기본입니다. `false`이면 설정된 `models`만 사용합니다. |
 | `selectedModels?` | `string[]` | 모델 발견 뒤 적용할 카탈로그 allowlist. 비어 있지 않으면 해당 id만 Codex에 노출하고, 비어 있거나 생략하면 발견한 모델을 모두 노출합니다. |
 | `contextWindow?` | `number` | 라우팅 카탈로그 항목에 표시할 프로바이더 단위 context-window cap. 실시간 metadata가 더 작으면 그대로 둡니다. |
 | `modelContextWindows?` | `Record<string,number>` | 모델별 context-window cap. 일치하는 모델에서는 `contextWindow`보다 우선하며 더 작은 실시간 metadata를 올리지 않습니다. |
@@ -201,6 +201,29 @@ token 대신 쓸 수 있습니다. 모든 후보는 timing side channel을 막�
 | `mcpServers?` | `Record<string,CursorMcpServerConfig>` | **Cursor 전용.** stdio로 시작하거나 Streamable HTTP로 연결할 MCP server. 필드는 아래에 설명합니다. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | **Cursor 전용.** 외부 computer-use/record-screen 명령. 필드는 아래에 설명합니다. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | **Cursor 어댑터 전용.** Cursor 서버가 지시한 로컬 `read` / `write` / `delete` / `ls` / `grep` / `shell` / `fetch` 실행을 허용하는 opt-in escape hatch. 기본 `false`라 원격 Cursor 메시지가 Codex 승인과 sandbox를 우회하지 못합니다. 아래 [Cursor 프로바이더](#cursor-프로바이더-adapter-cursor) 참조. |
+
+### 고정 프로바이더 엔드포인트
+
+라우팅은 adapter가 요청을 보기 전에 provider endpoint를 결정합니다. 대부분의 기본 제공 provider에서는
+config의 `baseUrl`보다 registry endpoint가 우선합니다. 이 단계에서 설정 URL을 유지하는 경우는 네 가지입니다.
+
+- override를 명시적으로 허용하는 provider: `ollama`, `vllm`, `lm-studio`, `litellm`, `qwen-cloud`,
+  `alibaba-token-plan-intl`.
+- registry endpoint가 사용자가 채우는 template인 provider(예: `azure-openai`,
+  `cloudflare-ai-gateway`).
+- 이름 충돌을 보호하는 새 고정 API-key preset. 기존의 같은 이름 custom provider가 다른 목적지를
+  가리키면 원래 목적지를 유지하며 key를 새 registry host로 보내지 않습니다.
+- registry에 없고 사용자가 직접 정의한 provider.
+
+그 뒤에도 adapter가 결정된 URL을 조정할 수 있습니다. 예를 들어 `kiro` adapter는 canonical
+`runtime.{region}.kiro.dev` host에서 가져온 credential의 API region을 사용합니다. adapter별 규칙은
+[Adapters](/ko/reference/adapters/)를 참조하세요.
+
+라우팅이 설정된 `baseUrl`을 버리면 opencodex가 경고를 출력합니다. registry endpoint는 전체를 표시하고
+설정 URL은 origin만 표시합니다. path는 credential 정보를 포함할 수 있으므로 기록하지 않습니다. 사용하지
+않는 `baseUrl`을 제거하거나 목적 URL과 endpoint가 일치하는 provider를 선택하세요. 지역별 서비스에서는
+올바른 항목을 사용해야 합니다. `alibaba-token-plan`은 베이징으로 고정되고,
+`alibaba-token-plan-intl`은 국제 endpoint override를 허용합니다.
 
 ## Cursor 프로바이더 (`adapter: "cursor"`)
 
@@ -273,6 +296,11 @@ OpenRouter에서 같은 모델을 제공하는 endpoint마다 prompt cache 지�
 
 일부 프로바이더는 실시간 모델 카탈로그가 매우 크거나 느립니다. Codex에 `models`로 고정한 모델만
 보이게 하려면 `liveModels`를 `false`로 설정하세요.
+
+실시간 discovery 응답이 4 MiB 또는 원시 모델 행 2,000개를 넘으면 캐시 전에 거부됩니다. 기본 제공
+preset은 이 한도를 더 낮추고 혼합 카탈로그를 채팅 가능 행으로 필터링할 수 있습니다. 한도 초과 또는
+손상된 응답은 stale/static fallback을 사용하고, 부적격 행은 제외됩니다. 유효한 응답에 적격 행이
+없으면 권위 있는 빈 카탈로그가 되며, 한도 초과 응답을 조용히 잘라 사용하지 않습니다.
 
 `liveModels`가 `false`이고 `models`가 비어 있거나 생략되면 opencodex는 해당 프로바이더의 라우팅
 모델을 하나도 노출하지 않습니다.

@@ -135,7 +135,7 @@ async function handleKeyLogin(name: string): Promise<void> {
     process.exit(1);
   }
   process.stdout.write("   validating… ");
-  const valid = await validateApiKey({ ...def, baseUrl }, key);
+  const valid = await validateApiKey(name, { ...def, baseUrl }, key);
   console.log(valid === true ? "valid ✅" : valid === false ? "INVALID ❌" : "couldn't validate (may still work)");
   if (valid === false) {
     console.error("Provider rejected the key. Not saved.");

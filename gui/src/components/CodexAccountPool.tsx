@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { IconPlus } from "../icons";
-import { Notice, EmptyState } from "../ui";
+import { EmptyState } from "../ui";
 import AddCodexAccountModal from "./AddCodexAccountModal";
 import { useCodexAccountPool, type CodexAccountPoolController } from "../hooks/useCodexAccountPool";
 import type { ReactNode } from "react";
@@ -59,8 +59,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
-  const [toast, setToast] = useState("");
-  const [toastError, setToastError] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [actionFeedbackTone, setActionFeedbackTone] = useState<"ok" | "err" | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
@@ -68,6 +69,21 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
   const doctorCopy = useCopyFeedback<string>();
+
+  const showActionFeedback = useCallback((text: string, error = false) => {
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    setActionFeedback(text);
+    setActionFeedbackTone(error ? "err" : "ok");
+    feedbackTimerRef.current = setTimeout(() => {
+      setActionFeedback(null);
+      setActionFeedbackTone(null);
+      feedbackTimerRef.current = null;
+    }, 5000);
+  }, []);
+
+  useEffect(() => () => {
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+  }, []);
 
   const copyDoctor = useCallback((accountId: string) => {
     doctorCopy.copy(DOCTOR_CMD, accountId);
@@ -121,19 +137,15 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const handleAccountAdded = useCallback(() => {
     void controller.syncAfterAccountAdded();
-    setToast(t("codexAuth.accountAdded"));
-    setToastError(false);
-    setTimeout(() => setToast(""), 5000);
+    showActionFeedback(t("codexAuth.accountAdded"));
     closeAddModal();
-  }, [closeAddModal, controller, t]);
+  }, [closeAddModal, controller, showActionFeedback, t]);
 
   const setActive = async (id: string | null) => {
     const result = await controller.switchAccount(id);
     if (!result.ok) {
       if (result.reason === "busy") return;
-      setToast(t("codexAuth.switchFailed"));
-      setToastError(true);
-      setTimeout(() => setToast(""), 5000);
+      showActionFeedback(t("codexAuth.switchFailed"), true);
       return;
     }
     setConfirm(null);
@@ -141,19 +153,16 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const label = selectedId && selectedId !== "__main__"
       ? accounts.find(account => account.id === selectedId)?.email ?? t("pws.accountOrdinal", { count: "1" })
       : t("codexAuth.mainAccount");
-    setToast(accountModeState === "direct"
+    showActionFeedback(accountModeState === "direct"
       ? t("codexAuth.poolPreparedToast", { email: label })
       : t("codexAuth.switched", { email: label }));
-    setToastError(false);
-    setTimeout(() => setToast(""), 5000);
   };
 
   const editAlias = async (account: CodexAccountEntry) => {
     const entered = window.prompt(t("prov.aliasPrompt"), account.alias ?? "");
     if (entered === null) return;
     const result = await controller.saveAlias(account.id, entered);
-    setToastError(!result.ok);
-    setToast(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"));
+    showActionFeedback(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"), !result.ok);
   };
 
   const togglePaused = async (account: CodexAccountEntry) => {
@@ -161,13 +170,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const result = await controller.setAccountPaused(account.id, paused);
     if (!result.ok && result.reason === "busy") return;
     setConfirm(current => current?.id === account.id ? null : current);
-    setToastError(!result.ok);
-    setToast(t(result.ok
+    showActionFeedback(t(result.ok
       ? paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded"
       : paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", {
       email: account.alias ?? account.email,
-    }));
-    setTimeout(() => setToast(""), 5000);
+    }), !result.ok);
   };
 
   const remove = async (id: string) => {
@@ -175,9 +182,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     if (!window.confirm(t("codexAuth.removeConfirm", { id: label }))) return;
     const result = await controller.removeAccount(id);
     if (!result.ok) {
-      setToast(t("codexAuth.removeFailed"));
-      setToastError(true);
-      setTimeout(() => setToast(""), 5000);
+      showActionFeedback(t("codexAuth.removeFailed"), true);
     }
   };
 
@@ -185,8 +190,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setRefreshingQuota(true);
     try {
       const ok = await load(true);
-      setToast(t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed"));
-      setTimeout(() => setToast(""), 5000);
+      showActionFeedback(t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed"), !ok);
     } finally {
       setRefreshingQuota(false);
     }
@@ -195,13 +199,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const pauseExhausted = async () => {
     const result = await controller.pauseExhaustedAccounts();
     if (!result.ok && result.reason === "busy") return;
-    setToastError(!result.ok);
-    setToast(result.ok
+    showActionFeedback(result.ok
       ? result.pausedCount > 0
         ? t("codexAuth.pauseExhaustedSucceeded", { count: String(result.pausedCount) })
         : t("codexAuth.pauseExhaustedNone")
-      : t("codexAuth.pauseExhaustedFailed"));
-    setTimeout(() => setToast(""), 5000);
+      : t("codexAuth.pauseExhaustedFailed"), !result.ok);
   };
 
   const openResetPopup = async (account: CodexAccountEntry) => {
@@ -231,9 +233,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         setResetConfirm(false);
       }
       if (result.toast) {
-        setToastError(!result.ok);
-        setToast(result.toast);
-        setTimeout(() => setToast(""), 5000);
+        showActionFeedback(result.toast, !result.ok);
       }
     } finally {
       setRedeeming(false);
@@ -244,6 +244,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const pool = accounts.filter(a => !a.isMain);
   const isMainActive = !main?.paused && (!activeId || activeId === "__main__");
   const switchActionLabel = t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext");
+  const pauseBusy = pauseUpdatingId !== null || pausingExhausted;
+  const autoSwitchThreshold = autoSwitch.threshold ?? 0;
 
   return (
     <div>
@@ -251,14 +253,18 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         t={t}
         embedded={embedded}
         refreshingQuota={refreshingQuota}
+        actionFeedback={actionFeedback}
+        actionFeedbackTone={actionFeedbackTone}
         pausingExhausted={pausingExhausted}
-        pauseBusy={pauseUpdatingId !== null || pausingExhausted}
+        pauseBusy={pauseBusy}
         onRefresh={() => { void refreshQuotas(); }}
         onPauseExhausted={() => { void pauseExhausted(); }}
       />
 
-      {toast && <Notice tone={toastError ? "err" : "ok"}>{toast}</Notice>}
+      {banner}
 
+      {/* Skeleton must sit where main/pool cards will be — never above the account-mode
+          banner, or the strip collapses on ready and shoves the whole page up (CLS). */}
       <CodexAccountPoolLoadStates
         t={t}
         loadState={loadState}
@@ -266,59 +272,62 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         onRetry={() => { void load(); }}
       />
 
-      {banner}
+      {!(loadState === "loading" && accounts.length === 0) && (
+        <>
+          <CodexAccountPoolMainCard
+            t={t}
+            main={main}
+            isMainActive={isMainActive}
+            accountModeState={accountModeState}
+            threshold={autoSwitchThreshold}
+            switchActionLabel={switchActionLabel}
+            onSwitch={setConfirm}
+            onTogglePause={togglePaused}
+            pauseUpdatingId={pauseUpdatingId}
+            pauseBusy={pauseBusy}
+            onOpenReset={openResetPopup}
+            onCopyDoctor={copyDoctor}
+            doctorCopyOutcomeFor={doctorCopy.outcomeFor}
+          />
 
-      <CodexAccountPoolMainCard
-        t={t}
-        main={main}
-        isMainActive={isMainActive}
-        accountModeState={accountModeState}
-        threshold={autoSwitch.threshold ?? 0}
-        switchActionLabel={switchActionLabel}
-        onSwitch={setConfirm}
-        onTogglePause={togglePaused}
-        pauseUpdatingId={pauseUpdatingId}
-        pauseBusy={pauseUpdatingId !== null || pausingExhausted}
-        onOpenReset={openResetPopup}
-        onCopyDoctor={copyDoctor}
-        doctorCopyOutcomeFor={doctorCopy.outcomeFor}
-      />
+          <div className="section-sep">
+            <span className="section-label">{t("codexAuth.accountPool")}</span>
+            <div className="sep-line" />
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAdd(true)}>
+              <IconPlus width={14} /> {t("codexAuth.add")}
+            </button>
+          </div>
 
-      <div className="section-sep">
-        <span className="section-label">{t("codexAuth.accountPool")}</span>
-        <div className="sep-line" />
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAdd(true)}>
-          <IconPlus width={14} /> {t("codexAuth.add")}
-        </button>
-      </div>
+          {activePoolNeedsReauth && activePoolAccount && (
+            <CodexAccountPoolReauthBanner onReauth={() => openReauth(activePoolAccount.id)} />
+          )}
 
-      {activePoolNeedsReauth && activePoolAccount && (
-        <CodexAccountPoolReauthBanner onReauth={() => openReauth(activePoolAccount.id)} />
+          {pool.length === 0 && <EmptyState title={t("codexAuth.noPool")} />}
+
+          <CodexAccountPoolCards
+            pool={pool}
+            activeId={activeId}
+            accountModeState={accountModeState}
+            switchActionLabel={switchActionLabel}
+            threshold={autoSwitchThreshold}
+            onOpenReset={openResetPopup}
+            onSwitch={setConfirm}
+            onTogglePause={togglePaused}
+            pauseUpdatingId={pauseUpdatingId}
+            pauseBusy={pauseBusy}
+            onReauth={openReauth}
+            onEditAlias={editAlias}
+            onRemove={remove}
+            onCopyDoctor={copyDoctor}
+            doctorCopyOutcomeFor={doctorCopy.outcomeFor}
+          />
+        </>
       )}
-
-      {pool.length === 0 && <EmptyState title={t("codexAuth.noPool")} />}
-
-      <CodexAccountPoolCards
-        pool={pool}
-        activeId={activeId}
-        accountModeState={accountModeState}
-        switchActionLabel={switchActionLabel}
-        threshold={autoSwitch.threshold ?? 0}
-        onOpenReset={openResetPopup}
-        onSwitch={setConfirm}
-        onTogglePause={togglePaused}
-        pauseUpdatingId={pauseUpdatingId}
-        pauseBusy={pauseUpdatingId !== null || pausingExhausted}
-        onReauth={openReauth}
-        onEditAlias={editAlias}
-        onRemove={remove}
-        onCopyDoctor={copyDoctor}
-        doctorCopyOutcomeFor={doctorCopy.outcomeFor}
-      />
 
       <CodexAutoSwitchSetting
         threshold={autoSwitch.threshold}
         draft={autoSwitch.draft}
+        hydrated={autoSwitch.hydrated}
         saving={autoSwitch.saving}
         loadError={autoSwitch.loadError}
         feedback={autoSwitch.feedback}
@@ -333,7 +342,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         }}
       />
 
-      <CodexPoolStrategySetting apiBase={apiBase} />
+      <CodexPoolStrategySetting
+        apiBase={apiBase}
+        subscribeLoadObserver={controller.subscribeLoadObserver}
+        readLastActive={controller.readLastActive}
+      />
 
       {confirm && (
         <CodexAccountSwitchModal

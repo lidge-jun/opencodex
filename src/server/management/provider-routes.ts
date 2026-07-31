@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
-import { providerModelsListFromProbeResponse } from "../../codex/catalog/provider-fetch";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -24,10 +23,16 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
+import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
+import {
+  extractModelEnvelopeRows,
+  extractProviderModelItems,
+  readBoundedDiscoveryJson,
+  resolveProviderModelDiscovery,
+} from "../../providers/model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -339,6 +344,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
     const { url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
+    const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
       const res = await providerOutboundGet(name, prov, modelsUrl, {
@@ -355,15 +361,42 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         });
       }
       if (!res.ok) {
+        try {
+          void res.body?.cancel().catch(() => undefined);
+        } catch {
+          // Best-effort release for non-conforming response streams.
+        }
         return jsonResponse({ ok: false, latencyMs, error: `upstream /models returned ${res.status}` });
       }
-      const json = await res.json().catch(() => null);
-      // OpenAI-style { data }, Google { models }, and Together-style top-level arrays (#617).
-      const list = providerModelsListFromProbeResponse(json);
-      if (!Array.isArray(list)) {
-        return jsonResponse({ ok: false, latencyMs, error: "upstream /models returned an unexpected shape" });
+      const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+      if (!bounded.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: bounded.reason === "response_too_large"
+            ? `upstream /models exceeded the ${discovery.maxResponseBytes}-byte response limit`
+            : "upstream /models returned invalid JSON",
+        });
       }
-      const models = list.length;
+      // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
+      // as catalog discovery. Google's /v1beta/models uses `models[].name` and remains a
+      // connectivity-only count because it is not an authoritative catalog source.
+      const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
+        ? bounded.value as Record<string, unknown>
+        : undefined;
+      const extracted = Array.isArray(bounded.value) || Array.isArray(record?.data)
+        ? extractProviderModelItems(bounded.value, discovery)
+        : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
+      if (!extracted.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: extracted.reason === "too_many_models"
+            ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
+            : "upstream /models returned an unexpected shape",
+        });
+      }
+      const models = "items" in extracted ? extracted.items.length : extracted.rows.length;
       return jsonResponse({
         ok: true,
         latencyMs,
@@ -374,7 +407,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({
         ok: false,
         latencyMs: Date.now() - started,
-        error: err instanceof Error ? err.message : "Connection test failed",
+        error: err instanceof ProviderOutboundPolicyError
+          ? `upstream /models blocked by destination policy: ${err.message}`
+          : err instanceof Error ? err.message : "Connection test failed",
       });
     }
   }

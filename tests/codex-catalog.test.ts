@@ -696,6 +696,34 @@ describe("Google Gemini catalog metadata", () => {
   });
 });
 
+describe("Cursor Kimi K3 catalog default effort", () => {
+  // Regression for the effort-tier ladder added with cursor/kimi-k3: the Cursor ladder is
+  // low/high/max with NO medium rung, so applyReasoningLevels' medium -> high -> first
+  // preference would settle default_reasoning_level on "high" unless the registry supplies a
+  // default. Kimi documents `max` as K3's API default, and a "high" default makes the picker
+  // send high explicitly so the request builder never falls back to kimi-k3-max.
+  test("keeps max as the catalog default instead of falling back to high", async () => {
+    const cursor = {
+      adapter: "cursor",
+      authMode: "oauth" as const,
+      liveModels: false,
+    };
+    enrichProviderFromRegistry("cursor", cursor);
+    const models = await gatherRoutedModels({
+      port: 0,
+      defaultProvider: "cursor",
+      providers: { cursor },
+    });
+    const entry = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(row => row.slug === "cursor/kimi-k3");
+
+    expect(entry).toBeDefined();
+    expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
+    expect(entry?.default_reasoning_level).toBe("max");
+  });
+});
+
 describe("configured CatalogModel displayName -> catalog display_name", () => {
   test("a routed CatalogModel displayName becomes the catalog display_name", () => {
     const model = { provider: "deepseek", id: "deepseek-v4", displayName: "DeepSeek V4", owned_by: "deepseek" };
@@ -2043,9 +2071,11 @@ describe("Codex catalog routed normalization", () => {
   test("opencode-go high-risk models use official jawcode metadata in the Codex catalog", () => {
     const cases = [
       { id: "glm-5.2", context: 1_000_000, auto: 900_000, input: ["text"] },
-      { id: "qwen3.5-plus", context: 262_144, auto: 235_929, input: ["text", "image"] },
+      // Upstream raised qwen3.5-plus to a 1M window and cut minimax-m3 to the 512K tier that
+      // matches MiniMax's own <=512K pricing band; both are catalogue refreshes, not overrides.
+      { id: "qwen3.5-plus", context: 1_000_000, auto: 900_000, input: ["text", "image"] },
       { id: "kimi-k2.7-code", context: 262_144, auto: 235_929, input: ["text", "image"] },
-      { id: "minimax-m3", context: 1_000_000, auto: 900_000, input: ["text", "image"] },
+      { id: "minimax-m3", context: 512_000, auto: 460_800, input: ["text", "image"] },
       { id: "qwen3.7-max", context: 1_000_000, auto: 900_000, input: ["text"] },
     ] as const;
     const entries = buildCatalogEntries(nativeTemplate(), [], cases.map(({ id }) => ({ provider: "opencode-go", id })));
@@ -2550,7 +2580,10 @@ describe("OpenAI API trusted catalog augmentation", () => {
       });
     };
     try {
-      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true }));
+      // This test exercises the catalog fetch/augmentation path, not DNS destination
+      // classification. Keep it hermetic on NAT64 hosts whose resolver also returns
+      // 64:ff9b::/96 answers for api.openai.com.
+      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true, allowPrivateNetwork: true }));
       const apiRows = rows.filter(row => row.provider === "openai-apikey");
       expect(calls).toEqual(["https://api.openai.com/v1/models"]);
       expect(apiRows.map(row => row.id)).toEqual([...exactIds].sort());

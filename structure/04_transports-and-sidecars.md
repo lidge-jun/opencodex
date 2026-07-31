@@ -241,7 +241,7 @@ It also repairs the opposite direction (260718): an assistant `tool_calls` round
 by an intervening user/developer barrier or an interrupted turn — is closed by deferring barrier
 messages until the round completes, reattaching real results to their original call occurrence,
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
-(Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_plan/260718_dangling_toolcall_hardening`).
+(Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_fin/260718_dangling_toolcall_hardening`).
 
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
@@ -319,7 +319,7 @@ backends may reject the OpenAI-specific field.
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
-`devlog/_plan/260716_grok_build_hardening/`.
+`devlog/_fin/260716_grok_build_hardening/`.
 
 - **Reasoning folding:** the Responses parser folds `reasoning` items into the FOLLOWING
   assistant turn (`pendingReasoning` in `src/responses/parser.ts`) so the Grok chat wire carries
@@ -358,7 +358,7 @@ request-level `parallel_tool_calls` bit (default true) and routed catalog entrie
 opt-out (registry-seeded, router-backfilled; an explicit user value always wins). Non-chat
 adapters advertise the catalog bit only on explicit `true`; cursor keeps its own special-casing.
 Providers with flaky parallel streaming can be opted out individually. Evidence and provider
-ledger: `devlog/_plan/260709_parallel_tool_calls/`.
+ledger: `devlog/_fin/260709_parallel_tool_calls/`.
 
 ## Reasoning display parity (hideThinkingSummary)
 
@@ -369,7 +369,7 @@ item (`summary: []`, txt-only `ocxr1:` `encrypted_content`, no text deltas) — 
 Codex app, so tool cells group like native models — while the text still round-trips for
 `preserveReasoningContentModels` replay. Visible mode (summary "auto") keeps the raw
 `content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
-`devlog/_plan/260709_native_response_pattern/`.
+`devlog/_fin/260709_native_response_pattern/`.
 
 ## Chat-to-Responses message phase inference
 

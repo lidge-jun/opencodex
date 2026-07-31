@@ -122,6 +122,11 @@ test("concurrent 401s share one token prompt and all retry with the stored token
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
+    // Session re-bootstrap probe: this fixture never mints sessions, so fail it fast
+    // instead of letting it join the release queue below.
+    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/") {
+      return new Response("unauthorized", { status: 401 });
+    }
     if (headers.get("X-OpenCodex-API-Key") === "shared-token") {
       return new Response("{}", { status: 200 });
     }
@@ -240,6 +245,9 @@ test("canceling the token prompt once does not reopen it for the rest of the 401
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
+    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/") {
+      return new Response("unauthorized", { status: 401 });
+    }
     if (headers.get("X-OpenCodex-API-Key")) {
       return new Response("{}", { status: 200 });
     }
@@ -309,4 +317,99 @@ test("data-plane requests never receive the management token or prompt", async (
   expect(cross.status).toBe(401);
   expect(seenHeaders).toEqual([null]);
   expect(promptCalls).toBe(beforeCrossPrompts);
+});
+
+function injectSessionMeta(token: string, csrf: string, origin: string): void {
+  for (const [name, content] of [
+    ["opencodex-session-token", token],
+    ["opencodex-session-csrf", csrf],
+    ["opencodex-session-origin", origin],
+  ] as const) {
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", name);
+    meta.setAttribute("content", content);
+    document.head.appendChild(meta);
+  }
+}
+
+function sessionDocumentHtml(token: string, csrf: string, origin: string): string {
+  return [
+    "<!doctype html><html><head>",
+    `<meta name="opencodex-session-token" content="${token}">`,
+    `<meta name="opencodex-session-csrf" content="${csrf}">`,
+    `<meta name="opencodex-session-origin" content="${origin}">`,
+    "</head><body></body></html>",
+  ].join("");
+}
+
+test("expired session silently re-bootstraps from the served document without prompting", async () => {
+  // Regression for the post-security-hardening UX bug: loopback sessions expire after the
+  // 5-minute TTL (or die on proxy restart), and the dashboard used to demand an admin token
+  // the user never chose. The fetch wrapper must renew the session from a freshly served
+  // document instead — token entry is not part of the default loopback experience.
+  injectSessionMeta("ocx_session_stale", "stale-csrf", "http://localhost");
+
+  let promptCalls = 0;
+  let bootstrapFetches = 0;
+  const seenApiKeys: Array<string | null> = [];
+  const seenGuiOrigins: Array<string | null> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = input instanceof Request ? input.url : String(input);
+    const url = new URL(raw, "http://localhost/");
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    if (url.pathname === "/") {
+      bootstrapFetches += 1;
+      return new Response(sessionDocumentHtml("ocx_session_fresh", "fresh-csrf", "http://localhost"), {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+    seenApiKeys.push(headers.get("X-OpenCodex-API-Key"));
+    seenGuiOrigins.push(headers.get("X-OpenCodex-GUI-Origin"));
+    if (headers.get("X-OpenCodex-API-Key") === "ocx_session_fresh"
+      && headers.get("X-OpenCodex-GUI-Origin") === "http://localhost") {
+      return new Response("{}", { status: 200 });
+    }
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return null;
+  };
+  await installMockAuthFetch(mockFetch);
+
+  const res = await fetch("/api/config");
+  expect(res.status).toBe(200);
+  expect(promptCalls).toBe(0);
+  expect(bootstrapFetches).toBe(1);
+  expect(seenApiKeys).toEqual(["ocx_session_stale", "ocx_session_fresh"]);
+  expect(seenGuiOrigins).toEqual(["http://localhost", "http://localhost"]);
+});
+
+test("a session minted for another origin is rejected and the prompt fallback stays", async () => {
+  // Non-loopback dashboards never get server-minted sessions; a re-bootstrap document whose
+  // origin does not match must not be trusted, and the operator-only prompt remains.
+  let promptCalls = 0;
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = input instanceof Request ? input.url : String(input);
+    const url = new URL(raw, "http://localhost/");
+    const headers = new Headers(init?.headers);
+    if (url.pathname === "/") {
+      return new Response(sessionDocumentHtml("ocx_session_foreign", "foreign-csrf", "http://192.0.2.10:10100"), {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+    if (headers.get("X-OpenCodex-API-Key") === "manual-admin-token") return new Response("{}", { status: 200 });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  window.prompt = () => {
+    promptCalls += 1;
+    return "manual-admin-token";
+  };
+  await installMockAuthFetch(mockFetch);
+
+  const res = await fetch("/api/config");
+  expect(res.status).toBe(200);
+  expect(promptCalls).toBe(1);
 });

@@ -8,7 +8,7 @@ type RawModel = {
   id?: string;
   contextWindow?: number;
   maxTokens?: number;
-  input?: ("text" | "image")[];
+  input?: ("text" | "image" | "video")[];
   reasoning?: boolean;
   wireModelId?: string;
   cost?: {
@@ -22,7 +22,11 @@ type RawModel = {
 const sourcePath = process.env.JAWCODE_MODELS_JSON
   ? resolve(process.env.JAWCODE_MODELS_JSON)
   : resolve(process.cwd(), "../jawcode/packages/ai/src/models.json");
-const outPath = resolve(process.cwd(), "src/generated/jawcode-model-metadata.ts");
+// `JAWCODE_METADATA_OUT` lets the sync guard regenerate into a temp file and byte-compare without
+// any risk of clobbering the committed output (tests/jawcode-metadata-sync.test.ts).
+const outPath = process.env.JAWCODE_METADATA_OUT
+  ? resolve(process.env.JAWCODE_METADATA_OUT)
+  : resolve(process.cwd(), "src/generated/jawcode-model-metadata.ts");
 const CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
   "anthropic/claude-sonnet-4-6": 200_000,
   "anthropic/claude-sonnet-4-6[1m]": 200_000,
@@ -45,6 +49,15 @@ const COST_VENDOR_BUNDLES = [
 const allowedProviders = Array.from(
   new Set([...Object.values(PROVIDER_ALIASES), ...COST_VENDOR_BUNDLES]),
 ).sort();
+
+// Models the upstream catalogue lists but the provider rejects at request time. Issue #82:
+// `opencode-go/hy3-preview` returns `Provider error 400 ... model_not_supported` because it is not
+// on the Zen Go lite model list, yet upstream keeps re-adding `tencent/hy3-preview`. Without this
+// block, every regeneration resurrects it as a selectable model and users hit that 400 again.
+// Keyed as `<bundle>/<modelId>`; `tests/codex-catalog.test.ts` asserts the slug stays absent.
+const EXCLUDED_MODELS = new Set<string>([
+  "opencode-go/hy3-preview",
+]);
 const lines: string[] = [];
 
 function compactRow(values: unknown[]): unknown[] {
@@ -60,7 +73,7 @@ lines.push("  provider: string;");
 lines.push("  id: string;");
 lines.push("  contextWindow?: number;");
 lines.push("  maxTokens?: number;");
-lines.push("  input?: (\"text\" | \"image\")[];");
+lines.push("  input?: (\"text\" | \"image\" | \"video\")[];");
 lines.push("  reasoning?: boolean;");
 lines.push("  wireModelId?: string;");
 lines.push("  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };");
@@ -74,6 +87,7 @@ lines.push("const DATA: Record<string, readonly Row[]> = {");
 for (const provider of allowedProviders) {
   const models = registry[provider] ?? {};
   const rows = Object.entries(models)
+    .filter(([id]) => !EXCLUDED_MODELS.has(`${provider}/${id}`))
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, model]) => compactRow([
       id,
@@ -136,7 +150,7 @@ lines.push("  return {");
 lines.push("    provider, id,");
 lines.push("    ...(contextWindow != null ? { contextWindow } : {}),");
 lines.push("    ...(maxTokens != null ? { maxTokens } : {}),");
-lines.push("    ...(input ? { input: input.split(\",\") as (\"text\" | \"image\")[] } : {}),");
+lines.push("    ...(input ? { input: input.split(\",\") as (\"text\" | \"image\" | \"video\")[] } : {}),");
 lines.push("    ...(reasoning != null ? { reasoning: reasoning === 1 } : {}),");
 lines.push("    ...(wireModelId != null ? { wireModelId } : {}),");
 lines.push("    ...(hasCost ? { cost: { input: costInput, output: costOutput, cacheRead: costCacheRead, cacheWrite: costCacheWrite } } : {}),");

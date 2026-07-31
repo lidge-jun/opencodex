@@ -187,6 +187,62 @@
   grid-column: 1 / -1;
   padding-left: 30px;
   padding-top: 1px;
+  min-height: 64px;
+}
+
+.pws-dashboard-section--rate-limits,
+.pws-dashboard-section--recent {
+  min-height: 180px;
+}
+
+.pws-dashboard-empty {
+  margin: 8px 0 0;
+  min-height: 3rem;
+}
+
+.pws-dashboard-row--skeleton {
+  pointer-events: none;
+  cursor: default;
+}
+
+.pws-skel {
+  display: block;
+  border-radius: var(--radius-2xs, 4px);
+  background: linear-gradient(90deg, var(--raised, #eee) 0%, var(--surface, #f7f7f7) 50%, var(--raised, #eee) 100%);
+  background-size: 200% 100%;
+  animation: codex-auth-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.pws-dashboard-row-icon.pws-skel {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.pws-skel--name {
+  width: 7rem;
+  height: 0.85rem;
+}
+
+.pws-skel--meta {
+  width: 5rem;
+  height: 0.7rem;
+  margin-top: 4px;
+}
+
+.pws-skel--count {
+  width: 4rem;
+  height: 0.75rem;
+  margin-left: auto;
+}
+
+.providers-workspace--boot {
+  min-height: 600px;
+}
+
+.providers-workspace-rail--boot {
+  min-height: 600px;
+  opacity: 0.35;
 }
 
 /* Narrow main pane / mobile: stack columns */

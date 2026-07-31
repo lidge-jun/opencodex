@@ -76,6 +76,8 @@ afterEach(async () => {
 });
 
 async function mount() {
+  // Row-disclosure tests need the Opus family open; family fold is covered elsewhere.
+  testWindow.localStorage.setItem("ocx.claudeDesktop.collapsedFamilies.v2", JSON.stringify([]));
   await act(async () => {
     root = createRoot(container);
     root.render(<LanguageProvider><ClaudeDesktop apiBase="" /></LanguageProvider>);

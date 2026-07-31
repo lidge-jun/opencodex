@@ -108,25 +108,26 @@ test("families render as a vertical stack, Opus first", async () => {
   expect(names).toEqual(["Opus", "Fable", "Sonnet", "Haiku"]);
 });
 
-// Empty families fold on first load; populated ones stay open. A fixed "only Opus is
-// open" rule would be wrong here — Sonnet holds a model and must be visible.
-test("empty families fold on first load, populated ones stay open", async () => {
+test("all families fold on first load", async () => {
   await mount();
-  expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("true");
-  expect(familyToggle("Sonnet").getAttribute("aria-expanded")).toBe("true");
+  expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("false");
+  expect(familyToggle("Sonnet").getAttribute("aria-expanded")).toBe("false");
   expect(familyToggle("Fable").getAttribute("aria-expanded")).toBe("false");
   expect(familyToggle("Haiku").getAttribute("aria-expanded")).toBe("false");
 });
 
 test("toggling a family hides its body and persists the preference", async () => {
   await mount();
+  expect(container.querySelector("#claude-lane-body-opus")).toBeNull();
+  await click(familyToggle("Opus"));
+  expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("true");
   expect(container.querySelector("#claude-lane-body-opus")).not.toBeNull();
 
   await click(familyToggle("Opus"));
   expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("false");
   expect(container.querySelector("#claude-lane-body-opus")).toBeNull();
 
-  const stored = testWindow.localStorage.getItem("ocx.claudeDesktop.collapsedFamilies.v1");
+  const stored = testWindow.localStorage.getItem("ocx.claudeDesktop.collapsedFamilies.v2");
   expect(stored).not.toBeNull();
   expect(JSON.parse(stored!)).toContain("opus");
 });
@@ -156,6 +157,7 @@ test("a collapsed family still accepts a dropped model", async () => {
 // typing in the box would believe models had been unassigned.
 test("the header count ignores the search", async () => {
   await mount();
+  await click(familyToggle("Opus"));
   const opusSection = Array.from(container.querySelectorAll("section.ocx-group"))
     .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Opus")!;
   expect(opusSection.querySelector(".ocx-group-count")?.textContent).toContain("7");
@@ -173,6 +175,7 @@ test("the header count ignores the search", async () => {
 // live family counts, so moving the last model out of a family folded it mid-gesture.
 test("moving a model does not re-fold the family the user is working in", async () => {
   await mount();
+  await click(familyToggle("Sonnet"));
   const sonnetSection = Array.from(container.querySelectorAll("section.ocx-group"))
     .find(section => (section.querySelector(".ocx-group-name")?.textContent ?? "") === "Sonnet")!;
   expect(sonnetSection.querySelector("button.ocx-group-toggle")!.getAttribute("aria-expanded")).toBe("true");
@@ -193,10 +196,9 @@ test("moving a model does not re-fold the family the user is working in", async 
 });
 
 test("a stored preference wins over the load-time default", async () => {
-  testWindow.localStorage.setItem("ocx.claudeDesktop.collapsedFamilies.v1", JSON.stringify(["opus"]));
+  // Only Opus folded — every other family stays open despite the all-collapsed default.
+  testWindow.localStorage.setItem("ocx.claudeDesktop.collapsedFamilies.v2", JSON.stringify(["opus"]));
   await mount();
   expect(familyToggle("Opus").getAttribute("aria-expanded")).toBe("false");
-  // Fable is empty but the stored preference says nothing about it, so it stays open:
-  // an explicit preference replaces the default rather than merging with it.
   expect(familyToggle("Fable").getAttribute("aria-expanded")).toBe("true");
 });

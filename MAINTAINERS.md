@@ -8,62 +8,67 @@ review and merge policy.
 | GitHub account | Project role | Responsibilities |
 | --- | --- | --- |
 | [@lidge-jun](https://github.com/lidge-jun) | Project owner | Project direction, releases, repository administration, and final governance decisions |
-| [@Ingwannu](https://github.com/Ingwannu) | Maintainer | Issue and pull-request triage, `dev` and `dev2-go` integration, security review, and repository maintenance |
-| [@Wibias](https://github.com/Wibias) | Maintainer | Issue and pull-request triage, `dev` and `dev2-go` integration, and provider/CI maintenance |
+| [@Ingwannu](https://github.com/Ingwannu) | Maintainer | Issue and pull-request triage, `dev` integration, security review, and repository maintenance |
+| [@Wibias](https://github.com/Wibias) | Maintainer | Issue and pull-request triage, `dev` integration, and provider/CI maintenance |
 
 The table describes project responsibilities. Actual repository permissions remain controlled
 through GitHub repository settings.
 
-Integration duty spans both lines while the Go native port is in transition: a
-maintainer who merges into `dev` also carries that work onto `dev2-go`. The
-rule is written out under [Review and merge policy](#review-and-merge-policy).
+`dev` is the only integration line. The former `dev2-go` carry duty is retired;
+see [The retired `dev2-go` line](#the-retired-dev2-go-line).
 
 ## Review and merge policy
 
-- Pull requests target `dev` by default. `dev2-go` is a parallel integration
-  line reserved for Go native-port work; it converges back through
-  maintainer-controlled merges, and promotion to `main` still happens only from
-  `dev`. The target-branch check accepts both as integration targets. It cannot
-  distinguish scoped Go port work from anything else aimed at `dev2-go`, so
-  that boundary is enforced in review: redirect an out-of-scope pull request to
-  `dev` rather than treating the automation's silence as approval.
-- **Transition to `dev2-go` (current phase).** The project is moving its
-  primary runtime to the Go native port, so `dev2-go` has to keep receiving
-  everything that lands on `dev`. Contributors still open pull requests against
-  `dev`, and that stays allowed — the extra work is the maintainer's, not
-  theirs. A merge into `dev` is therefore not the end of the task. The
-  maintainer who merges it also rebases that work onto `dev2-go`, ports
-  whatever needs a Go counterpart under `go/`, and merges the port. The item is
-  finished only when both lines carry the change.
-  - Do the rebase and the port in the same session as the merge. A `dev` merge
-    left unported is the failure mode this rule exists to prevent: `dev2-go`
-    silently falls behind, and the divergence surfaces later as a conflict
-    nobody has context for.
-  - When a change genuinely has no Go counterpart — docs, TypeScript-only
-    paths the port does not cover yet, GUI-only work — record that decision in
-    the merge or the tracking issue. An unexplained missing port is
-    indistinguishable from a forgotten one.
-  - If the port cannot be completed immediately (a blocking dependency, a
-    subsystem the port has not reached), open a tracking issue against
-    `dev2-go` before closing out the `dev` merge, label it `needs-go-port`,
-    and name the source commits. That label is the durable signal that a
-    deferred port is intentional, not forgotten.
+- Pull requests target `dev`. It is the only integration line, and promotion to
+  `main` happens only from `dev`. The target-branch check accepts `dev` alone.
 - The **`enforce-target`** CI check rejects pull requests whose head
-  ancestry sits on the **`main`** tip while far behind **`dev`** or **`dev2-go`**,
-  and rejects empty, thin, or malformed descriptions; authors with repository
-  push permission skip the ancestry heuristic only. As with the approval
-  requirement above, this is enforced by convention until branch protection is
-  configured (see the note under the change log).
+  ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
+  empty, thin, or malformed descriptions; authors with repository push
+  permission skip the ancestry heuristic only. As with the approval requirement
+  above, this is enforced by convention until branch protection is configured
+  (see the note under the change log).
 - A pull request requires approval from at least one maintainer and successful required CI checks
   before merge.
 - Authors do not approve their own pull requests.
 - Authentication, credential handling, GitHub Actions, release automation, dependency installation,
   and other security-boundary changes require explicit security review.
+- A new or promoted provider preset is a credential-destination change. Before merge it needs the
+  primary-source evidence listed under [Adding a provider to the
+  catalog](https://opencodex.me/contributing/#evidence-required-for-a-canonical-preset): documented
+  OpenAI-compatible endpoints (including authenticated `GET /v1/models` when the entry declares
+  `liveModels`), terms of service and operating legal entity, resale or routing authorization for
+  aggregators, a named maintenance owner, and a citable verification date. Contributor affiliation
+  with the service is disclosed, not disqualifying, and it does not lower the evidence bar. When the
+  evidence is incomplete, prefer an inert `src/providers/free-directory.ts` reference row over a
+  canonical registry entry.
 - Security-sensitive and release-related changes should be reviewed by both maintainers when
   practical.
 - Direct pushes are reserved for maintainer-owned integration work, urgent repairs, or incident
   recovery. The same CI and documentation requirements still apply.
 - Promotion from `dev` to `main` and npm releases is maintainer-controlled.
+
+## The retired `dev2-go` line
+
+`dev2-go` was a parallel integration line that rebuilt the runtime as a Go
+native port, and policy required every merge into `dev` to be rebased onto it
+and ported under `go/`. That policy is withdrawn as of 2026-07-30.
+
+The dual-track cost outran its return: the carry backlog never cleared (17
+commits and 9 open `needs-go-port` issues at the time of the decision, against
+594 commits of divergence), and dogfooding the Go runtime kept producing new
+defects. Bun-native TypeScript on `dev` is the single runtime line again.
+
+- The branch has been deleted from this repository. Its full history is
+  published at
+  [lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive),
+  and its final tip stays reachable here as the `archive/dev2-go` tag.
+- A merge into `dev` carries no port obligation. The nine open `needs-go-port`
+  issues (#661, #663, #666, #670, #674, #678, #680, #685, #703) were closed as
+  not planned, and the `needs-go-port` label no longer exists on the
+  repository.
+- Future native work is expected to be an incremental module landing on `dev`
+  (Rust via N-API is the current candidate), not a second integration branch.
+  Reopening a parallel runtime line is an owner decision.
 
 ## Maintainer changes
 
@@ -87,14 +92,13 @@ Adding or removing a maintainer requires:
   records the gap rather than papering over it — a later maintainer change
   should go through a reviewed pull request.
 
-  Scope covers issue and pull-request triage, `dev` and `dev2-go` integration,
-  and provider/CI maintenance. While the Go native port is in transition,
-  integration duty includes carrying merged `dev` work onto `dev2-go` as
-  described in the review and merge policy above. Security-boundary ownership
-  in `.github/CODEOWNERS` is deliberately unchanged: authentication, credential
-  handling, GitHub Actions, and release automation keep the two owners already
-  listed for those paths, so this addition does not widen the review surface
-  for them.
+  Scope covers issue and pull-request triage, `dev` integration, and
+  provider/CI maintenance. (This entry originally also described carrying
+  merged `dev` work onto `dev2-go`; that duty ended when the line was retired
+  on 2026-07-30.) Security-boundary ownership in `.github/CODEOWNERS` is
+  deliberately unchanged: authentication, credential handling, GitHub Actions,
+  and release automation keep the two owners already listed for those paths, so
+  this addition does not widen the review surface for them.
 
   CODEOWNERS requests reviews rather than enforcing them — no branch protection
   rule is configured on this repository, so code-owner approval is a convention

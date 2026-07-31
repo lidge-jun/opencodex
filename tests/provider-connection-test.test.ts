@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
 
 const TEST_DIR = join(tmpdir(), "ocx-conn-test");
@@ -105,6 +106,38 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(String(body.error)).toContain("401");
   });
 
+  test("releases a rejected upstream response body", async () => {
+    let cancelled = false;
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      cancel() {
+        cancelled = true;
+      },
+    }), { status: 401 })) as typeof fetch;
+    const config = baseConfig({
+      fake: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-fake" },
+    });
+    const { body } = await probe(config, "fake");
+    expect(body.ok).toBe(false);
+    expect(cancelled).toBe(true);
+  });
+
+  test("blocks an unsafe discovery destination before sending provider headers", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return Response.json({ data: [] });
+    }) as typeof fetch;
+    const config = baseConfig({
+      blocked: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-secret" },
+    });
+    config.providers.blocked!.baseUrl = "http://127.0.0.1:8080/v1";
+
+    const { body } = await probe(config, "blocked");
+    expect(body.ok).toBe(false);
+    expect(String(body.error)).toContain("destination policy");
+    expect(fetches).toBe(0);
+  });
+
   test("disabled providers fail fast without touching the network", async () => {
     let fetches = 0;
     globalThis.fetch = (async () => { fetches++; return new Response("{}", { status: 200 }); }) as typeof fetch;
@@ -144,6 +177,37 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(body.models).toBe(2);
   });
 
+  test("reports only eligible deduplicated models from a registry discovery contract", async () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "together");
+    if (!entry) throw new Error("missing together registry entry");
+    const original = entry.modelDiscovery;
+    entry.modelDiscovery = {
+      filter: { anyOf: [{ path: ["type"], equalsAny: ["chat"] }] },
+    };
+    try {
+      globalThis.fetch = (async () => Response.json({
+        data: [
+          { id: "chat-model", type: "chat" },
+          { id: "chat-model", type: "chat" },
+          { id: "embedding-model", type: "embedding" },
+        ],
+      })) as typeof fetch;
+      const config = baseConfig({
+        together: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.together.xyz/v1",
+          apiKey: "sk-live",
+        },
+      });
+      const { body } = await probe(config, "together");
+      expect(body.ok).toBe(true);
+      expect(body.models).toBe(1);
+    } finally {
+      if (original === undefined) delete entry.modelDiscovery;
+      else entry.modelDiscovery = original;
+    }
+  });
+
   test("Google's models-array response shape is accepted (x-goog-api-key path)", async () => {
     let requestedUrl = "";
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -179,6 +243,18 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ nope: true }), {
       status: 200,
       headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      weird: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },
+    });
+    const { body } = await probe(config, "weird");
+    expect(body.ok).toBe(false);
+    expect(String(body.error)).toContain("unexpected shape");
+  });
+
+  test("a malformed model row fails the probe like authoritative discovery", async () => {
+    globalThis.fetch = (async () => Response.json({
+      data: [{ id: "valid" }, { id: " padded" }],
     })) as typeof fetch;
     const config = baseConfig({
       weird: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },

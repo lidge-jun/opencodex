@@ -80,4 +80,15 @@ describe("interactiveConfirm", () => {
     input.write("\n");
     expect(await accepted).toBe(true);
   });
+
+  test("the highlighted choice sets both colours so it stays readable", async () => {
+    const { frames } = await ask([ENTER]);
+    const painted = frames.join("");
+
+    // Bare reverse video (\x1b[7m) inherits the surrounding foreground colour,
+    // which rendered the selected label as black-on-black on some themes. The
+    // highlight must name a foreground AND a background instead.
+    expect(painted).toContain("\x1b[30;47m");
+    expect(painted).not.toContain("\x1b[7m");
+  });
 });

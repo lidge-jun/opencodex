@@ -66,6 +66,16 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-fast-xhigh");
   });
 
+  test("kimi-k3 maps to its live effort-suffixed variants", () => {
+    expect(modelIdFor("cursor/kimi-k3", "low")).toBe("kimi-k3-low");
+    expect(modelIdFor("cursor/kimi-k3", "medium")).toBe("kimi-k3-high");
+    expect(modelIdFor("cursor/kimi-k3", "high")).toBe("kimi-k3-high");
+    expect(modelIdFor("cursor/kimi-k3", "max")).toBe("kimi-k3-max");
+    // Bare id (no requested effort) resolves to the model's top tier; upstream rejects the bare id.
+    expect(modelIdFor("cursor/kimi-k3")).toBe("kimi-k3-max");
+    expect(cursorModelEffortLadder("kimi-k3")).toEqual(["low", "high", "max"]);
+  });
+
   test("model ladders are deduped and sorted in canonical Codex order", () => {
     expect(cursorModelEffortLadder("claude-opus-4-8")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(cursorModelEffortLadder("glm-5.2")).toEqual(["high", "max"]);

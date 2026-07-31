@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import {
+  DEFAULT_ACCOUNT_POOL_STRATEGY,
   DEFAULT_ACCOUNT_POOL_STICKY_LIMIT,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
@@ -9,17 +10,47 @@ import {
   type AccountPoolStrategy,
 } from "../account-pool-strategy";
 import AccountPoolStrategyControls from "./AccountPoolStrategyControls";
+import type { CodexAccountLoadObserver } from "../hooks/useCodexAccountPool";
+
+function strategyFieldsFromActive(value: unknown): {
+  strategy: AccountPoolStrategy;
+  stickyLimit: number;
+} | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  if (!("accountPoolStrategy" in row) && !("accountPoolStickyLimit" in row)) return null;
+  return {
+    strategy: normalizeAccountPoolStrategy(row.accountPoolStrategy),
+    stickyLimit: normalizeAccountPoolStickyLimit(row.accountPoolStickyLimit),
+  };
+}
 
 /**
  * Codex account-pool rotation strategy controls.
- * Reads GET /api/codex-auth/active; writes PUT /api/codex-auth/pool-strategy.
+ * Prefers the shared /active read from the account-pool controller (no blocked wait).
+ * Falls back to its own GET only when no shared observer is wired.
  */
-export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string }) {
+export default function CodexPoolStrategySetting({
+  apiBase,
+  subscribeLoadObserver,
+  readLastActive,
+}: {
+  apiBase: string;
+  subscribeLoadObserver?: (observer: CodexAccountLoadObserver) => () => void;
+  readLastActive?: () => unknown;
+}) {
   const t = useT();
-  const [strategy, setStrategy] = useState<AccountPoolStrategy | null>(null);
+  // Seed defaults immediately — never gate the control chrome on a network round-trip.
+  const [strategy, setStrategy] = useState<AccountPoolStrategy>(DEFAULT_ACCOUNT_POOL_STRATEGY);
   const [stickyLimit, setStickyLimit] = useState(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT);
   const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
+  const [hydrated, setHydrated] = useState(false);
+  const hydratedRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  /** Set when an /active read arrives mid-save; triggers one post-save refresh. */
+  const deferredActiveRefreshRef = useRef(false);
+  const revisionRef = useRef(0);
   const [loadError, setLoadError] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,48 +63,97 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
     setStrategy(nextStrategy);
     setStickyLimit(nextSticky);
     setStickyDraft(String(nextSticky));
+    hydratedRef.current = true;
+    setHydrated(true);
     setLoadError(false);
     setError(null);
   }, []);
+
+  const applyActivePayload = useCallback((value: unknown) => {
+    const fields = strategyFieldsFromActive(value);
+    if (!fields) return;
+    applyServer({
+      accountPoolStrategy: fields.strategy,
+      accountPoolStickyLimit: fields.stickyLimit,
+    });
+  }, [applyServer]);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch(`${apiBase}/api/codex-auth/active`);
       if (!res.ok) throw new Error("load");
-      applyServer(await res.json() as {
+      const payload = await res.json() as {
         accountPoolStrategy?: unknown;
         accountPoolStickyLimit?: unknown;
-      });
+      };
+      // A save started while this GET was in flight — retry once after it settles.
+      if (savingRef.current) {
+        deferredActiveRefreshRef.current = true;
+        return;
+      }
+      applyServer(payload);
     } catch {
-      setLoadError(true);
+      if (!savingRef.current) setLoadError(true);
     }
   }, [apiBase, applyServer]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/codex-auth/active`);
-        if (!res.ok) throw new Error("load");
-        const json = await res.json() as {
-          accountPoolStrategy?: unknown;
-          accountPoolStickyLimit?: unknown;
-        };
-        if (cancelled) return;
-        applyServer(json);
-      } catch {
-        if (!cancelled) setLoadError(true);
+  const scheduleDeferredActiveRefresh = useCallback(() => {
+    if (!deferredActiveRefreshRef.current) return;
+    deferredActiveRefreshRef.current = false;
+    queueMicrotask(() => {
+      if (savingRef.current) {
+        deferredActiveRefreshRef.current = true;
+        return;
       }
-    })();
-    return () => {
-      cancelled = true;
+      void load();
+    });
+  }, [load]);
+
+  // Shared /active observer (preferred): same payload the pool already fetched.
+  // Ignore stale polls that started before a PUT bumped revision; mid-save reads
+  // arm one post-save /active refresh instead of being dropped forever.
+  // Replay readLastActive on subscribe so late mounts hydrate without waiting a poll.
+  useEffect(() => {
+    if (!subscribeLoadObserver) return;
+    const observer: CodexAccountLoadObserver = {
+      beginActiveRead: () => revisionRef.current,
+      acceptActiveRead: (value, startedRevision) => {
+        if (startedRevision !== revisionRef.current) return;
+        if (savingRef.current) {
+          deferredActiveRefreshRef.current = true;
+          return;
+        }
+        applyActivePayload(value);
+      },
+      rejectActiveRead: () => {
+        if (!hydratedRef.current) setLoadError(true);
+      },
     };
-  }, [apiBase, applyServer]);
+    const unsubscribe = subscribeLoadObserver(observer);
+    if (!savingRef.current && readLastActive) applyActivePayload(readLastActive());
+    return unsubscribe;
+  }, [subscribeLoadObserver, applyActivePayload, readLastActive]);
+
+  useEffect(() => {
+    if (!readLastActive || subscribeLoadObserver) return;
+    if (savingRef.current) return;
+    applyActivePayload(readLastActive());
+  }, [readLastActive, applyActivePayload, subscribeLoadObserver]);
+
+  // Standalone fallback when no shared controller observer is wired (keeps tests without observer green).
+  useEffect(() => {
+    if (subscribeLoadObserver) return;
+    // Not a synchronous cascade: load() reaches `await fetch(...)` before it touches any
+    // setter, so state never updates during this effect's own render pass.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load, subscribeLoadObserver]);
 
   const save = useCallback(async (next: {
     strategy?: AccountPoolStrategy;
     stickyLimit?: number;
   }) => {
+    if (savingRef.current) return;
     const previousStrategy = strategy;
     const previousSticky = stickyLimit;
     if (next.strategy !== undefined) setStrategy(next.strategy);
@@ -81,55 +161,61 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
       setStickyLimit(next.stickyLimit);
       setStickyDraft(String(next.stickyLimit));
     }
+    savingRef.current = true;
     setSaving(true);
     setError(null);
+    revisionRef.current += 1;
     const result = await putCodexPoolStrategy(apiBase, next);
+    revisionRef.current += 1;
     if (result.ok) {
       setStrategy(result.strategy);
       setStickyLimit(result.stickyLimit);
       setStickyDraft(String(result.stickyLimit));
+      hydratedRef.current = true;
+      setHydrated(true);
     } else {
       setError(t("accountPool.strategyUpdateFailed"));
-      if (previousStrategy) setStrategy(previousStrategy);
+      setStrategy(previousStrategy);
       setStickyLimit(previousSticky);
       setStickyDraft(String(previousSticky));
     }
+    savingRef.current = false;
     setSaving(false);
-  }, [apiBase, stickyLimit, strategy, t]);
+    scheduleDeferredActiveRefresh();
+  }, [apiBase, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
 
-  const ready = strategy !== null;
-  const loading = !ready && !loadError;
+  // Block writes until /active confirms — defaults paint for CLS but must not overwrite server state.
+  const controlsDisabled = saving || loadError || !hydrated;
 
   return (
-    <div className="card" style={{ marginTop: 16 }} aria-busy={loading || saving}>
+    <div className="card account-pool-strategy-card" aria-busy={saving || (!hydrated && !loadError)}>
       <strong>{t("accountPool.strategy")}</strong>
-      <div className="card-sub" style={{ marginTop: 4 }} role={loadError ? "alert" : undefined}>
+      <div className="card-sub" role={loadError ? "alert" : undefined}>
         {loadError
           ? t("accountPool.strategyLoadFailed")
-          : loading
-            ? t("common.loading")
-            : t("accountPool.strategyDesc")}
+          : t("accountPool.strategyDesc")}
       </div>
       {loadError && (
-        <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => { void load(); }}>
+        <button type="button" className="btn btn-ghost btn-sm account-pool-strategy-card__retry" onClick={() => { void load(); }}>
           {t("common.retry")}
         </button>
       )}
-      {ready && (
+      {!loadError && (
         <AccountPoolStrategyControls
           strategy={strategy}
           stickyDraft={stickyDraft}
-          disabled={saving}
+          disabled={controlsDisabled}
           strategySelectId="codex-pool-strategy"
           stickyInputId="codex-pool-sticky-limit"
           strategyLabelHidden
           onStrategyChange={(next) => {
-            if (next === strategy) return;
+            if (controlsDisabled || next === strategy) return;
             void save({ strategy: next });
           }}
           onStickyDraftChange={setStickyDraft}
-          onStickyCommit={() => {
-            const parsed = parseAccountPoolStickyLimitDraft(stickyDraft);
+          onStickyCommit={(nextDraft) => {
+            if (controlsDisabled) return;
+            const parsed = parseAccountPoolStickyLimitDraft(nextDraft ?? stickyDraft);
             if (parsed === null) {
               setStickyDraft(String(stickyLimit));
               setError(t("accountPool.stickyLimitInvalid"));
@@ -144,7 +230,7 @@ export default function CodexPoolStrategySetting({ apiBase }: { apiBase: string 
         />
       )}
       {error && (
-        <div role="alert" className="card-sub" style={{ marginTop: 8, color: "var(--danger, #c44)" }}>
+        <div role="alert" className="card-sub account-pool-strategy-card__error">
           {error}
         </div>
       )}

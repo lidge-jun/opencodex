@@ -3,7 +3,7 @@
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
  * handlers via props-down; no internal auth machinery.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
@@ -27,9 +27,12 @@ import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
 const DOCTOR_CMD = "ocx doctor";
+const QUOTA_ENRICH_RESERVE_MS = 4_000;
+const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
+const EMPTY_API_KEYS: ApiKeyRow[] = [];
 
 export default function ProviderAuthPanel({
-  item, apiBase, oauth, accounts = [], keys = [], accountLoadState = "ready",
+  item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
   switchingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
   codexController,
 }: {
@@ -51,8 +54,32 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
   const deviceCodeCopy = useCopyFeedback<string>();
   const doctorCopy = useCopyFeedback<string>();
+
+  // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
+  // bar height briefly so bars don't shove rows when WHAM returns.
+  //
+  // Deliberately a timed state machine, not a derived value: the reservation must EXPIRE
+  // after QUOTA_ENRICH_RESERVE_MS so a stalled enrichment cannot leave skeleton rows up
+  // forever. A plain `accounts.some(...)` boolean would drop that bound, so the rule is
+  // suppressed here rather than refactored away.
+  useEffect(() => {
+    if (accounts.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setReserveQuotaSlots(false);
+      return;
+    }
+    const needsFill = accounts.some(a => a.quota == null && !a.quotaUnavailable);
+    if (!needsFill) {
+      setReserveQuotaSlots(false);
+      return;
+    }
+    setReserveQuotaSlots(true);
+    const timer = window.setTimeout(() => setReserveQuotaSlots(false), QUOTA_ENRICH_RESERVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [accounts]);
 
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
   const isOauth = surface === "oauth-accounts";
@@ -222,7 +249,7 @@ export default function ProviderAuthPanel({
                       </button>
                     )}
                     {showDoctor && (
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={copyDoctor}>
+                      <button type="button" className="btn btn-ghost btn-sm codex-auth-action-btn" onClick={copyDoctor}>
                         <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopy.outcomeFor(account.id))}</span>
                       </button>
                     )}
@@ -238,13 +265,19 @@ export default function ProviderAuthPanel({
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
                     </div>
-                    {(account.quota || account.quotaUnavailable) && (
+                    {(account.quota != null || account.quotaUnavailable || (reserveQuotaSlots && account.quota == null)) && (
                       <div className="pwi-auth-acct-quota">
-                        {account.quota && (
-                          <QuotaBars quota={account.quota} plan={null} threshold={80} t={t} layout="stacked" />
-                        )}
-                        {account.quotaUnavailable && (
+                        {account.quotaUnavailable ? (
                           <p className="muted pwi-auth-acct-quota-stale">{t("pws.accountQuotaUnavailable")}</p>
+                        ) : (
+                          <QuotaBars
+                            quota={account.quota ?? null}
+                            plan={null}
+                            threshold={80}
+                            t={t}
+                            layout="stacked"
+                            pending={account.quota == null}
+                          />
                         )}
                       </div>
                     )}

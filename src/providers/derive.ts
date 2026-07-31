@@ -1,5 +1,5 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
-import { PROVIDER_REGISTRY, type ProviderRegistryEntry } from "./registry";
+import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderRegistryEntry } from "./registry";
 
 export interface DerivedKeyLoginProvider {
   label: string;
@@ -223,7 +223,7 @@ export function deriveProviderPresets(): DerivedProviderPreset[] {
 
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
-  if (!entry) return;
+  if (!entry || !providerMatchesRegistryTransport(name, prov)) return;
   const seed = providerConfigSeed(entry);
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;

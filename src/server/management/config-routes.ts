@@ -140,16 +140,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/startup-action" && req.method === "POST") {
-    let body: { action?: unknown };
+    let body: { action?: unknown; repair?: unknown };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!body || !["install-service", "install-shim"].includes(String(body.action))) {
       return jsonResponse({ error: "action must be install-service or install-shim" }, 400);
     }
+    if (body.repair !== undefined && typeof body.repair !== "boolean") {
+      return jsonResponse({ error: "repair must be a boolean when provided" }, 400);
+    }
     try {
       const action = body.action as StartupInstallAction;
-      const result = await (deps.runStartupInstallAction ?? runStartupInstallAction)(action);
+      const repair = body.repair === true;
+      const result = await (deps.runStartupInstallAction ?? runStartupInstallAction)(action, { repair });
       invalidateStartupHealthCache();
-      return jsonResponse({ ok: true, action, message: result.message });
+      return jsonResponse({ ok: true, action, repair, message: result.message });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
     }
@@ -227,8 +231,6 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const { syncModelsToCodex } = await import("../../codex/sync");
     const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
     const result = await syncModelsToCodex(undefined, config, null);
-    // Hint only after a real catalog/cache write — never enumerate processes here
-    // (WMIC/PowerShell would block Bun's event loop on every dashboard sync).
     return jsonResponse({
       ...attachStaleAppServerHint(result),
       ...(result.ok ? {} : { error: result.message }),

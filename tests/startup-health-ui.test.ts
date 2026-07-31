@@ -26,16 +26,19 @@ describe("startup health UI decisions", () => {
     expect(settingsPollMayCommit(started, { request: 4, mutation: 2, mutationInFlight: true })).toBe(false);
   });
 
-  test("maps stale diagnostics to error and rejects invalid payloads", () => {
-    expect(mapStartupHealthProbe({ status: "protected", diagnosticStale: true })).toBe("error");
+  test("keeps payload status when diagnostics are stale and rejects invalid payloads", () => {
+    // diagnosticStale is SWR refresh, not a hard read failure — do not map to "error".
+    expect(mapStartupHealthProbe({ status: "protected", diagnosticStale: true })).toBe("protected");
+    expect(mapStartupHealthProbe({ status: "at-risk", diagnosticStale: true })).toBe("at-risk");
     expect(mapStartupHealthProbe({ status: "native", diagnosticStale: false })).toBe("native");
     expect(mapStartupHealthProbe({ status: "nope" })).toBeNull();
   });
 
-  test("settings may only seed while startup health is still unknown", () => {
+  test("settings may seed while unknown or hard-error, but not overwrite a real status", () => {
     expect(seedStartupHealthFromSettings(null, { status: "protected", diagnosticStale: false })).toBe("protected");
-    expect(seedStartupHealthFromSettings("error", { status: "protected", diagnosticStale: false })).toBe("error");
-    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true })).toBe("error");
+    expect(seedStartupHealthFromSettings("error", { status: "protected", diagnosticStale: false })).toBe("protected");
+    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true })).toBe("at-risk");
+    expect(seedStartupHealthFromSettings("at-risk", { status: "protected", diagnosticStale: false })).toBe("at-risk");
   });
 });
 

@@ -102,6 +102,51 @@ describe("usage log", () => {
     })]);
   });
 
+  test("persists an absolute context checkpoint for stateful providers", () => {
+    // Kiro reports per-attempt usage only, so contextTotalTokens is the sole carrier of the
+    // cumulative context figure once the log stores raw adapter usage (usageFromBridge).
+    // Dropping it here erased Kiro context growth from every persisted row.
+    appendUsageEntry({
+      requestId: "ocx-context-checkpoint",
+      timestamp: 1,
+      provider: "kiro",
+      model: "claude-opus-5",
+      status: 200,
+      durationMs: 10,
+      usageStatus: "estimated",
+      usage: { inputTokens: 220, outputTokens: 252, contextTotalTokens: 127_000, estimated: true },
+      totalTokens: 472,
+    });
+    expect(readUsageEntries()).toEqual([expect.objectContaining({
+      requestId: "ocx-context-checkpoint",
+      usage: expect.objectContaining({
+        inputTokens: 220,
+        outputTokens: 252,
+        contextTotalTokens: 127_000,
+        estimated: true,
+      }),
+      // The checkpoint must NOT be folded into the per-request total.
+      totalTokens: 472,
+    })]);
+  });
+
+  test("never invents a context checkpoint when the adapter reported none", () => {
+    appendUsageEntry({
+      requestId: "ocx-no-checkpoint",
+      timestamp: 1,
+      provider: "kiro",
+      model: "claude-opus-5",
+      status: 200,
+      durationMs: 10,
+      usageStatus: "estimated",
+      usage: { inputTokens: 61, outputTokens: 48, estimated: true },
+      totalTokens: 109,
+    });
+    const [entry] = readUsageEntries();
+    expect(entry?.usage).toBeDefined();
+    expect(entry?.usage && "contextTotalTokens" in entry.usage).toBe(false);
+  });
+
   test("persists only canonical ordered attempt fields", () => {
     appendUsageEntry({
       requestId: "ocx-attempts",

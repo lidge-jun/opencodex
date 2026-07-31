@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../src/web-search";
 import { runWithWebSearch } from "../src/web-search/loop";
+import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
@@ -757,6 +758,203 @@ describe("web-search sidecar native web_search_call emission", () => {
     expect(content[0].thinking).toBe("I should search");
     expect(content[0].signature).toBe("RealSig1234567890==");
     expect(content[1].type).toBe("toolCall");
+  });
+
+  // #688: DeepSeek V4 and other OpenAI-compatible providers emit reasoning_raw_delta rather than
+  // signed thinking. Dropping it left the replayed turn as a bare tool call, which the provider
+  // rejected — surfacing downstream as a 502 because the loop drops the LoopError status.
+  test("raw reasoning before a web_search call is replayed as an unsigned thinking part", async () => {
+    globalThis.fetch = ((input) => {
+      const url = String(input);
+      if (url.startsWith("https://routed.test/")) return Promise.resolve(new Response("{}", { status: 200 }));
+      return Promise.resolve(new Response(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"docs say X"}\n\n' +
+          'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+    }) as typeof fetch;
+
+    const seenBodies: OcxMessage[][] = [];
+    let pass = 0;
+    const adapter: ProviderAdapter = {
+      name: "mock",
+      buildRequest: (p: OcxParsedRequest) => {
+        seenBodies.push(p.context.messages);
+        return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
+      },
+      async *parseStream() {
+        pass++;
+        if (pass === 1) {
+          const events: AdapterEvent[] = [
+            { type: "reasoning_raw_delta", text: "I should " },
+            { type: "reasoning_raw_delta", text: "search the docs" },
+            { type: "tool_call_start", id: "call_raw", name: "web_search" },
+            { type: "tool_call_delta", arguments: JSON.stringify({ query: "docs" }) },
+            { type: "tool_call_end" },
+            { type: "done" },
+          ];
+          for (const event of events) yield event;
+          return;
+        }
+        yield { type: "text_delta", text: "final" };
+        yield { type: "done" };
+      },
+      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
+    };
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "look up docs", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 2,
+    });
+    await collectSse(response.body!);
+
+    // Locate the replayed turn by its tool-call id so unrelated history cannot satisfy this.
+    const replayMessages = seenBodies.at(-1)!;
+    const assistant = replayMessages.find(m => m.role === "assistant"
+      && Array.isArray(m.content)
+      && (m.content as { type: string; id?: string }[]).some(c => c.type === "toolCall" && c.id === "call_raw"));
+    expect(assistant).toBeDefined();
+    const content = assistant!.content as { type: string; thinking?: string; signature?: string }[];
+    expect(content[0].type).toBe("thinking");
+    expect(content[0].thinking).toBe("I should search the docs");
+    // Raw reasoning is NOT signed: presenting it as signed would corrupt the Anthropic contract.
+    expect(content[0].signature).toBeUndefined();
+    expect(content[1].type).toBe("toolCall");
+  });
+
+  // A signature authenticates the exact block it closed, so each block must keep its own pairing.
+  // Flattening two blocks under the last signature is what src/images/loop.ts already guards.
+  test("multiple signed thinking blocks keep their own signatures across a web_search replay", async () => {
+    globalThis.fetch = ((input) => {
+      const url = String(input);
+      if (url.startsWith("https://routed.test/")) return Promise.resolve(new Response("{}", { status: 200 }));
+      return Promise.resolve(new Response(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"docs say X"}\n\n' +
+          'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+    }) as typeof fetch;
+
+    const seenBodies: OcxMessage[][] = [];
+    let pass = 0;
+    const adapter: ProviderAdapter = {
+      name: "mock",
+      buildRequest: (p: OcxParsedRequest) => {
+        seenBodies.push(p.context.messages);
+        return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
+      },
+      async *parseStream() {
+        pass++;
+        if (pass === 1) {
+          const events: AdapterEvent[] = [
+            { type: "redacted_thinking", data: "d1" },
+            { type: "thinking_delta", thinking: "first" },
+            { type: "thinking_signature", signature: "RealSigAAAAAAAAAA==" },
+            { type: "thinking_delta", thinking: "second" },
+            { type: "thinking_signature", signature: "RealSigBBBBBBBBBB==" },
+            { type: "reasoning_raw_delta", text: "raw" },
+            { type: "tool_call_start", id: "call_multi", name: "web_search" },
+            { type: "tool_call_delta", arguments: JSON.stringify({ query: "docs" }) },
+            { type: "tool_call_end" },
+            { type: "done" },
+          ];
+          for (const event of events) yield event;
+          return;
+        }
+        yield { type: "text_delta", text: "final" };
+        yield { type: "done" };
+      },
+      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
+    };
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "look up docs", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 2,
+    });
+    await collectSse(response.body!);
+
+    const replayMessages = seenBodies.at(-1)!;
+    const assistant = replayMessages.find(m => m.role === "assistant"
+      && Array.isArray(m.content)
+      && (m.content as { type: string; id?: string }[]).some(c => c.type === "toolCall" && c.id === "call_multi"));
+    expect(assistant).toBeDefined();
+    const content = assistant!.content as { type: string; thinking?: string; signature?: string; redacted?: string[] }[];
+    expect(content).toHaveLength(5);
+    expect(content[0]).toEqual({ type: "thinking", thinking: "", redacted: ["d1"] });
+    expect(content[1]).toEqual({ type: "thinking", thinking: "first", signature: "RealSigAAAAAAAAAA==" });
+    expect(content[2]).toEqual({ type: "thinking", thinking: "second", signature: "RealSigBBBBBBBBBB==" });
+    expect(content[3]).toEqual({ type: "thinking", thinking: "raw" });
+    expect(content[4].type).toBe("toolCall");
+  });
+
+  // The user-visible failure lives at the SERIALIZER boundary: openai-chat only emits
+  // reasoning_content for models in preserveReasoningContentModels, and only from thinking parts.
+  // The mock-adapter tests above prove the replay SHAPE; this one proves the wire contract, so a
+  // regression that drops reasoning_content on the second request cannot pass unnoticed.
+  test("a reasoning_content provider receives raw reasoning beside the replayed tool_calls", async () => {
+    const routedBodies: Record<string, unknown>[] = [];
+    let routedPass = 0;
+    globalThis.fetch = ((input, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://routed.test/")) {
+        routedBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        routedPass++;
+        const sse = routedPass === 1
+          ? 'data: {"choices":[{"delta":{"reasoning_content":"I should search the docs"}}]}\n\n'
+            + 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_ds","type":"function","function":{"name":"web_search","arguments":"{\\"query\\":\\"docs\\"}"}}]}}]}\n\n'
+            + 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+            + "data: [DONE]\n\n"
+          : 'data: {"choices":[{"delta":{"content":"final"}}]}\n\n'
+            + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            + "data: [DONE]\n\n";
+        return Promise.resolve(new Response(sse, { headers: { "Content-Type": "text/event-stream" } }));
+      }
+      return Promise.resolve(new Response(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"docs say X"}\n\n' +
+          'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+    }) as typeof fetch;
+
+    // modelInList matches EXACTLY, so the provider list and the request model must agree verbatim.
+    const deepseekProvider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://routed.test/v1",
+      apiKey: "routed-key",
+      preserveReasoningContentModels: ["deepseek-v4-flash"],
+    };
+
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "deepseek-v4-flash", input: "look up docs", stream: true, tools: [{ type: "web_search" }] }),
+      adapter: createOpenAIChatAdapter(deepseekProvider),
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 2,
+    });
+    await collectSse(response.body!);
+
+    expect(routedBodies).toHaveLength(2);
+    const replay = routedBodies[1]!.messages as {
+      role: string; content?: unknown; reasoning_content?: string;
+      tool_calls?: { id: string; function: { name: string } }[];
+    }[];
+    const assistant = replay.find(m => m.role === "assistant" && m.tool_calls?.some(tc => tc.id === "call_ds"));
+    expect(assistant).toBeDefined();
+    expect(assistant!.reasoning_content).toBe("I should search the docs");
+    expect(assistant!.tool_calls).toHaveLength(1);
+    expect(assistant!.tool_calls![0]!.function.name).toBe("web_search");
   });
 
   test("an executed search emits a web_search_call item ahead of the assistant message", async () => {

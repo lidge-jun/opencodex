@@ -24,7 +24,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
+import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
@@ -45,6 +45,13 @@ import {
   providerRedirectError,
 } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
+import {
+  extractProviderModelItems,
+  readBoundedDiscoveryJson,
+  resolveProviderModelDiscovery,
+  type ModelDiscoveryResponseFailure,
+  type ProviderModelsApiItem,
+} from "../../providers/model-discovery";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
@@ -54,51 +61,72 @@ import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpen
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 
-export type ProviderModelsApiItem = {
-  id: string;
-  owned_by?: string;
-  context_length?: number;
-  max_model_len?: number;
-  metadata?: {
-    capabilities?: Record<string, unknown>;
-    limits?: Record<string, unknown>;
+/** Concurrent gatherRoutedModels callers with the same catalog identity share one live discovery.
+ *  Keyed by gatherFlightKey so a different config cannot join or evict the wrong flight. */
+interface GatherFlightResult {
+  models: CatalogModel[];
+  comboOmissions: ComboCatalogOmission[];
+}
+
+const gatherInflight = new Map<string, Promise<GatherFlightResult>>();
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, nested) => {
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      return Object.fromEntries(Object.entries(nested as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return nested;
+  });
+}
+
+function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Record<string, unknown> {
+  return {
+    n: name,
+    live: prov.liveModels !== false,
+    base: prov.baseUrl ?? "",
+    adapter: prov.adapter ?? "",
+    models: [...(prov.models ?? [])].sort(),
+    selected: [...(prov.selectedModels ?? [])].sort(),
+    defaultModel: prov.defaultModel ?? null,
+    ctx: prov.contextWindow ?? null,
+    ctxW: prov.modelContextWindows ?? null,
+    maxIn: prov.modelMaxInputTokens ?? null,
+    inMod: prov.modelInputModalities ?? null,
+    re: prov.modelReasoningEfforts ?? null,
+    defRe: prov.modelDefaultReasoningEfforts ?? null,
+    rsSum: prov.modelSupportsReasoningSummaries ?? null,
+    rsDel: prov.modelReasoningSummaryDelivery ?? null,
+    noVis: [...(prov.noVisionModels ?? [])].sort(),
+    ptc: prov.parallelToolCalls ?? null,
+    gMode: prov.googleMode ?? null,
   };
-};
-
-export function isProviderModelsApiItems(value: unknown): value is ProviderModelsApiItem[] {
-  return Array.isArray(value) && value.every(item =>
-    item !== null
-    && typeof item === "object"
-    && !Array.isArray(item)
-    && typeof (item as { id?: unknown }).id === "string"
-    && (item as { id: string }).id.trim().length > 0
-  );
 }
 
-/**
- * Normalize OpenAI-compatible /models payloads for catalog discovery.
- * Supports `{ data: [...] }` and top-level arrays (Together AI `#617`).
- * Google's `{ models: [...] }` is handled by the connectivity probe only — catalog
- * discovery must not treat a stray `models` key on openai-chat responses as valid.
- */
-export function providerModelsListFromResponse(json: unknown): unknown {
-  if (Array.isArray(json)) return json;
-  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
-    const data = (json as { data?: unknown }).data;
-    if (Array.isArray(data)) return data;
-  }
-  return undefined;
+function gatherFlightKey(config: OcxConfig): string {
+  const providers = Object.entries(config.providers)
+    .filter(([, prov]) => prov.disabled !== true)
+    .map(([name, prov]) => providerCatalogFingerprint(name, prov))
+    .sort((a, b) => String(a.n).localeCompare(String(b.n)));
+  const assembly = stableJson({
+    providers,
+    disabledModels: [...(config.disabledModels ?? [])].sort(),
+    combos: config.combos ?? {},
+    customModels: (config.customModels ?? []).map((cm) => ({
+      p: cm.provider,
+      m: cm.modelId,
+      d: cm.displayName ?? null,
+      cw: cm.contextWindow ?? null,
+      im: cm.inputModalities ?? null,
+    })),
+    caps: config.providerContextCaps ?? null,
+  });
+  const digest = createHash("sha256").update(assembly).digest("hex").slice(0, 16);
+  return `${digest}#${config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS}`;
 }
 
-/** Connectivity-probe shape: also accepts Google `{ models: [...] }`. */
-export function providerModelsListFromProbeResponse(json: unknown): unknown {
-  if (Array.isArray(json)) return json;
-  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
-    const obj = json as { data?: unknown; models?: unknown };
-    if (Array.isArray(obj.data)) return obj.data;
-    if (Array.isArray(obj.models)) return obj.models;
-  }
-  return undefined;
+/** Drop in-flight gather so tests / full cache clears do not reuse a stale promise. */
+export function clearGatherRoutedModelsInflight(): void {
+  gatherInflight.clear();
 }
 
 export function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
@@ -223,29 +251,127 @@ export function isGlm52ModelId(id: string): boolean {
   return normalized === "glm-5.2" || normalized === "glm-5.2[1m]";
 }
 
-export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
-  const capabilities = item.metadata?.capabilities;
-  const limits = item.metadata?.limits;
-  const contextWindow =
-    typeof limits?.max_context_length === "number" ? limits.max_context_length
-      : typeof item.context_length === "number" ? item.context_length
-      : typeof item.max_model_len === "number" ? item.max_model_len
-        : undefined;
- const reasoningEfforts = capabilities && typeof capabilities.reasoning_effort === "boolean"
-   ? (capabilities.reasoning_effort
-     ? ((providerName === "neuralwatt" || providerName === "zai") && isGlm52ModelId(item.id)
-       ? ["low", "medium", "high", "xhigh", "max"]
-       : ["low", "medium", "high", "xhigh"])
-     : [])
-   : undefined;
- const inputModalities = capabilities && typeof capabilities.vision === "boolean"
-    ? (capabilities.vision ? ["text", "image"] : ["text"])
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : undefined;
+}
+
+const MODEL_DISCOVERY_METADATA_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+function positiveSafeInteger(...values: unknown[]): number | undefined {
+  return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value > 0) as number | undefined;
+}
+
+function normalizedMetadataString(raw: string, maxLength: number): string | undefined {
+  if (raw.length > maxLength * 4 || MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(raw)) return undefined;
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, maxLength);
+  return normalized || undefined;
+}
+
+function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const maxInspectedItems = Math.max(maxItems * 8, maxItems);
+  for (let i = 0; i < value.length && i < maxInspectedItems; i += 1) {
+    const raw = value[i];
+    if (typeof raw !== "string") continue;
+    const normalized = normalizedMetadataString(raw, maxLength);
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+    if (out.length >= maxItems) break;
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
+  const metadata = plainRecord(item.metadata);
+  const metadataCapabilities = metadata?.capabilities;
+  const capabilityRecord = plainRecord(metadataCapabilities) ?? plainRecord(item.capabilities);
+  const out = new Set<string>();
+  for (const list of [item.capabilities, item.features, item.supported_features, metadataCapabilities]) {
+    for (const capability of normalizedStringList(list) ?? []) out.add(capability);
+  }
+  const capabilityFields = capabilityRecord ?? {};
+  let inspectedCapabilityFields = 0;
+  for (const key in capabilityFields) {
+    if (!Object.hasOwn(capabilityFields, key)) continue;
+    inspectedCapabilityFields += 1;
+    if (inspectedCapabilityFields > 256 || out.size >= 32) break;
+    if (capabilityFields[key] === true) {
+      const normalized = normalizedMetadataString(key, 64);
+      if (normalized) out.add(normalized);
+    }
+  }
+  for (const field of ["supports_tools", "supports_tool_calling", "supports_function_calling"] as const) {
+    if (item[field] === true) out.add("tools");
+  }
+  for (const field of ["supports_reasoning", "reasoning"] as const) {
+    if (item[field] === true) out.add("reasoning");
+  }
+  return out.size > 0 ? [...out].filter(Boolean).slice(0, 32) : undefined;
+}
+
+function modelInputModalities(
+  item: ProviderModelsApiItem,
+  capabilities: readonly string[] | undefined,
+): string[] | undefined {
+  const metadata = plainRecord(item.metadata);
+  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const explicit = normalizedStringList(
+    item.input_modalities
+      ?? item.modalities
+      ?? metadata?.input_modalities
+      ?? capabilityRecord?.input_modalities,
+    8,
+    24,
+  )?.filter(value => value === "text" || value === "image" || value === "audio" || value === "video");
+  if (explicit && explicit.length > 0) return explicit;
+  if (capabilityRecord?.vision === false) return ["text"];
+  if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
+    return ["text", "image"];
+  }
+  return undefined;
+}
+
+export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
+  const metadata = plainRecord(item.metadata);
+  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const limits = plainRecord(metadata?.limits);
+  const contextWindow =
+    positiveSafeInteger(
+      limits?.max_context_length,
+      item.context_length,
+      item.context_size,
+      item.max_model_len,
+      item.max_context_length,
+    );
+  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
+  const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
+  const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
+  const reasoningEfforts = listedReasoningEfforts
+    ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
+    : typeof rawReasoningEfforts === "boolean"
+      ? (rawReasoningEfforts
+        ? ((providerName === "neuralwatt" || providerName === "zai") && isGlm52ModelId(item.id)
+          ? ["low", "medium", "high", "xhigh", "max"]
+          : ["low", "medium", "high", "xhigh"])
+        : [])
+      : undefined;
+  const capabilities = modelCapabilities(item);
+  const inputModalities = modelInputModalities(item, capabilities);
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+    ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
+    ...(capabilities ? { capabilities } : {}),
   };
+}
+
+function boundedOwnedBy(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) return undefined;
+  if (MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(value)) return undefined;
+  return value;
 }
 
 export async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
@@ -329,6 +455,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     const stale = getStaleCached(name);
     return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : failedDiscoveryConfigured;
   }
+  const discovery = resolveProviderModelDiscovery(name, prov);
   const { url, headers } = buildModelsRequest(prov, apiKey, name);
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
@@ -379,15 +506,14 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     const contentType = (
       res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
     ).slice(0, 80);
-    const body = await res.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(body) as unknown;
-    } catch {
+    const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+    if (!bounded.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
-      const diagnostic = contentType === "application/json" || contentType.endsWith("+json")
-        ? "returned invalid JSON in a 2xx response"
-        : "returned a non-JSON 2xx response";
+      const diagnostic = bounded.reason === "response_too_large"
+        ? `exceeded the ${discovery.maxResponseBytes}-byte response limit`
+        : contentType === "application/json" || contentType.endsWith("+json")
+          ? "returned invalid JSON in a 2xx response"
+          : "returned a non-JSON 2xx response";
       if (shouldLog) {
         console.warn(
           `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
@@ -395,23 +521,32 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       }
       return models;
     }
-    const data = providerModelsListFromResponse(json);
-    if (!isProviderModelsApiItems(data)) {
+    const extracted = extractProviderModelItems(bounded.value, discovery);
+    if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {
+        response_too_large: "returned an oversized 2xx response",
+        invalid_json: "returned invalid JSON in a 2xx response",
+        invalid_shape: "returned malformed 2xx data",
+        too_many_models: `exceeded the ${discovery.maxModels}-row model limit`,
+      };
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
         );
       }
       return models;
     }
-    const items = data;
-    const live = items.map(m => applyProviderConfigHints(name, prov, {
-      id: m.id,
-      provider: name,
-      owned_by: m.owned_by,
-      ...catalogHintsFromModelsApiItem(name, m),
-    }, contextCap))
+    const items = extracted.items;
+    const live = items.map(m => {
+      const ownedBy = boundedOwnedBy(m.owned_by);
+      return applyProviderConfigHints(name, prov, {
+        id: m.id,
+        provider: name,
+        ...(ownedBy ? { owned_by: ownedBy } : {}),
+        ...catalogHintsFromModelsApiItem(name, m),
+      }, contextCap);
+    })
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
     // `live`; otherwise configured entries would be reported as discovered ones.
@@ -505,7 +640,29 @@ export async function gatherRoutedModels(
   config: OcxConfig,
   options?: { comboOmissions?: ComboCatalogOmission[] },
 ): Promise<CatalogModel[]> {
-  // Per-invocation list: sync passes `comboOmissions` so overlapping gathers cannot race.
+  const key = gatherFlightKey(config);
+  let promise = gatherInflight.get(key);
+  if (!promise) {
+    // Claim the slot synchronously before any await so same-key callers join this flight.
+    // Distinct keys keep their own entries — a second config must not evict the first.
+    const flight = gatherRoutedModelsUncached(config).finally(() => {
+      if (gatherInflight.get(key) === flight) gatherInflight.delete(key);
+    });
+    gatherInflight.set(key, flight);
+    promise = flight;
+  }
+  const { models, comboOmissions } = await promise;
+  if (options?.comboOmissions) {
+    options.comboOmissions.length = 0;
+    options.comboOmissions.push(...comboOmissions);
+  }
+  return models;
+}
+
+async function gatherRoutedModelsUncached(
+  config: OcxConfig,
+): Promise<GatherFlightResult> {
+  // Flight-local list: joiners copy from the resolved promise, not a process-global last write.
   const localOmissions: ComboCatalogOmission[] = [];
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
   // Persisted provider entries can predate newer registry fields (noVisionModels,
@@ -587,10 +744,6 @@ export async function gatherRoutedModels(
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);
-  if (options?.comboOmissions) {
-    options.comboOmissions.length = 0;
-    options.comboOmissions.push(...localOmissions);
-  }
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
   // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
@@ -624,7 +777,7 @@ export async function gatherRoutedModels(
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
   const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
-  return [...deduped, ...customModels];
+  return { models: [...deduped, ...customModels], comboOmissions: localOmissions };
 }
 
 export function augmentRoutedModelsWithRegistryOpenAiApiRows(
@@ -632,7 +785,7 @@ export function augmentRoutedModelsWithRegistryOpenAiApiRows(
   config: OcxConfig,
 ): CatalogModel[] {
   const configured = config.providers[OPENAI_API_PROVIDER_ID];
-  if (!configured || configured.disabled === true) return models;
+  if (!configured || configured.disabled === true || !providerMatchesRegistryTransport(OPENAI_API_PROVIDER_ID, configured)) return models;
   const entry = getProviderRegistryEntry(OPENAI_API_PROVIDER_ID);
   if (!entry?.models) return models;
 

@@ -1,12 +1,18 @@
 let installed = false;
 /** Shared 401 refresh gate — concurrent waiters join one prompt / token resolution. */
-let promptInFlight: Promise<string | null> | null = null;
+let resolutionInFlight: Promise<string | null> | null = null;
+/** Unwrapped fetch captured at install time — used for session re-bootstrap so the
+ *  bootstrap document request itself never enters the 401 handling path. */
+let rawFetch: typeof fetch | null = null;
 /**
  * After the user cancels (or submits blank) once, suppress further prompts for this page
  * lifetime so a staggered 401 fan-out does not reopen the dialog N times (#647 / Codex).
  * A full reload clears module state and allows prompting again.
  */
 let promptCancelled = false;
+
+/** Document path re-fetched to mint a fresh loopback GUI session (server injects meta tags). */
+const SESSION_REBOOTSTRAP_PATH = "/";
 
 function needsApiAuth(input: RequestInfo | URL): boolean {
   try {
@@ -53,15 +59,56 @@ function loadInjectedSession(): void {
   const token = takeMetaContent("opencodex-session-token");
   const csrfToken = takeMetaContent("opencodex-session-csrf");
   const origin = takeMetaContent("opencodex-session-origin");
-  if (!token?.startsWith("ocx_session_") || !csrfToken || origin !== window.location.origin) return;
-  memoryToken = token;
-  memoryCsrfToken = csrfToken;
-  memorySessionOrigin = origin;
+  storeSession(token, csrfToken, origin);
 }
 
 /** Clear memory only when it still holds `expected` (avoid wiping a newer concurrent store). */
 function clearTokenIfCurrent(expected: string | null): void {
   if (expected != null && readToken() === expected) clearToken();
+}
+
+/** Validate and store a server-minted GUI session; rejects anything bound to another origin. */
+function storeSession(token: string | null, csrfToken: string | null, origin: string | null): boolean {
+  if (!token?.startsWith("ocx_session_") || !csrfToken || origin !== window.location.origin) return false;
+  memoryToken = token;
+  memoryCsrfToken = csrfToken;
+  memorySessionOrigin = origin;
+  return true;
+}
+
+/** Read one named meta tag out of a served HTML document (attribute order varies). */
+function metaContentFromHtml(html: string, name: string): string | null {
+  for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+    const nameMatch = tag.match(/\bname="([^"]+)"/i);
+    if (nameMatch?.[1] !== name) continue;
+    const contentMatch = tag.match(/\bcontent="([^"]*)"/i);
+    return contentMatch?.[1]?.trim() || null;
+  }
+  return null;
+}
+
+/**
+ * Silently renew the GUI session from a freshly served document. Loopback servers mint
+ * short-lived sessions into the HTML on every page load, so an expired session (5-minute
+ * TTL) or one invalidated by a proxy restart is replaced without ever asking the user for
+ * a token. Returns null when the server refuses to mint sessions (non-loopback operator
+ * dashboards), where the manual admin-token prompt remains the fallback.
+ */
+async function reBootstrapSessionToken(): Promise<string | null> {
+  if (!rawFetch) return null;
+  try {
+    const response = await rawFetch(SESSION_REBOOTSTRAP_PATH, { cache: "no-store" });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const stored = storeSession(
+      metaContentFromHtml(html, "opencodex-session-token"),
+      metaContentFromHtml(html, "opencodex-session-csrf"),
+      metaContentFromHtml(html, "opencodex-session-origin"),
+    );
+    return stored ? readToken() : null;
+  } catch {
+    return null;
+  }
 }
 
 function clearLegacySessionToken(): void {
@@ -93,14 +140,17 @@ function withToken(input: RequestInfo | URL, init: RequestInit | undefined, toke
  */
 async function resolveTokenAfter401(failedToken: string | null): Promise<string | null> {
   if (promptCancelled) return null;
-  if (promptInFlight) return promptInFlight;
+  if (resolutionInFlight) return resolutionInFlight;
 
-  promptInFlight = (async () => {
+  resolutionInFlight = (async () => {
     if (promptCancelled) return null;
     const current = readToken();
     if (current && current !== failedToken) return current;
 
-    const prompted = window.prompt("OpenCodex API token")?.trim() || null;
+    const renewed = await reBootstrapSessionToken();
+    if (renewed) return renewed;
+
+    const prompted = window.prompt("OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)")?.trim() || null;
     if (prompted) {
       storeToken(prompted);
       return prompted;
@@ -108,10 +158,10 @@ async function resolveTokenAfter401(failedToken: string | null): Promise<string 
     promptCancelled = true;
     return null;
   })().finally(() => {
-    promptInFlight = null;
+    resolutionInFlight = null;
   });
 
-  return promptInFlight;
+  return resolutionInFlight;
 }
 
 export function installApiAuthFetch(): void {
@@ -121,6 +171,7 @@ export function installApiAuthFetch(): void {
   clearLegacySessionToken();
   loadInjectedSession();
   const originalFetch = window.fetch.bind(window);
+  rawFetch = originalFetch;
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!needsApiAuth(input)) return originalFetch(input, init);
 
@@ -156,6 +207,7 @@ export function resetApiAuthFetchForTests(): void {
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
-  promptInFlight = null;
+  resolutionInFlight = null;
+  rawFetch = null;
   promptCancelled = false;
 }

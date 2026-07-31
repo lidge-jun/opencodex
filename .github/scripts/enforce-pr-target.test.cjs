@@ -61,6 +61,17 @@ describe("enforce-pr-target workflow", () => {
     assert.match(workflow, /collectPrQualityFailures/);
   });
 
+  it("checks stacked bases via open PR heads before wrong_base enforcement", () => {
+    assert.match(workflow, /stackedBase/);
+    assert.match(workflow, /github\.rest\.pulls\.list/);
+    assert.match(workflow, /treating as stacked/);
+    const qualityCall = workflow.match(
+      /collectPrQualityFailures\(\{([\s\S]*?)\}\);/,
+    );
+    assert.ok(qualityCall, "must call collectPrQualityFailures");
+    assert.match(qualityCall[1], /stackedBase/);
+  });
+
   it("strips stale WRONG BRANCH prefix on failure when base is corrected", () => {
     const failureBlock = workflow.match(
       /if \(failures\.length > 0\) \{([\s\S]*?)core\.setFailed\(/,

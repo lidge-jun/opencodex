@@ -27,6 +27,15 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t
 
 export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccountEntry; onClick: () => void; t: TFn }) {
   const credits = account.quota?.resetCredits;
+  // Reserve badge width while WHAM quota is still null so the card-head does not grow
+  // when resetCredits arrives (0 or N). Quota loaded without resetCredits → no badge.
+  if (account.quota == null) {
+    return (
+      <span className="badge badge-muted codex-ticket-badge-slot" aria-hidden="true">
+        <IconTicket width={12} />0
+      </span>
+    );
+  }
   if (credits === undefined) return null;
   const hasCredits = typeof credits === "number" && credits > 0;
   return (
@@ -38,5 +47,29 @@ export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccoun
       <IconTicket width={12} />
       {credits}
     </button>
+  );
+}
+
+/** Equal-width Pause / Resume / Saving label so the button does not grow on toggle. */
+export function CodexPauseToggleLabel({
+  t,
+  paused,
+  saving,
+}: {
+  t: TFn;
+  paused: boolean;
+  saving: boolean;
+}) {
+  const pause = t("codexAuth.pause");
+  const resume = t("codexAuth.resume");
+  const savingLabel = t("common.saving");
+  const visible = saving ? savingLabel : paused ? resume : pause;
+  // Proportional fonts: ch is approximate, but avoids the height bugs of hidden
+  // multi-line measure stacks / ::before sizers.
+  const minCh = Math.max(pause.length, resume.length, savingLabel.length);
+  return (
+    <span className="codex-auth-pause-label" style={{ minWidth: `${minCh}ch` }}>
+      {visible}
+    </span>
   );
 }
