@@ -764,7 +764,6 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
-      let sawContent = false;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -805,7 +804,6 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (block.type === "tool_use") {
                   currentToolCallId = block.id ?? synthesizeToolUseId();
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
-                  sawContent = true;
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
@@ -818,24 +816,19 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 const delta = data.delta as Record<string, unknown> | undefined;
                 if (!delta) break;
                 if (delta.type === "text_delta" && typeof delta.text === "string") {
-                  sawContent = true;
                   yield { type: "text_delta", text: delta.text };
                 } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
-                  sawContent = true;
                   yield { type: "thinking_delta", thinking: delta.thinking };
                 } else if (delta.type === "reasoning_delta" && typeof delta.reasoning === "string") {
                   // Some Anthropic-compatible reasoning models use `reasoning` names for the
                   // otherwise equivalent thinking block. Preserve it as raw reasoning and keep
                   // later text blocks independent.
-                  sawContent = true;
                   yield { type: "thinking_delta", thinking: delta.reasoning };
                 } else if (delta.type === "signature_delta" && typeof delta.signature === "string" && (currentBlockType === "thinking" || currentBlockType === "reasoning")) {
                   // Arrives once, just before the thinking block's content_block_stop; block-scoped
                   // so a stray signature on a non-thinking block can never be captured.
-                  sawContent = true;
                   yield { type: "thinking_signature", signature: delta.signature };
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
-                  sawContent = true;
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 }
                 break;
