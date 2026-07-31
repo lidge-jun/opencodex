@@ -125,7 +125,10 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const logs = filterRequestLogs(getRequestLogEntries(), url.searchParams);
-    return jsonResponse(logs.map(requestLogDto));
+    return jsonResponse({
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      logs: logs.map(requestLogDto),
+    });
   }
 
   if (url.pathname === "/api/debug" && req.method === "GET") {

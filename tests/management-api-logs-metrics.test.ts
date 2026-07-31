@@ -16,7 +16,8 @@ async function readLogs(): Promise<Array<Record<string, any>>> {
   const url = new URL("http://localhost/api/logs");
   const response = await handleManagementAPI(new Request(url), url, config);
   expect(response?.status).toBe(200);
-  return await response!.json() as Array<Record<string, any>>;
+  const body = await response!.json() as { logs?: Array<Record<string, any>> } | Array<Record<string, any>>;
+  return Array.isArray(body) ? body : (body.logs ?? []);
 }
 
 function baseEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {
