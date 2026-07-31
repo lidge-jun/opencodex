@@ -284,6 +284,23 @@ function toolUseArguments(input: unknown): string {
   return JSON.stringify(input ?? {});
 }
 
+/**
+ * Whether arguments assembled from a stream's `input_json_delta` fragments are usable.
+ * A tool block that sent no fragments at all is fine — that is a no-argument call. Anything
+ * else has to parse, because unlike the non-stream path the fragments have already been
+ * forwarded to the client and cannot be repaired after the fact.
+ */
+function streamedToolArgumentsParse(assembled: string): boolean {
+  const trimmed = assembled.trim();
+  if (!trimmed) return true;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
@@ -765,6 +782,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let currentBlockType = "";
       let currentToolCallId = "";
       let currentToolCallName = "";
+      let currentToolCallJson = "";
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
@@ -808,6 +826,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (block.type === "tool_use") {
                   currentToolCallId = block.id ?? synthesizeToolUseId();
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
+                  currentToolCallJson = "";
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
@@ -833,14 +852,32 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   // so a stray signature on a non-thinking block can never be captured.
                   yield { type: "thinking_signature", signature: delta.signature };
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
+                  // Forwarded immediately: the bridge maps each delta to a client-visible
+                  // response.function_call_arguments.delta frame, so withholding fragments until
+                  // block close would leave a started call showing empty arguments. A copy is kept
+                  // to validate the assembled payload at content_block_stop.
+                  currentToolCallJson += delta.partial_json;
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 }
                 break;
               }
               case "content_block_stop": {
                 if (currentBlockType === "tool_use") {
+                  // The non-stream path repairs an unparseable payload in toolUseArguments(); the
+                  // stream cannot, because the fragments are already downstream. Fail the turn
+                  // instead of ending a tool call whose arguments will not parse — the bridge's
+                  // terminal-error path cancels the open call (status incomplete) rather than
+                  // completing it before response.failed (#765).
+                  if (!streamedToolArgumentsParse(currentToolCallJson)) {
+                    yield {
+                      type: "error",
+                      message: "Anthropic stream sent malformed tool_use arguments (invalid JSON)",
+                    };
+                    return;
+                  }
                   yield { type: "tool_call_end" };
                   currentToolCallId = "";
+                  currentToolCallJson = "";
                 }
                 currentBlockType = "";
                 break;

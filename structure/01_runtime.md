@@ -63,6 +63,9 @@ The bridge enforces a heartbeat stall deadline. It defaults to 300 seconds sampl
 invariant; sidecars keep their own clocks. On expiry the stream is closed and the upstream request
 cancelled. If the adapter generator ends without an explicit done/error event, the response is marked
 `incomplete` rather than `completed` so Codex can distinguish a clean finish from a truncated stream.
+On `error` / incomplete / stall / EOF — and when assembled non-freeform tool arguments fail to parse —
+an open tool call is cancelled as `status: "incomplete"` without `function_call_arguments.done`, so
+the client never sees a completed call ahead of `response.failed` / `response.incomplete`.
 
 The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
