@@ -867,7 +867,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         }
       }
       if (!emittedDone) {
-        if (pendingStopReason !== undefined || sawContent) {
+        // Fail closed on transport EOF. Compatible providers may omit message_stop after message_delta.stop_reason.
+        if (pendingStopReason !== undefined) {
           const stopReason = pendingStopReason === "max_tokens"
             ? "max_tokens"
             : pendingStopReason === "refusal" || pendingStopReason === "content_filter"

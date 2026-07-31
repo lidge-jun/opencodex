@@ -24,7 +24,7 @@ describe("anthropicMessagesUrl", () => {
 });
 
 describe("anthropic stream hardening", () => {
-  test("EOF after content without message_stop completes as done", async () => {
+  test("EOF after content without message_stop fails closed", async () => {
     const response = new Response([
       "event: content_block_start\n",
       'data: {"type":"content_block_start","content_block":{"type":"text","text":""}}\n\n',
@@ -32,8 +32,8 @@ describe("anthropic stream hardening", () => {
       'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
     ].join(""));
     const events = await collect(createAnthropicAdapter(provider).parseStream(response));
-    expect(events.at(-1)?.type).toBe("done");
-    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(e => e.type === "done")).toBe(false);
   });
 
   test("input_json_delta outside tool_use is ignored", async () => {
