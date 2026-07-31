@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, readFileSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 
 type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
@@ -97,6 +98,7 @@ function loadCodexAccountRecordStore(): CodexAccountStore {
 
 function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
 }

@@ -1,0 +1,1392 @@
+From 12c9907e41d3dd9841a04171258639bfa841578a Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:11:22 +0200
+Subject: [PATCH 01/10] feat(provider): add OpenCode Free -- keyless
+ public-tier provider
+
+---
+ src/adapters/openai-chat.ts            |  2 +-
+ src/providers/derive.ts                |  2 +
+ src/providers/registry.ts              | 20 ++++++-
+ tests/opencode-free-provider.test.ts   | 77 ++++++++++++++++++++++++++
+ tests/provider-registry-parity.test.ts |  6 +-
+ 5 files changed, 102 insertions(+), 5 deletions(-)
+ create mode 100644 tests/opencode-free-provider.test.ts
+
+diff --git a/src/adapters/openai-chat.ts b/src/adapters/openai-chat.ts
+index d88715db..745f2f83 100644
+--- a/src/adapters/openai-chat.ts
++++ b/src/adapters/openai-chat.ts
+@@ -249,8 +249,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+ 
+       const url = `${provider.baseUrl}/chat/completions`;
+       const headers: Record<string, string> = { "Content-Type": "application/json" };
+-      if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+       if (provider.headers) Object.assign(headers, provider.headers);
++      if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+ 
+       return { url, method: "POST", headers, body: JSON.stringify(body) };
+     },
+diff --git a/src/providers/derive.ts b/src/providers/derive.ts
+index 959279d8..2e81170d 100644
+--- a/src/providers/derive.ts
++++ b/src/providers/derive.ts
+@@ -69,6 +69,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
+     authMode: entry.authKind === "local" ? undefined : entry.authKind,
+     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
+     ...(entry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: entry.modelSuffixBracketStrip } : {}),
++    ...(entry.staticHeaders ? { headers: { ...entry.staticHeaders } } : {}),
+     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
+     ...(entry.models ? { models: [...entry.models] } : {}),
+     ...(entry.liveModels !== undefined ? { liveModels: entry.liveModels } : {}),
+@@ -193,6 +194,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
+   if (prov.escapeBuiltinToolNames === undefined && seed.escapeBuiltinToolNames !== undefined) prov.escapeBuiltinToolNames = seed.escapeBuiltinToolNames;
+   if (prov.keyOptional === undefined && seed.keyOptional !== undefined) prov.keyOptional = seed.keyOptional;
+   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
++  if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
+ }
+ 
+ export function deriveFeaturedProviderIds(): string[] {
+diff --git a/src/providers/registry.ts b/src/providers/registry.ts
+index 9e5a7bf0..dacf04cb 100644
+--- a/src/providers/registry.ts
++++ b/src/providers/registry.ts
+@@ -23,6 +23,8 @@ export interface ProviderRegistryEntry {
+   allowPrivateNetworkByDefault?: boolean;
+   keyOptional?: boolean;
+   allowBaseUrlOverride?: boolean;
++  /** Static headers merged into every upstream request for this provider. */
++  staticHeaders?: Record<string, string>;
+   modelSuffixBracketStrip?: boolean;
+   featured?: boolean;
+   dashboardPreset?: boolean;
+@@ -66,7 +68,7 @@ export type ProviderConfigSeed = Pick<
+   | "reasoningEfforts" | "modelReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
+   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
+   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
+-  | "googleMode" | "project" | "location"
++  | "googleMode" | "project" | "location" | "headers"
+ >;
+ 
+ // Shared between the OAuth (Claude account) and API-key Anthropic entries so both expose the
+@@ -583,6 +585,22 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+   },
+   { id: "opencode-zen", label: "opencode zen", baseUrl: "https://opencode.ai/zen/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://opencode.ai/auth" },
+   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
++  {
++    id: "opencode-free",
++    label: "OpenCode Free",
++    adapter: "openai-chat",
++    baseUrl: "https://opencode.ai/zen/v1",
++    authKind: "key",
++    keyOptional: true,
++    featured: true,
++    liveModels: true,
++    note: "No key needed — uses the public desktop tier (Bearer public). Models fetched live from opencode.ai.",
++    dashboardUrl: "https://opencode.ai",
++    staticHeaders: {
++      "Authorization": "Bearer public",
++      "x-opencode-client": "desktop",
++    },
++  },
+   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
+   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },
+   { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway" },
+diff --git a/tests/opencode-free-provider.test.ts b/tests/opencode-free-provider.test.ts
+new file mode 100644
+index 00000000..d6b60d3f
+--- /dev/null
++++ b/tests/opencode-free-provider.test.ts
+@@ -0,0 +1,77 @@
++import { describe, expect, test } from "bun:test";
++import { PROVIDER_REGISTRY } from "../src/providers/registry";
++import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../src/providers/derive";
++import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
++import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
++
++function minimalRequest(model = "kimi-k2.7-code"): OcxParsedRequest {
++  return {
++    modelId: model,
++    stream: false,
++    context: { messages: [{ role: "user", content: "hi" }], tools: [] },
++    options: {},
++  };
++}
++
++describe("opencode-free provider", () => {
++  const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-free");
++
++  test("registry entry exists with correct shape", () => {
++    expect(entry).toBeDefined();
++    expect(entry?.adapter).toBe("openai-chat");
++    expect(entry?.baseUrl).toBe("https://opencode.ai/zen/v1");
++    expect(entry?.authKind).toBe("key");
++    expect(entry?.keyOptional).toBe(true);
++    expect(entry?.featured).toBe(true);
++    expect(entry?.liveModels).toBe(true);
++  });
++
++  test("static headers include Bearer public and x-opencode-client", () => {
++    expect(entry?.staticHeaders?.["Authorization"]).toBe("Bearer public");
++    expect(entry?.staticHeaders?.["x-opencode-client"]).toBe("desktop");
++  });
++
++  test("providerConfigSeed propagates static headers", () => {
++    const seed = providerConfigSeed(entry!);
++    expect(seed.headers?.["Authorization"]).toBe("Bearer public");
++    expect(seed.headers?.["x-opencode-client"]).toBe("desktop");
++    expect(seed.keyOptional).toBe(true);
++    expect(seed.liveModels).toBe(true);
++  });
++
++  test("is included in the key-login map (keyOptional = true)", () => {
++    const keyMap = deriveKeyLoginMap();
++    expect(keyMap["opencode-free"]).toBeDefined();
++  });
++
++  test("is in the featured provider list", () => {
++    expect(deriveFeaturedProviderIds()).toContain("opencode-free");
++  });
++
++  test("adapter sends Bearer public with no apiKey configured", () => {
++    const provider: OcxProviderConfig = providerConfigSeed(entry!);
++    const adapter = createOpenAIChatAdapter(provider);
++    const req = adapter.buildRequest(minimalRequest());
++    const headers = req.headers as Record<string, string>;
++    expect(headers["Authorization"]).toBe("Bearer public");
++    expect(headers["x-opencode-client"]).toBe("desktop");
++    expect(req.url).toBe("https://opencode.ai/zen/v1/chat/completions");
++  });
++
++  test("user-supplied apiKey overrides the static Bearer public token", () => {
++    const provider: OcxProviderConfig = {
++      ...providerConfigSeed(entry!),
++      apiKey: "user-secret-key",
++    };
++    const adapter = createOpenAIChatAdapter(provider);
++    const req = adapter.buildRequest(minimalRequest());
++    const headers = req.headers as Record<string, string>;
++    expect(headers["Authorization"]).toBe("Bearer user-secret-key");
++    expect(headers["x-opencode-client"]).toBe("desktop");
++  });
++
++  test("provider note mentions no key needed", () => {
++    expect(entry?.note?.toLowerCase()).toContain("no key needed");
++    expect(entry?.note?.toLowerCase()).toContain("bearer public");
++  });
++});
+diff --git a/tests/provider-registry-parity.test.ts b/tests/provider-registry-parity.test.ts
+index a752d0cc..bde790b0 100644
+--- a/tests/provider-registry-parity.test.ts
++++ b/tests/provider-registry-parity.test.ts
+@@ -34,7 +34,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
+   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
+   "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
+-  "xiaomi", "kilo", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
++  "opencode-free", "xiaomi", "kilo", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
+ ];
+ 
+ describe("provider registry parity", () => {
+@@ -233,7 +233,7 @@ describe("provider registry parity", () => {
+ 
+     expect(litellm?.authKind).toBe("key");
+     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
+-    expect(optionalKeyProviders).toEqual(["litellm"]);
++    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free"]);
+   });
+ 
+   test("base URL override permission is registry-only and limited to local/self-hosted providers", () => {
+@@ -378,7 +378,7 @@ describe("provider registry parity", () => {
+     const featured = deriveFeaturedProviderIds();
+     expect(featured).toEqual([
+       "openai", "xai", "anthropic", "anthropic-apikey", "kimi", "openai-apikey", "umans", "opencode-go", "openrouter",
+-      "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
++      "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
+     ]);
+ 
+     const presets = deriveProviderPresets();
+
+From 80797936d25076f37ba80a78ff5a3afbc0ce7d94 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 22:47:05 +0200
+Subject: [PATCH 02/10] feat(gui): expose keyOptional through presets API +
+ Free badge + optional key field in AddProviderModal
+
+---
+ gui/src/components/AddProviderModal.tsx | 48 +++++++++++++++++++------
+ src/providers/derive.ts                 |  2 ++
+ tests/opencode-free-provider.test.ts    |  9 +++++
+ 3 files changed, 48 insertions(+), 11 deletions(-)
+
+diff --git a/gui/src/components/AddProviderModal.tsx b/gui/src/components/AddProviderModal.tsx
+index 8ded7774..0a299777 100644
+--- a/gui/src/components/AddProviderModal.tsx
++++ b/gui/src/components/AddProviderModal.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useMemo, useRef, useState } from "react";
++﻿import { useEffect, useMemo, useRef, useState } from "react";
+ import { IconX, IconLock, IconKey, IconExternal } from "../icons";
+ import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
+ 
+@@ -17,6 +17,8 @@ interface Preset {
+   /** Where to create/copy the API key (for auth === "key" catalog providers). */
+   dashboardUrl?: string;
+   note?: string;
++  /** API key is optional — provider works without one (free public tier). */
++  keyOptional?: boolean;
+ }
+ 
+ const FALLBACK_PRESETS: Preset[] = [
+@@ -185,13 +187,18 @@ export default function AddProviderModal({
+                     <div className="title">{p.label}</div>
+                     <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
+                   </div>
+-                  {p.auth === "oauth"
+-                    ? <span className="badge badge-accent">OAuth</span>
+-                    : p.auth === "forward"
+-                      ? <span className="badge badge-green">Codex login</span>
+-                      : p.auth === "local"
+-                        ? <span className="badge badge-amber">Local</span>
+-                        : <span className="badge badge-muted">API key</span>}
++                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
++                    {p.keyOptional && <span className="badge badge-green">Free</span>}
++                    {p.auth === "oauth"
++                      ? <span className="badge badge-accent">OAuth</span>
++                      : p.auth === "forward"
++                        ? <span className="badge badge-green">Codex login</span>
++                        : p.auth === "local"
++                          ? <span className="badge badge-amber">Local</span>
++                          : !p.keyOptional
++                            ? <span className="badge badge-muted">API key</span>
++                            : null}
++                  </div>
+                 </button>
+               ))}
+               {filtered.length === 0 && <div className="muted" style={{ fontSize: 13, padding: 8 }}>No match.</div>}
+@@ -220,9 +227,9 @@ export default function AddProviderModal({
+               </div>
+             </div>
+           ) : (
+-            // API key / Codex-forward form
++            // API key / Codex-forward / free-tier form
+             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+-              {!isCustom && !isLocal && preset.note && (
++              {!isCustom && !isLocal && !preset.keyOptional && preset.note && (
+                 <details className="setup-guide">
+                   <summary>Setup guide</summary>
+                   <ol style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
+@@ -253,6 +260,25 @@ export default function AddProviderModal({
+                 <div style={{ fontSize: 12, color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px", lineHeight: 1.55 }}>
+                   No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
+                 </div>
++              ) : preset.keyOptional ? (
++                <>
++                  <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px", lineHeight: 1.6 }}>
++                    <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
++                  </div>
++                  <details style={{ marginTop: 2 }}>
++                    <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>Use your own API key instead (optional)</summary>
++                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
++                      {preset.dashboardUrl && (
++                        <a href={preset.dashboardUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
++                          <IconKey style={{ width: 14, height: 14 }} />Get a {preset.label} key<IconExternal style={{ width: 13, height: 13 }} />
++                        </a>
++                      )}
++                      <Field label="API key (optional)">
++                        <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="Overrides the free public token" />
++                      </Field>
++                    </div>
++                  </details>
++                </>
+               ) : (
+                 <>
+                   {preset.dashboardUrl && (
+@@ -290,4 +316,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
+       {children}
+     </label>
+   );
+-}
++}
+\ No newline at end of file
+diff --git a/src/providers/derive.ts b/src/providers/derive.ts
+index 2e81170d..af1d401e 100644
+--- a/src/providers/derive.ts
++++ b/src/providers/derive.ts
+@@ -48,6 +48,7 @@ export interface DerivedProviderPreset {
+   oauthProvider?: string;
+   dashboardUrl?: string;
+   note?: string;
++  keyOptional?: boolean;
+ }
+ 
+ export function listRegistryEntries(): readonly ProviderRegistryEntry[] {
+@@ -229,6 +230,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
+     ...(entry.authKind === "oauth" ? { oauthProvider: entry.oauthId ?? entry.id } : {}),
+     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
+     ...(entry.note ? { note: entry.note } : {}),
++    ...(entry.keyOptional ? { keyOptional: true } : {}),
+   };
+ }
+ 
+diff --git a/tests/opencode-free-provider.test.ts b/tests/opencode-free-provider.test.ts
+index d6b60d3f..1ccd0c3e 100644
+--- a/tests/opencode-free-provider.test.ts
++++ b/tests/opencode-free-provider.test.ts
+@@ -74,4 +74,13 @@ describe("opencode-free provider", () => {
+     expect(entry?.note?.toLowerCase()).toContain("no key needed");
+     expect(entry?.note?.toLowerCase()).toContain("bearer public");
+   });
++
++  test("deriveProviderPresets exposes keyOptional for GUI picker", () => {
++    const { deriveProviderPresets } = require("../src/providers/derive");
++    const presets = deriveProviderPresets();
++    const preset = presets.find((p: { id: string }) => p.id === "opencode-free");
++    expect(preset).toBeDefined();
++    expect(preset.keyOptional).toBe(true);
++    expect(preset.note).toBeDefined();
++  });
+ });
+
+From fbb2fce71ee43704fe41afb3d6b02c5478abf113 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:48:13 +0200
+Subject: [PATCH 03/10] test: skip symlink test on Windows without elevated
+ symlink rights (EPERM)
+
+---
+ tests/claude-agents-inject.test.ts | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/tests/claude-agents-inject.test.ts b/tests/claude-agents-inject.test.ts
+index 78445619..9dabc7db 100644
+--- a/tests/claude-agents-inject.test.ts
++++ b/tests/claude-agents-inject.test.ts
+@@ -89,7 +89,12 @@ describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
+     mkdirSync(agentsDir, { recursive: true });
+     const victim = join(dir, "victim.md");
+     writeFileSync(victim, "precious");
+-    symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
++    try {
++      symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
++    } catch (e: unknown) {
++      if ((e as NodeJS.ErrnoException).code === "EPERM") return; // skip on Windows without elevated symlink rights
++      throw e;
++    }
+     syncClaudeAgentDefs([], dir); // prune pass
+     expect(readFileSync(victim, "utf8")).toBe("precious");
+     expect(readdirSync(agentsDir)).toContain("ocx-linked.md");
+
+From 60e307d3f5497c91345914c8d0ce474742dba9fb Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 23:29:49 +0200
+Subject: [PATCH 04/10] fix(gui): simplify free provider add flow and add
+ provider icons
+
+---
+ gui/src/components/AddProviderModal.tsx | 23 ++++-------------------
+ gui/src/provider-icons.ts               |  2 ++
+ 2 files changed, 6 insertions(+), 19 deletions(-)
+
+diff --git a/gui/src/components/AddProviderModal.tsx b/gui/src/components/AddProviderModal.tsx
+index 0a299777..504a524c 100644
+--- a/gui/src/components/AddProviderModal.tsx
++++ b/gui/src/components/AddProviderModal.tsx
+@@ -261,24 +261,9 @@ export default function AddProviderModal({
+                   No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
+                 </div>
+               ) : preset.keyOptional ? (
+-                <>
+-                  <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px", lineHeight: 1.6 }}>
+-                    <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
+-                  </div>
+-                  <details style={{ marginTop: 2 }}>
+-                    <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>Use your own API key instead (optional)</summary>
+-                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+-                      {preset.dashboardUrl && (
+-                        <a href={preset.dashboardUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
+-                          <IconKey style={{ width: 14, height: 14 }} />Get a {preset.label} key<IconExternal style={{ width: 13, height: 13 }} />
+-                        </a>
+-                      )}
+-                      <Field label="API key (optional)">
+-                        <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="Overrides the free public token" />
+-                      </Field>
+-                    </div>
+-                  </details>
+-                </>
++                <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px", lineHeight: 1.6 }}>
++                  <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
++                </div>
+               ) : (
+                 <>
+                   {preset.dashboardUrl && (
+@@ -316,4 +301,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
+       {children}
+     </label>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/gui/src/provider-icons.ts b/gui/src/provider-icons.ts
+index 357e40d2..6dc5305e 100644
+--- a/gui/src/provider-icons.ts
++++ b/gui/src/provider-icons.ts
+@@ -27,6 +27,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
+   "ollama-cloud": "ollama-color.svg",
+   openai: "openai.svg",
+   "openai-apikey": "openai.svg",
++  "opencode-free": "opencode.svg",
+   "opencode-go": "opencode.svg",
+   "opencode-zen": "opencode.svg",
+   openrouter: "openrouter-color.svg",
+@@ -35,6 +36,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
+   "vercel-ai-gateway": "vercel-ai-gateway-color.svg",
+   vllm: "vllm-color.svg",
+   xai: "grok-color.svg",
++  "mimo-free": "xiaomi-color.svg",
+   xiaomi: "xiaomi-color.svg",
+ };
+ 
+
+From 382fd257c86c64bda7725634b8c77c44df1fc52c Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 23:37:28 +0200
+Subject: [PATCH 05/10] fix(gui): label saved free providers and preserve user
+ auth headers
+
+---
+ gui/src/pages/Providers.tsx |  7 +++++--
+ src/server/auth-cors.ts     |  1 +
+ tests/server-auth.test.ts   | 23 +++++++++++++++++++++++
+ 3 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/gui/src/pages/Providers.tsx b/gui/src/pages/Providers.tsx
+index 126ed7ef..317afc00 100644
+--- a/gui/src/pages/Providers.tsx
++++ b/gui/src/pages/Providers.tsx
+@@ -10,7 +10,7 @@ import { providerIconSrc } from "../provider-icons";
+ interface Config {
+   port: number;
+   defaultProvider: string;
+-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; disabled?: boolean }>;
++  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean }>;
+ }
+ 
+ interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean }
+@@ -392,6 +392,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+           })}
+           {keyProviders.map(name => {
+             const icon = providerIconSrc(name);
++            const provider = config?.providers[name];
++            const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
+             return (
+               <div key={name} className="oauth-row">
+                 <span className="oauth-name" title={name}>
+@@ -400,7 +402,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+                 </span>
+                 <span className="oauth-status">
+                   <span className="dot dot-green" />
+-                  <span className="oauth-email muted">{t("prov.hasApiKey")}</span>
++                  <span className="oauth-email muted">{keylessFree ? "free tier" : t("prov.hasApiKey")}</span>
+                 </span>
+                 <span className="oauth-actions" aria-hidden="true" />
+               </div>
+@@ -444,6 +446,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+                         {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
+                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
+                         {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
++                        {prov.keyOptional && <span className="badge badge-green">Free</span>}
+                       </div>
+                       <div className="muted prov-meta" style={{ fontSize: 13 }}>
+                         <code className="chip">{prov.adapter}</code>
+diff --git a/src/server/auth-cors.ts b/src/server/auth-cors.ts
+index 8a8ee7e2..5664bb21 100644
+--- a/src/server/auth-cors.ts
++++ b/src/server/auth-cors.ts
+@@ -210,6 +210,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
+       "disabled",
+       "allowPrivateNetwork",
+       "authMode",
++      "keyOptional",
+       "liveModels",
+       "models",
+       "contextWindow",
+diff --git a/tests/server-auth.test.ts b/tests/server-auth.test.ts
+index e966fbe7..60ecc502 100644
+--- a/tests/server-auth.test.ts
++++ b/tests/server-auth.test.ts
+@@ -149,6 +149,29 @@ describe("server local API auth", () => {
+     expect(dto.providers.openai.disabled).toBeUndefined();
+   });
+ 
++  test("safeConfigDTO exposes keyOptional for saved free-tier providers", () => {
++    const dto = safeConfigDTO({
++      ...config("127.0.0.1"),
++      providers: {
++        "mimo-free": {
++          adapter: "mimo-free",
++          baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
++          authMode: "key",
++          keyOptional: true,
++        },
++      },
++    } as OcxConfig) as {
++      providers: Record<string, Record<string, unknown>>;
++    };
++
++    expect(dto.providers["mimo-free"]).toMatchObject({
++      adapter: "mimo-free",
++      authMode: "key",
++      keyOptional: true,
++      hasApiKey: false,
++    });
++  });
++
+   test("safeConfigDTO strips URL-embedded provider secrets", () => {
+     const dto = safeConfigDTO({
+       ...config("127.0.0.1"),
+
+From 2b7b87981cf5e13e2ae414860e2ffafefcab2b2e Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 23:38:20 +0200
+Subject: [PATCH 06/10] test(opencode-free): lock user apiKey precedence over
+ static auth header
+
+---
+ tests/opencode-free-provider.test.ts | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/tests/opencode-free-provider.test.ts b/tests/opencode-free-provider.test.ts
+index 1ccd0c3e..2467c5f2 100644
+--- a/tests/opencode-free-provider.test.ts
++++ b/tests/opencode-free-provider.test.ts
+@@ -70,6 +70,19 @@ describe("opencode-free provider", () => {
+     expect(headers["x-opencode-client"]).toBe("desktop");
+   });
+ 
++  test("registry static headers still apply when a user apiKey is present", () => {
++    const provider: OcxProviderConfig = {
++      ...providerConfigSeed(entry!),
++      apiKey: "user-secret-key",
++    };
++    const adapter = createOpenAIChatAdapter(provider);
++    const req = adapter.buildRequest(minimalRequest());
++    const headers = req.headers as Record<string, string>;
++    expect(headers["Authorization"]).toBe("Bearer user-secret-key");
++    expect(headers["x-opencode-client"]).toBe("desktop");
++    expect(Object.keys(headers)).toContain("Authorization");
++  });
++
+   test("provider note mentions no key needed", () => {
+     expect(entry?.note?.toLowerCase()).toContain("no key needed");
+     expect(entry?.note?.toLowerCase()).toContain("bearer public");
+
+From edcf29cccf91190de3090c899da097241c3c81e6 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Wed, 15 Jul 2026 00:26:37 +0200
+Subject: [PATCH 07/10] fix(opencode-free): restrict live discovery to -free
+ models
+
+---
+ src/codex/catalog.ts               |  8 +++++++-
+ tests/provider-live-models.test.ts | 31 ++++++++++++++++++++++++++++++
+ 2 files changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/src/codex/catalog.ts b/src/codex/catalog.ts
+index 7ea75e07..cf7c9487 100644
+--- a/src/codex/catalog.ts
++++ b/src/codex/catalog.ts
+@@ -1179,7 +1179,8 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
+       provider: name,
+       owned_by: m.owned_by,
+       ...catalogHintsFromModelsApiItem(name, m),
+-    }, contextCap));
++    }, contextCap))
++      .filter(m => shouldExposeProviderModel(name, m.id));
+     const liveIds = new Set(live.map(m => m.id));
+     // Dated-release aliases (Anthropic pattern): older models may appear in the live catalog
+     // ONLY under their dated id (claude-haiku-4-5-20251001) while the config names the
+@@ -1213,6 +1214,11 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
+   }
+ }
+ 
++function shouldExposeProviderModel(providerName: string, modelId: string): boolean {
++  if (providerName === "opencode-free") return modelId.endsWith("-free");
++  return true;
++}
++
+ /**
+  * Narrow a raw routed-model list to what Codex's catalog / clients should see: drop the
+  * `disabledModels` blocklist AND, for any provider with a non-empty `selectedModels` allowlist, keep
+diff --git a/tests/provider-live-models.test.ts b/tests/provider-live-models.test.ts
+index e75ea04a..c0216996 100644
+--- a/tests/provider-live-models.test.ts
++++ b/tests/provider-live-models.test.ts
+@@ -10,6 +10,7 @@ import type { OcxConfig } from "../src/types";
+ const PROVIDER = "xai-live-test";
+ const HY3_PROVIDER = "opencode-go";
+ const HY3_CONTROL_PROVIDER = "hy3-control-live-test";
++const OPENCODE_FREE_PROVIDER = "opencode-free";
+ 
+ function config(): OcxConfig {
+   return {
+@@ -123,6 +124,36 @@ describe("live provider model discovery (authority + fallback)", () => {
+       .toBe(500_000);
+   });
+ 
++  test("opencode-free live discovery only exposes -free models", async () => {
++    globalThis.fetch = (async (url: string | URL | Request) => {
++      expect(String(url)).toBe("https://opencode.ai/zen/v1/models");
++      return new Response(JSON.stringify({
++        data: [
++          { id: "kimi-k2.7-code" },
++          { id: "deepseek-v4-flash-free" },
++          { id: "glm-5.2-free" },
++          { id: "gpt-oss:120b" },
++        ],
++      }), { status: 200, headers: { "content-type": "application/json" } });
++    }) as typeof fetch;
++
++    const models = await gatherRoutedModels({
++      providers: {
++        [OPENCODE_FREE_PROVIDER]: {
++          baseUrl: "https://opencode.ai/zen/v1",
++          adapter: "openai-chat",
++          authMode: "key",
++          keyOptional: true,
++          models: ["glm-5.2-free"],
++          liveModels: true,
++        },
++      },
++    } as unknown as OcxConfig);
++
++    const ids = models.filter(m => m.provider === OPENCODE_FREE_PROVIDER).map(m => m.id).sort();
++    expect(ids).toEqual(["deepseek-v4-flash-free", "glm-5.2-free"]);
++  });
++
+   test("non-ok response also falls back to statics (and cooldown clears via clearModelCache)", async () => {
+     globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+ 
+
+From 88cba663d3a05dd270472e1f52bb382a7fb1d7bb Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Wed, 15 Jul 2026 00:34:36 +0200
+Subject: [PATCH 08/10] fix(opencode-free): avoid persisting registry-only auth
+ headers
+
+---
+ src/server/management-api.ts | 15 ++++++++++++++-
+ tests/server-auth.test.ts    | 33 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 46 insertions(+), 2 deletions(-)
+
+diff --git a/src/server/management-api.ts b/src/server/management-api.ts
+index 4fb273ea..ba732b8f 100644
+--- a/src/server/management-api.ts
++++ b/src/server/management-api.ts
+@@ -28,6 +28,7 @@ import { readUsageEntries } from "../usage/log";
+ import { getUsageDebugLogEntries } from "../usage/debug";
+ import { parseRange, summarizeUsage } from "../usage/summary";
+ import { stripCodexRuntimeProviderFields } from "../codex/auth-context";
++import { getProviderRegistryEntry } from "../providers/registry";
+ import { getDebugLogEntries } from "../lib/debug-log-buffer";
+ import { getInjectionDebugLogEntries } from "../lib/injection-debug-log";
+ import {
+@@ -403,7 +404,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
+     // let the (possibly new) apiKey join the pool as the active entry.
+     const existingPool = config.providers[name]?.apiKeyPool;
+     if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
+-    config.providers[name] = prov;
++    config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
+     if (body.setDefault) config.defaultProvider = name;
+     save(config);
+     if (prov.apiKey && prov.apiKeyPool) {
+@@ -1180,3 +1181,15 @@ export async function fetchAllModels(config: OcxConfig): Promise<CatalogModel[]>
+   const { gatherRoutedModels } = await import("../codex/catalog");
+   return gatherRoutedModels(config);
+ }
++
++function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProviderConfig): OcxProviderConfig {
++  const entry = getProviderRegistryEntry(name);
++  if (!entry?.staticHeaders || !provider.headers) return provider;
++  const headerEntries = Object.entries(provider.headers);
++  const staticEntries = Object.entries(entry.staticHeaders);
++  if (headerEntries.length !== staticEntries.length) return provider;
++  const matchesRegistryStaticHeaders = staticEntries.every(([key, value]) => provider.headers?.[key] === value);
++  if (!matchesRegistryStaticHeaders) return provider;
++  const { headers: _headers, ...rest } = provider;
++  return rest;
++}
+diff --git a/tests/server-auth.test.ts b/tests/server-auth.test.ts
+index 60ecc502..b8c35670 100644
+--- a/tests/server-auth.test.ts
++++ b/tests/server-auth.test.ts
+@@ -1,5 +1,5 @@
+ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+-import { existsSync, mkdirSync, rmSync } from "node:fs";
++import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+ import { join } from "node:path";
+ import { saveCodexAccountCredential } from "../src/codex/account-store";
+ import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
+@@ -308,6 +308,37 @@ describe("server local API auth", () => {
+     }
+   });
+ 
++  test("provider management does not persist registry-only static auth headers for opencode-free", async () => {
++    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
++    mkdirSync(TEST_DIR, { recursive: true });
++    process.env.OPENCODEX_HOME = TEST_DIR;
++    saveConfig(config("127.0.0.1"));
++
++    const server = startServer(0);
++    try {
++      const response = await fetch(new URL("/api/providers", server.url), {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({
++          name: "opencode-free",
++          provider: {
++            adapter: "openai-chat",
++            baseUrl: "https://opencode.ai/zen/v1",
++            authMode: "key",
++          },
++        }),
++      });
++      expect(response.status).toBe(200);
++
++      const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
++      expect(saved.providers["opencode-free"]).toBeDefined();
++      expect(saved.providers["opencode-free"]?.headers).toBeUndefined();
++      expect(saved.providers["opencode-free"]?.keyOptional).toBe(true);
++    } finally {
++      await server.stop(true);
++    }
++  });
++
+   test("provider management rejects namespace-breaking or reserved provider names", async () => {
+     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+     mkdirSync(TEST_DIR, { recursive: true });
+
+From 34e61bfd089577c1e631cdf0dfbacecba3b2eef5 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Wed, 15 Jul 2026 01:06:41 +0200
+Subject: [PATCH 09/10] fix(opencode-free): match public transport and replay
+ reasoning
+
+---
+ src/providers/registry.ts            |  8 +++-
+ tests/opencode-free-provider.test.ts | 55 ++++++++++++++++++++++++----
+ 2 files changed, 53 insertions(+), 10 deletions(-)
+
+diff --git a/src/providers/registry.ts b/src/providers/registry.ts
+index dacf04cb..e69e6ee4 100644
+--- a/src/providers/registry.ts
++++ b/src/providers/registry.ts
+@@ -135,6 +135,7 @@ const THINKING_BUDGET_MODELS = [
+ ];
+ const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"];
+ const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
++const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
+ // "max" is advertised too: the wire map routes xhigh->max and max->max, so the picker
+ // should surface the max tier instead of hiding it behind xhigh.
+ const DEEPSEEK_THINKING_EFFORTS = ["high", "xhigh", "max"];
+@@ -594,12 +595,15 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+     keyOptional: true,
+     featured: true,
+     liveModels: true,
+-    note: "No key needed — uses the public desktop tier (Bearer public). Models fetched live from opencode.ai.",
++    note: "No key needed — uses the public desktop tier. Models fetched live from opencode.ai.",
+     dashboardUrl: "https://opencode.ai",
+     staticHeaders: {
+-      "Authorization": "Bearer public",
+       "x-opencode-client": "desktop",
+     },
++    modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS])),
++    modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP])),
++    preserveReasoningContentModels: OPENCODE_FREE_DEEPSEEK_MODELS,
++    noVisionModels: OPENCODE_FREE_DEEPSEEK_MODELS,
+   },
+   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
+   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },
+diff --git a/tests/opencode-free-provider.test.ts b/tests/opencode-free-provider.test.ts
+index 2467c5f2..51c26565 100644
+--- a/tests/opencode-free-provider.test.ts
++++ b/tests/opencode-free-provider.test.ts
+@@ -26,14 +26,14 @@ describe("opencode-free provider", () => {
+     expect(entry?.liveModels).toBe(true);
+   });
+ 
+-  test("static headers include Bearer public and x-opencode-client", () => {
+-    expect(entry?.staticHeaders?.["Authorization"]).toBe("Bearer public");
++  test("static headers include only the public client marker", () => {
++    expect(entry?.staticHeaders?.["Authorization"]).toBeUndefined();
+     expect(entry?.staticHeaders?.["x-opencode-client"]).toBe("desktop");
+   });
+ 
+   test("providerConfigSeed propagates static headers", () => {
+     const seed = providerConfigSeed(entry!);
+-    expect(seed.headers?.["Authorization"]).toBe("Bearer public");
++    expect(seed.headers?.["Authorization"]).toBeUndefined();
+     expect(seed.headers?.["x-opencode-client"]).toBe("desktop");
+     expect(seed.keyOptional).toBe(true);
+     expect(seed.liveModels).toBe(true);
+@@ -48,17 +48,17 @@ describe("opencode-free provider", () => {
+     expect(deriveFeaturedProviderIds()).toContain("opencode-free");
+   });
+ 
+-  test("adapter sends Bearer public with no apiKey configured", () => {
++  test("adapter sends no auth header with no apiKey configured", () => {
+     const provider: OcxProviderConfig = providerConfigSeed(entry!);
+     const adapter = createOpenAIChatAdapter(provider);
+     const req = adapter.buildRequest(minimalRequest());
+     const headers = req.headers as Record<string, string>;
+-    expect(headers["Authorization"]).toBe("Bearer public");
++    expect(headers["Authorization"]).toBeUndefined();
+     expect(headers["x-opencode-client"]).toBe("desktop");
+     expect(req.url).toBe("https://opencode.ai/zen/v1/chat/completions");
+   });
+ 
+-  test("user-supplied apiKey overrides the static Bearer public token", () => {
++  test("user-supplied apiKey is sent when configured", () => {
+     const provider: OcxProviderConfig = {
+       ...providerConfigSeed(entry!),
+       apiKey: "user-secret-key",
+@@ -70,7 +70,7 @@ describe("opencode-free provider", () => {
+     expect(headers["x-opencode-client"]).toBe("desktop");
+   });
+ 
+-  test("registry static headers still apply when a user apiKey is present", () => {
++  test("the provider client marker still applies when a user apiKey is present", () => {
+     const provider: OcxProviderConfig = {
+       ...providerConfigSeed(entry!),
+       apiKey: "user-secret-key",
+@@ -85,7 +85,17 @@ describe("opencode-free provider", () => {
+ 
+   test("provider note mentions no key needed", () => {
+     expect(entry?.note?.toLowerCase()).toContain("no key needed");
+-    expect(entry?.note?.toLowerCase()).toContain("bearer public");
++    expect(entry?.note?.toLowerCase()).not.toContain("bearer public");
++  });
++
++  test("DeepSeek Free preserves reasoning content for tool-call history", () => {
++    const provider: OcxProviderConfig = providerConfigSeed(entry!);
++    const request = adapterRequest("deepseek-v4-flash-free");
++    const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(request).body as string) as {
++      messages: Array<Record<string, unknown> & { reasoning_content?: string }>;
++    };
++    expect(body.messages.find(message => message.role === "assistant")?.reasoning_content)
++      .toBe("previous reasoning");
+   });
+ 
+   test("deriveProviderPresets exposes keyOptional for GUI picker", () => {
+@@ -97,3 +107,32 @@ describe("opencode-free provider", () => {
+     expect(preset.note).toBeDefined();
+   });
+ });
++
++function adapterRequest(modelId: string) {
++  return {
++    modelId,
++    stream: false,
++    context: {
++      messages: [
++        { role: "user" as const, content: "inspect the repo", timestamp: 0 },
++        {
++          role: "assistant" as const,
++          timestamp: 1,
++          content: [
++            { type: "thinking" as const, thinking: "previous reasoning" },
++            { type: "toolCall" as const, id: "call_1", name: "read_file", arguments: { path: "README.md" } },
++          ],
++        },
++        {
++          role: "toolResult" as const,
++          toolCallId: "call_1",
++          toolName: "read_file",
++          content: "contents",
++          isError: false,
++          timestamp: 2,
++        },
++      ],
++    },
++    options: { reasoning: "high" as const },
++  };
++}
+
+From 0d64eda5da6d6c46b8777a7c78e8fdbaa977bb20 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Wed, 15 Jul 2026 02:17:55 +0200
+Subject: [PATCH 10/10] fix(opencode-free): dynamic model discovery,
+ tool-schema normalization, and provider note exposure
+
+---
+ gui/src/pages/Providers.tsx          |  11 ++-
+ gui/src/provider-icons.ts            |  13 +++-
+ src/adapters/openai-chat.ts          | 101 ++++++++++++++++++++++++++-
+ src/codex/catalog.ts                 |   9 ++-
+ src/providers/registry.ts            |   2 +-
+ src/server/auth-cors.ts              |   3 +
+ src/server/relay.ts                  |   2 +-
+ src/server/request-log.ts            |   5 +-
+ tests/opencode-free-provider.test.ts |  46 +++++++++++-
+ tests/provider-live-models.test.ts   |  10 +--
+ tests/request-log.test.ts            |  16 +++++
+ tests/server-auth.test.ts            |  11 +--
+ 12 files changed, 209 insertions(+), 20 deletions(-)
+
+diff --git a/gui/src/pages/Providers.tsx b/gui/src/pages/Providers.tsx
+index 317afc00..ecac9818 100644
+--- a/gui/src/pages/Providers.tsx
++++ b/gui/src/pages/Providers.tsx
+@@ -10,7 +10,7 @@ import { providerIconSrc } from "../provider-icons";
+ interface Config {
+   port: number;
+   defaultProvider: string;
+-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean }>;
++  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string }>;
+ }
+ 
+ interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean }
+@@ -391,8 +391,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+             );
+           })}
+           {keyProviders.map(name => {
+-            const icon = providerIconSrc(name);
+             const provider = config?.providers[name];
++            const icon = providerIconSrc(name, provider);
+             const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
+             return (
+               <div key={name} className="oauth-row">
+@@ -427,7 +427,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+             const isDefault = name === config.defaultProvider;
+             const isDisabled = prov.disabled === true;
+             const quota = quotaReports[name]?.quota ?? null;
+-            const icon = providerIconSrc(name);
++            const icon = providerIconSrc(name, prov);
+             const accountSet = prov.authMode === "oauth" ? accountSets[name] : undefined;
+             const isKeyAuth = prov.authMode !== "oauth" && prov.authMode !== "forward";
+             const keyPool = isKeyAuth && prov.hasApiKey ? (keyPools[name] ?? []) : [];
+@@ -455,6 +455,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+                         {prov.hasApiKey && <span>{t("prov.hasApiKey")}</span>}
+                         {prov.hasHeaders && <span>{t("prov.hasHeaders")}</span>}
+                       </div>
++                      {prov.note && (
++                        <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
++                          {prov.note}
++                        </div>
++                      )}
+                     </div>
+                   </div>
+                   <div className="provider-actions">
+diff --git a/gui/src/provider-icons.ts b/gui/src/provider-icons.ts
+index 6dc5305e..00f9303f 100644
+--- a/gui/src/provider-icons.ts
++++ b/gui/src/provider-icons.ts
+@@ -40,7 +40,16 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
+   xiaomi: "xiaomi-color.svg",
+ };
+ 
+-export function providerIconSrc(provider: string): string | undefined {
+-  const icon = PROVIDER_ICON_ALIASES[provider.toLowerCase()];
++type ProviderIconHints = {
++  adapter?: string;
++  baseUrl?: string;
++};
++
++function providerIconAlias(provider: string): string | undefined {
++  return PROVIDER_ICON_ALIASES[provider.toLowerCase()];
++}
++
++export function providerIconSrc(provider: string, hints?: ProviderIconHints): string | undefined {
++  const icon = providerIconAlias(provider);
+   return icon ? `/provider-icons/${icon}` : undefined;
+ }
+diff --git a/src/adapters/openai-chat.ts b/src/adapters/openai-chat.ts
+index 745f2f83..a2766a75 100644
+--- a/src/adapters/openai-chat.ts
++++ b/src/adapters/openai-chat.ts
+@@ -125,6 +125,88 @@ function safeToolName(name: string | undefined): string {
+   return sanitized;
+ }
+ 
++const ZEN_SCHEMA_MAP_KEYS = new Set(["properties", "$defs", "definitions"]);
++const ZEN_DROPPED_SCHEMA_KEYS = new Set(["encrypted"]);
++
++function sanitizeZenSchemaMap(value: unknown): unknown {
++  if (!value || typeof value !== "object" || Array.isArray(value)) return sanitizeZenToolParameters(value);
++  const out: Record<string, unknown> = {};
++  for (const [name, child] of Object.entries(value as Record<string, unknown>)) {
++    out[name] = sanitizeZenToolParameters(child);
++  }
++  return out;
++}
++
++function sanitizeZenToolParameters(value: unknown): unknown {
++  if (Array.isArray(value)) return value.map(sanitizeZenToolParameters);
++  if (!value || typeof value !== "object") return value;
++  const input = value as Record<string, unknown>;
++  const out: Record<string, unknown> = {};
++  for (const [key, child] of Object.entries(input)) {
++    if (ZEN_DROPPED_SCHEMA_KEYS.has(key)) continue;
++    if (key === "required" && Array.isArray(child) && child.length === 0) continue;
++    if (key === "type" && Array.isArray(child)) {
++      const nonNull = child.filter(entry => entry !== "null");
++      if (child.includes("null")) out.nullable = true;
++      if (nonNull.length > 0) out.type = nonNull[0];
++      continue;
++    }
++    out[key] = ZEN_SCHEMA_MAP_KEYS.has(key) ? sanitizeZenSchemaMap(child) : sanitizeZenToolParameters(child);
++  }
++  return out;
++}
++
++function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
++  const obj = schema && typeof schema === "object" && !Array.isArray(schema)
++    ? schema as Record<string, unknown>
++    : {};
++  const compositionKeys = ["oneOf", "anyOf", "allOf"] as const;
++  const hasComposition = compositionKeys.some(key => Array.isArray(obj[key]));
++  const rootType = obj.type;
++  const rootObjectType = rootType === "object" || (Array.isArray(rootType) && rootType.includes("object"));
++  if (!hasComposition) {
++    const base = sanitizeZenToolParameters(obj) as Record<string, unknown>;
++    return rootObjectType && base.type === "object" ? base : { ...base, type: "object" };
++  }
++
++  const props: Record<string, unknown> = {};
++  const required = new Set<string>();
++  if (obj.properties && typeof obj.properties === "object") {
++    Object.assign(props, sanitizeZenSchemaMap(obj.properties) as Record<string, unknown>);
++  }
++  if (Array.isArray(obj.required)) {
++    for (const entry of obj.required) if (typeof entry === "string") required.add(entry);
++  }
++  for (const key of compositionKeys) {
++    const variants = obj[key];
++    if (!Array.isArray(variants)) continue;
++    const mergeRequired = key === "allOf";
++    for (const variant of variants) {
++      if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
++      const rec = variant as Record<string, unknown>;
++      if (rec.properties && typeof rec.properties === "object") {
++        Object.assign(props, sanitizeZenSchemaMap(rec.properties) as Record<string, unknown>);
++      }
++      if (mergeRequired && Array.isArray(rec.required)) {
++        for (const entry of rec.required) if (typeof entry === "string") required.add(entry);
++      }
++    }
++  }
++
++  const merged = sanitizeZenToolParameters(obj) as Record<string, unknown>;
++  delete merged.oneOf;
++  delete merged.anyOf;
++  delete merged.allOf;
++  merged.type = "object";
++  if (Object.keys(props).length > 0) merged.properties = props;
++  if (required.size > 0) merged.required = [...required];
++  return merged;
++}
++
++function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
++  return provider.baseUrl.replace(/\/+$/, "") === "https://opencode.ai/zen/v1";
++}
++
+ function toolsToChatFormat(parsed: OcxParsedRequest): unknown[] | undefined {
+   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
+   const allowed = isAllowedToolChoice(parsed.options.toolChoice)
+@@ -145,6 +227,23 @@ function toolsToChatFormat(parsed: OcxParsedRequest): unknown[] | undefined {
+   }));
+ }
+ 
++function toolsToChatFormatForProvider(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {
++  const base = toolsToChatFormat(parsed);
++  if (!base || !shouldSanitizeZenToolParameters(provider)) return base;
++  return base.map(tool => {
++    if (!tool || typeof tool !== "object") return tool;
++    const functionDef = (tool as { function?: Record<string, unknown> }).function;
++    if (!functionDef || typeof functionDef !== "object") return tool;
++    return {
++      ...tool,
++      function: {
++        ...functionDef,
++        parameters: ensureZenRootObjectSchema(functionDef.parameters ?? {}),
++      },
++    };
++  });
++}
++
+ function toolChoiceToChatFormat(tc: OcxParsedRequest["options"]["toolChoice"], tools: OcxParsedRequest["context"]["tools"]): unknown {
+   if (!tc) return undefined;
+   if (isAllowedToolChoice(tc)) return tc.mode === "required" ? "required" : "auto";
+@@ -190,7 +289,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+       }
+ 
+       const messages = messagesToChatFormat(parsed, provider);
+-      const tools = toolsToChatFormat(parsed);
++      const tools = toolsToChatFormatForProvider(parsed, provider);
+       const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools);
+ 
+       const body: Record<string, unknown> = {
+diff --git a/src/codex/catalog.ts b/src/codex/catalog.ts
+index cf7c9487..0b39e105 100644
+--- a/src/codex/catalog.ts
++++ b/src/codex/catalog.ts
+@@ -1194,6 +1194,8 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
+       if (dated) {
+         // Reapply config hints so alias-keyed overrides (modelContextWindows etc.) win.
+         live.push(applyProviderConfigHints(name, prov, { ...dated, id: m.id }, contextCap));
++      } else if (shouldRetainConfiguredProviderModel(name, m.id)) {
++        live.push(m);
+       } else {
+         droppedConfiguredIds.push(m.id);
+       }
+@@ -1215,10 +1217,15 @@ async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs:
+ }
+ 
+ function shouldExposeProviderModel(providerName: string, modelId: string): boolean {
+-  if (providerName === "opencode-free") return modelId.endsWith("-free");
++  if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
+   return true;
+ }
+ 
++function shouldRetainConfiguredProviderModel(providerName: string, modelId: string): boolean {
++  if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
++  return false;
++}
++
+ /**
+  * Narrow a raw routed-model list to what Codex's catalog / clients should see: drop the
+  * `disabledModels` blocklist AND, for any provider with a non-empty `selectedModels` allowlist, keep
+diff --git a/src/providers/registry.ts b/src/providers/registry.ts
+index e69e6ee4..eb4db985 100644
+--- a/src/providers/registry.ts
++++ b/src/providers/registry.ts
+@@ -595,7 +595,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+     keyOptional: true,
+     featured: true,
+     liveModels: true,
+-    note: "No key needed — uses the public desktop tier. Models fetched live from opencode.ai.",
++    note: "No key needed — public desktop tier. OpenCode currently advertises about 200 Big Pickle/free-model requests per 5 hours. Free models are discovered live from Zen.",
+     dashboardUrl: "https://opencode.ai",
+     staticHeaders: {
+       "x-opencode-client": "desktop",
+diff --git a/src/server/auth-cors.ts b/src/server/auth-cors.ts
+index 5664bb21..e38c95c4 100644
+--- a/src/server/auth-cors.ts
++++ b/src/server/auth-cors.ts
+@@ -6,6 +6,7 @@ import {
+   providerHeadersConfigError,
+ } from "../config";
+ import { providerDestinationConfigError } from "../lib/destination-policy";
++import { getProviderRegistryEntry } from "../providers/registry";
+ import type { OcxConfig, OcxProviderConfig } from "../types";
+ 
+ let _corsOrigin = "http://localhost:10100";
+@@ -228,6 +229,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
+     ] as const) {
+       copyIfDefined(dto, provider, key);
+     }
++    const registryNote = getProviderRegistryEntry(name)?.note;
++    if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
+     providers[name] = dto;
+   }
+   return {
+diff --git a/src/server/relay.ts b/src/server/relay.ts
+index a6f2822d..aedb9b61 100644
+--- a/src/server/relay.ts
++++ b/src/server/relay.ts
+@@ -212,7 +212,7 @@ export function responseWithDeferredRequestLog(
+     return response;
+   }
+   if (!response.body || !contentType.includes("text/event-stream")) {
+-    if (response.body && contentType.includes("application/json")) {
++    if (response.body && (contentType.includes("application/json") || response.status >= 400)) {
+       const finalizeJsonLog = async () => {
+         const text = await response.text();
+         inspectResponseLogJson(logCtx, text);
+diff --git a/src/server/request-log.ts b/src/server/request-log.ts
+index d1dece74..06bc2021 100644
+--- a/src/server/request-log.ts
++++ b/src/server/request-log.ts
+@@ -294,7 +294,10 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
+       logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
+     }
+   } catch {
+-    /* not JSON; nothing to capture */
++    const trimmed = text.trim();
++    if (trimmed) {
++      logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
++    }
+   }
+ }
+ 
+diff --git a/tests/opencode-free-provider.test.ts b/tests/opencode-free-provider.test.ts
+index 51c26565..097fd98e 100644
+--- a/tests/opencode-free-provider.test.ts
++++ b/tests/opencode-free-provider.test.ts
+@@ -24,6 +24,7 @@ describe("opencode-free provider", () => {
+     expect(entry?.keyOptional).toBe(true);
+     expect(entry?.featured).toBe(true);
+     expect(entry?.liveModels).toBe(true);
++    expect(entry?.models).toBeUndefined();
+   });
+ 
+   test("static headers include only the public client marker", () => {
+@@ -85,7 +86,8 @@ describe("opencode-free provider", () => {
+ 
+   test("provider note mentions no key needed", () => {
+     expect(entry?.note?.toLowerCase()).toContain("no key needed");
+-    expect(entry?.note?.toLowerCase()).not.toContain("bearer public");
++    expect(entry?.note?.toLowerCase()).toContain("200");
++    expect(entry?.note?.toLowerCase()).toContain("discovered live from zen");
+   });
+ 
+   test("DeepSeek Free preserves reasoning content for tool-call history", () => {
+@@ -98,6 +100,48 @@ describe("opencode-free provider", () => {
+       .toBe("previous reasoning");
+   });
+ 
++  test("Zen-bound tool schemas are normalized to an object root", () => {
++    const provider: OcxProviderConfig = providerConfigSeed(entry!);
++    const request: OcxParsedRequest = {
++      modelId: "deepseek-v4-flash-free",
++      stream: false,
++      context: {
++        messages: [{ role: "user", content: "hi" }],
++        tools: [
++          {
++            name: "arr",
++            description: "array-root",
++            parameters: { type: ["object", "null"], properties: { a: { type: "string" } } },
++          },
++          {
++            name: "comp",
++            description: "root-oneOf",
++            parameters: {
++              oneOf: [
++                { type: "object", properties: { x: { type: "string" } } },
++                { type: "object", properties: { y: { type: "number" } } },
++              ],
++            },
++          },
++        ],
++      },
++      options: {},
++    };
++
++    const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(request).body as string) as {
++      tools: Array<{ function: { parameters: Record<string, unknown> } }>;
++    };
++
++    expect(body.tools[0].function.parameters.type).toBe("object");
++    expect(body.tools[0].function.parameters.properties).toEqual({ a: { type: "string" } });
++    expect(body.tools[1].function.parameters.type).toBe("object");
++    expect(body.tools[1].function.parameters.oneOf).toBeUndefined();
++    expect(body.tools[1].function.parameters.properties).toEqual({
++      x: { type: "string" },
++      y: { type: "number" },
++    });
++  });
++
+   test("deriveProviderPresets exposes keyOptional for GUI picker", () => {
+     const { deriveProviderPresets } = require("../src/providers/derive");
+     const presets = deriveProviderPresets();
+diff --git a/tests/provider-live-models.test.ts b/tests/provider-live-models.test.ts
+index c0216996..c741a016 100644
+--- a/tests/provider-live-models.test.ts
++++ b/tests/provider-live-models.test.ts
+@@ -124,14 +124,16 @@ describe("live provider model discovery (authority + fallback)", () => {
+       .toBe(500_000);
+   });
+ 
+-  test("opencode-free live discovery only exposes -free models", async () => {
++  test("opencode-free live discovery exposes big-pickle plus -free ids", async () => {
+     globalThis.fetch = (async (url: string | URL | Request) => {
+       expect(String(url)).toBe("https://opencode.ai/zen/v1/models");
+       return new Response(JSON.stringify({
+         data: [
++          { id: "big-pickle" },
+           { id: "kimi-k2.7-code" },
+           { id: "deepseek-v4-flash-free" },
+-          { id: "glm-5.2-free" },
++          { id: "hy3-free" },
++          { id: "mimo-v2.5-free" },
+           { id: "gpt-oss:120b" },
+         ],
+       }), { status: 200, headers: { "content-type": "application/json" } });
+@@ -144,14 +146,14 @@ describe("live provider model discovery (authority + fallback)", () => {
+           adapter: "openai-chat",
+           authMode: "key",
+           keyOptional: true,
+-          models: ["glm-5.2-free"],
++          models: ["big-pickle", "deepseek-v4-flash-free", "mimo-v2.5-free", "north-mini-code-free"],
+           liveModels: true,
+         },
+       },
+     } as unknown as OcxConfig);
+ 
+     const ids = models.filter(m => m.provider === OPENCODE_FREE_PROVIDER).map(m => m.id).sort();
+-    expect(ids).toEqual(["deepseek-v4-flash-free", "glm-5.2-free"]);
++    expect(ids).toEqual(["big-pickle", "deepseek-v4-flash-free", "hy3-free", "mimo-v2.5-free", "north-mini-code-free"]);
+   });
+ 
+   test("non-ok response also falls back to statics (and cooldown clears via clearModelCache)", async () => {
+diff --git a/tests/request-log.test.ts b/tests/request-log.test.ts
+index 6bf587d9..cf334a26 100644
+--- a/tests/request-log.test.ts
++++ b/tests/request-log.test.ts
+@@ -348,6 +348,22 @@ describe("request log metadata", () => {
+     expect(entries[0].upstreamError).toContain("[REDACTED]");
+   });
+ 
++  test("plain-text upstream errors are captured in deferred logging", async () => {
++    const entries: RequestLogEntry[] = [];
++    const response = responseWithDeferredRequestLog(
++      new Response("provider says nope", { status: 400, headers: { "content-type": "text/plain" } }),
++      "ocx-test-plain-upstream-error",
++      Date.now(),
++      { model: "opencode-free/deepseek-v4-flash-free", provider: "opencode-free" },
++      entry => entries.push(entry),
++    );
++
++    const text = await response.text();
++    expect(text).toBe("provider says nope");
++    expect(entries).toHaveLength(1);
++    expect(entries[0].upstreamError).toBe("provider says nope");
++  });
++
+   test("deferred SSE logging uses adapter-provided Kiro log input tokens", async () => {
+     const entries: RequestLogEntry[] = [];
+     const payload = "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"kiro/claude-sonnet-4.5\",\"usage\":{\"input_tokens\":9,\"output_tokens\":4}}}";
+diff --git a/tests/server-auth.test.ts b/tests/server-auth.test.ts
+index b8c35670..20f9b4b6 100644
+--- a/tests/server-auth.test.ts
++++ b/tests/server-auth.test.ts
+@@ -153,9 +153,9 @@ describe("server local API auth", () => {
+     const dto = safeConfigDTO({
+       ...config("127.0.0.1"),
+       providers: {
+-        "mimo-free": {
+-          adapter: "mimo-free",
+-          baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
++        "opencode-free": {
++          adapter: "openai-chat",
++          baseUrl: "https://opencode.ai/zen/v1",
+           authMode: "key",
+           keyOptional: true,
+         },
+@@ -164,12 +164,13 @@ describe("server local API auth", () => {
+       providers: Record<string, Record<string, unknown>>;
+     };
+ 
+-    expect(dto.providers["mimo-free"]).toMatchObject({
+-      adapter: "mimo-free",
++    expect(dto.providers["opencode-free"]).toMatchObject({
++      adapter: "openai-chat",
+       authMode: "key",
+       keyOptional: true,
+       hasApiKey: false,
+     });
++    expect(dto.providers["opencode-free"].note).toBeTruthy();
+   });
+ 
+   test("safeConfigDTO strips URL-embedded provider secrets", () => {

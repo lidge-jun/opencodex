@@ -144,16 +144,17 @@ export function findExpectedPriceOverlay(
 }
 
 /**
- * OpenAI service_tier "priority" (Fast) price multipliers by model slug.
- * Source: https://platform.openai.com/docs/models (2026-07-24).
- * Priority pricing applies uniformly to all token types (input, output, cache).
+ * OpenAI Fast mode (`service_tier=priority`) price multipliers by model slug.
+ * Source: https://openai.com/api-fast-mode/ (2026-07-31).
+ * Fast pricing applies uniformly to all token types (input, output, cache).
  * Models not listed here fall back to 1× (no multiplier).
  */
 export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
   "gpt-5.6-sol": 2,
-  "gpt-5.6-terra": 2,
-  "gpt-5.6-luna": 2,
+  "gpt-5.6-terra": 1.6,
+  "gpt-5.6-luna": 0.4,
   "gpt-5.5": 2.5,
+  "gpt-5.4-mini": 2,
   "gpt-5.4": 2,
 };
 

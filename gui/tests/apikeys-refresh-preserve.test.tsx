@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import ApiKeys from "../src/pages/ApiKeys";
 
 const originalFetch = globalThis.fetch;
@@ -10,6 +11,7 @@ let restoreGlobals: (() => void) | undefined;
 let previousLanguageDescriptor: PropertyDescriptor | undefined;
 
 beforeEach(() => {
+  clearClientResourceStoresForTests();
   previousLanguageDescriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, "language");
   Object.defineProperty(globalThis.navigator, "language", { configurable: true, value: "en-US" });
   const previous = {
@@ -38,6 +40,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearClientResourceStoresForTests();
   restoreGlobals?.();
 });
 

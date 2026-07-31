@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
@@ -131,6 +132,7 @@ export function peekAuthStore(): AuthStore {
 
 function persist(store: AuthStore): void {
   const dir = getConfigDir();
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else {

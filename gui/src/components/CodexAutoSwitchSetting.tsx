@@ -129,30 +129,42 @@ export function CodexAutoSwitchSetting({
             </span>
           </label>
         )}
-        <button
-          type="button"
-          className={`toggle ${enabled ? "on" : ""}`}
-          onPointerDownCapture={() => {
-            togglePointerIntentRef.current = true;
-          }}
-          onPointerUp={() => {
-            togglePointerIntentRef.current = false;
-          }}
-          onPointerCancel={() => {
-            togglePointerIntentRef.current = false;
-          }}
-          onClick={() => {
-            togglePointerIntentRef.current = false;
-            void onToggle();
-          }}
-          disabled={controlsDisabled}
-          aria-pressed={enabled}
-          aria-label={t("codexAuth.autoSwitch")}
-          aria-describedby={describedBy}
-          title={t("codexAuth.autoSwitch")}
-        >
-          <span className="toggle-knob" />
-        </button>
+        {/*
+          The toggle sits in a slot as tall as the threshold field so the two controls share a
+          center line. The row is bottom-aligned (a 20px toggle against a 32px number compound
+          offset their centers by 6px, which is what read as a height bug), and the slot fixes
+          that without flipping the container to center — the mobile breakpoint deliberately
+          keeps bottom alignment.
+
+          Rendered outside the `enabled` branch on purpose: if the slot came and went with the
+          threshold field, the toggle would shift every time auto-switch was turned off.
+        */}
+        <span className="codex-auto-switch-toggle-slot">
+          <button
+            type="button"
+            className={`toggle ${enabled ? "on" : ""}`}
+            onPointerDownCapture={() => {
+              togglePointerIntentRef.current = true;
+            }}
+            onPointerUp={() => {
+              togglePointerIntentRef.current = false;
+            }}
+            onPointerCancel={() => {
+              togglePointerIntentRef.current = false;
+            }}
+            onClick={() => {
+              togglePointerIntentRef.current = false;
+              void onToggle();
+            }}
+            disabled={controlsDisabled}
+            aria-pressed={enabled}
+            aria-label={t("codexAuth.autoSwitch")}
+            aria-describedby={describedBy}
+            title={t("codexAuth.autoSwitch")}
+          >
+            <span className="toggle-knob" />
+          </button>
+        </span>
       </div>
       {feedbackMessage && (
         <div

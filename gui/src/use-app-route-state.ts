@@ -52,8 +52,14 @@ export function useAppRouteState() {
     setPageState(action.page);
   }, []);
 
-  const navigateToPage = (id: Page) => {
-    navigateHash(id);
+  /**
+   * Deliberate navigation. `subPath` deep-links a page sub-view (for example the
+   * sidebar's `dashboard/update` action link); `hashBelongsToPage` must accept it,
+   * otherwise the normalization effect below strips it right back off.
+   */
+  const navigateToPage = (id: Page, subPath?: string) => {
+    const target = subPath ? `${id}/${subPath}` : id;
+    navigateHash(target);
     setPageState(id);
   };
 

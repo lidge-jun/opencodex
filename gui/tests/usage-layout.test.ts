@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-test("Usage renders denser workspace rail layout (no layout toggle)", async () => {
+test("Usage renders every section in one scrollable column with a sticky strip", async () => {
   const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
@@ -12,10 +12,17 @@ test("Usage renders denser workspace rail layout (no layout toggle)", async () =
   expect(page).toContain("UsageWorkspaceSection");
   expect(page).toContain("usage-workspace-");
   expect(page).toContain("usw-");
-  expect(page).toContain("selectedSection");
+  // Sections are anchors in one document, not a swapped panel: the old `selectedSection`
+  // state rendered exactly one section, which is why the page could not be read by scrolling.
+  expect(page).not.toContain("selectedSection");
+  expect(page).toContain("<SectionTabs");
+  expect(page).toContain("sectionAnchorId");
 
   expect(app).toContain("<Usage apiBase={API_BASE} />");
   expect(css).toContain("styles-usage-workspace.css");
+  // The strip has to stay reachable while reading down the page.
+  expect(css).toContain(".section-tabs");
+  expect(css).toContain("position: sticky");
 });
 
 test("Usage workspace sections mount report panels in order", async () => {
@@ -41,7 +48,8 @@ test("Usage workspace sections mount report panels in order", async () => {
 
 test("Usage loading and empty states guard the workspace body", async () => {
   const src = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
-  expect(src).toContain("loading && !data");
+  expect(src).toContain("state.showSkeleton && !data");
+  expect(src).toContain("DataSurfaceSkeleton");
   expect(src).toContain('t("usage.loading")');
   expect(src).toContain('t("usage.empty")');
   expect(src).toContain("data.summary.requests === 0");

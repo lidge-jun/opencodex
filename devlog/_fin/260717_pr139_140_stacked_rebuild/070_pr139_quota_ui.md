@@ -1,0 +1,25 @@
+# WP070 — #139 quota rows and usage UI
+
+- Base/branch: ~~WP060 tip -> `codex/wibias-139-07-quota-ui`~~ **P-amendment (2026-07-17): commit directly onto dev@daa4669b.**
+- P stale-check (2026-07-17):
+  - Ledger scope for 070 is QuotaBars.tsx + rate-limit-reset-credits test only (Providers.tsx quota fetch hunks belong to WP040/WP090 fanout). The source rewrites the 76-line QuotaBars into a 300-line component: TAKE the rewrite substantially (interview: render what the WP020 contract provides) — buildQuotaRows (fiveHour/weekly/monthly + custom windows with cursor label localization and short-window-first ranking), maxQuotaUtilisation export (WP090 sorting consumer), compact + stacked layouts, warn/exhausted tones with min-visible bar width, bcp47 locale-aware date formatting, formatResetFuture future-facing copy.
+  - fiveHourPercent/fiveHourResetAt were added to AccountQuota at WP020 with no consumer — buildQuotaRows is that consumer now (the WP020 audit predicted this).
+  - Locale surface: the rewrite consumes new quota.* keys (fiveHourLimit/weeklyLimit/monthlyLimit/cursorFirstParty/cursorApiUsage/usedPercent/limitReached/resetsToday/resetsTomorrow/resetsAt/resetsRelativeMinutes/resetsRelativeHours) — add to all four locales; codexAuth.fiveHour also required (check dev presence).
+  - NEW styles/provider-quota.css: quota-stacked-* and warn/exhausted selectors (compact classes already exist in styles.css — only NEW selectors).
+  - Tests: extend tests/rate-limit-reset-credits.test.ts source-reads if bar JSX assertions drift (verify at B); ADD a quota-rows unit describe (new file tests/quota-bars-rows.test.ts is cleaner than forcing provider-quota.test.ts): five-hour-only, weekly-only, dual-window ordering (5h before weekly before cursor pools before monthly), unavailable (null quota → []), custom-window localization mapping, maxQuotaUtilisation with mixed/absent values, formatResetFuture branches (today/tomorrow/minutes/hours/date+year).
+  - Runtime GUI QA deferred to WP100 (standing ruling). Providers.tsx untouched this child.
+- A-audit corrections (2026-07-17, claude-fable-5 — 2 blockers folded):
+  - **Rank BEFORE localization.** The source's quotaWindowRank string-matches TRANSLATED labels (fragile "5-stunden"/"자사"/"官方" heuristics). Repair: build rows with a rank computed from RAW window identities (fiveHour/weekly/monthly slots have intrinsic ranks; custom windows rank on their RAW wire label — "5h"→0, "First-party models"→2, "API usage"→3, else 5/monthly-ish 4), THEN localize labels for display. The localized-string heuristics are dropped entirely.
+  - **fiveHour passthrough verified:** dev normalizeQuotaForPlan (codex-quota-utils.ts:18) returns quota unchanged for normal plans and strips to monthly-only for 30-day plans — fiveHour* flows through; the five-hour row renders. For thirty-day-only plans it is intentionally stripped (correct).
+  - Judgment TAKEs documented (adoption rationale, not silent): min-4% bar width (visibility affordance), 99.5% exhausted threshold (display-only), future-facing reset copy (UX text). All display-layer; no routing impact.
+  - Test additions per audit: percent 0 → barWidth 0, percent 1 → min 4, 99.5 boundary, threshold 0 disables warn, mixed custom+standard ranking, formatResetFuture past-date branch — added to the fixture list.
+- MODIFY `gui/src/components/QuotaBars.tsx`: render rows from WP020 normalized contract; keep component/helpers split and preserve five-hour plus weekly windows.
+- Interview decision: build on WP020 quota contract. Minimal judgment — render what the normalized contract provides.
+- NEW `gui/src/styles/provider-quota.css`; add only quota/usage selectors.
+- MODIFY `gui/src/pages/Providers.tsx` to fetch/pass quota reports without owning display calculations.
+- MODIFY locale files with visible quota/reset/source labels only.
+- MODIFY `tests/rate-limit-reset-credits.test.ts` and `tests/provider-quota.test.ts` for missing and dual-window cases.
+- Before -> after: single bar/ambiguous reset -> bounded row model with source and reset metadata.
+- Conditional activation: render fixtures prove five-hour, weekly-only, dual-window, and unavailable quota branches.
+- Verification: `bun test tests/rate-limit-reset-credits.test.ts tests/provider-quota.test.ts`; `bun run --cwd gui lint`; `bun run --cwd gui build`; `git diff --check`; diff <=500. Run `006_gui_qa_protocol.md` with `WP_ID=070 ROUTE='#providers'`; save five-hour/weekly/dual/unavailable in `evidence/WP070/<state>.md` plus screenshot JSON.
+- Rollback: quota UI reverts while WP020 wire contract remains backward-compatible.

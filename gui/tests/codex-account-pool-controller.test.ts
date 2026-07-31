@@ -16,6 +16,9 @@ test("the controller is the single data owner and exposes the agreed contract", 
   for (const member of [
     "accounts", "activeId", "loadState", "switchingId", "pauseUpdatingId", "pausingExhausted", "activeNeedsReauth",
     "load", "switchAccount", "setAccountPaused", "pauseExhaustedAccounts", "saveAlias", "removeAccount", "syncAfterAccountAdded",
+    // WP2 (260730_gui_hydration_loading_unify/010): progress is part of the contract, because a
+    // forced quota refresh keeps `loadState` at "ready" and would otherwise be invisible.
+    "refreshing", "initialLoading",
   ]) {
     expect(hook).toContain(member);
   }

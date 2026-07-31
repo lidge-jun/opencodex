@@ -51,10 +51,19 @@ export function readPageFromHash(hash?: string): Page {
  */
 export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] as const;
 
+/**
+ * `#dashboard/update` is an action deep link, not a tab: the sidebar update button uses
+ * it to open the maintenance update dialog over the Overview section. It is listed as a
+ * valid dashboard hash so route normalization does not strip it before the dashboard
+ * reads it.
+ */
+export const DASHBOARD_UPDATE_HASH = "dashboard/update";
+
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "logs" && rawHash === "logs/debug")
-    || (page === "dashboard" && (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash));
+    || (page === "dashboard"
+      && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)));
 }
 
 

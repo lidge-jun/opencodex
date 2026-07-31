@@ -4,10 +4,19 @@ dist/
 *.log
 .DS_Store
 
-# Maintainer-only planning notes. `devlog` is a private submodule
-# (lidge-jun/opencodex-internal) pinned by gitlink; its contents are never
-# tracked here. Commit inside the submodule, then bump the pointer separately.
-devlog/
+# Maintainer planning notes are TRACKED in this repository (`devlog/`). Security
+# material is not: see the "Security working notes" section of AGENTS.md.
+#
+# These exclusions were previously enforced by devlog's own .gitignore, which stops
+# applying now that devlog is not a separate repository. Reference clones are
+# third-party source with their own licenses and must never enter this history.
+devlog/_chase/_cca/
+devlog/_chase/_litellm/
+devlog/_fin/opencode-cursor/
+devlog/_plan/*/_ref_*/
+devlog/**/*-security-redaction/
+devlog/**/*_security_findings/
+devlog/**/security-advisory-draft*
 
 # Scratch space. Security working notes — unreleased findings, draft advisories,
 # exploit reasoning, pre-disclosure patch plans — belong here or in a

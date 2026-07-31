@@ -1,0 +1,29 @@
+# WP110 — #140 pinned advisory React Doctor tooling
+
+- Base/branch: ~~WP100 tip -> `codex/wibias-140-01-react-doctor-tooling`~~ **P-amendment (2026-07-17): commit directly onto dev. REORDERED before WP040-100: a concurrent session (019f6f84, phase B) is rewriting src/server/* and the openai tier structure; WP110 touches only gui tooling/.github/scripts/tests with zero overlap and no content dependency on the deferred children.**
+- P stale-check + dispositions (2026-07-17, dev@7ba65f41):
+  - Source workflow uses `millionco/react-doctor@v2` (mutable major) + `actions/checkout@v5` (mutable major) with `pull-requests: write`, `issues: write`, `statuses: write` — all three REJECTED by this doc's own contract. Pin by full commit SHA: `actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0` and `millionco/react-doctor@80de666263699836acd95845ef1f4866ef0945d5 # v2.1.0` (SHAs resolved live from GitHub tags). Permissions: `contents: read` ONLY — advisory means no comment/status writes; pass `comment: false`, `review-comments: false`, `commit-status: false`, `blocking: none` explicitly so the action needs no write scopes.
+  - Source package scripts use `npx --yes react-doctor@latest` — REJECTED (`no @latest`). Pin exact npm version `react-doctor@0.7.8` (current latest, resolved live). doctor.config.json `blocking: "error"` conflicts with the advisory contract → set `"none"` (local runs report, never fail).
+  - Source gui/package.json hunk also adds `@tanstack/react-query` — belongs to WP120 (query foundation), EXCLUDED here. gui/bun.lock hunks (H003-H004) are the react-query lock entries → also WP120. No lockfile change needed in this child (npx fetches the pinned version).
+  - Source root package.json hunk downgrades version 2.7.23→2.7.22 (stale base) — EXCLUDED; keep dev's version field untouched.
+  - Source workflow `push: branches: [main]` kept; PR trigger kept; concurrency kept.
+  - gui/eslint.config.js await-import → static-import simplification: TAKE (behavior-neutral; tsc -b and eslint both pass with static TS import via jiti).
+  - `tests/ci-workflows.test.ts` exists on dev? — check at B; if absent, create with: rejects `react-doctor@latest` anywhere in gui/package.json + root package.json, rejects mutable major tags (`@v2`, `@v5`) and missing-SHA uses in react-doctor.yml, rejects any write permission in react-doctor.yml, accepts the pinned SHAs; plus doctor-gui-if-changed run/skip fixture logic per Conditional activation.
+  - Verification amendment: `bun run --cwd gui doctor` requires network npx fetch — acceptable locally; in addition run `bun x tsc -b --noEmit` in gui (WP030 gate rule) since eslint.config.js changed. Skip `bun install --cwd gui --frozen-lockfile` (no lockfile change in this child).
+- A-audit corrections (2026-07-17, claude-fable-5 reviewer, 2 rounds — 2 blockers + 3 rulings folded):
+  - **Engine pin (blocker).** The SHA-pinned action wrapper fetches the npm `react-doctor` engine at latest by default — cosmetic SHA pin, CI/local skew. Add `version: "0.7.8"` to the action inputs and assert it in the test alongside both SHAs.
+  - **Honest prose (blocker).** With comment/review-comments/commit-status disabled, the source workflow's comments about sticky summary comments/inline reviews/commit statuses become false — rewrite them to describe log + step-summary advisory output, or future readers re-add write perms "to make the comments work."
+  - Ruling: log-only IS acceptable advisory output (findings in the Actions step log; zero write scopes) — preferred over write-scoped comments.
+  - Ruling: blanket `blocking: none` stands for local too — local stricter than CI inverts gate topology and breeds --no-verify habits. Findings scroll at push time via stdio inherit; that is "informative local".
+  - Ruling: prepush must degrade gracefully offline — on spawn error or nonzero exit, warn "react-doctor unavailable — skipping advisory scan" and exit 0 (findings are non-gating by contract, so nonzero exit is pure infra noise). Other prepush steps stay gating.
+  - Testability restructure: export pure `guiPathsChanged(files: string[])` (slash-guarded `gui/` prefix; `guitools/x` false), wrap git IO + spawn in `import.meta.main`, add `DOCTOR_DRY_RUN=1` (+ `DOCTOR_FILES` newline list) that prints run/skip and exits 0 without spawning. Tests: predicate table, DRY_RUN both branches, exit-0-on-spawn-failure; never touch network.
+  - Test additions: react-doctor.yml contains both full SHAs + `version: "0.7.8"` + `contents: read` and not `: write`; no `@latest` in either package.json; house no-mutable-tag regex kept.
+  - Superseded lines notice: the original "MODIFY gui/bun.lock" bullet and `bun install --frozen-lockfile` verification line are void (P-section governs).
+- MODIFY `gui/package.json`, `gui/bun.lock`, root `package.json`: pin an exact React Doctor version; no `@latest`.
+- NEW/MODIFY `.github/workflows/react-doctor.yml`: pin third-party actions by full commit SHA, least permissions, advisory result, no write token requirement.
+- NEW `gui/doctor.config.json`, `scripts/doctor-gui-if-changed.ts`; MODIFY `scripts/setup-hooks.ts`, `gui/eslint.config.js`, `gui/README.md` only for the documented local/CI command.
+- Before -> after: floating package/major action with write exposure -> reproducible advisory tooling.
+- Conditional activation: changed-GUI and unchanged-GUI script fixtures prove run/skip branches.
+- MODIFY `tests/ci-workflows.test.ts`: reject `react-doctor@latest`, mutable action major tags, and workflow write permissions; accept exact package/action pins.
+- Verification: `bun test tests/ci-workflows.test.ts`; `bun install --cwd gui --frozen-lockfile`; `bun run --cwd gui doctor`; `bun run --cwd gui lint`; `git diff --check`; diff <=500 excluding generated lockfile lines reported separately.
+- Rollback: tooling child reverts independently from all runtime/UI behavior.

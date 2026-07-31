@@ -572,35 +572,71 @@ test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", a
   });
 
   expect(
-    buildLiveSidebandUpstreamWsUrl("https://chatgpt.com/backend-api/codex", true, {
+    buildLiveSidebandUpstreamWsUrl({
       style: "frameless-path",
       callId: "rtc_1",
     }),
   ).toBe("wss://api.openai.com/v1/live/rtc_1");
   expect(
-    buildLiveSidebandUpstreamWsUrl("https://chatgpt.com/backend-api/codex", true, {
+    buildLiveSidebandUpstreamWsUrl({
       style: "realtime-calls-path",
       callId: "rtc_1",
     }),
   ).toBe("wss://api.openai.com/v1/realtime/calls/rtc_1");
   expect(
-    buildLiveSidebandUpstreamWsUrl("https://chatgpt.com/backend-api/codex", true, {
+    buildLiveSidebandUpstreamWsUrl({
       style: "realtime-query",
       callId: "rtc_2",
     }),
   ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
   expect(
-    buildLiveSidebandUpstreamWsUrl("https://api.openai.com/v1", false, {
+    buildLiveSidebandUpstreamWsUrl({
       style: "frameless-path",
       callId: "rtc_1",
     }),
   ).toBe("wss://api.openai.com/v1/live/rtc_1");
   expect(
-    buildLiveSidebandUpstreamWsUrl("https://api.openai.com/v1", false, {
+    buildLiveSidebandUpstreamWsUrl({
       style: "realtime-query",
       callId: "rtc_2",
     }),
   ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
+});
+
+test("sideband URL policy: override precedence, normalization, and fail-closed bounds", async () => {
+  const { buildLiveSidebandUpstreamWsUrl } = await import("../src/server/live");
+  const frameless = { style: "frameless-path", callId: "rtc_1" } as const;
+  const realtime = { style: "realtime-query", callId: "rtc 2" } as const;
+
+  // Override wins for every target style.
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://realtime.example.test/v1")).toBe("wss://realtime.example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(realtime, "https://realtime.example.test/v1")).toBe("wss://realtime.example.test/v1/realtime?intent=quicksilver&call_id=rtc%202");
+
+  // Normalization: query/fragment dropped, exactly one /v1, path prefix preserved,
+  // recognized endpoint forms stripped back to the root (upstream methods.rs:994).
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/api/v1/?foo=bar#frag")).toBe("wss://example.test/api/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v1/realtime")).toBe("wss://example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v1/realtime/calls/abc")).toBe("wss://example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v1/live/abc")).toBe("wss://example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v10")).toBe("wss://example.test/v10/v1/live/rtc_1");
+
+  // Scheme rewrite: https -> wss; loopback http -> ws (the dev case the knob exists for).
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://localhost:8080/v1")).toBe("ws://localhost:8080/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://127.0.0.1:8080")).toBe("ws://127.0.0.1:8080/v1/live/rtc_1");
+
+  // Fail-closed bounds: malformed, remote plaintext, userinfo, and non-http(s)
+  // schemes all return the canonical root — a compromised or accidental override
+  // must never redirect upstream bearer credentials or user audio.
+  for (const bad of [
+    "not a url",
+    "http://realtime.example.test/v1",
+    "ws://realtime.example.test/v1",
+    "https://user:pass@realtime.example.test/v1",
+    "ftp://realtime.example.test/v1",
+    "   ",
+  ]) {
+    expect(buildLiveSidebandUpstreamWsUrl(frameless, bad)).toBe("wss://api.openai.com/v1/live/rtc_1");
+  }
 });
 
 // Regression: Korean realtime transcripts must survive the sideband relay byte-identically.

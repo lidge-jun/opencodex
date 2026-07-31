@@ -189,12 +189,14 @@ export default function CodexPoolStrategySetting({
 
   return (
     <div className="card account-pool-strategy-card" aria-busy={saving || (!hydrated && !loadError)}>
-      <strong>{t("accountPool.strategy")}</strong>
-      <div className="card-sub" role={loadError ? "alert" : undefined}>
-        {loadError
-          ? t("accountPool.strategyLoadFailed")
-          : t("accountPool.strategyDesc")}
-      </div>
+      {/*
+        The title and description now live in the setting row itself, so the card no longer
+        repeats them above an unnamed select. Only the load failure still needs its own line:
+        there is no row to attach it to when the controls are replaced by a retry button.
+      */}
+      {loadError && (
+        <div className="card-sub" role="alert">{t("accountPool.strategyLoadFailed")}</div>
+      )}
       {loadError && (
         <button type="button" className="btn btn-ghost btn-sm account-pool-strategy-card__retry" onClick={() => { void load(); }}>
           {t("common.retry")}
@@ -207,7 +209,6 @@ export default function CodexPoolStrategySetting({
           disabled={controlsDisabled}
           strategySelectId="codex-pool-strategy"
           stickyInputId="codex-pool-sticky-limit"
-          strategyLabelHidden
           onStrategyChange={(next) => {
             if (controlsDisabled || next === strategy) return;
             void save({ strategy: next });

@@ -7,6 +7,8 @@ import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 
@@ -245,6 +247,9 @@ function formatEstimatedUsdValue(value: number, localeTag?: string): string {
   }).format(value)}`;
 }
 
+/** Consecutive failed polls before a stale table is called out. Two seconds each, so ~6s. */
+const STALE_POLL_FAILURE_LIMIT = 3;
+
 const METRIC_REASON_KEYS = {
   usage_missing: "logs.detail.reason.usage_missing",
   usage_unsupported: "logs.detail.reason.usage_unsupported",
@@ -332,16 +337,12 @@ function summarizeFilteredLogs(entries: LogEntry[]): {
 export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const cachedLogs = readSessionListCache<LogEntry[]>(logsCacheKey(apiBase));
-  const [logs, setLogs] = useState<LogEntry[]>(() => cachedLogs ?? []);
-  const [loading, setLoading] = useState(() => !(cachedLogs && cachedLogs.length > 0));
-  const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
   const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const hasLogsRef = useRef(Boolean(cachedLogs?.length));
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
   // so refresh/bookmark/back-forward keep the tab choice.
@@ -362,39 +363,49 @@ export default function Logs({ apiBase }: { apiBase: string }) {
 
   const selectTab = selectLogsTab;
 
-  const fetchLogs = useCallback(async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent === true;
-    // Silent polls must not clear an existing error or toggle loading — otherwise
-    // failures flicker between the error banner, empty state, and stale table.
-    if (!silent) setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/logs`);
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      const next = await res.json() as LogEntry[];
-      setLogs(next);
-      writeSessionListCache(logsCacheKey(apiBase), next);
-      setError(null);
-    } catch (cause) {
-      if (silent) return;
-      const detail = cause instanceof Error ? cause.message : "";
-      setError(detail ? `${t("logs.loadError")} ${detail}` : t("logs.loadError"));
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [apiBase, t]);
+  const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
+    const res = await fetch(`${apiBase}/api/logs`, { signal });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+    const next = await res.json() as LogEntry[];
+    writeSessionListCache(logsCacheKey(apiBase), next);
+    return next;
+  }, [apiBase]);
 
-  useEffect(() => {
-    if (tab !== "logs") return;
-    // Re-entering the Logs tab keeps held rows; only cold mounts flash loading.
-    void fetchLogs({ silent: hasLogsRef.current });
-    if (!autoRefresh) return;
-    const interval = setInterval(() => void fetchLogs({ silent: true }), 2000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, fetchLogs, tab]);
+  // The resource layer owns the request and the 2s poll. It keeps held rows through a quiet
+  // poll on its own, which is what the old silent/non-silent split was hand-rolling — and an
+  // empty successful response is now a real empty result rather than a cold load.
+  const logsResource = useDataSurface<LogEntry[]>(
+    logsCacheKey(apiBase),
+    [apiBase],
+    loadLogs,
+    {
+      isEmpty: rows => rows.length === 0,
+      enabled: tab === "logs",
+      pollMs: autoRefresh ? 2000 : undefined,
+    },
+  );
+  const logsState = logsResource.state;
+  const logs = logsState.data ?? cachedLogs ?? [];
+  const fetchLogs = logsResource.refresh;
 
-  useEffect(() => {
-    hasLogsRef.current = logs.length > 0;
-  }, [logs.length]);
+  // A single failed tick on a two-second poll is noise, but an outage that never recovers must not
+  // leave the user reading stale rows as if they were current. Count consecutive failures and speak
+  // up once it is clearly not transient.
+  const settledFailure = !logsResource.refreshing && logsState.showError;
+  const settledSuccess = !logsResource.refreshing && !logsState.showError && logsState.data !== undefined;
+  // Derived from the settlement itself, so there is no second copy of this state to keep
+  // in sync and no frame painted with a stale banner. `streak` counts CONSECUTIVE failed
+  // settlements: it is stored keyed by the error identity that produced it, so repeated
+  // renders of the same failure do not inflate the count and a success clears it.
+  const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
+    { error: null, count: 0 },
+  );
+  if (settledSuccess && failureStreak.count !== 0) {
+    setFailureStreak({ error: null, count: 0 });
+  } else if (settledFailure && failureStreak.error !== logsState.error) {
+    setFailureStreak(previous => ({ error: logsState.error, count: previous.count + 1 }));
+  }
+  const pollFailing = failureStreak.count >= STALE_POLL_FAILURE_LIMIT;
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
   const conversationQuery = conversationFilter.trim();
@@ -547,15 +558,41 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         </div>
       )}
 
-      {error ? (
+      {/*
+        Only a cold failure or a user-initiated retry surfaces here. This tab polls every two
+        seconds, so a transient 5xx would otherwise flash the banner on and off under a table
+        that is still perfectly readable — noise, not information. A quiet poll failure keeps the
+        held rows and waits for the next tick, which is the behaviour the auto-refresh tests pin.
+      */}
+      {logsState.kind === "failed-cold" && (
         <Notice tone="err">
-          {error}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void fetchLogs()} disabled={loading}>
+          {logsState.error instanceof Error ? `${t("logs.loadError")} ${logsState.error.message}` : t("logs.loadError")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchLogs({ forceLoading: true })} disabled={logsState.refreshing}>
             {t("common.retry")}
           </button>
         </Notice>
-      ) : loading && logs.length === 0 ? (
-        <EmptyState title={t("common.loading")} />
+      )}
+      {/* Progress is reported only for a forced read: a two-second heartbeat that announced
+          itself would talk over the table continuously. */}
+      {logsResource.loading && logs.length > 0 && (
+        <DataSurfaceStatus live={false}>{t("common.loading")}</DataSurfaceStatus>
+      )}
+
+      {/* A run of failed polls is no longer transient: say the rows below are stale rather than
+          letting them read as current. Cleared by the first successful poll. */}
+      {pollFailing && logs.length > 0 && (
+        <Notice tone="err">
+          {t("logs.loadError")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchLogs({ forceLoading: true })} disabled={logsResource.refreshing}>
+            {t("common.retry")}
+          </button>
+        </Notice>
+      )}
+
+      {/* A cold failure must not also render the empty state: "nothing came back" and "there is
+          nothing to show" are different answers, and showing both at once tells the user neither. */}
+      {logsState.kind === "failed-cold" ? null : logsState.showSkeleton && logs.length === 0 ? (
+        <DataSurfaceSkeleton label={t("common.loading")} rows={6} />
       ) : filteredLogs.length === 0 ? (
         <EmptyState title={t("logs.noRequests")} />
       ) : (

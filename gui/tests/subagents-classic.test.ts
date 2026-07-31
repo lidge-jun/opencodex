@@ -16,8 +16,9 @@ test("Subagents mounts the denser workspace as the only layout", async () => {
   expect(page).not.toContain("pws.workspaceToggle");
   expect(page).not.toContain("pws.classicToggle");
 
-  // Exactly one render path remains after the loading guard.
-  expect(page).toContain("if (loading) return");
+  // Exactly one workspace render path remains after the shared cold-state guard.
+  expect(page).toContain('state.showSkeleton && !snapshot');
+  expect(page).toContain("DataSurfaceSkeleton");
   expect(page.match(/^ {2}return \(/gm)?.length).toBe(1);
 });
 

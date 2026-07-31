@@ -104,22 +104,43 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // itself never writes config — this endpoint is the only server-side mutation
   // surface for the flag.
   if (url.pathname === "/api/v2" && req.method === "GET") {
-    const { isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads } = await import("../../codex/features");
+    const {
+      isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads,
+      getAgentsEnabled, getAgentsMaxDepth, getSubagentDeveloperInstructions,
+    } = await import("../../codex/features");
     const enabled = isMultiAgentV2Enabled();
     return jsonResponse({
       enabled,
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
       multiAgentMode: config.multiAgentMode ?? "default",
+      agentsEnabled: getAgentsEnabled(),
+      agentsMaxDepth: getAgentsMaxDepth(),
+      subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
+      // max_depth is V1-only upstream; this is the global-flag statement, derived
+      // server-side so no client can present it as an effective V2 limit.
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
     });
   }
   if (url.pathname === "/api/v2" && req.method === "PUT") {
-    let body: { enabled?: unknown; maxConcurrentThreadsPerSession?: unknown; multiAgentMode?: unknown };
+    let body: {
+      enabled?: unknown;
+      maxConcurrentThreadsPerSession?: unknown;
+      multiAgentMode?: unknown;
+      agentsEnabled?: unknown;
+      agentsMaxDepth?: unknown;
+      subagentDeveloperInstructions?: unknown;
+    };
     try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
     const wantsFlag = body.enabled !== undefined;
     const wantsThreads = body.maxConcurrentThreadsPerSession !== undefined;
     const wantsMode = body.multiAgentMode !== undefined;
-    if (!wantsFlag && !wantsThreads && !wantsMode) return jsonResponse({ error: "body must set enabled, multiAgentMode, and/or maxConcurrentThreadsPerSession" }, 400);
+    const wantsAgentsEnabled = body.agentsEnabled !== undefined;
+    const wantsMaxDepth = body.agentsMaxDepth !== undefined;
+    const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
+    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions) {
+      return jsonResponse({ error: "body must set enabled, multiAgentMode, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, and/or subagentDeveloperInstructions" }, 400);
+    }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
       return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
@@ -127,12 +148,31 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
       return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1" }, 400);
     }
+    // Validate every new field BEFORE any write, so each 400 leaves config untouched.
+    // null unsets the key; "" is a meaningful value for instructions and must not be
+    // collapsed by a falsy check. The i32 preflight mirrors the upstream Option<i32>
+    // contract — out-of-range would otherwise surface as a mid-sequence write failure.
+    if (wantsAgentsEnabled && body.agentsEnabled !== null && typeof body.agentsEnabled !== "boolean") {
+      return jsonResponse({ error: "body.agentsEnabled must be a boolean or null" }, 400);
+    }
+    if (wantsMaxDepth && body.agentsMaxDepth !== null
+        && (typeof body.agentsMaxDepth !== "number" || !Number.isInteger(body.agentsMaxDepth)
+            || body.agentsMaxDepth < -2_147_483_648 || body.agentsMaxDepth > 2_147_483_647)) {
+      return jsonResponse({ error: "body.agentsMaxDepth must be an integer within signed i32 range, or null" }, 400);
+    }
+    if (wantsSubagentInstructions && body.subagentDeveloperInstructions !== null && typeof body.subagentDeveloperInstructions !== "string") {
+      return jsonResponse({ error: "body.subagentDeveloperInstructions must be a string or null" }, 400);
+    }
     const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
     const modeFlag = mode === "v2" ? true : mode === "v1" ? false : undefined;
     if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
       return jsonResponse({ error: `body.enabled conflicts with multiAgentMode '${mode}'` }, 400);
     }
-    const { isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads, transitionMultiAgentV2 } = await import("../../codex/features");
+    const {
+      isMultiAgentV2Enabled, hasAgentsMaxThreads, getLogicalMaxThreads, transitionMultiAgentV2,
+      getAgentsEnabled, getAgentsMaxDepth, getSubagentDeveloperInstructions,
+      setAgentsEnabled, setAgentsMaxDepth, setSubagentDeveloperInstructions,
+    } = await import("../../codex/features");
     const warnings: string[] = [];
     const requestedFlag = wantsFlag ? body.enabled as boolean : modeFlag;
     if (requestedFlag !== undefined || wantsThreads) {
@@ -159,6 +199,36 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       saveConfigPreservingClaudeCode(config);
       warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
     }
+    // New-key scalar writes: each writer is individually atomic, so apply them in
+    // sequence after the transition. A failure here is a persistence failure (the
+    // writers' ok:false result or a throw from the underlying atomic write helper),
+    // reported as 502 naming the failed key plus the writes that already landed.
+    // NOTE: do not name that helper literally here — tests/grok-writer-boundary.test.ts
+    // asserts this route file contains no direct write primitive, and matches on the
+    // symbol name even inside a comment.
+    const scalarWrites: Array<{ field: string; run: () => { ok: true; changed: boolean } | { ok: false; error: string } }> = [];
+    if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null) });
+    if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null) });
+    if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null) });
+    const landed: string[] = [];
+    for (const write of scalarWrites) {
+      try {
+        const result = write.run();
+        if (!result.ok) {
+          return jsonResponse({ error: `writing ${write.field} failed: ${result.error}${landed.length > 0 ? ` (already applied: ${landed.join(", ")})` : ""}` }, 502);
+        }
+        landed.push(write.field);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResponse({ error: `writing ${write.field} failed: ${message}${landed.length > 0 ? ` (already applied: ${landed.join(", ")})` : ""}` }, 502);
+      }
+    }
+    // Derived from fresh post-write readers (readConfigText is uncached): upstream
+    // lets an enabled multi_agent_v2 feature override [agents].enabled = false, so
+    // warn rather than reject — silently accepting would imply multi-agent is off.
+    if (getAgentsEnabled() === false && isMultiAgentV2Enabled()) {
+      warnings.push("agents.enabled = false has no effect while features.multi_agent_v2 is enabled; upstream keeps V2 active.");
+    }
     await refreshCodexCatalogBestEffort();
     if (requestedFlag !== undefined) warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the ladder change.");
     const enabled = isMultiAgentV2Enabled();
@@ -168,6 +238,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxThreadsConflict: enabled && hasAgentsMaxThreads(),
       maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
       multiAgentMode: config.multiAgentMode ?? "default",
+      agentsEnabled: getAgentsEnabled(),
+      agentsMaxDepth: getAgentsMaxDepth(),
+      subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
       warnings,
     });
   }

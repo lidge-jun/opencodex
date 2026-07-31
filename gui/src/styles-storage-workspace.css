@@ -10,15 +10,16 @@
 
 .storage-workspace-root {
   display: grid;
-  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  /*
+    Single column, page-scrolled. The fixed-height two-pane shell meant the bucket list and
+    the detail body each owned an inner scroller with `overscroll-behavior: contain`, so the
+    wheel never reached the page and everything below the shell was unreachable.
+  */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   width: 100%;
   max-width: 100%;
-  align-items: stretch;
-  /* Fixed chrome height so bucket detail variance cannot shift panels below.
-     Sized so the overview (stats + largest files) usually fits without a scrollbar. */
-  height: min(30.5rem, 76vh);
-  min-height: 24rem;
+  align-items: start;
 }
 
 /* ── Rail ─────────────────────────────────────────────── */
@@ -27,11 +28,20 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  border-right: 1px solid var(--border);
-  padding-right: var(--space-3);
+  /* Stacked: the seam runs underneath. */
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-3);
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  /*
+    Pinned bucket selector: the page scrolls through the overview and the cleanup card below,
+    and the buckets stay reachable instead of scrolling away at the top.
+  */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding-top: 6px;
 }
 
 .storage-workspace-rail-header {
@@ -60,9 +70,16 @@
   flex-direction: column;
   gap: 2px;
   min-height: 0;
-  flex: 1 1 auto;
+  /*
+    The one place an inner scroller belongs: this list is pinned, so it must not grow tall
+    enough to cover the content it is pinned over. `overscroll-behavior: auto` lets the wheel
+    continue to the page once the list reaches its end, which is what made the old fixed-height
+    shell feel stuck.
+  */
+  max-height: min(11rem, 30vh);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
 }
 
 .storage-workspace-rail-row {
@@ -151,20 +168,13 @@
   min-width: 0;
   min-height: 0;
   max-width: 100%;
-  overflow: hidden;
   padding: 0;
 }
 
 .stw-overview,
 .stw-detail-body {
-  flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* Keep the scrollbar in its own gutter — never over file paths / kv text. */
-  scrollbar-gutter: stable;
-  padding-right: 10px;
 }
 
 .stw-detail-body {
@@ -578,7 +588,12 @@
 
 .storage-cleanup-policy-split {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(16rem, 0.85fr);
+  /*
+    Single column: the side-by-side policy/manual split read as cramped against the card
+    border. Switching happens through the tab strip at the top of the card instead, so
+    each panel gets the full width.
+  */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px 20px;
   align-items: start;
 }
@@ -594,8 +609,9 @@
   gap: 8px;
   align-content: start;
   min-width: 0;
-  padding-left: 20px;
-  border-left: 1px solid var(--border);
+  /* Stacked under the policy pane: the seam is a rule above it, not beside it. */
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .storage-cleanup-manual__title {
@@ -674,19 +690,6 @@
   margin: 0;
 }
 
-@media (max-width: 720px) {
-  .storage-cleanup-policy-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .storage-cleanup-manual {
-    padding-left: 0;
-    border-left: none;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
-  }
-}
-
 @media (max-width: 520px) {
   .storage-cleanup-card__tabs {
     width: 100%;
@@ -715,28 +718,12 @@
 /* ── Responsive ───────────────────────────────────────── */
 
 @media (max-width: 768px) {
-  .storage-workspace-root {
-    grid-template-columns: minmax(0, 1fr);
-    height: auto;
-    min-height: 0;
-  }
+  /*
+    The layout is single-column and page-scrolled at every width now, so this block no longer
+    switches the grid or re-introduces inner scrollers. The rail also stops sticking here:
+    on a short viewport a pinned bucket list would eat most of the screen.
+  */
   .storage-workspace-rail {
-    border-right: none;
-    padding-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
-    max-height: 14rem;
-  }
-  .storage-workspace-rail-list {
-    max-height: none;
-    overflow-y: auto;
-  }
-  .storage-workspace-main {
-    max-height: min(24rem, 60vh);
-  }
-
-  .stw-overview,
-  .stw-detail-body {
-    max-height: none;
+    position: static;
   }
 }

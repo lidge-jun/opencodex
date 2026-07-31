@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatUptime } from "../formatUptime";
 import { IconActivity } from "../icons";
-import { useI18n, type Locale } from "../i18n/shared";
+import { useI18n, type Locale, type TFn } from "../i18n/shared";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 
 /**
@@ -123,11 +123,68 @@ function observedGrowthPerHour(samples: MemorySample[]): number | null {
 }
 
 /** One labelled monospace metric cell inside a stat-row. */
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "warn" | "danger" }) {
   return (
     <div className="stat">
       <div className="label">{label}</div>
-      <div className="value mono">{value}</div>
+      <div className={`value mono${tone ? ` value--${tone}` : ""}`}>{value}</div>
+      {sub && <div className="stat-sub mono">{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * Headline pressure gauge: observed memory against the watchdog warn threshold.
+ * The scalar cells below answer "what is allocated"; this answers "is that a
+ * problem", which is the only question a glance at this panel should need.
+ */
+function MemoryPressure({
+  observedBytes,
+  thresholdBytes,
+  metric,
+  locale,
+  t,
+}: {
+  observedBytes: number | null;
+  thresholdBytes: number | null;
+  metric: MemoryMetric | null;
+  locale: Locale;
+  t: TFn;
+}) {
+  const ratio =
+    observedBytes !== null && thresholdBytes !== null && thresholdBytes > 0
+      ? observedBytes / thresholdBytes
+      : null;
+  // Warn before the watchdog fires, not at the same instant: 75% is the point
+  // where a still-climbing process is worth looking at.
+  const tone = ratio === null ? "unknown" : ratio >= 1 ? "over" : ratio >= 0.75 ? "warn" : "ok";
+  const pct = ratio === null ? null : Math.round(ratio * 100);
+  return (
+    <div className={`mem-pressure mem-pressure--${tone}`}>
+      <div className="mem-pressure-head">
+        <span className="mem-pressure-label">
+          {t("dash.mem.pressure")}
+          {metric ? <span className="mem-pressure-metric mono">{metric}</span> : null}
+        </span>
+        <span className="mem-pressure-figure mono">
+          {observedBytes === null ? "—" : formatBytes(observedBytes, locale)}
+          {thresholdBytes !== null && (
+            <span className="mem-pressure-limit">
+              {" / "}
+              {formatBytes(thresholdBytes, locale)}
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="mem-pressure-track" role="presentation">
+        <span
+          className="mem-pressure-fill"
+          style={{ ["--mem-scale" as string]: String(ratio === null ? 0 : Math.min(1, Math.max(0.01, ratio))) }}
+        />
+      </div>
+      <div className="mem-pressure-foot">
+        {pct === null ? t("dash.mem.pressureUnknown") : t("dash.mem.pressureOf", { pct })}
+      </div>
     </div>
   );
 }
@@ -322,6 +379,19 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
   const growth = data?.watchdog ? observedGrowthPerHour(data.watchdog.samples) : null;
   const observedBytes = data ? data.observedBytes ?? data.watchdog?.observedBytes ?? observedMemory(data) : null;
   const observedBy = data ? observedMetric(data) : null;
+  // Drift only matters relative to the headroom it eats. Flag it when the current
+  // climb would reach the warn threshold within an hour (danger) or a shift (warn);
+  // a flat or falling process stays neutral no matter how large it already is.
+  const growthTone = ((): "warn" | "danger" | undefined => {
+    const threshold = data?.watchdog?.warnThresholdBytes;
+    if (growth === null || growth <= 0 || observedBytes === null || !threshold) return undefined;
+    const headroom = threshold - observedBytes;
+    if (headroom <= 0) return "danger";
+    const hoursLeft = headroom / growth;
+    if (hoursLeft <= 1) return "danger";
+    if (hoursLeft <= 8) return "warn";
+    return undefined;
+  })();
   // Optional on purpose: a 200 from an older proxy may lack the responseState field.
   const responseState = data?.responseState;
   const activeTurns = data?.activeTurnCount;
@@ -329,18 +399,56 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
 
   return (
     <div className="panel" style={{ marginBottom: 24 }}>
-      <div className="font-semibold" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <IconActivity width={16} height={16} aria-hidden="true" />
-        {t("dash.mem.title")}
+      {/* Title row carries the in-flight count and the restart action: as its own
+          block below the stats it cost ~87px of near-empty panel height. */}
+      <div className="mem-head">
+        <div className="font-semibold mem-head-title">
+          <IconActivity width={16} height={16} aria-hidden="true" />
+          {t("dash.mem.title")}
+        </div>
+        {supportsRestart && (
+          <div className="mem-head-actions">
+            <span className="mem-inflight">
+              <span className="mem-inflight-label">{t("dash.mem.inFlight")}</span>
+              <span className="mem-inflight-value mono">
+                {typeof activeTurns === "number" ? plainNumberFormat(locale).format(activeTurns) : "—"}
+              </span>
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={busy}
+              onClick={confirmRestart}
+            >
+              {t("dash.mem.restart")}
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="stat-row">
+      <MemoryPressure
+        observedBytes={observedBytes}
+        thresholdBytes={data?.watchdog?.warnThresholdBytes ?? null}
+        metric={observedBy}
+        locale={locale}
+        t={t}
+      />
+
+      <div className="stat-row mem-stats">
         <Stat label={t("dash.mem.rss")} value={data ? formatBytes(data.rss, locale) : "—"} />
-        <Stat label={t("dash.mem.jsHeap")} value={data ? `${formatBytes(data.heapUsed, locale)} / ${formatBytes(data.heapTotal, locale)}` : "—"} />
+        {/* heapUsed can exceed heapTotal on Bun (external buffers are counted in
+            used but not in the JS-object arena), so a "used / total" label reads
+            as a contradiction. Show the live figure and demote the arena size. */}
+        <Stat
+          label={t("dash.mem.jsHeap")}
+          value={data ? formatBytes(data.heapUsed, locale) : "—"}
+          sub={data ? t("dash.mem.jsHeapArena", { total: formatBytes(data.heapTotal, locale) }) : undefined}
+        />
         <Stat label={t("dash.mem.jscHeap")} value={data?.jscHeap ? formatBytes(data.jscHeap.heapSize, locale) : "—"} />
         <Stat
           label={t("dash.mem.growth")}
-          value={growth === null ? "—" : `${growth >= 0 ? "+" : "-"}${formatBytes(Math.abs(growth), locale)}${t("dash.mem.perHour")}`}
+          value={growth === null ? "—" : `${growth >= 0 ? "+" : "−"}${formatBytes(Math.abs(growth), locale)}${t("dash.mem.perHour")}`}
+          tone={growthTone}
         />
       </div>
 
@@ -380,20 +488,10 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         )}
       </details>
 
+      {/* Status line only: it stays out of the layout entirely while idle so the
+          panel does not reserve a row for a message that is usually absent. */}
       {supportsRestart && (
-        <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }} aria-live="polite">
-          <Stat
-            label={t("dash.mem.inFlight")}
-            value={typeof activeTurns === "number" ? plainNumberFormat(locale).format(activeTurns) : "—"}
-          />
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={busy}
-            onClick={confirmRestart}
-          >
-            {t("dash.mem.restart")}
-          </button>
+        <div className="mem-status" aria-live="polite">
           {restartPhase === "draining" && (
             <span className="muted text-control">
               {t("dash.mem.draining", { count: typeof activeTurns === "number" ? activeTurns : 0 })}

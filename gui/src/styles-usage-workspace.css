@@ -17,11 +17,19 @@
 
 .usage-workspace-root {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
-  gap: var(--space-4);
+  /* Single column at every width: section list on top, selected section below. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   width: 100%;
   max-width: 100%;
   min-height: 0;
+}
+
+/* Sections are stacked in the document; each panel already carries its own heading. */
+.usw-section-block + .usw-section-block {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 /* ── Rail ─────────────────────────────────────────────── */
@@ -30,8 +38,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  border-right: 1px solid var(--border);
-  padding-right: var(--space-3);
+  /* Stacked layout: the seam runs underneath, not down the side. */
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-3);
   min-width: 0;
 }
 
@@ -141,41 +150,53 @@
   min-width: 0;
   /* Inset table from border+surface so cells aren't flush to the frame. */
   padding: var(--space-3);
+  /*
+    The model and provider tables are the two long regions on this tab; unbounded they push the
+    rest of the report far below the fold. Cap them and scroll inside instead. A partially
+    visible last row is the scroll affordance. `overscroll-behavior: auto` hands the wheel back
+    to the page at either end, which keeps the sections below reachable by scrolling.
+  */
+  max-height: min(574px, 58vh);
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Keep column labels visible while the body scrolls under them. */
+.usw-section .tbl-wrap thead th {
+  position: sticky;
+  /*
+    The wrapper's own top padding scrolls with the content, so the header must stick at the
+    negative padding offset and repaint that strip; otherwise rows show through the gap.
+  */
+  top: calc(-1 * var(--space-3));
+  z-index: 1;
+  background: var(--surface);
+  /*
+    A sticky cell keeps its own border only while the table is at rest, so redraw the seam as a
+    shadow. The first value repaints the padding strip above; the second holds the rule below.
+  */
+  border-bottom-color: transparent;
+  box-shadow:
+    0 calc(-1 * var(--space-3)) 0 var(--surface),
+    inset 0 -1px 0 var(--border);
 }
 
 .usw-section .usage-cards {
   margin-top: 0;
 }
 
-.usw-section .usage-scroll {
-  max-height: 520px;
-}
-
 /* ── Responsive ───────────────────────────────────────── */
-/* Keep @container and @media stacking rules in sync when changing breakpoints. */
+/* The layout is single-column at every width, so these blocks no longer switch the grid. */
 
 @container usage-workspace (max-width: 720px) {
   .usage-workspace-root {
-    grid-template-columns: 1fr;
-  }
-
-  .usage-workspace-rail {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding-right: 0;
-    padding-bottom: var(--space-3);
+    min-height: auto;
   }
 }
 
 @media (max-width: 768px) {
   .usage-workspace-root {
-    grid-template-columns: 1fr;
-  }
-
-  .usage-workspace-rail {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding-right: 0;
-    padding-bottom: var(--space-3);
+    min-height: auto;
   }
 }

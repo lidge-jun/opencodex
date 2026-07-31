@@ -11,7 +11,7 @@
  *  - nothing in the catalog build path calls this module; no auto-flip exists.
  */
 import { execFileSync } from "node:child_process";
-import { getLogicalMaxThreads, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
+import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { loadConfig, saveConfig } from "../config";
@@ -85,6 +85,15 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     log.log(multiAgentModeLine(cfg.multiAgentMode ?? "default"));
     const threads = getLogicalMaxThreads();
     log.log(`max_threads: ${threads ?? "(unset — codex default)"}`);
+    const v2Active = isEnabled();
+    const agentsEnabled = getAgentsEnabled();
+    log.log(`agents.enabled: ${agentsEnabled === null ? "(unset — upstream default true)" : agentsEnabled}`);
+    const maxDepth = getAgentsMaxDepth();
+    // max_depth is V1-only upstream; say so whenever V2 is active so the number
+    // cannot be misread as an effective V2 limit.
+    log.log(`agents.max_depth: ${maxDepth ?? "(unset — upstream default 1)"}${v2Active ? " (V1-only — ignored while multi_agent_v2 is enabled)" : ""}`);
+    const instructions = getSubagentDeveloperInstructions();
+    log.log(`subagent_developer_instructions: ${instructions === null ? "(unset — children inherit)" : instructions === "" ? '"" (clears inherited instructions)' : JSON.stringify(instructions)}`);
     if (isEnabled() && hasMaxThreads()) {
       log.log("WARNING: [agents] max_threads is set — codex refuses to start while multi_agent_v2 is enabled. Remove it from config.toml (concurrency lives in features.multi_agent_v2.max_concurrent_threads_per_session).");
     }
