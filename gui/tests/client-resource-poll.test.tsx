@@ -148,10 +148,7 @@ test("a hidden tab stops passive polling and one quiet fetch makes up for it on 
   expect(fetches).toBe(atHide);
 
   await setVisibility("visible");
-  await act(async () => {
-    await new Promise<void>((resolve) => testWindow.setTimeout(resolve, 50));
-  });
-  await waitFor(() => fetches === atHide + 1, 3000);
+  await waitFor(() => fetches === atHide + 1);
   expect(fetches).toBe(atHide + 1);
 
   await act(async () => { root.unmount(); });
