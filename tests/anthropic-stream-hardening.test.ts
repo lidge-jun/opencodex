@@ -104,6 +104,26 @@ describe("anthropic non-stream tool_use input", () => {
     });
   });
 
+  test("EOF after message_delta.stop_reason settles instead of erroring", async () => {
+    // The other two EOF tests assert the pre-existing error path and never send a stop reason,
+    // so they stay green with this fallback reverted -- they do not test the change they shipped
+    // with. This drives the fallback itself: a stream that reported why it stopped but never
+    // sent message_stop.
+    const response = new Response([
+      "event: content_block_start\n",
+      'data: {"type":"content_block_start","content_block":{"type":"text","text":""}}\n\n',
+      "event: content_block_delta\n",
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
+      "event: message_delta\n",
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+    ].join(""));
+    const events = await collect(createAnthropicAdapter(provider).parseStream(response));
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "end_turn" });
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+});
+
+describe("anthropic streamed tool argument validation", () => {
   test("malformed streamed tool arguments fail the turn instead of completing the call", async () => {
     // The stream forwards fragments as they arrive (the bridge turns each into a client-visible
     // frame), so a malformed payload cannot be repaired the way the non-stream path repairs it.
@@ -188,23 +208,5 @@ describe("anthropic non-stream tool_use input", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
     expect(events.some(e => e.type === "tool_call_end")).toBe(true);
     expect(events.at(-1)?.type).toBe("done");
-  });
-
-  test("EOF after message_delta.stop_reason settles instead of erroring", async () => {
-    // The other two EOF tests assert the pre-existing error path and never send a stop reason,
-    // so they stay green with this fallback reverted -- they do not test the change they shipped
-    // with. This drives the fallback itself: a stream that reported why it stopped but never
-    // sent message_stop.
-    const response = new Response([
-      "event: content_block_start\n",
-      'data: {"type":"content_block_start","content_block":{"type":"text","text":""}}\n\n',
-      "event: content_block_delta\n",
-      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
-      "event: message_delta\n",
-      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
-    ].join(""));
-    const events = await collect(createAnthropicAdapter(provider).parseStream(response));
-    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "end_turn" });
-    expect(events.some(e => e.type === "error")).toBe(false);
   });
 });
