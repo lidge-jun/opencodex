@@ -185,10 +185,10 @@ export interface GrokCandidateModel {
  * from the same two sources as the sync so the two can never disagree.
  */
 export async function fetchGrokCandidateModels(config: OcxConfig): Promise<GrokCandidateModel[]> {
-  const { filterCatalogVisibleModels, nativeOpenAiContextWindow, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
+  const { filterCatalogVisibleModels, nativeOpenAiContextWindow, visibleNativeSlugs } = await import("../../codex/catalog");
   const routed = filterCatalogVisibleModels(await fetchAllModels(config), config);
   return [
-    ...desktopVisibleNativeSlugs(config).map(id => {
+    ...visibleNativeSlugs(config).map(id => {
       const contextWindow = nativeOpenAiContextWindow(id);
       return { id, native: true, ...(contextWindow !== undefined ? { contextWindow } : {}) };
     }),
