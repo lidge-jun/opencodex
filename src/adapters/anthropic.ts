@@ -250,20 +250,32 @@ function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
   }
 }
 
+const MALFORMED_ANTHROPIC_BASE_URL = "anthropic provider has malformed baseUrl";
+
 /** Normalize provider baseUrl paths ending in `/`, `/v1`, or `/v1/messages` to `{origin}/v1/messages`. */
 export function anthropicMessagesUrl(baseUrl: string): string {
+  let parsed: URL;
   try {
-    new URL(baseUrl);
+    parsed = new URL(baseUrl.trim());
   } catch {
-    throw new Error(`anthropic provider has malformed baseUrl: ${baseUrl}`);
+    throw new Error(MALFORMED_ANTHROPIC_BASE_URL);
   }
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  const root = trimmed.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
-  return `${root}/v1/messages`;
+  if (parsed.search || parsed.hash) {
+    throw new Error(MALFORMED_ANTHROPIC_BASE_URL);
+  }
+  let path = parsed.pathname.replace(/\/+$/, "");
+  path = path.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
+  const suffix = path ? `${path}/v1/messages` : "/v1/messages";
+  return `${parsed.origin}${suffix}`;
 }
 
 function synthesizeToolUseId(): string {
   return `toolu_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+function usableToolUseId(id: string | undefined): string {
+  const trimmed = id?.trim();
+  return trimmed || synthesizeToolUseId();
 }
 
 function toolUseArguments(input: unknown): string {
@@ -802,7 +814,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "tool_use") {
-                  currentToolCallId = block.id ?? synthesizeToolUseId();
+                  currentToolCallId = usableToolUseId(block.id);
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
@@ -897,7 +909,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
             events.push({ type: "redacted_thinking", data: block.data });
           } else if (block.type === "tool_use") {
-            const id = block.id ?? synthesizeToolUseId();
+            const id = usableToolUseId(block.id);
             events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
             events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
             events.push({ type: "tool_call_end" });
