@@ -213,7 +213,7 @@ export async function runInit(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/stdin (closed|reached EOF)/i.test(message)) {
-      console.error(`\n❌ ${message}. Re-run \`ocx init\` in an interactive terminal, or supply a complete answer pipe.`);
+      console.error(`\n❌ ${message}. Re-run \`ocx init\` in an interactive terminal.`);
       process.exitCode = 1;
       return;
     }
