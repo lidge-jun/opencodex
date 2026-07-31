@@ -3,7 +3,7 @@ import {
   beginPollEpoch,
   settingsPollMayCommit,
   mapStartupHealthProbe,
-  type StartupHealthStatus,
+  type StartupHealthProbe,
 } from "../startup-health-ui";
 import {
   requireJson,
@@ -94,20 +94,22 @@ function isAbortError(error: unknown, signal: AbortSignal): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): Promise<StartupHealthStatus> {
+export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): Promise<StartupHealthProbe> {
   try {
     const response = await fetch(`${apiBase}/api/startup-health`, { signal });
     if (!response.ok) throw new Error("startup health unavailable");
     const data = await response.json() as { status?: unknown; diagnosticStale?: unknown };
     const mapped = mapStartupHealthProbe(data);
     if (!mapped) throw new Error("invalid startup health response");
-    return mapped;
+    // Carry `stale` through so the caller can re-ask in seconds instead of waiting for
+    // the next 30s poll tick while the server resolves the real answer.
+    return { status: mapped, stale: data.diagnosticStale === true };
   } catch (error) {
     // Aborts must propagate so client-resource can discard the generation.
     // Swallowing them as "error" briefly shows "Could not read startup protection"
     // after refresh / remount races.
     if (isAbortError(error, signal)) throw error;
-    return "error";
+    return { status: "error", stale: false };
   }
 }
 

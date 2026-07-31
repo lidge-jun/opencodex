@@ -69,7 +69,9 @@ export default function Claude({ apiBase }: { apiBase: string }) {
         aria-labelledby="claude-code-tab"
         hidden={tab !== "code"}
       >
-        <ClaudeCode key={apiBase} apiBase={apiBase} />
+        {/* Mounted while hidden so drafts survive a tab switch, but `active` keeps it from
+            fetching for a panel nobody is looking at — mirroring Desktop below. */}
+        <ClaudeCode key={apiBase} apiBase={apiBase} active={tab === "code"} />
       </div>
       <div
         id="claude-desktop-panel"

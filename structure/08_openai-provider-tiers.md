@@ -56,8 +56,14 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 ```
 
 The historical v1 backup is never overwritten. Restoring the v2 backup intentionally restores the
-shipped v1 shape; the next startup re-migrates to the same marker-2 bytes. A differing pre-existing
-v2 backup blocks migration before save.
+shipped v1 shape; the next startup re-migrates to the same marker-2 bytes.
+
+A pre-existing snapshot that differs from the current config is classified before anything is written
+(`src/config.ts` `classifyOpenAiTierBackup`): a snapshot that parses as a valid pre-migration (v1)
+config is a user-intentional rollback point and blocks migration; a snapshot that is unparseable or
+already tier-v2 is stale and is replaced with a warning. The distinction matters because silently
+discarding a rollback point is destructive, while preserving a stale one would block every later
+migration.
 
 ## Model and wire identity
 
@@ -70,6 +76,19 @@ v2 backup blocks migration before save.
 - `*-pro` selected ids rewrite to the base wire id with `reasoning.mode: "pro"`; request logs,
   usage, model visibility, subagent state, and injection state retain the selected virtual id.
 - Compact preserves provider/selected identity but sends the base model without a reasoning object.
+
+## Account identity and store concurrency
+
+Pool mode needs stable public names and a store that survives concurrent refresh:
+
+- Public selectors are generated per account; the main login's selector is `main`, collision-suffixed
+  if that name is taken, and it maps to the config-only sentinel `@main`, which sits outside the
+  pool-account id grammar (`src/codex/account-namespaces.ts`, `src/codex/account-namespace-match.ts`).
+  Selectors must not collide with provider or combo ids. A user alias is display metadata; routing
+  consults credential identity, never the alias.
+- The credential store is generation-guarded and refresh-locked (`src/codex/account-store.ts`): a
+  refresh persists only if the generation it started from still holds, and a lost race raises a
+  generation-conflict error instead of overwriting the newer credential.
 
 ## Sidecars, management, and UI
 

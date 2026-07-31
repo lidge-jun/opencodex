@@ -13,6 +13,7 @@ import {
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
 import { hardenSecretDir, hardenSecretPath, hardenSecretPathAsync } from "./lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
+import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import {
@@ -696,6 +697,10 @@ const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
+  // Same degrade-don't-reject rationale as the fields above: a hand-edited
+  // non-string must not trip the backup-and-defaults repair path. Unset then
+  // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).
+  experimentalRealtimeWsBaseUrl: z.string().optional().catch(undefined),
 }).passthrough().superRefine((config, ctx) => {
   const claudeCode = (config as { claudeCode?: unknown }).claudeCode;
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
@@ -1278,6 +1283,9 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
 
 export function saveConfig(config: OcxConfig): void {
   const dir = getConfigDir();
+  // First statement on purpose: a rejected write must leave nothing behind, not a
+  // freshly created/chmod'd directory. See src/lib/test-home-guard.ts.
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else {

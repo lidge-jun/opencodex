@@ -1,0 +1,43 @@
+parent_id	sub_id	symbol_or_selector	child_id	disposition	rationale
+139-H090	PW-01	shared types + status/icon helpers	080	rewrite	shell contracts
+139-H090	PW-02	RailRow + EmptyState + OverviewPanel shell	080	rewrite	rail and shell
+139-H090	PW-03	ConnectionCard + StatsSidebar + TabOverview + TabModels + TabUsage	090	rewrite	overview/model/usage panels
+139-H090	PW-04	AuthAccountsCard + TabSettings + JsonEditorPanel + dialogs	091	rewrite	auth/settings/json panels
+139-H209	CSS-01	add-provider catalog selectors	050	rewrite	provider-catalog.css
+139-H209	CSS-02	account/auth selectors	060	rewrite	provider-accounts.css
+139-H209	CSS-03	quota/usage selectors	070	rewrite	provider-quota.css
+139-H209	CSS-04	root/rail/search/filter selectors	080	rewrite	provider-workspace-shell.css
+139-H209	CSS-05	overview/models/usage detail selectors	090	rewrite	provider-workspace-detail.css
+139-H209	CSS-06	auth/settings/json/dialog selectors	091	rewrite	provider-workspace-settings.css
+139-H209	CSS-07	responsive consolidation + legacy deletion	100	rewrite	final integration
+139-H121	LOCALE-01	add-provider catalog keys	050	rewrite	consumer-owned keys
+139-H121	LOCALE-02	account/auth keys	060	rewrite	consumer-owned keys
+139-H121	LOCALE-03	quota/usage keys	070	rewrite	consumer-owned keys
+139-H121	LOCALE-04	workspace shell/rail keys	080	rewrite	consumer-owned keys
+139-H121	LOCALE-05	overview/models/usage keys	090	rewrite	consumer-owned keys
+139-H121	LOCALE-06	settings/json/dialog keys	091	rewrite	consumer-owned keys
+139-H121	LOCALE-07	copy normalization/unused-key deletion	100	rewrite	final parity cleanup
+139-H134	LOCALE-01	add-provider catalog keys	050	rewrite	consumer-owned keys
+139-H134	LOCALE-02	account/auth keys	060	rewrite	consumer-owned keys
+139-H134	LOCALE-03	quota/usage keys	070	rewrite	consumer-owned keys
+139-H134	LOCALE-04	workspace shell/rail keys	080	rewrite	consumer-owned keys
+139-H134	LOCALE-05	overview/models/usage keys	090	rewrite	consumer-owned keys
+139-H134	LOCALE-06	settings/json/dialog keys	091	rewrite	consumer-owned keys
+139-H134	LOCALE-07	copy normalization/unused-key deletion	100	rewrite	final parity cleanup
+139-H147	LOCALE-01	add-provider catalog keys	050	rewrite	consumer-owned keys
+139-H147	LOCALE-02	account/auth keys	060	rewrite	consumer-owned keys
+139-H147	LOCALE-03	quota/usage keys	070	rewrite	consumer-owned keys
+139-H147	LOCALE-04	workspace shell/rail keys	080	rewrite	consumer-owned keys
+139-H147	LOCALE-05	overview/models/usage keys	090	rewrite	consumer-owned keys
+139-H147	LOCALE-06	settings/json/dialog keys	091	rewrite	consumer-owned keys
+139-H147	LOCALE-07	copy normalization/unused-key deletion	100	rewrite	final parity cleanup
+139-H160	LOCALE-01	add-provider catalog keys	050	rewrite	consumer-owned keys
+139-H160	LOCALE-02	account/auth keys	060	rewrite	consumer-owned keys
+139-H160	LOCALE-03	quota/usage keys	070	rewrite	consumer-owned keys
+139-H160	LOCALE-04	workspace shell/rail keys	080	rewrite	consumer-owned keys
+139-H160	LOCALE-05	overview/models/usage keys	090	rewrite	consumer-owned keys
+139-H160	LOCALE-06	settings/json/dialog keys	091	rewrite	consumer-owned keys
+139-H160	LOCALE-07	copy normalization/unused-key deletion	100	rewrite	final parity cleanup
+140-H393	140-CSS-01	card-selectable + card-select-hit	153	rewrite	CodexAuth/account consumer
+140-H393	140-CSS-02	modal-card/input/list/notice/button/spinner utilities	120	rewrite	AddCodexAccountModal consumer
+140-H393	140-CSS-03	help-popup selectors	140	rewrite	Dashboard consumer

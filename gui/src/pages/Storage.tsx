@@ -9,6 +9,8 @@ import StorageWorkspace, {
   type StorageReport,
 } from "../components/storage-workspace/StorageWorkspace";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
 
 
 interface CleanupPreview {
@@ -355,8 +357,6 @@ function QuarantineTrashPanel({
   reloadToken: number;
   onEntriesChange?: (entries: TrashEntry[]) => void;
 }) {
-  const [entries, setEntries] = useState<TrashEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [confirmEntry, setConfirmEntry] = useState<TrashEntry | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -364,7 +364,6 @@ function QuarantineTrashPanel({
   const cancelRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const busyRef = useRef(false);
-  const loadGenerationRef = useRef(0);
 
   useEffect(() => {
     busyRef.current = busy;
@@ -386,43 +385,22 @@ function QuarantineTrashPanel({
     };
   }, [confirmEntry, closeConfirm]);
 
-  const loadTrash = useCallback(async (signal?: AbortSignal) => {
-    const generation = ++loadGenerationRef.current;
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/storage/trash`, { signal });
-      if (!res.ok) {
-        if (signal?.aborted || generation !== loadGenerationRef.current) return;
-        throw new Error(t("storage.trash.listFailed"));
-      }
-      const json = await res.json() as TrashList;
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      const next = Array.isArray(json.entries) ? json.entries : [];
-      setEntries(next);
-      onEntriesChange?.(next);
-      setError(null);
-    } catch (e) {
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setEntries([]);
-      onEntriesChange?.([]);
-      setError(localizedCatch(e, t("storage.trash.listFailed")));
-    } finally {
-      if (generation === loadGenerationRef.current) setLoading(false);
-    }
-  }, [apiBase, t, onEntriesChange]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => {
-      void loadTrash(controller.signal);
-    }, 0);
-    return () => {
-      window.clearTimeout(timeout);
-      loadGenerationRef.current += 1;
-      controller.abort();
-    };
-  }, [loadTrash, reloadToken]);
+  const loadTrash = useCallback(async (signal: AbortSignal): Promise<TrashEntry[]> => {
+    const res = await fetch(`${apiBase}/api/storage/trash`, { signal });
+    if (!res.ok) throw new Error(t("storage.trash.listFailed"));
+    const json = await res.json() as TrashList;
+    const next = Array.isArray(json.entries) ? json.entries : [];
+    onEntriesChange?.(next);
+    return next;
+  }, [apiBase, onEntriesChange, t]);
+  const trashResource = useDataSurface<TrashEntry[]>(
+    `storage-trash:${apiBase}`,
+    [apiBase, reloadToken],
+    loadTrash,
+    { isEmpty: entries => entries.length === 0 },
+  );
+  const trashState = trashResource.state;
+  const entries = trashState.data ?? [];
 
   const mapRestoreError = (code: string | undefined, fallback?: string) => {
     switch (code) {
@@ -490,10 +468,18 @@ function QuarantineTrashPanel({
       <p className="muted storage-manual-panel__help">{t("storage.trash.help")}</p>
 
       {status && <p className="muted storage-manual-panel__status">{status}</p>}
-      {error && !confirmEntry && <p className="storage-manual-panel__status" style={{ color: "var(--red)" }}>{error}</p>}
+      {error && !confirmEntry && <p className="storage-manual-panel__status" style={{ color: "var(--red)" }} role="alert">{error}</p>}
+      {trashState.showError && !confirmEntry && (
+        <p className="storage-manual-panel__status" style={{ color: "var(--red)" }} role="alert">
+          {trashState.error instanceof Error ? trashState.error.message : t("storage.trash.listFailed")}
+        </p>
+      )}
+      {trashState.refreshing && !trashState.showSkeleton && (
+        <DataSurfaceStatus live={!trashState.showError}>{t("storage.trash.loading")}</DataSurfaceStatus>
+      )}
 
-      {loading ? (
-        <p className="muted storage-manual-panel__status">{t("storage.trash.loading")}</p>
+      {trashState.showSkeleton ? (
+        <DataSurfaceSkeleton label={t("storage.trash.loading")} rows={2} />
       ) : entries.length === 0 ? (
         <p className="muted storage-manual-panel__status">{t("storage.trash.empty")}</p>
       ) : (
@@ -1285,7 +1271,7 @@ function StorageCleanupCard({
 
   return (
     <section className="panel storage-cleanup-card" aria-labelledby="storage-cleanup-card-title">
-      <div className="usage-segmented storage-cleanup-card__tabs" role="tablist" aria-label={t("storage.cleanupCard.tabs")}>
+      <div className="page-tabs storage-cleanup-card__tabs" role="tablist" aria-label={t("storage.cleanupCard.tabs")}>
         {tabs.map(({ id, label, ref }) => (
           <button
             key={id}
@@ -1296,7 +1282,7 @@ function StorageCleanupCard({
             aria-selected={tab === id}
             aria-controls={`storage-cleanup-panel-${id}`}
             tabIndex={tab === id ? 0 : -1}
-            className={`usage-segmented-btn${tab === id ? " active" : ""}`}
+            className={`page-tab${tab === id ? " page-tab--active" : ""}`}
             onKeyDown={handleTabKey}
             onClick={() => selectTab(id)}
           >
@@ -1356,59 +1342,48 @@ export default function Storage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const storageCacheKey = `ocx.storage.report.v1:${apiBase}`;
   const cachedReport = readSessionListCache<StorageReport>(storageCacheKey);
-  const [data, setData] = useState<StorageReport | null>(() => cachedReport);
-  const [loading, setLoading] = useState(() => !cachedReport);
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [trashReloadToken, setTrashReloadToken] = useState(0);
+  const manualRefreshRef = useRef(false);
   // Stamp trash awareness with apiBase so a base change invalidates without an effect.
   const [trashInfo, setTrashInfo] = useState({ apiBase, settled: false, hasEntries: false });
-  const loadGenerationRef = useRef(0);
-  const hasReportRef = useRef(Boolean(cachedReport));
-
-  const fetchStorage = useCallback(async (signal?: AbortSignal) => {
-    const generation = ++loadGenerationRef.current;
-    // Keep Refresh disabled for soft revalidation too (cached report already painted).
-    setLoading(true);
+  const fetchStorage = useCallback(async (signal: AbortSignal): Promise<StorageReport> => {
     try {
       const res = await fetch(`${apiBase}/api/storage`, { signal });
-      if (!res.ok) throw new Error("fetch failed");
-      const json = await res.json() as StorageReport;
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      setData(json);
-      hasReportRef.current = true;
-      writeSessionListCache(storageCacheKey, json);
-      return json;
-    } catch {
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      if (!hasReportRef.current) setData(null);
-      return null;
-    } finally {
-      if (generation === loadGenerationRef.current) setLoading(false);
+      if (!res.ok) throw new Error(t("storage.error"));
+      const report = await res.json() as StorageReport;
+      writeSessionListCache(storageCacheKey, report);
+      if (manualRefreshRef.current) {
+        manualRefreshRef.current = false;
+        setScanStatus(t("storage.rescanned"));
+      }
+      return report;
+    } catch (error) {
+      if (manualRefreshRef.current) {
+        manualRefreshRef.current = false;
+        setScanStatus(t("storage.error"));
+      }
+      if (signal.aborted) throw error;
+      throw new Error(t("storage.error"), { cause: error });
     }
-  }, [apiBase, storageCacheKey]);
+  }, [apiBase, storageCacheKey, t]);
+  const reportResource = useDataSurface<StorageReport>(
+    `storage-report:${apiBase}`,
+    [apiBase],
+    fetchStorage,
+    { isEmpty: report => report.total.fileCount === 0 && report.error === undefined },
+  );
+  const reportState = reportResource.state;
+  const data = reportState.data ?? cachedReport;
+  const loading = reportState.refreshing || (reportState.showSkeleton && !data);
+  const refreshReport = reportResource.refresh;
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => {
-      void fetchStorage(controller.signal);
-    }, 0);
-    return () => {
-      window.clearTimeout(timeout);
-      loadGenerationRef.current += 1;
-      controller.abort();
-    };
-  }, [fetchStorage]);
-
-  const refreshAll = useCallback(async () => {
+  const refreshAll = useCallback(() => {
     setScanStatus(null);
-    const report = await fetchStorage();
+    manualRefreshRef.current = true;
+    refreshReport();
     setTrashReloadToken(n => n + 1);
-    setScanStatus(
-      report && report.error === undefined
-        ? t("storage.rescanned")
-        : t("storage.error"),
-    );
-  }, [fetchStorage, t]);
+  }, [refreshReport]);
 
   const onTrashEntriesChange = useCallback((entries: TrashEntry[]) => {
     setTrashInfo({ apiBase, settled: true, hasEntries: entries.length > 0 });
@@ -1416,10 +1391,10 @@ export default function Storage({ apiBase }: { apiBase: string }) {
 
   const trashSettled = trashInfo.apiBase === apiBase && trashInfo.settled;
   const trashHasEntries = trashInfo.apiBase === apiBase && trashInfo.hasEntries;
-  const failed = !loading && (!data || data.error !== undefined);
-  const empty = !loading && !failed && data!.total.fileCount === 0 && trashSettled && !trashHasEntries;
+  const reportFailed = data?.error !== undefined;
+  const empty = !loading && !reportState.showError && !reportFailed && data!.total.fileCount === 0 && trashSettled && !trashHasEntries;
   const archivedCount = data?.buckets.find(b => b.key === "archived_sessions")?.fileCount ?? 0;
-  const showBody = Boolean(data) && !failed;
+  const showBody = Boolean(data) && !reportFailed;
   // While storage is empty, keep the trash panel mounted until it reports so we
   // do not flash the empty state over a non-empty quarantine.
   const showTrashWhileSettling = showBody && (data!.total.fileCount > 0 || !trashSettled || trashHasEntries);
@@ -1449,16 +1424,28 @@ export default function Storage({ apiBase }: { apiBase: string }) {
         </p>
       )}
 
-      {loading && !data ? (
-        <EmptyState title={t("storage.loading")} />
-      ) : failed ? (
-        <EmptyState title={t("storage.error")} />
-      ) : empty ? (
-        <EmptyState title={t("storage.empty")} />
+      {reportState.showSkeleton && !data ? (
+        <DataSurfaceSkeleton label={t("storage.loading")} rows={5} />
+      ) : reportState.kind === "failed-cold" && !data ? (
+        <>
+          <div className="alert alert-err" role="alert">
+            {reportState.error instanceof Error ? reportState.error.message : t("storage.error")}
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => refreshReport()}>{t("common.retry")}</button>
+        </>
+      ) : reportFailed ? (
+        <>
+          <div className="alert alert-err" role="alert">{t("storage.error")}</div>
+        </>
       ) : (
-        data && data.total.fileCount > 0 && (
-          <StorageWorkspace report={data} locale={locale} />
-        )
+        <>
+          {reportState.showError && <div className="alert alert-err" role="alert">{t("storage.error")}</div>}
+          {empty ? <EmptyState title={t("storage.empty")} /> : data && data.total.fileCount > 0 && <StorageWorkspace report={data} locale={locale} />}
+        </>
+      )}
+
+      {data && data.error === undefined && reportState.refreshing && !reportState.showSkeleton && (
+        <DataSurfaceStatus live={!reportState.showError}>{t("storage.loading")}</DataSurfaceStatus>
       )}
 
       {showBody && (

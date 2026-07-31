@@ -274,6 +274,16 @@ export function ensureStrictCatalogFields(
   if (!Array.isArray(entry.input_modalities) && !options.preserveExactInputModalities) {
     entry.input_modalities = ["text"];
   }
+  // Codex parses `input_modalities` as a closed enum. One out-of-enum value (zenmux advertises
+  // "video") makes its config loader reject the entire catalog, which takes down plugins, apps and
+  // MCP servers — not just that model. Normalize at the single point every entry passes through,
+  // because provider metadata, jawcode metadata and effort sync each write this field.
+  if (Array.isArray(entry.input_modalities)) {
+    const accepted = entry.input_modalities.filter(value =>
+      value === "text" || value === "image" || value === "audio");
+    // Never leave it empty: an entry with no modality at all is worse than a text-only one.
+    entry.input_modalities = accepted.length > 0 ? accepted : ["text"];
+  }
   const contextWindow = typeof entry.context_window === "number" && entry.context_window > 0 ? entry.context_window : 128000;
   entry.context_window = contextWindow;
   if (
@@ -290,7 +300,18 @@ export function ensureStrictCatalogFields(
 
 export type MultiAgentMode = "v1" | "default" | "v2";
 
-export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode): RawEntry[] {
+/**
+ * @param v2FeatureEnabled When the native multi_agent_v2 feature is on, "default"
+ *   mode stamps unpinned entries as "v2" instead of deleting the key. The native
+ *   binary validates spawn_agent models against THIS catalog with its own
+ *   `multi_agent_version == Some(V2)` test (codex-rs multi_agents_common.rs), so an
+ *   absent pin means a clean refusal at spawn time — exactly the cross-provider
+ *   spawns opencodex exists to enable (option B, devlog
+ *   260730_codex_rs_upstream_v2_live_handoff/060). Upstream pins are always
+ *   preserved: a genuine "v1" pin is a real capability statement and stays excluded.
+ *   With the feature off the output is byte-identical to the historical behavior.
+ */
+export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v2FeatureEnabled = false): RawEntry[] {
   if (mode === "default") {
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.
@@ -300,6 +321,8 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode): 
       const upstreamPin = upstream?.multi_agent_version;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
+      } else if (v2FeatureEnabled) {
+        entry.multi_agent_version = "v2";
       } else {
         delete entry.multi_agent_version;
       }

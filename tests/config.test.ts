@@ -220,6 +220,37 @@ describe("opencodex config defaults", () => {
     expect(backupNames()).toEqual([]);
   });
 
+  test("a non-string experimentalRealtimeWsBaseUrl degrades to unset without wiping config", () => {
+    // The sideband builder calls overrideBaseUrl?.trim(); a boolean here would crash
+    // it, so the schema degrades the field instead of rejecting the whole config.
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+      experimentalRealtimeWsBaseUrl: true,
+    });
+
+    const config = loadConfig();
+
+    expect(config.experimentalRealtimeWsBaseUrl).toBeUndefined();
+    expect(config).toMatchObject({
+      port: 12345,
+      providers: { custom: { baseUrl: "https://example.test/v1", apiKey: "upstream-secret" } },
+    });
+    expect(backupNames()).toEqual([]);
+  });
+
+  test("a string experimentalRealtimeWsBaseUrl round-trips through loadConfig", () => {
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+      experimentalRealtimeWsBaseUrl: "https://realtime.example.test/v1",
+    });
+
+    expect(loadConfig().experimentalRealtimeWsBaseUrl).toBe("https://realtime.example.test/v1");
+  });
+
   test("a whitespace hostname on disk is treated the same as a blank one", () => {
     writeConfig({
       port: 12345,

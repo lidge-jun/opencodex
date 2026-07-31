@@ -209,7 +209,11 @@ describe("workspace account integration seam", () => {
     expect(hook).toContain("pauseTokensRef");
     expect(hook).toContain("if (!enabled || pauseCount > 0) return;");
     // The initial load must not be re-triggered by pause transitions.
-    expect(hook).toContain("}, [enabled, load]);");
+    // `apiBase` joined the dep list when the initial-load guard became per-base
+    // (cafdc4986): the effect reads it, so omitting it would be the stale-closure bug
+    // this assertion is meant to protect against. What still matters is the absence of
+    // `pauseCount` — that is what would re-fire the initial load on every pause.
+    expect(hook).toContain("}, [apiBase, enabled, load]);");
     // Reauth OAuth payload lives in the extracted OAuth hook (modal only wires props).
     expect(oauthHook).toContain("reauth: true");
     expect(oauthHook).toContain("startedReauthRef");

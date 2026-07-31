@@ -18,6 +18,11 @@ import {
   type PolicyRunResult,
   type PolicySkipReason,
 } from "./policy";
+import {
+  drainStorageWorkers,
+  registerStorageWorker,
+  terminateStorageWorker,
+} from "./worker-lifecycle";
 
 export type PolicyJobStatus = "idle" | "running";
 
@@ -127,7 +132,7 @@ function disownActiveRun(): void {
 export function resetStorageCleanupPolicyJobForTests(): void {
   disownActiveRun();
   if (activeWorker) {
-    try { activeWorker.terminate(); } catch { /* */ }
+    void terminateStorageWorker(activeWorker);
     activeWorker = null;
   }
   inflight = null;
@@ -136,11 +141,24 @@ export function resetStorageCleanupPolicyJobForTests(): void {
   state = { status: "idle" };
 }
 
+/**
+ * Await-able sibling of the reset above, for test teardown.
+ *
+ * `bun test --isolate` reclaims a file's realm at the file boundary. A storage
+ * worker still exiting at that moment trips a Bun-internal assertion on Windows
+ * and takes the whole run down, so a suite that spawns workers must be able to
+ * wait for them rather than fire-and-forget.
+ */
+export async function resetStorageCleanupPolicyJobForTestsAsync(): Promise<void> {
+  resetStorageCleanupPolicyJobForTests();
+  await drainStorageWorkers();
+}
+
 /** Terminate an in-flight worker during process shutdown. */
 export function abortStorageCleanupPolicyJob(): void {
   disownActiveRun();
   if (activeWorker) {
-    try { activeWorker.terminate(); } catch { /* */ }
+    void terminateStorageWorker(activeWorker);
     activeWorker = null;
   }
   releaseHeldMutationSlot();
@@ -218,13 +236,14 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
     const requestId = crypto.randomUUID();
     let settled = false;
     const worker = new Worker(new URL("./policy-worker.ts", import.meta.url).href);
+    registerStorageWorker(worker);
     activeWorker = worker;
 
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       cancelActiveRun = null;
-      try { worker.terminate(); } catch { /* */ }
+      void terminateStorageWorker(worker);
       if (activeWorker === worker) activeWorker = null;
       reject(new Error("storage_cleanup_worker_timeout"));
     }, WORKER_TIMEOUT_MS);
@@ -235,8 +254,10 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
       cancelActiveRun = null;
       clearTimeout(timer);
       if (activeWorker === worker) activeWorker = null;
-      try { worker.terminate(); } catch { /* */ }
-      fn();
+      // Settle the caller only after the thread is actually gone, so a suite
+      // that awaits its request cannot reach the next test file with a worker
+      // still exiting behind it.
+      void terminateStorageWorker(worker).then(fn, fn);
     };
 
     cancelActiveRun = () => {

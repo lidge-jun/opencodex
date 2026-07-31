@@ -1,6 +1,7 @@
-import { IconAlert, IconExternal, IconInfo, IconRefresh } from "../icons";
+import { IconAlert, IconInfo, IconRefresh } from "../icons";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
+import { navigateHash } from "../hash-routing";
 import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -87,17 +88,24 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
   );
 }
 
+/**
+ * Delegation row: pick the model (and effort) inline, with a link to the rest.
+ *
+ * The two switches moved to the Subagents tab, which is where the roster they affect lives.
+ * The model pick stays: it is the same shape as the sidecar rows below it (label left,
+ * dropdown right), and it is the one delegation choice worth changing without leaving the
+ * status page.
+ */
 export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
   const {
-    t,
-    injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
-    multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
+    t, injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
+    saveInjection,
   } = d;
 
   return (
-    <div className="panel">
-      <div className="injection-head">
-        <span className="injection-label">{t("dash.injectionLabel")}</span>
+    <div className="panel dash-delegation-summary">
+      <div className="font-semibold">{t("dash.injectionLabel")}</div>
+      <div className="dash-delegation-controls">
         <Select
           value={injectionModel}
           options={[
@@ -120,38 +128,12 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
             label={t("dash.injectionEffortLabel")}
           />
         )}
-      </div>
-      <div className="muted text-control" style={{ marginTop: 6 }}>{t("dash.injectionHint")}</div>
-      <div className="spread dash-subagent-guidance-row">
-        <div className="setting-copy" style={{ flex: 1 }}>
-          <div className="font-semibold">{t("dash.syncCodexSubagentDefaults")}</div>
-          <div className="muted setting-hint">{t("dash.syncCodexSubagentDefaultsHint")}</div>
-        </div>
         <button
           type="button"
-          className={`switch ${syncCodexSubagentDefaults ? "on" : ""}`}
-          onClick={() => { void saveInjection({ syncCodexSubagentDefaults: !syncCodexSubagentDefaults }); }}
-          disabled={injectionSaving || !injectionModel}
-          aria-label={t("dash.syncCodexSubagentDefaults")}
-          aria-pressed={syncCodexSubagentDefaults}
+          className="btn btn-ghost btn-sm"
+          onClick={() => navigateHash("#subagents")}
         >
-          <span className="knob" />
-        </button>
-      </div>
-      <div className="spread dash-subagent-guidance-row">
-        <div className="setting-copy" style={{ flex: 1 }}>
-          <div className="font-semibold">{t("dash.multiAgentGuidance")}</div>
-          <div className="muted setting-hint">{t("dash.multiAgentGuidanceHint")}</div>
-        </div>
-        <button
-          type="button"
-          className={`switch ${multiAgentGuidanceEnabled ? "on" : ""}`}
-          onClick={() => { void saveInjection({ multiAgentGuidanceEnabled: !multiAgentGuidanceEnabled }); }}
-          disabled={injectionSaving}
-          aria-label={t("dash.multiAgentGuidance")}
-          aria-pressed={multiAgentGuidanceEnabled}
-        >
-          <span className="knob" />
+          {t("dash.injectionManage")}
         </button>
       </div>
     </div>
@@ -168,25 +150,32 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
     <div className="panel maintenance-panel">
       <div className="spread maintenance-head">
         <div>
-          <div className="font-semibold">{t("dash.maintenance")}</div>
-          <div className="muted text-control" style={{ marginTop: 3 }}>{t("dash.maintenanceHint")}</div>
+          <div className="font-semibold">{t("dash.syncModels")}</div>
+          <div className="muted text-control" style={{ marginTop: 3 }}>{t("dash.syncModelsHint")}</div>
         </div>
         <div className="maintenance-actions">
           <button type="button" className="btn btn-ghost" onClick={runSync} disabled={syncing}>
-            <IconRefresh /> {syncing ? t("dash.syncing") : t("dash.syncModels")}
+            <IconRefresh /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
           </button>
+          {/*
+            The update flow lives in the sidebar footer, which reports whether one is waiting
+            and is reachable from every page. A second button here duplicated it without
+            adding that signal. The trigger stays as a zero-size anchor so the deep link
+            (`#dashboard/update`) still has something to open against and the dialog has a
+            focus target to return to on close.
+          */}
           <button
             ref={updateTriggerRef}
             type="button"
-            className="btn btn-primary"
+            className="maintenance-update-anchor"
             onClick={openUpdateDialog}
             disabled={updateLoading}
             aria-haspopup="dialog"
             aria-controls="dashboard-update-dialog"
             aria-expanded={updateOpen}
-          >
-            <IconExternal /> {t("dash.checkUpdate")}
-          </button>
+            aria-label={t("dash.checkUpdate")}
+            tabIndex={-1}
+          />
         </div>
       </div>
       {syncResult && (

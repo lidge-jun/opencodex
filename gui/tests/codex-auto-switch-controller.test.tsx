@@ -468,4 +468,23 @@ describe("Codex auto-switch controller interactions", () => {
     expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("true");
     expect(harness.container.textContent).toContain("80% usage or above");
   });
+
+  /*
+   * Alignment structure. The 20px toggle used to sit directly in a bottom-aligned row beside
+   * the 32px threshold compound, so their centres were 6px apart — what read as a switch
+   * height bug. The toggle now lives in a slot that matches the compound's height.
+   *
+   * happy-dom does no real layout, so this asserts the structure that produces the alignment;
+   * the resulting centre line is measured in a real browser against the running build.
+   */
+  test("the toggle sits in a height-matched slot rather than directly in the bottom-aligned row", async () => {
+    const harness = await mountHarness();
+
+    const slot = harness.container.querySelector(".codex-auto-switch-toggle-slot");
+    expect(slot).not.toBeNull();
+    // Inside the slot, not a direct child of the row — that nesting is what supplies the
+    // matching 32px height and therefore the shared centre line.
+    expect(slot!.querySelector("button.toggle[aria-pressed]")).not.toBeNull();
+    expect(harness.container.querySelector(".codex-auto-switch-controls > button.toggle")).toBeNull();
+  });
 });

@@ -50,7 +50,10 @@ function catalogFixture(dir: string, models: CatalogFixtureModel[]): void {
       display_name: model.slug,
       visibility: model.visibility ?? "list",
       priority: model.priority ?? index,
-      multi_agent_version: model.multiAgentVersion === undefined ? "v2" : model.multiAgentVersion,
+      // undefined means the key is ABSENT, matching how routed entries are really
+      // written (normalizeRoutedCatalogEntry deletes it). The production absent-key
+      // path cannot be tested if the fixture rewrites it to "v2".
+      ...(model.multiAgentVersion === undefined ? {} : { multi_agent_version: model.multiAgentVersion }),
       supported_reasoning_levels: (model.efforts ?? [])
         .map(effort => ({ effort, description: effort })),
     })),
@@ -136,10 +139,12 @@ describe("multiAgentGuidanceText", () => {
     const effective = effectiveSubagentRoster(configured, "v2");
     expect(effective.candidates.map(model => model.model)).toEqual([
       "gpt-5.6-sol",
+      "gpt-5.5",
       "gpt-5.6-terra",
     ]);
     expect(effective.advertised.map(model => model.model)).toEqual([
       "gpt-5.6-sol",
+      "gpt-5.5",
       "gpt-5.6-terra",
     ]);
 
@@ -148,8 +153,10 @@ describe("multiAgentGuidanceText", () => {
       { subagentModels: configured },
     );
     expect(text).toContain('"gpt-5.6-sol"');
+    // Option B: an unpinned (null) model is a routed/unpinned-native model and is
+    // now advertised; only a genuine "v1" pin stays excluded.
+    expect(text).toContain('"gpt-5.5"');
     expect(text).toContain('"gpt-5.6-terra"');
-    expect(text).not.toContain('"gpt-5.5"');
     expect(text).not.toContain('"gpt-5.6-luna"');
     for (const advertised of effective.advertised) {
       expect(effective.candidates.map(model => model.model)).toContain(advertised.model);
@@ -219,10 +226,13 @@ describe("multiAgentGuidanceText", () => {
       { slug: "gpt-5.5", efforts: ["high"], priority: 1, multiAgentVersion: null },
     ]);
 
-    expect(await multiAgentGuidanceText(
+    // Option B: the null-pinned model is now an active candidate, so it is a valid
+    // preferred model rather than producing no guidance.
+    const nullPinned = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
       { injectionModel: "gpt-5.5" },
-    )).toBeNull();
+    );
+    expect(nullPinned).toContain('Preferred sub-agent: model "gpt-5.5"');
 
     const eligible = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),

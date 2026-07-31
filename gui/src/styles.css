@@ -52,6 +52,11 @@
   --red-soft:   light-dark(rgba(185, 28, 28, 0.09), rgba(248, 113, 113, 0.13));
   --amber:      light-dark(#9a4a08, #fbbf24);
   --amber-soft: light-dark(rgba(180, 83, 9, 0.10), rgba(251, 191, 36, 0.13));
+  /* Reserved for "something new is waiting" affordances (sidebar update orb). The base
+     palette is monochrome, so blue is the one hue that reads as an offer rather than a
+     warning (amber) or a failure (red). */
+  --blue:       light-dark(#1d4ed8, #7aa2ff);
+  --blue-soft:  light-dark(rgba(29, 78, 216, 0.10), rgba(122, 162, 255, 0.16));
 
   /* geometry: 4px base grid, three surface radii, and one pill radius */
   --space-0-5: 2px;
@@ -325,6 +330,47 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-link:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
 .sidebar-link svg { width: 16px; height: 16px; }
 
+/* GitHub row: the label keeps the full-width link affordance, the two circular
+   satellites (star, update) sit at the trailing edge without shrinking the label's
+   hover target. The update orb only exists when an update is available, so the row
+   is one or two circles wide — never a placeholder. */
+.sidebar-github-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sidebar-github-link { flex: 1 1 auto; min-width: 0; }
+.sidebar-github-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.sidebar-orb {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: 0 0 28px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--raised); color: var(--muted); cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+}
+.sidebar-orb svg { width: 14px; height: 14px; }
+.sidebar-orb:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: var(--accent-ring); }
+.sidebar-orb:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+/* Already starred: a settled state, not a disabled control that looks broken. */
+.sidebar-orb--starred { color: var(--amber); cursor: default; opacity: 1; }
+/* Update pending: the one blue accent in the sidebar, so a waiting release is visible
+   at a glance without shouting like an error state. */
+.sidebar-orb--update {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+.sidebar-orb--update:hover:not(:disabled) {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  filter: brightness(1.06);
+}
+/* The dot repeats the "new" signal alongside the accessible name, so the meaning is
+   not carried by color alone. */
+.sidebar-orb-dot {
+  position: absolute; top: 1px; right: 1px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--blue); border: 1.5px solid var(--rail);
+}
+
 .lang-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; color: var(--muted); font-size: var(--text-control); border-radius: var(--radius-sm); transition: background var(--motion-fast), color var(--motion-fast); position: relative; }
 .lang-toggle:hover { background: var(--accent-soft); color: var(--text); }
 .lang-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
@@ -373,6 +419,30 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .page-tab:hover { color: var(--text); }
 .page-tab--active { color: var(--text); border-bottom-color: var(--accent); font-weight: var(--weight-semibold); }
 .page-tab:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+
+/*
+  Sticky section strip: the page scrolls normally and every section stays in the document,
+  so the strip has to stay reachable while you read down the page.
+*/
+.section-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg);
+  /* The strip sits over content once pinned; without this the rows show through its gap. */
+  padding-top: 6px;
+  margin-top: 0;
+}
+.section-tab-meta {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: var(--text-label);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+.page-tab--active > .section-tab-meta { color: var(--text); }
+/* Keep a scrolled-to heading clear of the pinned strip. */
+[id*="-section-"] { scroll-margin-top: 56px; }
 .page-sub b { color: var(--text); font-weight: var(--weight-semibold); }
 .api-page h2 svg { width: 1em; height: 1em; vertical-align: -0.16em; }
 .api-page .page-sub code {
@@ -578,6 +648,20 @@ a.btn, a.btn:hover { text-decoration: none; }
 .api-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .maintenance-head { align-items: flex-start; flex-wrap: wrap; }
 .maintenance-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+/*
+  Focus anchor for the update dialog, not a control: the visible entry point is the sidebar
+  footer orb, which also reports whether an update is waiting. This keeps `#dashboard/update`
+  openable and gives the dialog somewhere to return focus on close, without painting a second
+  button that does the same thing.
+*/
+.maintenance-update-anchor {
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  overflow: hidden;
+}
 .maintenance-notice { margin: 14px 0 0; align-items: flex-start; }
 .update-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .update-row .field-label { margin: 0; }
@@ -663,6 +747,90 @@ a.btn, a.btn:hover { text-decoration: none; }
   flex-direction: column;
   margin-bottom: 0;
 }
+
+/* ---- memory observability panel ---- */
+.mem-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.mem-head-title { display: flex; align-items: center; gap: 8px; }
+.mem-head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mem-inflight { display: inline-flex; align-items: baseline; gap: 6px; }
+.mem-inflight-label { font-size: var(--text-label); color: var(--muted); }
+.mem-inflight-value { font-size: var(--text-control); font-weight: var(--weight-semibold); }
+/* :empty keeps an idle panel from reserving a row for an absent status message. */
+.mem-status { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mem-status:empty { display: none; }
+/* Four scalars in the shared 6-column .stat-row left a third of the panel empty
+   and squeezed each figure into two lines. Give this row its own track count. */
+.mem-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0; }
+@media (max-width: 900px) { .mem-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .mem-stats { grid-template-columns: minmax(0, 1fr); } }
+.mem-stats .stat-sub {
+  font-size: var(--text-caption);
+  color: var(--faint);
+  margin-top: 4px;
+}
+.stat .value--warn { color: var(--amber); }
+.stat .value--danger { color: var(--red); }
+
+/* Headline gauge: observed memory against the watchdog warn threshold. */
+.mem-pressure {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--raised);
+}
+.mem-pressure--warn { border-color: color-mix(in srgb, var(--amber) 42%, var(--border)); background: var(--amber-soft); }
+.mem-pressure--over { border-color: color-mix(in srgb, var(--red) 42%, var(--border)); background: var(--red-soft); }
+.mem-pressure-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mem-pressure-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.mem-pressure-metric { font-size: var(--text-caption); color: var(--faint); }
+.mem-pressure-figure {
+  font-size: var(--text-subtitle);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+}
+.mem-pressure-limit { color: var(--faint); font-weight: var(--weight-regular); }
+.mem-pressure-track {
+  height: 5px;
+  border-radius: var(--radius-2xs);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  overflow: hidden;
+  margin: 8px 0 6px;
+}
+.mem-pressure-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: var(--radius-2xs);
+  background: var(--green);
+  transform: scaleX(var(--mem-scale, 0));
+  transform-origin: left center;
+  transition: transform var(--motion-normal);
+}
+.mem-pressure--warn .mem-pressure-fill { background: var(--amber); }
+.mem-pressure--over .mem-pressure-fill { background: var(--red); }
+.mem-pressure-foot { font-size: var(--text-caption); color: var(--muted); }
 
 .dash-overview-head .stat-row {
   margin-bottom: 0;
@@ -917,6 +1085,37 @@ select.input { appearance: none; }
 .spin { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: var(--radius-round); display: inline-block; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Shared data-surface loading primitives (WP2). Reuses .spin and the existing shimmer keyframes. */
+.data-surface-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-md);
+  color: var(--muted);
+  font-size: var(--text-control);
+  line-height: var(--leading-body);
+}
+
+.data-surface-skeleton {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.data-surface-skeleton__row {
+  min-height: var(--control-lg);
+}
+
+.data-surface-skeleton__block {
+  display: block;
+  min-height: var(--control-lg);
+  width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--raised) 0%, var(--surface) 50%, var(--raised) 100%);
+  background-size: 200% 100%;
+  animation: codex-auth-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
 /* glass fallbacks: solid surfaces when blur is unsupported or unwanted */
@@ -970,9 +1169,9 @@ dialog.modal-overlay::backdrop {
 .modal-head h3 { font-size: var(--text-subtitle); }
 
 /* ---- codex auth page ---- */
-.card-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px 6px; flex-wrap: wrap; min-width: 0; }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px; flex-wrap: wrap; min-width: 0; }
 .card-head strong { min-width: 0; overflow-wrap: anywhere; }
-.card-sub { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); padding: 0 16px 10px; min-width: 0; overflow-wrap: anywhere; }
+.card-sub { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); padding: 0 16px 8px; min-width: 0; overflow-wrap: anywhere; }
 .card-active { border-color: var(--accent-ring); }
 .card-right { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: var(--text-caption); color: var(--faint); }
 .btn-icon-danger.card-right {
@@ -992,11 +1191,11 @@ dialog.modal-overlay::backdrop {
 .section-sep { display: flex; align-items: center; gap: 10px; margin: 20px 0 12px; }
 .section-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .sep-line { flex: 1; height: 1px; background: var(--border); }
-.quota-compact { padding: 2px 16px 12px; display: grid; gap: 4px; }
+.quota-compact { padding: 0 16px 10px; display: grid; gap: 4px; }
 /* Fixed slot so pending skeleton and real bars occupy the same vertical space.
    Sized for two compact rows — a 1-bar plan must not shrink the card under settings. */
 .codex-account-quota-slot {
-  min-height: 58px;
+  min-height: 48px;
   box-sizing: border-box;
 }
 /* Display:contents so main/section/empty keep the same margins as the ready tree. */
@@ -1058,11 +1257,11 @@ dialog.modal-overlay::backdrop {
   min-width: 2.25rem;
   justify-content: center;
 }
-/* Pending skeletons must fit the same 58px slot as ready bars — otherwise main shrinks. */
+/* Pending skeletons must fit the same 48px slot as ready bars — otherwise main shrinks. */
 .quota-compact--pending {
-  height: 58px;
-  min-height: 58px;
-  max-height: 58px;
+  height: 48px;
+  min-height: 48px;
+  max-height: 48px;
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -1128,7 +1327,27 @@ dialog.modal-overlay::backdrop {
 .codex-auto-switch-copy { flex: 1 1 auto; min-width: 0; }
 .codex-auto-switch-copy .card-sub { padding: 2px 0 0; }
 .codex-auto-switch-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
-.codex-auto-switch-controls > .toggle { margin-left: auto; }
+/* The toggle now lives in the slot below, which carries the auto margin itself. */
+/*
+  Toggle slot: matches the height of the threshold compound so the 20px toggle centres against
+  it instead of sharing its baseline. A 20px control bottom-aligned with a ~32px one puts their
+  centres 6px apart, which is what read as a switch height bug.
+
+  The height tracks the input compound only, NOT the labelled column around it: the threshold
+  is a label stacked above the field, so stretching to the column's full height centred the
+  toggle against the label too and pushed the offset to 11px. Sizing to the field's own content
+  keeps the toggle on the field's centre line. The row stays bottom-aligned, which is what the
+  mobile breakpoint expects.
+*/
+.codex-auto-switch-toggle-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  /* Same box model as the input compound: 1px border + padding-driven line box. */
+  min-height: 36px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
 .codex-auto-switch-threshold { display: flex; flex-direction: column; align-items: flex-start; margin: 0; }
 .codex-auto-switch-threshold .field-label { margin-bottom: 4px; white-space: nowrap; }
 /* Combined number field: value (+ optional unit) + inbound stepper share one border. */
@@ -1813,10 +2032,6 @@ button.prov-account-row.active { cursor: default; }
 .daybar-tip-name { color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
 .daybar-tip-val { color: var(--muted); font-variant-numeric: tabular-nums; }
 
-/* Model / provider tables: cap height and scroll inside the box instead of growing unbounded. */
-.usage-scroll { max-height: 360px; overflow-y: auto; }
-.usage-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
-
 /* ── Toggle switch ── */
 .toggle { position: relative; display: inline-block; width: var(--toggle-w); height: var(--toggle-h); flex-shrink: 0; }
 .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
@@ -1830,12 +2045,20 @@ button.prov-account-row.active { cursor: default; }
 /* ── Setting row (label left, control right) ── */
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; gap: 16px; }
 .setting-row + .setting-row { border-top: 1px solid var(--border-soft); }
-.dash-subagent-guidance-row {
+/* Dashboard keeps the model pick inline; the two switches live on the Subagents tab. */
+.dash-delegation-summary {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-soft);
+}
+.dash-delegation-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 .setting-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .setting-label .title { font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }

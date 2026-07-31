@@ -1,0 +1,15 @@
+schemaVersion=1
+verdict=PASS
+command[0]=openai-three-tier-e2e|exit=0|pass=1|fail=0|build=na
+command[1]=cycle-020-focused|exit=0|pass=404|fail=0|build=na
+command[2]=cycle-030-040-tooling|exit=0|pass=234|fail=0|build=na
+command[3]=isolated-runtime-smoke|exit=0|pass=na|fail=na|build=na
+command[4]=live-key-status|exit=0|pass=na|fail=na|build=na
+command[5]=typescript|exit=0|pass=na|fail=na|build=na
+command[6]=full-isolated-tests|exit=0|pass=2760|fail=0|build=na
+command[7]=privacy-scan|exit=0|pass=na|fail=na|build=na
+command[8]=gui-i18n|exit=0|pass=na|fail=na|build=na
+command[9]=gui-build|exit=0|pass=na|fail=na|build=pass
+command[10]=docs-install|exit=0|pass=na|fail=na|build=na
+command[11]=docs-build|exit=0|pass=na|fail=na|build=pass
+command[12]=scoped-diff-check|exit=0|pass=na|fail=na|build=na

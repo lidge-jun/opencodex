@@ -2,6 +2,9 @@ import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { setClientResourceData, useKeyedClientResource } from "../client-resource";
 import { useI18n } from "../i18n/shared";
+import { Notice } from "../ui";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { DebugClaudeInboundPanel } from "./debug-claude-inbound-panel";
 import { DebugLogViewer } from "./debug-log-viewer";
@@ -35,18 +38,21 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
   // unrelated debug flags toggle (those used to rebuild fetchLogs and storm GETs).
   const streamIdentityRef = useRef<string | null>(null);
 
-  const debugPoll = useKeyedClientResource(
+  const debugPoll = useDataSurface<DebugSettings>(
     debugSettingsKey(apiBase),
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/debug`, { signal });
-      if (!res.ok) return null;
+      // Throw rather than resolving with null: a failed read used to be indistinguishable from
+      // a slow one, so the panel could sit on "loading debug settings" forever.
+      if (!res.ok) throw new Error(String(res.status));
       const next = await res.json() as DebugSettings;
       writeSessionListCache(settingsCacheKey, next);
       return next;
     },
-    { pollMs: 2000, enabled: active },
+    { pollMs: 2000, enabled: active, isEmpty: () => false },
   );
+  const debugState = debugPoll.state;
   const debug = debugPoll.data ?? cachedSettings ?? null;
 
   const claudePoll = useKeyedClientResource(
@@ -204,8 +210,21 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
         onFollowChange={setFollow}
       />
 
-      {!debug ? (
-        <div className="empty">{t("debug.loading")}</div>
+      {/* A failed settings read is not a slow one. Both used to land in this single branch, so a
+          500 looked like an endless load with no way to retry. */}
+      {!debug && debugState.showError ? (
+        <div className="notice notice-err" role="alert">
+          <span>{t("debug.loadFailed")}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => debugPoll.refresh()}>
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : debugState.showSkeleton && !debug ? (
+        <DataSurfaceSkeleton label={t("debug.loading")} rows={3} />
+      ) : !debug ? (
+        // No data and not cold either means the panel is gated off (inactive tab). A disabled
+        // surface must render nothing rather than hold a skeleton for a tab nobody opened.
+        null
       ) : (
         <DebugSettingsPanel
           debug={debug}
@@ -216,6 +235,13 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
           onStreamChange={setStream}
         />
       )}
+
+      {/* Revalidation over a panel that is already rendered: keep the controls usable and say
+          that a read is in flight, instead of silently swapping values under the user. */}
+      {debug && debugState.refreshing && (
+        <DataSurfaceStatus live={!debugState.showError}>{t("debug.loading")}</DataSurfaceStatus>
+      )}
+      {debug && debugState.showError && <Notice tone="err">{t("debug.loadFailed")}</Notice>}
 
       {debug?.claude && <DebugClaudeInboundPanel entries={claudeEntries} />}
 

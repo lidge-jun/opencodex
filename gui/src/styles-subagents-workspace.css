@@ -17,7 +17,12 @@
 
 .subagents-workspace-root {
   display: grid;
-  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  /*
+    Single column at every width: the two-pane rail split read as cramped on this tab,
+    so the picker sits above the featured list instead of beside it. The responsive
+    blocks below are now the same shape as the default and only adjust the seam.
+  */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   width: 100%;
   max-width: 100%;
@@ -30,9 +35,75 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  border-right: 1px solid var(--border);
-  padding-right: var(--space-3);
+  /* Stacked layout: the seam runs underneath, not down the side. */
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-3);
   min-width: 0;
+}
+
+/* Stacked sections: featured roster, then the picker. */
+.subagents-workspace-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Sections stay in the document and the sticky strip scrolls between them; the seam marks
+   where one ends, matching the Usage tab. */
+.subagents-workspace-section + .subagents-workspace-section {
+  margin-top: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ── Delegation settings ──────────────────────────────── */
+
+.swi-delegation {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.swi-delegation-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3);
+}
+
+.swi-delegation-row + .swi-delegation-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.swi-delegation-row .setting-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.swi-delegation-row .setting-hint {
+  margin-top: 3px;
+  max-width: 72ch;
+  line-height: 1.5;
+}
+
+.swi-delegation-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.swi-rail-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--faint);
 }
 
 .subagents-workspace-rail-header {
@@ -55,17 +126,60 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+  Picker box: the model list is the only long region on this tab, and letting it run to full
+  height pushed the Featured roster off screen. The box caps it so the tab fits one screen.
+*/
+.swi-picker-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: var(--space-2);
+}
+
+.swi-picker-box .subagents-workspace-rail-search {
+  flex: 0 0 auto;
+}
+
 .subagents-workspace-rail-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  overflow-y: auto;
-  max-height: 560px;
   min-height: 0;
-  /* Keep +/- toggles clear of the scrollbar track (10px) and leave end breathing room. */
+}
+
+/*
+  Inner scroller, scoped to the boxed picker. An earlier version trapped the wheel because it
+  contained the overscroll chain, so the page never moved once the pointer was over the list.
+  `overscroll-behavior: auto` hands the gesture back to the page at either end, which is the
+  same arrangement the storage rail uses.
+*/
+/*
+  One row is 42px tall with a 4px gap, so a clean box height is always `n * 46 - 4`. The
+  helpers below keep every cap on that grid; a plain `vh` cap lands mid-row and the list looks
+  clipped rather than scrollable.
+*/
+.swi-picker-box {
+  --swi-row-step: 46px;
+}
+
+.swi-picker-box .subagents-workspace-rail-list {
+  /* Fallback for engines without stepped-value functions: 10 rows. */
+  max-height: min(456px, 52vh);
+  overflow-y: auto;
+  overscroll-behavior: auto;
   scrollbar-gutter: stable;
-  padding-inline-end: 12px;
-  padding-block-end: var(--space-3);
+}
+
+/* Round the viewport-relative cap down to a whole row count so the box never ends mid-row. */
+@supports (height: round(down, 50vh, 46px)) {
+  .swi-picker-box .subagents-workspace-rail-list {
+    max-height: calc(round(down, min(456px, 52vh) + 4px, var(--swi-row-step)) - 4px);
+  }
 }
 
 .subagents-workspace-rail-group {
@@ -210,7 +324,7 @@
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  padding: 0 var(--space-2);
+  padding: 0;
 }
 
 .swi-featured-head {
@@ -426,45 +540,38 @@
 /* ── Responsive ───────────────────────────────────────── */
 
 /*
-  Stack rail above the main pane when the workspace shell is squeezed —
-  typically by the persistent desktop sidebar at ~900–1024px viewports —
-  not only at the mobile drawer breakpoint.
+  The layout is single-column at every width now, so these blocks no longer switch the
+  grid; they only cap the picker height where vertical space is tight.
 */
 @container subagents-workspace (max-width: 720px) {
   .subagents-workspace-root {
-    grid-template-columns: minmax(0, 1fr);
     min-height: auto;
   }
-  .subagents-workspace-rail {
-    border-right: none;
-    padding-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
+
+  .swi-picker-box .subagents-workspace-rail-list {
+    max-height: min(318px, 46vh);
   }
-  .subagents-workspace-rail-list {
-    max-height: 320px;
-  }
-  .subagents-workspace-main {
-    padding: var(--space-2) 0 0;
+
+  @supports (height: round(down, 50vh, 46px)) {
+    .swi-picker-box .subagents-workspace-rail-list {
+      max-height: calc(round(down, min(318px, 46vh) + 4px, var(--swi-row-step)) - 4px);
+    }
   }
 }
 
-/* Mobile: sidebar is a drawer; still prefer rail-on-top for touch. */
+/* Mobile: sidebar is a drawer. */
 @media (max-width: 768px) {
   .subagents-workspace-root {
-    grid-template-columns: minmax(0, 1fr);
     min-height: auto;
   }
-  .subagents-workspace-rail {
-    border-right: none;
-    padding-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
+
+  .swi-picker-box .subagents-workspace-rail-list {
+    max-height: min(272px, 44vh);
   }
-  .subagents-workspace-rail-list {
-    max-height: 320px;
-  }
-  .subagents-workspace-main {
-    padding: var(--space-2) 0 0;
+
+  @supports (height: round(down, 50vh, 46px)) {
+    .swi-picker-box .subagents-workspace-rail-list {
+      max-height: calc(round(down, min(272px, 44vh) + 4px, var(--swi-row-step)) - 4px);
+    }
   }
 }

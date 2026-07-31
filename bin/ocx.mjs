@@ -10,10 +10,11 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
@@ -287,18 +288,14 @@ function bunBinDir() {
   return dirname(require.resolve("bun/package.json"));
 }
 
-// The `bun` package ships a tiny ASCII placeholder at bin/bun.exe until its
-// postinstall downloads the real ~60MB binary. --ignore-scripts / pnpm leave
-// the ~450-byte stub in place, which is NOT executable (ENOEXEC). A size gate
-// cleanly distinguishes the stub from a real binary on every platform.
-const REAL_BUN_MIN_BYTES = 1_000_000;
+const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
 
 function findBunBinary(bunDir) {
   // The npm `bun` package ships the binary as bin/bun.exe on every platform;
   // probe bin/bun too for forward compatibility.
   for (const name of ["bun.exe", "bun"]) {
     const p = join(bunDir, "bin", name);
-    if (existsSync(p) && statSync(p).size >= REAL_BUN_MIN_BYTES) return p;
+    if (isRealBunBinary(p)) return p;
   }
   return null;
 }
@@ -317,6 +314,17 @@ function fail(msg) {
 }
 
 function resolveBun() {
+  // Keep direct npm-launcher starts aligned with durable service/shim installs:
+  // a valid explicit runtime must win even when the bundled dependency exists.
+  const override = process.env[BUN_OVERRIDE_ENV]?.trim();
+  if (override) {
+    const overridePath = resolve(override);
+    if (isRealBunBinary(overridePath)) return overridePath;
+    console.error(
+      `opencodex: ${BUN_OVERRIDE_ENV} is missing, unreadable, or not a complete Bun binary; falling back to the bundled runtime.`,
+    );
+  }
+
   let bunDir;
   try {
     bunDir = bunBinDir();

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
+import { replaceHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
+  STARTUP_HEALTH_STALE_RETRY_MS,
+  probeNeedsFastRetry,
   seedStartupHealthFromSettings,
   type StartupHealthStatus,
 } from "../startup-health-ui";
@@ -38,6 +41,7 @@ import {
   UPDATE_CHECK_MAX_AUTO_RETRIES,
   UPDATE_CHECK_RETRY_BASE_MS,
   defaultUpdateChannel,
+  hashRequestsUpdateDialog,
   mergeSidecarSetting,
   readDashboardSectionFromHash,
   requireJson,
@@ -158,6 +162,7 @@ export function useDashboardData(apiBase: string) {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+
   useEffect(() => () => {
     updateRequestEpochRef.current += 1;
     if (updateRetryTimerRef.current !== null) {
@@ -184,6 +189,20 @@ export function useDashboardData(apiBase: string) {
     (signal) => fetchStartupHealth(apiBase, signal),
     { pollMs: 30_000 },
   );
+
+  /*
+   * `/api/startup-health` answers instantly from a 30s cache and resolves the real probe in the
+   * background, so a cold answer is a conservative placeholder. Waiting for the next 30s tick is
+   * what made the chip look stuck until an unrelated action (refresh quota, tab hop) remounted it.
+   * Re-ask in ~2s while the server says it is still working.
+   */
+  const startupHealthStale = probeNeedsFastRetry(startupHealthPoll.data);
+  const refreshStartupHealth = startupHealthPoll.refresh;
+  useEffect(() => {
+    if (!startupHealthStale) return;
+    const timer = window.setTimeout(() => { void refreshStartupHealth(); }, STARTUP_HEALTH_STALE_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [startupHealthStale, refreshStartupHealth]);
 
   // Wave 1: status/uptime/providers must not wait on injection-model / usage.
   const overviewPoll = useKeyedClientResource(
@@ -256,12 +275,15 @@ export function useDashboardData(apiBase: string) {
   /* eslint-disable react-hooks/set-state-in-effect -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   useEffect(() => {
     if (startupHealthPoll.data !== undefined) {
+      const probe = startupHealthPoll.data;
       startupHealthGenerationRef.current += 1;
-      setStartupHealth(startupHealthPoll.data);
-      startupHealthRef.current = startupHealthPoll.data;
+      setStartupHealth(probe.status);
+      startupHealthRef.current = probe.status;
       // Never persist hard errors — a cold SWR miss used to poison revisits.
-      if (startupHealthPoll.data !== "error") {
-        writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, startupHealthPoll.data);
+      // A stale answer is a placeholder too: caching it makes the next visit start from
+      // the server's guess instead of asking again.
+      if (probe.status !== "error" && !probe.stale) {
+        writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, probe.status);
       }
     }
   }, [startupHealthPoll.data, apiBase]);
@@ -395,7 +417,13 @@ export function useDashboardData(apiBase: string) {
       }
       return { reconnecting: false as const };
     },
-    { pollMs: 1500, enabled: !!(updateJob?.id && updateJob.restart) },
+    {
+      pollMs: 1500,
+      enabled: !!(updateJob?.id && updateJob.restart),
+      // This poll exists to notice a restarted server coming back. Pausing it while the
+      // tab is hidden is exactly when it would be missed, so it opts out of the gate.
+      pauseWhenHidden: false,
+    },
   );
 
   /* eslint-disable react-hooks/set-state-in-effect -- mirror update-job client-resource snapshot into local job UI state */
@@ -639,6 +667,35 @@ export function useDashboardData(apiBase: string) {
     setUpdateChannel(channel);
     void fetchUpdateCheck(channel, true);
   };
+
+  /**
+   * Sidebar update button deep link (`#dashboard/update`). Opening happens straight from
+   * the hashchange listener — an external event, not a render-time effect — so no
+   * intermediate state or ref hand-off is needed. The hash is normalized back to
+   * `#dashboard` before opening, so Back never re-triggers the dialog.
+   *
+   * `openUpdateDialogRef` keeps the listener registration stable while still calling the
+   * latest handler; it is only ever written inside an effect.
+   */
+  const openUpdateDialogRef = useRef(openUpdateDialog);
+  useEffect(() => {
+    openUpdateDialogRef.current = openUpdateDialog;
+  });
+  useEffect(() => {
+    const consume = () => {
+      if (!hashRequestsUpdateDialog()) return;
+      replaceHash("dashboard");
+      openUpdateDialogRef.current();
+    };
+    // A cold load straight onto the deep link: defer past mount so the open is not a
+    // render-phase side effect.
+    const initial = hashRequestsUpdateDialog() ? window.setTimeout(consume, 0) : null;
+    window.addEventListener("hashchange", consume);
+    return () => {
+      if (initial !== null) window.clearTimeout(initial);
+      window.removeEventListener("hashchange", consume);
+    };
+  }, []);
 
   const runUpdate = async () => {
     if (!updateCheck?.canUpdate) return;

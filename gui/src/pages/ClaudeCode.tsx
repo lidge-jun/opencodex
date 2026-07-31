@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Notice } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
 import { backgroundHelperOptions } from "./claude-code-helper-options";
 import { reconcileAutoConnectState } from "./claude-autoconnect";
 import { buildManualEnv } from "./claude-manual-env";
@@ -24,66 +26,61 @@ function seedClaudeCode(cacheKey: string): CachedClaudeCode | null {
   return readSessionListCache<CachedClaudeCode>(cacheKey);
 }
 
-export default function ClaudeCode({ apiBase }: { apiBase: string }) {
+export default function ClaudeCode({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
   const { locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang ?? "en";
   const cacheKey = `ocx.claude-code.v1:${apiBase}`;
-  const [state, setState] = useState<ClaudeCodeState | null>(() => seedClaudeCode(cacheKey)?.state ?? null);
-  const [rows, setRows] = useState<MapRow[]>(() => seedClaudeCode(cacheKey)?.rows ?? []);
+  const cached = useMemo(() => seedClaudeCode(cacheKey), [cacheKey]);
+  const [draftState, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
+  const [draftRows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
+  const [hasDraftRows, setHasDraftRows] = useState(Boolean(cached));
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(() => !seedClaudeCode(cacheKey)?.state);
   const [selectedSection, setSelectedSection] = useState("settings");
-  const hasCacheRef = useRef(Boolean(seedClaudeCode(cacheKey)?.state));
 
-  const load = useCallback(async () => {
-    if (!hasCacheRef.current) setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/claude-code`);
-      const r = await readJsonOrThrow<ClaudeCodeState & { modelMap?: Record<string, string> }>(
-        res,
-        t("claude.loadFail"),
-      );
-      if (!r) {
-        setOk(false);
-        setStatus(t("claude.loadFail"));
-        return;
-      }
-      const nextState: ClaudeCodeState = {
-        ...r,
-        // No coercion: an absent config key is AUTO, and coercing it to subscription is
-        // what silently converted an untouched auto config on every save.
-        authMode: r.authMode === "proxy" || r.authMode === "subscription" ? r.authMode : "auto",
-        ...reconcileAutoConnectState(r),
-        fastMode: r.fastMode ?? null,
-        maxContextTokens: r.maxContextTokens ?? null,
-        autoContext: r.autoContext !== false,
-        autoCompactWindow: r.autoCompactWindow ?? null,
-        injectAgents: r.injectAgents !== false,
-        effectiveModelEnv: r.effectiveModelEnv ?? {},
-      };
-      const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
-      setState(nextState);
-      setRows(nextRows);
-      hasCacheRef.current = true;
-      writeSessionListCache(cacheKey, { state: nextState, rows: nextRows });
-    } catch (error) {
-      if (!hasCacheRef.current) {
-        setOk(false);
-        setStatus(error instanceof Error && error.message ? error.message : t("claude.loadFail"));
-      }
-    } finally {
-      setLoading(false);
-    }
+  const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
+    const res = await fetch(`${apiBase}/api/claude-code`, { signal });
+    const r = await readJsonOrThrow<ClaudeCodeState & { modelMap?: Record<string, string> }>(
+      res,
+      t("claude.loadFail"),
+    );
+    if (!r) throw new Error(t("claude.loadFail"));
+    const nextState: ClaudeCodeState = {
+      ...r,
+      // No coercion: an absent config key is AUTO, and coercing it to subscription is
+      // what silently converted an untouched auto config on every save.
+      authMode: r.authMode === "proxy" || r.authMode === "subscription" ? r.authMode : "auto",
+      ...reconcileAutoConnectState(r),
+      fastMode: r.fastMode ?? null,
+      maxContextTokens: r.maxContextTokens ?? null,
+      autoContext: r.autoContext !== false,
+      autoCompactWindow: r.autoCompactWindow ?? null,
+      injectAgents: r.injectAgents !== false,
+      effectiveModelEnv: r.effectiveModelEnv ?? {},
+    };
+    const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
+    const next = { state: nextState, rows: nextRows };
+    if (signal.aborted) throw new Error("Claude Code request aborted");
+    // This is the only server-owned draft replacement. Keeping it at the successful read
+    // boundary preserves the existing save→reload behavior without a synchronization effect.
+    setState(nextState);
+    setRows(nextRows);
+    setHasDraftRows(true);
+    writeSessionListCache(cacheKey, next);
+    return next;
   }, [apiBase, cacheKey, t]);
 
-  useEffect(() => {
-    // Deferred initial load (matches Models/Usage): avoids synchronous setState
-    // inside the effect, per the react-hooks/set-state-in-effect lint gate.
-    const timeout = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [load]);
+  const codeResource = useDataSurface<CachedClaudeCode>(
+    `claude-code:${apiBase}`,
+    [apiBase],
+    fetchCode,
+    { isEmpty: () => false, enabled: active },
+  );
+  const loadState = codeResource.state;
+  const data = loadState.data ?? cached;
+  const state = draftState ?? data?.state ?? null;
+  const rows = hasDraftRows ? draftRows : data?.rows ?? draftRows;
 
   const modelOptions = useMemo(
     () => backgroundHelperOptions(state?.available, t("claude.smallFastModelUnsetOption")),
@@ -131,15 +128,29 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
       await readJsonOrThrow(r, t("claude.saveFailed"));
       setOk(true);
       setStatus(t("claude.saved"));
-      await load();
+      codeResource.refresh();
     } catch (error) {
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
     }
   };
 
-  if (loading) return <div className="muted" style={{ padding: 8 }}>{t("claude.loading")}</div>;
-  if (!state) return <Notice tone="err">{status || t("claude.loadFail")}</Notice>;
+  // A hidden Code tab remains mounted for draft preservation, but must not advertise a
+  // disabled fetch as loading before the user ever opens it.
+  if (loadState.kind === "disabled" && !data) return null;
+  if (loadState.showSkeleton && !data) {
+    return <DataSurfaceSkeleton label={t("claude.loading")} rows={3} />;
+  }
+  if (loadState.kind === "failed-cold") {
+    const reason = loadState.error instanceof Error ? loadState.error.message : t("claude.loadFail");
+    return (
+      <div className="claudecode-workspace-shell">
+        <Notice tone="err">{reason}</Notice>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => codeResource.refresh()}>{t("common.retry")}</button>
+      </div>
+    );
+  }
+  if (!state) return null;
 
   const sections: Array<{ id: string; label: string; body: ReactNode }> = [
     {
@@ -174,7 +185,10 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
     {
       id: "modelMap",
       label: t("claude.modelMap"),
-      body: <ClaudeCodeModelMapSection rows={rows} onRowsChange={setRows} />,
+      body: <ClaudeCodeModelMapSection rows={rows} onRowsChange={(nextRows) => {
+        setHasDraftRows(true);
+        setRows(nextRows);
+      }} />,
     },
     {
       id: "aliases",
@@ -201,6 +215,10 @@ export default function ClaudeCode({ apiBase }: { apiBase: string }) {
       </div>
       <p className="page-sub">{t("claude.subtitle")}</p>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
+      {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
+      {loadState.refreshing && (
+        <DataSurfaceStatus live={!loadState.showError}>{t("claude.loading")}</DataSurfaceStatus>
+      )}
       <div className="claudecode-workspace-root">
         <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
           <div className="claudecode-workspace-rail-list">

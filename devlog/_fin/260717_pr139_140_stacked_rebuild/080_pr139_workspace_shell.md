@@ -1,0 +1,43 @@
+# WP080 — #139 workspace route, shell, and rail
+
+- Base/branch: ~~WP070 tip -> `codex/wibias-139-08-workspace-shell`~~ **P-amendment (2026-07-17): commit directly onto dev@05806482.**
+- P stale-check (2026-07-17, dev@05806482):
+  - The source's ProviderWorkspace.tsx (2,791 lines) is a REWRITE source; this child takes only the shell/rail symbol families per 003_monolith_fanout.md: shared types/labels/icon-status helpers/RailRow → types.ts + ProviderRail.tsx; DetailPanel/EmptyState shells → ProviderWorkspaceShell.tsx (overview panel bodies are WP090).
+  - Dev's Providers.tsx has since gained v2 surfaces the source predates (codexAccountMode Pool/Direct control from 14e57661, ProviderCatalog modal wiring from WP050b, workspace-data helpers WP030, quota rows WP070). The shell must WRAP the existing page behavior — adapt props from the current Providers.tsx state, never regress the v2 controls.
+  - Route: App.tsx gains a workspace view state under the existing `#providers` hash (rail/detail layout) rather than a new page id; hash restoration for all existing pages preserved verbatim (interview: no navigation redesign).
+  - Rail classification/sorting comes from WP030 catalog.ts (buildProviderWorkspace/sortWorkspaceItems/providerTier) — no new classification logic in the rail.
+  - Locale: only rail/search/filter/sort keys actually rendered (pws.rail.* naming); tsc -b is the parity gate (WP050b A-audit finding).
+  - Runtime GUI QA deferred to WP100 (WP050 ruling); this child's gates are tests + gui lint/tsc/build.
+  - 500-line gate: shell/rail/types + css + locale keys estimated ~450; if B exceeds it, split css+locales into a WP080b at P re-entry.
+- WP080b P-notes (2026-07-17, dev@b304e8df):
+  - ProviderWorkspaceShell.tsx (≤400): search/status/pricing/type-filter/sort state (catalog owns predicates; kind.ts owns typeCounts with the `login` facet), filtered+sorted rail groups with keyboard nav (listbox/arrow/home/end), filter popover with reset, EmptyState (3 tiles wired to AddProviderIntent {tier|custom}), model-count fetch (/api/selected-models feeds RailRow counts), duplicate-display-name detection, and a `detail` render-prop slot rendering a real placeholder message when WP090 has not filled it. JSON-editor machinery and DetailPanel/Overview bodies stay WP090/091; quota/usage fetches stay WP090.
+  - Hash-addressable per A ruling: `#providers/workspace` sub-hash; Providers.tsx listens to hashchange, renders the shell when active, classic page otherwise; a header toggle button switches the hash. App.tsx VALID_PAGES untouched (readPageFromHash must tolerate the suffix — verify and minimally adapt).
+  - CSS: hand-written compact provider-workspace-shell.css (~150 lines) covering only classes this slice renders (root grid, rail, search/filter popover, groups, row, empty tiles) — NOT the 3,207-line source stylesheet.
+  - SORT_DEFS: az/za/free-paid/paid-free from WP030 (+accounts-first available; include it as a 5th sort option since catalog ships it).
+  - Locales: shell keys only (search/filter/sort/groups/empty/placeholder), x4.
+- WP080b A-audit corrections (2026-07-17 — 1 blocker + 3 rulings folded):
+  - **AddProviderModal prefill (blocker):** MODIFY AddProviderModal.tsx with optional `initialTier?: CatalogTier` and `initialCustom?: boolean` (~10 lines: thread initialTier to <ProviderCatalog initialTier>, initialCustom auto-selects the custom preset on mount) so EmptyState tiles land on the right tab/form.
+  - Hash pin: readPageFromHash takes `raw.split("/")[0]` before the VALID_PAGES match (≤5 lines, zero blast radius); Providers.tsx reads the suffix.
+  - CSS namespace: shell-owned `pws-*` class names ONLY — never reuse pwi-*/providers-workspace-* with divergent styling. (RailRow from 080a keeps its source class names; the compact sheet must style THOSE names for the rail, which is the one sanctioned exception since the rail is verbatim source JSX.)
+  - Budget ruled: ~640 stands as the second half of the adjudicated split (NEW-file exemption on the shell); hard cap 700, beyond that return to P.
+- A-audit corrections (2026-07-17, claude-fable-5 — 1 blocker + 4 rulings folded):
+  - **Split ruled NOW (blocker):** honest recount ≈710 lines > 500. **WP080** = types.ts + kind.ts (pure classification: isLocalProvider/providerKind/SELF_HOSTED_HINTS, consuming an EXPORTED hasLoopbackBaseUrl from catalog.ts — reuse, never duplicate loopback logic) + ProviderRail.tsx (statusLabel/authModeLabel/ProviderIcon/railStatusCls/RailRow) + tests. **WP080b** = ProviderWorkspaceShell.tsx + provider-workspace-shell.css + pws.* locales + Providers/App wiring.
+  - Ship visible-but-placeholder (no feature flag): classic view stays default; the placeholder detail slot renders a real empty-detail message, not blank.
+  - The workspace view must be hash-addressable (`#providers/workspace` or query param) so reload/deep-link restores it — an in-memory toggle is state, not a route (satisfies the interview's "add workspace route").
+  - **Filter facet rename:** the type filter's oauth+forward bucket is `login` (pws.filter.login), NOT "account" — avoids colliding with the accounts TIER (canonical openai only).
+  - B-checks: IconStar/IconChevron presence in dev icons.tsx; lint:i18n glob covers components/provider-workspace/ (it does — src/components).
+- A-audit round 2 (2026-07-17, Sol reviewer on dev@b304e8df — 4 blockers folded):
+  - **Route/click contract pinned:** `#providers` renders the classic page UNCHANGED (default). `#providers/workspace` renders the preview shell. Rail-row click sets `selectedName`, highlights the row, and renders a localized selected-provider placeholder NAMING that provider — no mutation, no test/settings/detail controls. Rail Add opens the existing AddProviderModal with default behavior. WP090 replaces the placeholder without reinterpreting the selection. A no-op click or blank detail pane fails review.
+  - **WP080b re-split (was 630–930 lines):** WP080b = ProviderWorkspaceShell.tsx search/filter/sort controls + their locale keys + tests; WP080c = generic shell grid + provider-workspace-shell.css + placeholder copy; WP080d = App/Providers hash wiring (#providers/workspace subroute: page stays "providers", a providerView prop passes down; VALID_PAGES/NAV untouched) + route QA. Each sub-child carries its own ≤500 gate and verification route (route QA belongs to WP080d only).
+  - **No DetailPanel extraction.** The source DetailPanel owns tab state, unsaved protection, /api/providers/test, remove/enable, and WP090/091 dispatch — extracting it pulls future behavior forward. WP080c ships a generic main-slot boundary (root grid + rail slot + main slot + selection contract) only. Source EmptyState's tier/custom add intents exceed the current AddProviderModal API — reduce to the existing Add action (tier intents defer to WP090).
+  - **Locale ownership corrected:** rail-consumed pws.* keys landed with WP080a (already true on dev); each later sub-child adds only the keys its own controls render.
+  - Cleanups owed at next B: remove the duplicate ProviderUsageTotals from components/provider-workspace/types.ts (canonical owner gui/src/provider-workspace/usage.ts); add IconFilter to icons.tsx (only missing icon); status dots documented as configuration readiness, never live connectivity; kind.ts stays the pure sibling of catalog.ts (amend line 8 reading accordingly).
+- MODIFY `gui/src/App.tsx`: route/navigation entry for the Providers workspace; preserve all existing pages and hash restoration.
+- Interview decision: preserve all existing pages. Add workspace route only, no navigation redesign.
+- NEW `gui/src/components/provider-workspace/types.ts`, `ProviderRail.tsx`, `ProviderWorkspaceShell.tsx` from the shell/rail symbols listed in `003_monolith_fanout.md`.
+- MODIFY `gui/src/icons.tsx` only for icons consumed by the shell.
+- MODIFY `gui/src/pages/Providers.tsx`: adapt existing data/actions to shell props; no detail/settings body yet.
+- NEW `gui/src/styles/provider-workspace-shell.css`; locale keys only for rail/search/filter/sort.
+- Before -> after: classic provider page -> reviewable shell/rail around existing behavior, with no 2,791-line component.
+- Verification: `bun test tests/provider-workspace-data.test.ts`; `bun run --cwd gui lint`; `bun run --cwd gui build`; `git diff --check`; diff <=500. Run `006_gui_qa_protocol.md` with `WP_ID=080 ROUTE='#providers'`; record route restore/filter/sort in `evidence/WP080/{route,filter,sort}.md` and use the protocol's 1280/760 screenshots.
+- Rollback: route and shell revert together; all prior API/data children remain independent.

@@ -39,8 +39,30 @@ const SERVICE_WORKFLOW = "service-lifecycle.yml";
 const CI_WAIT_TIMEOUT_MS = 20 * 60 * 1000;
 const CI_POLL_MS = 10 * 1000;
 
+/**
+ * On Windows, `npm`, `gh`, and `git` are usually `.cmd`/`.exe` shims rather than
+ * bare files on PATH. `Bun.$` resolves those, but `Bun.spawn` does not: it looks
+ * for a literal `npm` and fails. The preflight below is the FIRST thing the
+ * release runs, so that mismatch aborted the script before a single shim was
+ * invoked — which is why the release-helper tests saw exit 1 and an empty call
+ * log on windows-latest while every other platform passed.
+ *
+ * `.cmd` is tried ahead of `.exe` because that is what npm and gh actually ship
+ * on Windows; a real `.exe` (git) still resolves through PATHEXT lookup below.
+ */
+function resolveCommandForPlatform(command: string[]): string[] {
+  if (process.platform !== "win32") return command;
+  const [bin, ...rest] = command;
+  if (!bin || bin.includes("\\") || bin.includes("/") || /\.[a-z]+$/i.test(bin)) return command;
+  for (const extension of [".cmd", ".exe", ".bat"]) {
+    const resolved = Bun.which(`${bin}${extension}`);
+    if (resolved) return [resolved, ...rest];
+  }
+  return [Bun.which(bin) ?? bin, ...rest];
+}
+
 async function runQuiet(command: string[]): Promise<CommandResult> {
-  const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(resolveCommandForPlatform(command), { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),

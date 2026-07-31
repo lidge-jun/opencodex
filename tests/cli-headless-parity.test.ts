@@ -57,6 +57,12 @@ describe("headless GUI parity CLI", () => {
       ["/api/claude-desktop", "ocx claude desktop"],
       ["/api/claude/", "ocx observe"],
       ["/api/codex-auth", "ocx account"],
+      // GUI-only affordance: starring the repo from the sidebar. There is deliberately
+      // no CLI mirror — the headless surface has nothing to gain from a one-click
+      // social action, and inventing `ocx github star` would be a command nobody asked
+      // for. Listed here so the parity sweep stays exhaustive rather than silently
+      // skipping the endpoint.
+      ["/api/github/star", "(none — GUI-only)"],
       ["/api/oauth", "ocx account"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],
