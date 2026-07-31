@@ -155,7 +155,7 @@ function installedTrayLauncherPath(): string {
 }
 
 function quoteVbsPath(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, "\"\"");
+  return value.replace(/"/g, '""');
 }
 
 /** Full PowerShell invocation used by the owned VBS launcher (not written to HKCU Run). */
@@ -528,7 +528,7 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   if (existsSync(entry.script) && (!state || resolve(state.script) !== resolve(entry.script))) {
     throw new Error(`Refusing to overwrite an unowned tray script at ${entry.script}.`);
   }
-  if (existsSync(launcherPath) && state?.launcherPath && resolve(state.launcherPath) !== resolve(launcherPath)) {
+  if (existsSync(launcherPath) && (!state?.launcherPath || resolve(state.launcherPath) !== resolve(launcherPath))) {
     throw new Error(`Refusing to overwrite an unowned tray launcher at ${launcherPath}.`);
   }
   if (!state && iconPairs.some(pair => existsSync(pair.installed))) {
@@ -586,7 +586,7 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
     if (!hardenedDir.ok) throw new Error("Windows tray directory ACL hardening did not complete; refusing to install persistence.");
     replaceOwnedFile(entry.script, readFileSync(sourceScript));
     for (const pair of iconPairs) replaceOwnedFile(pair.installed, readFileSync(pair.source));
-    replaceOwnedFile(launcherPath, buildWindowsTrayLauncherScript(entry));
+    replaceOwnedFile(launcherPath, Buffer.from("\uFEFF" + buildWindowsTrayLauncherScript(entry), "utf16le"));
     runRegistry(["add", RUN_KEY, "/v", runValue, "/t", "REG_SZ", "/d", runCommand, "/f", "/reg:64"]);
     writeState(entryWithLauncher, runValue, runCommand);
   } catch (error) {
