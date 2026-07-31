@@ -13,10 +13,28 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { assertNotRealHomeUnderTest, isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
 import { getConfigDir } from "../src/config";
 
-const REPO_ROOT = new URL("..", import.meta.url).pathname;
+/**
+ * Two different things are needed from the repo root, and conflating them is
+ * what broke Windows.
+ *
+ * `cwd` needs a real filesystem path. `URL.pathname` is not one on Windows: it
+ * yields `/D:/a/opencodex/opencodex/`, whose leading slash makes the directory
+ * invalid, and `Bun.spawnSync` then reports the failure against the
+ * *executable* — `ENOENT ... 'C:\Users\runneradmin\.bun\bin\bun.exe'` — even
+ * though Bun sits exactly where setup-bun left it. That misdirection is why
+ * this read as a missing-Bun problem for four CI runs.
+ */
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+/**
+ * The probe source needs a module SPECIFIER, not a path. A Windows path
+ * (`D:\a\...`) embedded in an import string would have its backslashes eaten as
+ * escapes, so keep the `file://` URL form for anything interpolated into code.
+ */
+const REPO_ROOT_URL = new URL("..", import.meta.url).href;
 
 /**
  * Run a probe in a child process so we control OCX_REAL_HOME at STARTUP — the guard
@@ -50,9 +68,9 @@ describe("real-home write guard", () => {
   test("armed + the protected home: all three writers throw", () => {
     const { realHome, opencodexHome } = sentinelHome();
     const probe = runProbe(`
-      import { saveConfig } from "${REPO_ROOT}src/config";
-      import { mutateStore } from "${REPO_ROOT}src/oauth/store";
-      import { saveCodexAccountCredential } from "${REPO_ROOT}src/codex/account-store";
+      import { saveConfig } from "${REPO_ROOT_URL}src/config";
+      import { mutateStore } from "${REPO_ROOT_URL}src/oauth/store";
+      import { saveCodexAccountCredential } from "${REPO_ROOT_URL}src/codex/account-store";
       const threw: string[] = [];
       const REFUSAL = "refusing to write the real OpenCodex home";
       try { saveConfig({ providers: {}, defaultProvider: "openai", port: 10100 } as never); }
@@ -79,7 +97,7 @@ describe("real-home write guard", () => {
     // The 54 suites that mkdtemp their own home must keep working with no opt-in.
     const dir = mkdtempSync(join(tmpdir(), "ocx-plain-home-"));
     const probe = runProbe(`
-      import { saveConfig } from "${REPO_ROOT}src/config";
+      import { saveConfig } from "${REPO_ROOT_URL}src/config";
       saveConfig({ providers: {}, defaultProvider: "openai", port: 10100 } as never);
       console.log("wrote");
     `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: join(tmpdir(), "ocx-nonexistent-real-home"), OPENCODEX_HOME: dir });
@@ -91,7 +109,7 @@ describe("real-home write guard", () => {
   test("disarmed: the protected home is allowed (production stays inert)", () => {
     const { realHome, opencodexHome } = sentinelHome();
     const probe = runProbe(`
-      import { saveConfig } from "${REPO_ROOT}src/config";
+      import { saveConfig } from "${REPO_ROOT_URL}src/config";
       saveConfig({ providers: {}, defaultProvider: "openai", port: 10100 } as never);
       console.log("wrote");
     `, { OCX_TEST_HOME_GUARD: undefined, OCX_REAL_HOME: realHome, OPENCODEX_HOME: opencodexHome });
@@ -105,7 +123,7 @@ describe("real-home write guard", () => {
     const { realHome } = sentinelHome();
     const decoyHome = mkdtempSync(join(tmpdir(), "ocx-decoy-home-"));
     const probe = runProbe(`
-      import { protectedHomeForTests } from "${REPO_ROOT}src/lib/test-home-guard";
+      import { protectedHomeForTests } from "${REPO_ROOT_URL}src/lib/test-home-guard";
       console.log(protectedHomeForTests());
     `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome, HOME: decoyHome });
 
@@ -119,7 +137,7 @@ describe("real-home write guard", () => {
     const link = join(linkDir, "looks-like-temp");
     symlinkSync(opencodexHome, link);
     const probe = runProbe(`
-      import { assertNotRealHomeUnderTest } from "${REPO_ROOT}src/lib/test-home-guard";
+      import { assertNotRealHomeUnderTest } from "${REPO_ROOT_URL}src/lib/test-home-guard";
       try { assertNotRealHomeUnderTest(${JSON.stringify(link)}); console.log("allowed"); }
       catch { console.log("rejected"); }
     `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome });
@@ -133,7 +151,7 @@ describe("real-home write guard", () => {
     const { realHome } = sentinelHome();
     const aliased = realHome.startsWith("/var/") ? join("/private", realHome) : realHome.replace(/^\/private/, "");
     const probe = runProbe(`
-      import { assertNotRealHomeUnderTest } from "${REPO_ROOT}src/lib/test-home-guard";
+      import { assertNotRealHomeUnderTest } from "${REPO_ROOT_URL}src/lib/test-home-guard";
       const results: string[] = [];
       for (const path of [${JSON.stringify(join(realHome, ".opencodex"))}, ${JSON.stringify(join(aliased, ".opencodex"))}]) {
         try { assertNotRealHomeUnderTest(path); results.push("allowed"); } catch { results.push("rejected"); }

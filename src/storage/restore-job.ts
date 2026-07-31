@@ -16,6 +16,11 @@ import {
   withStorageMutationSlot,
   type StorageMutationCoordinatorTestHooks,
 } from "./storage-mutation-coordinator";
+import {
+  drainStorageWorkers,
+  registerStorageWorker,
+  terminateStorageWorker,
+} from "./worker-lifecycle";
 
 export interface RestoreJobTestHooks extends StorageMutationCoordinatorTestHooks {
   /**
@@ -69,7 +74,7 @@ export function setRestoreTrashJobTestHooks(hooks: RestoreJobTestHooks | null): 
 
 export function resetRestoreTrashJobForTests(): void {
   if (activeWorker) {
-    try { activeWorker.terminate(); } catch { /* */ }
+    void terminateStorageWorker(activeWorker);
     activeWorker = null;
   }
   cancelActiveRun?.();
@@ -78,10 +83,16 @@ export function resetRestoreTrashJobForTests(): void {
   resetStorageMutationCoordinatorForTests();
 }
 
+/** Await-able reset for test teardown; see policy-job's equivalent for why. */
+export async function resetRestoreTrashJobForTestsAsync(): Promise<void> {
+  resetRestoreTrashJobForTests();
+  await drainStorageWorkers();
+}
+
 /** Terminate an in-flight worker during process shutdown. */
 export function abortRestoreTrashJob(): void {
   if (activeWorker) {
-    try { activeWorker.terminate(); } catch { /* */ }
+    void terminateStorageWorker(activeWorker);
     activeWorker = null;
   }
   cancelActiveRun?.();
@@ -117,13 +128,14 @@ function runInWorker(opts: {
     const requestId = crypto.randomUUID();
     let settled = false;
     const worker = new Worker(new URL("./restore-worker.ts", import.meta.url).href);
+    registerStorageWorker(worker);
     activeWorker = worker;
 
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       cancelActiveRun = null;
-      try { worker.terminate(); } catch { /* */ }
+      void terminateStorageWorker(worker);
       if (activeWorker === worker) activeWorker = null;
       reject(new Error("restore_worker_timeout"));
     }, WORKER_TIMEOUT_MS);
@@ -134,8 +146,7 @@ function runInWorker(opts: {
       cancelActiveRun = null;
       clearTimeout(timer);
       if (activeWorker === worker) activeWorker = null;
-      try { worker.terminate(); } catch { /* */ }
-      fn();
+      void terminateStorageWorker(worker).then(fn, fn);
     };
 
     cancelActiveRun = () => {

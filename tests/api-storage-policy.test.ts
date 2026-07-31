@@ -14,6 +14,7 @@ import {
 } from "../src/storage/cleanup-job";
 import {
   resetStorageCleanupPolicyJobForTests,
+  resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
 } from "../src/storage/policy-job";
 import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
@@ -114,9 +115,12 @@ beforeEach(() => {
   resetArchivedCleanupJobForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   stopStorageCleanupScheduler();
-  resetStorageCleanupPolicyJobForTests();
+  // Await the worker teardown: under `bun test --isolate` an exiting Bun Worker
+  // that outlives its test file crashes the Windows runner at the file
+  // boundary (workers_spawned > workers_terminated in the panic header).
+  await resetStorageCleanupPolicyJobForTestsAsync();
   setStorageCleanupPolicyJobTestHooks(null);
   resetArchivedCleanupJobForTests();
   setArchivedCleanupJobTestHooks(null);

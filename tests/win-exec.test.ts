@@ -60,6 +60,33 @@ describe("resolveWindowsCommand", () => {
     expect(resolveWindowsCommand("claude", { env, exists: () => false })).toBe("claude");
     expect(resolveWindowsCommand("claude", { env: {}, exists: () => true })).toBe("claude");
   });
+
+  /**
+   * Windows env vars are case-insensitive and a spawned child can arrive with
+   * `Path`, `PATH`, or both — `{...process.env, PATH: x}` on Windows leaves the
+   * inherited `Path` in place beside the new `PATH`. Reading two fixed spellings
+   * resolved against whichever happened to be listed first, which is how a test
+   * that put shims on PATH still reached the real `git`: the branch guard then
+   * read the wrong branch and the script aborted before running anything.
+   */
+  test("PATH and PATHEXT resolve whatever casing the child was handed", () => {
+    const exists = (p: string) => p === "D:\\shims\\git.cmd";
+
+    for (const pathKey of ["PATH", "Path", "path"]) {
+      const cased = { [pathKey]: "D:\\shims", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+      expect(resolveWindowsCommand("git", { env: cased, exists })).toBe("D:\\shims\\git.cmd");
+    }
+
+    for (const extKey of ["PATHEXT", "PathExt", "pathext"]) {
+      const cased = { Path: "D:\\shims", [extKey]: ".COM;.EXE;.BAT;.CMD" };
+      expect(resolveWindowsCommand("git", { env: cased, exists })).toBe("D:\\shims\\git.cmd");
+    }
+
+    // Both spellings present: the shim directory must still win, whichever key
+    // the platform ends up honouring.
+    const both = { Path: "D:\\shims", PATH: "D:\\shims", PATHEXT: ".CMD" };
+    expect(resolveWindowsCommand("git", { env: both, exists })).toBe("D:\\shims\\git.cmd");
+  });
 });
 
 describe("commandInvocation", () => {

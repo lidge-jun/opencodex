@@ -196,7 +196,7 @@ GUI가 필요하지 않습니다. `add`, `remove`, `list-custom`은 설정 파�
 | `provider <name> <on\|off>` | `--json` | 한 프로바이더의 모든 모델을 한 번의 쓰기로 켜거나 끕니다. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 프로바이더 모델 허용 목록을 읽거나 교체합니다. `--clear`는 목록을 지워 전체 모델을 제공합니다. |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | 컨텍스트 윈도 상한을 전역 또는 프로바이더 단위로 읽고 설정합니다. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 백그라운드 shadow-call 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex 백그라운드 헬퍼 호출을 대체할 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그 `sourceModels`도 함께 보여줍니다(기본값 `gpt-5.4-mini`, 그리고 Codex 0.145.0부터 쓰이는 `gpt-5.6-luna`). |
 
 ```bash
 ocx models live --json                                  # 지금 Codex가 실제로 보는 목록

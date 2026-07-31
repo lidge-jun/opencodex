@@ -165,6 +165,10 @@ read-only. Two environment variables make the source and token row selection exp
 - `KIROCLI_TOKEN_KEY` selects the exact `auth_kv` token key when a database contains multiple
   otherwise ambiguous token rows. A missing selection fails login instead of guessing.
 
+On Windows, import looks for `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`. Forced/add-account login
+also needs the local CLI binary: opencodex first uses `PATH`, then falls back to
+`%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` and `C:\Program Files\Kiro-Cli\kiro-cli.exe`.
+
 After a successful import, opencodex persists the imported credential to
 `~/.opencodex/auth.json`.
 

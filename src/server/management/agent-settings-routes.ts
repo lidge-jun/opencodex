@@ -80,12 +80,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (config.claudeCode?.desktopAutoApply === false) return;
       if (!config.claudeCode?.desktopProfile) return;
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
-      const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
+      const { filterCatalogVisibleModels, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
       const allModels = await fetchAllModels(config);
       const routed = filterCatalogVisibleModels(allModels, config).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow }));
       const result = writeDesktop3pConfig(
         config.port ?? 10100,
-        [...visibleNativeSlugs(config)],
+        [...desktopVisibleNativeSlugs(config)],
         routed,
         config.apiKeys?.[0]?.key,
         "static",
@@ -607,7 +607,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: state.profile };
       saveConfigPreservingClaudeCode(config);
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
-      const { visibleNativeSlugs } = await import("../../codex/catalog");
+      const { desktopVisibleNativeSlugs } = await import("../../codex/catalog");
       const routed = state.models
         .filter(model => model.available && !model.route.startsWith("native/"))
         .map(model => {
@@ -616,7 +616,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         });
       const result = writeDesktop3pConfig(
         Number(url.port) || config.port,
-        [...visibleNativeSlugs(config)],
+        [...desktopVisibleNativeSlugs(config)],
         routed,
         config.apiKeys?.[0]?.key,
         "static",

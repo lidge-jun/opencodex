@@ -90,6 +90,36 @@ describe("provider outbound GET transport", () => {
     expect(captured.address).toBeUndefined();
   });
 
+  test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../src/lib/provider-outbound");
+    let sawAllowPrivate: boolean | undefined;
+    const dependencies: ProviderOutboundDependencies = {
+      resolveAddresses: mock(async (_url, options) => {
+        sawAllowPrivate = typeof options === "object" && options?.allowPrivateNetwork === true;
+        return {
+          hostname: "127.0.0.1",
+          addresses: [{ address: "127.0.0.1", family: 4 }],
+          privateNetwork: true,
+        };
+      }),
+      pinnedGet: mock(async () => new Response('{"data":[{"id":"llama"}]}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    };
+
+    const response = await providerOutboundGet(
+      "ollama",
+      { baseUrl: "http://127.0.0.1:11434/v1" },
+      "http://127.0.0.1:11434/v1/models",
+      {},
+      dependencies,
+    );
+    expect(sawAllowPrivate).toBe(true);
+    expect(await response.json()).toEqual({ data: [{ id: "llama" }] });
+  });
+
   test("direct redirects return the same credential-safe final-URL guidance", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const redirectTarget = new URL("https://final.example/v1/models?token=secret#fragment");

@@ -455,6 +455,11 @@ export interface OcxClaudeCodeConfig {
   desktopProfile?: OcxClaudeDesktopProfile;
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
   desktopAutoApply?: boolean;
+  /**
+   * When false, omit `native/*` rows from Claude Desktop show/export/apply. Default: enabled.
+   * Routing-sidecar alias decoding is unchanged — only the Desktop model list writer.
+   */
+  desktopNativeModels?: boolean;
 }
 
 export type OcxClaudeDesktopFamily = "opus" | "fable" | "sonnet" | "haiku";

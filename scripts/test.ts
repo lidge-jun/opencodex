@@ -64,18 +64,59 @@ function findCompetingTestRunners(selfPid: number): number[] {
   }
 }
 
+/**
+ * Wait until this machine has no other full-suite runner, then proceed.
+ *
+ * Warning about contention was not enough: the warning scrolls past, the run still
+ * starts, and four concurrent suites drove load average to 10 and turned a ~210s
+ * suite into a 13-minute one that read as a hang. Agents in parallel worktrees each
+ * think they are the only runner, so the serialization has to live here rather than
+ * in anyone's discipline.
+ *
+ * Queue rather than refuse: a failed `bun run test` invites `bun test` directly,
+ * which bypasses this file entirely. Waiting is the behavior that survives being
+ * worked around. `OCX_TEST_NO_QUEUE=1` opts out for anyone who really wants overlap.
+ */
+async function waitForExclusiveRun(selfPid: number): Promise<void> {
+  if (process.env.OCX_TEST_NO_QUEUE === "1") return;
+  const pollMs = 5_000;
+  // Long enough for a full suite plus slack; past this, assume the holder is wedged
+  // rather than working and let this run start anyway.
+  const maxWaitMs = 45 * 60 * 1000;
+  const startedAt = Date.now();
+  let announced = false;
+  for (;;) {
+    const competing = findCompetingTestRunners(selfPid);
+    if (competing.length === 0) {
+      if (announced) {
+        console.warn(`[test] the other runner(s) finished after ${Math.round((Date.now() - startedAt) / 1000)}s; starting.`);
+      }
+      return;
+    }
+    if (Date.now() - startedAt > maxWaitMs) {
+      console.warn(
+        `[test] still waiting on pid ${competing.join(", ")} after ${Math.round(maxWaitMs / 60000)} minutes. `
+        + "Assuming they are stuck and starting anyway; expect a slow run.",
+      );
+      return;
+    }
+    if (!announced) {
+      announced = true;
+      console.warn(
+        `[test] ${competing.length} other bun test runner(s) already running (pid ${competing.join(", ")}). `
+        + "Waiting for them to finish so the suites do not fight over the CPU. "
+        + "Set OCX_TEST_NO_QUEUE=1 to run concurrently anyway.",
+      );
+    }
+    await Bun.sleep(pollMs);
+  }
+}
+
 if (import.meta.main) {
   const isolated = createIsolatedTestEnvironment();
   try {
     const requestedTests = process.argv.slice(2);
-    const competing = findCompetingTestRunners(process.pid);
-    if (competing.length > 0) {
-      console.warn(
-        `[test] ${competing.length} other bun test runner(s) are already running (pid ${competing.join(", ")}). `
-        + "They share this machine's CPU, so this run will be much slower than usual and can look hung. "
-        + "Stop them first if that is not what you meant.",
-      );
-    }
+    await waitForExclusiveRun(process.pid);
     const startedAt = Date.now();
     const child = Bun.spawnSync(
       [process.execPath, "test", "--isolate", ...(requestedTests.length > 0 ? requestedTests : ["./tests/"])],

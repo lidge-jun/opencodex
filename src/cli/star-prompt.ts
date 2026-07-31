@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { commandInvocation } from "../lib/win-exec";
 import { isAgentDriven } from "./agent-driven";
 import { interactiveConfirm } from "./interactive-confirm";
 
@@ -29,16 +30,37 @@ export function hasStarPromptRun(): boolean {
  * that case the prompt stays silent instead of asking for something it would
  * then fail to do.
  */
+/**
+ * On Windows `gh` is a `.cmd` shim; a shell-less spawn of the bare name skips
+ * PATHEXT and refuses `.cmd` targets, so it stalls until the timeout instead of
+ * failing fast. Route every call through the launcher the rest of the CLI uses.
+ */
+/** Resolve `gh` once; callers keep their own spawnSync overload. */
+function ghInvocation(args: string[]) {
+  const invocation = commandInvocation("gh", args);
+  return {
+    file: invocation.file,
+    args: invocation.args,
+    verbatim: invocation.options.windowsVerbatimArguments === true,
+  };
+}
+
 function ghAvailable(): boolean {
-  const version = spawnSync("gh", ["--version"], { stdio: "ignore", timeout: 3000, windowsHide: true });
+  const v = ghInvocation(["--version"]);
+  const version = spawnSync(v.file, v.args,
+    { stdio: "ignore", timeout: 3000, windowsHide: true, windowsVerbatimArguments: v.verbatim });
   if (version.error || version.status !== 0) return false;
-  const auth = spawnSync("gh", ["auth", "status"], { stdio: "ignore", timeout: 5000, windowsHide: true });
+  const a = ghInvocation(["auth", "status"]);
+  const auth = spawnSync(a.file, a.args,
+    { stdio: "ignore", timeout: 5000, windowsHide: true, windowsVerbatimArguments: a.verbatim });
   return !auth.error && auth.status === 0;
 }
 
 function starRepo(): { ok: boolean; error?: string } {
-  const r = spawnSync("gh", ["api", "-X", "PUT", `/user/starred/${REPO}`],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000, windowsHide: true });
+  const star = ghInvocation(["api", "-X", "PUT", `/user/starred/${REPO}`]);
+  const r = spawnSync(star.file, star.args,
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000, windowsHide: true,
+      windowsVerbatimArguments: star.verbatim });
   if (r.error) return { ok: false, error: r.error.message };
   if (r.status !== 0) return { ok: false, error: (r.stderr || r.stdout || "").trim() || `gh exited ${r.status}` };
   return { ok: true };

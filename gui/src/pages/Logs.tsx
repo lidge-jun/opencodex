@@ -285,12 +285,22 @@ function statusColor(status: number): string {
   return "var(--amber)";
 }
 
-function formatLogTimestamp(ts: number, localeTag?: string): string {
-  return new Date(ts).toLocaleTimeString(localeTag);
+function formatLogTimestamp(ts: number, localeTag?: string, timeZone?: string): string {
+  try {
+    return new Date(ts).toLocaleTimeString(localeTag, timeZone ? { timeZone } : undefined);
+  } catch {
+    // An IANA zone the browser's ICU build does not know throws RangeError, which would take
+    // the whole row render down. A timestamp in the wrong zone beats no log list at all.
+    return new Date(ts).toLocaleTimeString(localeTag);
+  }
 }
 
-function formatLogDateTime(ts: number, localeTag?: string): string {
-  return new Date(ts).toLocaleString(localeTag);
+function formatLogDateTime(ts: number, localeTag?: string, timeZone?: string): string {
+  try {
+    return new Date(ts).toLocaleString(localeTag, timeZone ? { timeZone } : undefined);
+  } catch {
+    return new Date(ts).toLocaleString(localeTag);
+  }
 }
 
 function modelTitle(log: LogEntry): string {
@@ -344,6 +354,27 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
+  // The proxy's own zone, so timestamps read the same as the server's logs rather than being
+  // silently shifted into the viewer's zone (#725). Fetched once: it cannot change while the
+  // page is open, so it must not join the 2s log poll. Undefined until it arrives, which
+  // formats browser-local exactly as before.
+  const [serverTimeZone, setServerTimeZone] = useState<string | undefined>();
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/settings`, { signal: controller.signal });
+        if (!res.ok) return;
+        const body = await res.json() as { timeZone?: unknown };
+        if (typeof body.timeZone === "string" && body.timeZone.trim()) {
+          setServerTimeZone(body.timeZone.trim());
+        }
+      } catch {
+        // Offline or an older proxy without the field: keep browser-local formatting.
+      }
+    })();
+    return () => controller.abort();
+  }, [apiBase]);
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
   // so refresh/bookmark/back-forward keep the tab choice.
   const [tab, setTab] = useState<LogsTab>(readTabFromHash);
@@ -628,7 +659,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
                >
-                 <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag)}</td>
+                 <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag, serverTimeZone)}</td>
                   <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
                     {(() => {
                       const tokenTotal = displayContextTokenTotal(log);
@@ -715,6 +746,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           detailInfo={detailInfo}
           localeCode={locale}
           localeTag={localeTag}
+          serverTimeZone={serverTimeZone}
           t={t}
           onClose={() => setDetail(null)}
           onFilterConversation={id => {
@@ -740,12 +772,13 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeCode, localeTag, t, onClose, onFilterConversation,
+  detail, detailInfo, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
   localeCode: string;
   localeTag?: string;
+  serverTimeZone?: string;
   t: TFn;
   onClose: () => void;
   onFilterConversation?: (conversationId: string) => void;
@@ -787,7 +820,7 @@ function LogDetailDialog({
         <section className="log-detail-section" aria-labelledby="log-detail-basic">
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
           <div className="log-detail-grid">
-            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag)}</span>
+            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag, serverTimeZone)}</span>
             <span className="muted">{t("logs.col.request")}</span>
             <span className="log-detail-request-row">
               <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>

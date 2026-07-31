@@ -3,6 +3,7 @@ import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
 import { navigateHash } from "../hash-routing";
 import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
+import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
 type Dash = ReturnType<typeof useDashboardData>;
@@ -284,7 +285,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             >
               <IconInfo width={13} height={13} aria-hidden="true" />
             </button>
-            <code className="muted text-caption">⚠ 5.4-mini</code>
+            <code className="muted text-caption">{`⚠ ${shadowSourceModelBadge(shadowCall?.sourceModels)}`}</code>
           </div>
           <div className="setting-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button

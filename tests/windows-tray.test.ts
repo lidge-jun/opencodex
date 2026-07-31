@@ -3,6 +3,8 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildWindowsTrayLauncherScript,
+  buildWindowsTrayPowerShellCommand,
   buildWindowsTrayRunCommand,
   launchWindowsTrayHost,
   parseWindowsTrayRunValue,
@@ -40,11 +42,39 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("quotes metacharacter and Unicode paths without shell interpolation", () => {
-    const powershellCommand = buildWindowsTrayRunCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    const powershellCommand = buildWindowsTrayPowerShellCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
     expect(powershellCommand).toContain(`-File "${entry.script}"`);
     expect(powershellCommand).toContain(`-OpenCodexHome "${entry.opencodexHome}"`);
     expect(powershellCommand).not.toContain("cmd /c");
     expect(powershellCommand).not.toContain("-Command");
+    const runCommand = buildWindowsTrayRunCommand({
+      ...entry,
+      launcherPath: `${entry.opencodexHome}\\opencodex-tray.vbs`,
+    });
+    expect(runCommand.toLowerCase()).toContain("wscript.exe");
+    expect(runCommand.length).toBeLessThanOrEqual(260);
+  });
+  test("keeps UNC backslashes literal in the VBS Run command", () => {
+    const uncRoot = "\\\\server\\share";
+    const uncEntry: WindowsTrayEntry = {
+      bun: `${uncRoot}\\tools\\bun.exe`,
+      cli: `${uncRoot}\\repo\\src\\cli\\index.ts`,
+      script: `${uncRoot}\\repo\\src\\tray\\windows-tray.ps1`,
+      codexHome: "C:\\Users\\Test\\.codex",
+      opencodexHome: `${uncRoot}\\opencodex`,
+    };
+    const launcher = buildWindowsTrayLauncherScript(uncEntry);
+    expect(launcher).toContain(`${uncRoot}\\tools\\bun.exe`);
+    expect(launcher).not.toMatch(/\\\\\\\\server/);
+  });
+
+
+  test("preserves non-ASCII paths in the tray launcher script and UTF-16LE install encoding", () => {
+    const launcher = buildWindowsTrayLauncherScript(entry);
+    expect(launcher).toContain("사용자 공간");
+    const encoded = Buffer.from("\uFEFF" + launcher, "utf16le");
+    expect(encoded.subarray(0, 2).equals(Buffer.from([0xff, 0xfe]))).toBe(true);
+    expect(encoded.toString("utf16le")).toContain("사용자 공간");
   });
 
   test("rejects quote and control-character path injection", () => {

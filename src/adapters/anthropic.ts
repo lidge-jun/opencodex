@@ -250,32 +250,20 @@ function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
   }
 }
 
-const MALFORMED_ANTHROPIC_BASE_URL = "anthropic provider has malformed baseUrl";
-
 /** Normalize provider baseUrl paths ending in `/`, `/v1`, or `/v1/messages` to `{origin}/v1/messages`. */
 export function anthropicMessagesUrl(baseUrl: string): string {
-  let parsed: URL;
   try {
-    parsed = new URL(baseUrl.trim());
+    new URL(baseUrl);
   } catch {
-    throw new Error(MALFORMED_ANTHROPIC_BASE_URL);
+    throw new Error(`anthropic provider has malformed baseUrl: ${baseUrl}`);
   }
-  if (parsed.search || parsed.hash) {
-    throw new Error(MALFORMED_ANTHROPIC_BASE_URL);
-  }
-  let path = parsed.pathname.replace(/\/+$/, "");
-  path = path.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
-  const suffix = path ? `${path}/v1/messages` : "/v1/messages";
-  return `${parsed.origin}${suffix}`;
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const root = trimmed.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
+  return `${root}/v1/messages`;
 }
 
 function synthesizeToolUseId(): string {
   return `toolu_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
-}
-
-function usableToolUseId(id: string | undefined): string {
-  const trimmed = id?.trim();
-  return trimmed || synthesizeToolUseId();
 }
 
 function toolUseArguments(input: unknown): string {
@@ -286,7 +274,11 @@ function toolUseArguments(input: unknown): string {
       JSON.parse(trimmed);
       return trimmed;
     } catch {
-      return JSON.stringify(trimmed);
+      // A tool call's arguments must be a JSON object. Re-encoding an unparseable string as a
+      // JSON *string* is the double-encoding #765 reports: the caller then receives
+      // `"get weather"` where an object was required and the tool call is unusable either way.
+      // An empty object at least fails in the tool's own argument validation.
+      return "{}";
     }
   }
   return JSON.stringify(input ?? {});
@@ -814,7 +806,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "tool_use") {
-                  currentToolCallId = usableToolUseId(block.id);
+                  currentToolCallId = block.id ?? synthesizeToolUseId();
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
@@ -909,7 +901,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
             events.push({ type: "redacted_thinking", data: block.data });
           } else if (block.type === "tool_use") {
-            const id = usableToolUseId(block.id);
+            const id = block.id ?? synthesizeToolUseId();
             events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
             events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
             events.push({ type: "tool_call_end" });

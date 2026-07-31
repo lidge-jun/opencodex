@@ -13,6 +13,8 @@
  * invalidates the cache immediately, which is why the click path never has to
  * wait for the TTL to see its own result.
  */
+import { commandInvocation } from "../lib/win-exec";
+
 export const STAR_REPO = "lidge-jun/opencodex";
 export const STAR_REPO_URL = `https://github.com/${STAR_REPO}`;
 /**
@@ -52,11 +54,18 @@ export interface StarDeps {
  */
 async function spawnGh(args: string[], timeoutMs: number): Promise<{ status: number | null } | null> {
   try {
-    const proc = Bun.spawn(["gh", ...args], {
+    // On Windows `gh` is a `.cmd` shim, and a shell-less spawn of the bare name
+    // neither consults PATHEXT nor accepts a `.cmd` target. It does not fail
+    // fast either — it hangs until the timeout below fires, which is how these
+    // sidebar tests turned into 5s timeouts on windows-latest while passing
+    // everywhere else. `commandInvocation` is the resolver the CLI already uses.
+    const invocation = commandInvocation("gh", args);
+    const proc = Bun.spawn([invocation.file, ...invocation.args], {
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
       windowsHide: true,
+      ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
     const timer = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } }, timeoutMs);
     try {

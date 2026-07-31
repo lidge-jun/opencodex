@@ -4,7 +4,11 @@
  * must match a source-model set, not a single literal.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../src/server/responses";
+import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
@@ -109,5 +113,61 @@ describe("shadow call intercept request path (issue #311)", () => {
     // routing (404) BEFORE any upstream fetch — proving no shadow rewrite happened.
     expect(sawFetch).toBe(false);
     expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * The GUI badge/tooltip used to hard-code "5.4-mini", so it kept naming a model
+ * Codex no longer sends. The management API is the single source of truth for
+ * which models are intercepted; every client renders what it reports.
+ */
+async function withTempHome<T>(run: () => Promise<T>): Promise<T> {
+  const previousHome = process.env.OPENCODEX_HOME;
+  const dir = mkdtempSync(join(tmpdir(), "ocx-shadow-"));
+  process.env.OPENCODEX_HOME = dir;
+  try {
+    return await run();
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function shadowApi(config: OcxConfig, method: string, body?: unknown): Promise<Record<string, unknown>> {
+  // Management API enforces a same-origin gate; a browserless caller must look local.
+  const headers: Record<string, string> = { origin: "http://127.0.0.1:10100", host: "127.0.0.1:10100" };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const req = new Request("http://localhost/api/shadow-call-settings", {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const res = await handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog: async () => {} });
+  expect(res).not.toBeNull();
+  expect(res!.status).toBe(200);
+  return await res!.json() as Record<string, unknown>;
+}
+
+describe("shadow-call settings API reports the intercepted source models", () => {
+  test("GET reports the defaults, including the 0.145.0 helper model", async () => {
+    await withTempHome(async () => {
+      const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
+      expect(body.sourceModels).toEqual(["gpt-5.4-mini", "gpt-5.6-luna"]);
+    });
+  });
+
+  test("GET and PUT report a configured override instead of the defaults", async () => {
+    await withTempHome(async () => {
+      const config = {
+        port: 0,
+        defaultProvider: "xai",
+        providers: {},
+        shadowCallIntercept: { enabled: true, model: "gpt-5.5", sourceModels: ["gpt-5.6-luna"] },
+      } as OcxConfig;
+      expect((await shadowApi(config, "GET")).sourceModels).toEqual(["gpt-5.6-luna"]);
+      const put = await shadowApi(config, "PUT", { enabled: true });
+      expect(put.sourceModels).toEqual(["gpt-5.6-luna"]);
+    });
   });
 });
