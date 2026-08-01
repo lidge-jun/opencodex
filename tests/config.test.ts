@@ -27,7 +27,7 @@ import {
 } from "../src/config";
 
 import * as windowsAcl from "../src/lib/windows-secret-acl";
-import { AtomicWriteResidualTempError, atomicWriteFile, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
+import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
 let testDir = "";
 
 beforeEach(() => {
@@ -1725,6 +1725,56 @@ describe("config.ts – atomic writes preserve symlinked destinations", () => {
     symlinkSync(join(testDir, "gone", "config.toml"), link);
 
     atomicWriteFile(link, "recovered");
+
+    expect(readFileSync(link, "utf8")).toBe("recovered");
+  });
+});
+
+describe("config.ts – async atomic writes preserve symlinked destinations", () => {
+  test("a symlinked destination survives the write and the real file receives it", async () => {
+    const repoDir = join(testDir, "dotfiles-async");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-async.toml");
+    symlinkSync(realFile, link);
+
+    await atomicWriteFileAsync(link, "rewritten");
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(realFile);
+    expect(readFileSync(realFile, "utf8")).toBe("rewritten");
+    expect(readFileSync(link, "utf8")).toBe("rewritten");
+  });
+
+  test("no temp file is left beside the link or its target", async () => {
+    const repoDir = join(testDir, "dotfiles-async-clean");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-async-clean.toml");
+    symlinkSync(realFile, link);
+
+    await atomicWriteFileAsync(link, "rewritten");
+
+    expect(readdirSync(repoDir).filter(name => name.includes(".ocx."))).toEqual([]);
+    expect(readdirSync(testDir).filter(name => name.includes(".ocx."))).toEqual([]);
+  });
+
+  test("a plain destination is unaffected", async () => {
+    const destination = join(testDir, "plain-async.toml");
+    await atomicWriteFileAsync(destination, "first");
+    await atomicWriteFileAsync(destination, "second");
+
+    expect(lstatSync(destination).isSymbolicLink()).toBe(false);
+    expect(readFileSync(destination, "utf8")).toBe("second");
+  });
+
+  test("a dangling symlink is replaced rather than followed into nothing", async () => {
+    const link = join(testDir, "dangling-async.toml");
+    symlinkSync(join(testDir, "gone-async", "config.toml"), link);
+
+    await atomicWriteFileAsync(link, "recovered");
 
     expect(readFileSync(link, "utf8")).toBe("recovered");
   });
