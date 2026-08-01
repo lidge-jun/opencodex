@@ -165,3 +165,35 @@ test("a half-filled fallback row blocks the save instead of dropping the row", a
     await cleanup();
   }
 });
+
+test("removing a row keeps the surviving rows' own values", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const { act, container, setSelectValue, buttonByText, saveButton, cleanup } = await mountSettings(async (_name, patch) => {
+    patches.push(patch);
+    return { ok: true };
+  });
+
+  try {
+    await act(async () => { buttonByText("Add fallback")!.click(); });
+    const providerSelects = container.querySelectorAll<HTMLSelectElement>('select[aria-label="Fallback provider"]');
+    await act(async () => { setSelectValue(providerSelects[1]!, "google-antigravity"); });
+
+    // Rows carry a stable id, so dropping the first one must leave the second row's own
+    // provider/model in place rather than shifting values up a slot.
+    const removeButtons = container.querySelectorAll<HTMLButtonElement>('.pwi-fallback-row button[aria-label]');
+    await act(async () => { removeButtons[0]!.click(); });
+
+    const rows = container.querySelectorAll(".pwi-fallback-row");
+    expect(rows).toHaveLength(1);
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Fallback provider"]')!.value)
+      .toBe("google-antigravity");
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Fallback model"]')!.value)
+      .toBe("gemini-3.6-flash");
+
+    await act(async () => { saveButton()!.click(); });
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.fallback).toEqual([{ provider: "google-antigravity", model: "gemini-3.6-flash" }]);
+  } finally {
+    await cleanup();
+  }
+});

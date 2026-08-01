@@ -30,6 +30,14 @@ export type ProviderPeerOption = {
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
 
+/** A fallback row plus a stable identity, so React keys survive reorder/removal. */
+type FallbackRow = ProviderFallbackTarget & { id: string };
+
+let fallbackRowSeq = 0;
+function withRowIds(rows: ProviderFallbackTarget[]): FallbackRow[] {
+  return rows.map(row => ({ ...row, id: `fb-${++fallbackRowSeq}` }));
+}
+
 function normalizeFallback(raw: ProviderFallbackTarget[] | undefined): ProviderFallbackTarget[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -78,7 +86,7 @@ export default function ProviderSettings({
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(item.liveModels !== false);
-  const [fallback, setFallback] = useState<ProviderFallbackTarget[]>(() => normalizeFallback(item.fallback));
+  const [fallback, setFallback] = useState<FallbackRow[]>(() => withRowIds(normalizeFallback(item.fallback)));
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
@@ -95,7 +103,7 @@ export default function ProviderSettings({
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(item.liveModels !== false);
-    setFallback(normalizeFallback(item.fallback));
+    setFallback(withRowIds(normalizeFallback(item.fallback)));
     setMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
   }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.liveModels, item.fallback, baseUrlChoices]);
@@ -217,7 +225,7 @@ export default function ProviderSettings({
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(item.liveModels !== false);
-    setFallback(normalizeFallback(item.fallback));
+    setFallback(withRowIds(normalizeFallback(item.fallback)));
     setMsg(null);
     setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
   };
@@ -231,8 +239,8 @@ export default function ProviderSettings({
     }
   };
 
-  const updateFallbackRow = (index: number, patch: Partial<ProviderFallbackTarget>) => {
-    setFallback(rows => rows.map((row, i) => i === index ? { ...row, ...patch } : row));
+  const updateFallbackRow = (id: string, patch: Partial<ProviderFallbackTarget>) => {
+    setFallback(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row));
   };
 
   return (
@@ -331,11 +339,11 @@ export default function ProviderSettings({
         <span className="pwi-settings-label">{t("pws.fallback")}</span>
         <span className="pwi-settings-hint">{t("pws.fallbackDesc")}</span>
         <div className="pwi-fallback-list">
-          {fallback.map((row, index) => {
+          {fallback.map((row) => {
             const peer = fallbackPeers.find(p => p.name === row.provider);
             const modelIds = modelsForPeer(peer, row.model);
             return (
-              <div key={index} className="pwi-fallback-row">
+              <div key={row.id} className="pwi-fallback-row">
                 <select
                   className="input"
                   value={row.provider}
@@ -343,7 +351,7 @@ export default function ProviderSettings({
                   onChange={e => {
                     const provider = e.target.value;
                     const first = modelsForPeer(fallbackPeers.find(p => p.name === provider), "")[0] ?? "";
-                    updateFallbackRow(index, { provider, model: first });
+                    updateFallbackRow(row.id, { provider, model: first });
                   }}
                 >
                   <option value="">{t("pws.fallback.pickProvider")}</option>
@@ -359,7 +367,7 @@ export default function ProviderSettings({
                     value={row.model}
                     disabled={!row.provider}
                     aria-label={t("pws.fallback.model")}
-                    onChange={e => updateFallbackRow(index, { model: e.target.value })}
+                    onChange={e => updateFallbackRow(row.id, { model: e.target.value })}
                   >
                     <option value="">{t("pws.fallback.pickModel")}</option>
                     {modelIds.map(id => <option key={id} value={id}>{id}</option>)}
@@ -371,14 +379,14 @@ export default function ProviderSettings({
                     disabled={!row.provider}
                     placeholder={t("pws.fallback.modelPlaceholder")}
                     aria-label={t("pws.fallback.model")}
-                    onChange={e => updateFallbackRow(index, { model: e.target.value })}
+                    onChange={e => updateFallbackRow(row.id, { model: e.target.value })}
                   />
                 )}
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
                   aria-label={t("common.remove")}
-                  onClick={() => setFallback(rows => rows.filter((_, i) => i !== index))}
+                  onClick={() => setFallback(rows => rows.filter(r => r.id !== row.id))}
                 >
                   <IconTrash width={14} height={14} />
                 </button>
@@ -390,7 +398,7 @@ export default function ProviderSettings({
             className="btn btn-ghost btn-sm"
             style={{ alignSelf: "flex-start" }}
             disabled={fallbackPeers.length === 0}
-            onClick={() => setFallback(rows => [...rows, { provider: "", model: "" }])}
+            onClick={() => setFallback(rows => [...rows, ...withRowIds([{ provider: "", model: "" }])])}
           >
             <IconPlus width={14} height={14} /> {t("pws.fallback.add")}
           </button>
