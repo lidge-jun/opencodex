@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -104,6 +104,28 @@ function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
+/**
+ * Resolve a write target through any symlink before the temp+rename dance.
+ *
+ * rename(2) replaces a directory ENTRY. When the entry is itself a symlink
+ * (a dotfiles-managed `~/.codex/config.toml` -> `~/dotfiles/.codex/config.toml`,
+ * say), renaming a sibling temp file over it destroys the link and leaves a plain
+ * file behind — the repo silently stops receiving writes. Resolving first puts both
+ * the temp file and the rename target inside the link's real directory, so the entry
+ * being replaced is the real file and the symlink survives.
+ *
+ * Same-filesystem atomicity is preserved because the temp file stays beside its
+ * resolved target. An unresolvable path (not yet created) falls back to the literal
+ * path, which is the correct target for a first write.
+ */
+function resolveWriteTarget(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO = {
   write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
   harden: target => {
@@ -115,13 +137,14 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
   unlink: unlinkSync,
 }): void {
   recordOwnedConfigPath(resolveConfigDir(), path);
-  const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  const target = resolveWriteTarget(path);
+  const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {
     io.write(tmp, content);
     io.harden(tmp);
     hardened = true;
-    io.rename(tmp, path);
+    io.rename(tmp, target);
     forgetHardenedSecretPath(tmp);
   } catch (cause) {
     let scrubbed = false;
@@ -201,13 +224,14 @@ export async function atomicWriteFileAsync(
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,
   };
-  const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  const target = resolveWriteTarget(path);
+  const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {
     await effective.write(tmp, content);
     await effective.harden(tmp);
     hardened = true;
-    await effective.rename(tmp, path);
+    await effective.rename(tmp, target);
     forgetHardenedSecretPath(tmp);
   } catch (cause) {
     let scrubbed = false;
