@@ -259,6 +259,11 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
       : {}),
+    // Backfill the registry capability; when it is absent the server's unknown-capability
+    // default strips caller service_tier and never injects fastMode (fail closed).
+    ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
+      ? { supportsServiceTier: registryEntry.supportsServiceTier }
+      : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
     // Backfill the Google wire mode + Vertex project/location from the registry when the user

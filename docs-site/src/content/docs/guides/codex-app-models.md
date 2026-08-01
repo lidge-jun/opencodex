@@ -120,8 +120,11 @@ fast_mode = true
 ```
 
 But the model catalog and runtime request tier id use `priority`. opencodex preserves that split.
-Native OpenAI passthrough models keep fast support; routed non-OpenAI models strip service-tier
-metadata so the fast option is not advertised where it cannot be honored.
+Native OpenAI passthrough models keep fast support. Responses providers only receive proxy-generated
+OpenAI-specific `service_tier` when their registry capability explicitly opts in; an omitted
+capability fails closed — a caller-supplied value is stripped and fastMode never injects one.
+DeepSeek V4 Flash's and Volcengine Agent Plan's native Responses routes are explicitly marked
+unsupported, so the field stays out of their upstream requests.
 
 ## Subagent selection
 

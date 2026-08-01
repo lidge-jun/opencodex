@@ -540,9 +540,9 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
  * `prompt` is a reference to a server-stored prompt template — the most stateful
  * field in the accepted schema.
  *
- * `service_tier` is deliberately NOT dropped: the server writes it for fast mode
- * (`responses/core.ts`), and silently deleting a configured knob inside an adapter is
- * worse than forwarding a parameter the upstream ignores.
+ * `service_tier` is deliberately NOT dropped here: the server owns the provider
+ * capability decision in `responses/core.ts` after the final route is known, so the
+ * adapter must stay provider-agnostic and forward what normalization left in place.
  *
  * MUST run before the composed sanitize chain below: `stripItemIdsWhenUnstored` keys
  * off `store === false`, and a stateless upstream cannot resolve a stored item id.

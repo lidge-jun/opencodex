@@ -161,6 +161,8 @@ export interface ProviderRegistryEntry {
    * replay miss are repaired rather than forwarded.
    */
   statelessResponses?: boolean;
+  /** Responses service-tier capability: true=proxy override, false=strip, unset=fail closed (strip + no inject). */
+  supportsServiceTier?: boolean;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -574,6 +576,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-responses",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     authKind: "forward",
+    supportsServiceTier: true,
     codexAccountMode: "pool",
     featured: true,
     note: "Codex login account pool (default) or Direct main-account mode via codexAccountMode",
@@ -745,6 +748,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     authKind: "key",
+    supportsServiceTier: true,
     featured: true,
     dashboardUrl: "https://platform.openai.com/api-keys",
     defaultModel: "gpt-5.5",
@@ -968,6 +972,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // "The API is stateless: responses and conversations are not stored on the
     // server." https://api-docs.deepseek.com/api/create-response/
     statelessResponses: true,
+    // DeepSeek's Responses schema does not document OpenAI's service_tier field.
+    supportsServiceTier: false,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
@@ -1245,6 +1251,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     responsesPath: "/responses",
     adapter: "openai-responses",
     authKind: "key",
+    // The Agent Plan Responses route does not document OpenAI's service_tier field, so
+    // an unknown caller tier or proxy fastMode priority must never be forwarded.
+    supportsServiceTier: false,
     preserveCustomDestination: true,
     dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
     defaultModel: "deepseek-v4-pro",

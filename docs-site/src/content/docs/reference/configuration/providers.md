@@ -52,6 +52,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (or alias `azure`). |
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; collision-safe key presets preserve an older same-named custom destination. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
+| `supportsServiceTier?` | `boolean` | Responses service-tier capability: `true` lets proxy `fastMode` set/remove OpenAI's fast/priority `service_tier`; `false` strips the field for an upstream that rejects it; omitted fails closed — a caller-supplied value is stripped and `fastMode` never injects one. Registry presets backfill this capability; custom providers should set `true` only when the upstream documents `service_tier`. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
 | `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |

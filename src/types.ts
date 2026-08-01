@@ -937,6 +937,14 @@ export interface OcxProviderConfig {
    */
   statelessResponses?: boolean;
   /**
+   * Responses service-tier capability. `true` lets proxy fastMode set/remove the
+   * OpenAI `service_tier`; `false` strips it for an upstream that rejects the field;
+   * omitted/unknown fails closed: a caller-supplied value is stripped and fastMode never
+   * injects one. Registry presets backfill the capability; custom providers can opt in
+   * explicitly only when the upstream documents `service_tier`.
+   */
+  supportsServiceTier?: boolean;
+  /**
    * Explicit opt-in for non-registry private-network destinations such as localhost, RFC1918,
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
    */

@@ -799,14 +799,31 @@ async function applyFinalRouteRequestNormalization(args: {
   // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
   applyOpenAiVirtualModel(parsed, route, logCtx);
 
-  // Fast mode override for OpenAI-routed models.
-  if (config.fastMode !== undefined && route.provider.adapter === "openai-responses") {
-    const tier = config.fastMode ? "priority" : undefined;
-    if (parsed._rawBody && typeof parsed._rawBody === "object") {
-      if (tier) (parsed._rawBody as Record<string, unknown>).service_tier = tier;
-      else delete (parsed._rawBody as Record<string, unknown>).service_tier;
+  // OpenAI `service_tier` is a provider capability, not a property of the Responses wire.
+  // Some Responses-compatible providers (DeepSeek, Volcengine Agent Plan, for example) do
+  // not document the field and reject unknown top-level parameters, so an unknown or
+  // omitted capability must fail closed: strip a caller-supplied tier and never inject
+  // one. Only an explicit `supportsServiceTier: true` preserves or rewrites the field.
+  const isResponsesWire = route.provider.adapter === "openai-responses";
+  if (isResponsesWire) {
+    const raw = parsed._rawBody && typeof parsed._rawBody === "object"
+      ? parsed._rawBody as Record<string, unknown>
+      : undefined;
+    if (route.provider.supportsServiceTier === true && config.fastMode !== undefined) {
+      const tier = config.fastMode ? "priority" : undefined;
+      if (raw) {
+        if (tier) raw.service_tier = tier;
+        else delete raw.service_tier;
+      }
+      parsed.options.serviceTier = tier;
+    } else if (route.provider.supportsServiceTier !== true) {
+      // Unknown capability fails closed: DeepSeek's Responses schema does not document
+      // `service_tier`, so leaving a caller-supplied value in the passthrough body would
+      // still produce a 400 even when fastMode is unset. The same default protects other
+      // unclassified Responses gateways until they opt in explicitly.
+      if (raw) delete raw.service_tier;
+      parsed.options.serviceTier = undefined;
     }
-    parsed.options.serviceTier = tier;
   }
 
   {

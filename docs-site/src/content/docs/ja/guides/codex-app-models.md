@@ -87,6 +87,7 @@ fast_mode = true
 ```
 
 ただし、モデル カタログとランタイム リクエスト層 ID は `priority` を使用します。 opencodex はその分割を保持します。ネイティブ OpenAI パススルー モデルは高速サポートを維持します。ルーティングされた非 OpenAI モデルはサービス層メタデータを削除するため、高速オプションが受け入れられない場合はアドバタイズされません。
+ネイティブ OpenAI パススルー モデルは fast をサポートします。Responses provider は registry capability が明示的に許可する場合だけ proxy が生成した OpenAI 固有の `service_tier` を受け取ります。capability を省略すると fail-closed となり、呼び出し側の値は削除され、fastMode は注入しません。DeepSeek V4 Flash と Volcengine Agent Plan のネイティブ Responses ルートは明示的に未対応とされるため、このフィールドは上流に送られません。
 
 ## サブエージェントの選択
 

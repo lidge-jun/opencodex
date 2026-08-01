@@ -5,6 +5,7 @@ export interface DerivedKeyLoginProvider {
   label: string;
   baseUrl: string;
   responsesPath?: string;
+  supportsServiceTier?: boolean;
   adapter: string;
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   dashboardUrl: string;
@@ -158,6 +159,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       label: entry.label,
       baseUrl: entry.baseUrl,
       ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
+      ...(entry.supportsServiceTier !== undefined ? { supportsServiceTier: entry.supportsServiceTier } : {}),
       adapter: entry.adapter,
       ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
       dashboardUrl: entry.dashboardUrl,
@@ -259,6 +261,11 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // learned this route still gets backfilled.
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
+  // Fail-closed backfill: when the registry knows the capability it always applies it,
+  // and when it does not, the server's unknown-capability default strips caller tiers.
+  if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) {
+    prov.supportsServiceTier = entry.supportsServiceTier;
+  }
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];

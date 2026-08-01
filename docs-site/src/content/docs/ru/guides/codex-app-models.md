@@ -124,8 +124,11 @@ fast_mode = true
 ```
 
 Но каталог моделей и id tier'а во время выполнения используют `priority`. opencodex сохраняет это
-разделение. Нативные passthrough-модели OpenAI сохраняют поддержку fast; routed не-OpenAI модели
-теряют service-tier metadata, чтобы опция fast не рекламировалась там, где её нельзя выполнить.
+разделение. Нативные passthrough-модели OpenAI сохраняют поддержку fast. Responses-провайдеры
+получают созданное proxy поле `service_tier` только при явном разрешении registry capability; при
+отсутствии capability применяется fail-closed — значение вызывающей стороны удаляется, а fastMode
+ничего не инъецирует. Нативные Responses-маршруты DeepSeek V4 Flash и Volcengine Agent Plan явно
+помечены как неподдерживающие поле, поэтому оно не отправляется на их upstream.
 
 ## Выбор подагентов
 

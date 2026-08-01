@@ -41,6 +41,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai` (または別名 `azure`) のいずれか。 |
 | `baseUrl` | `string` |アップストリーム API のベース URL。ほとんどの組み込み固定エンドポイントは不一致を無視します。衝突安全キー プリセットは、古い同じ名前のカスタム宛先を保持します。 |
 | `responsesPath?` | `string` |キー認証 `openai-responses` リクエストの相対リソース パス。 `/` で始まり、スキーム、クエリ、またはフラグメントが含まれていない必要があります。 |
+| `supportsServiceTier?` | `boolean` | Responses の tier 能力。`true` は proxy の `fastMode` による OpenAI `service_tier` の設定/削除、`false` は未対応 upstream への送信前削除、未設定は fail-closed（呼び出し側の値を削除し、`fastMode` は注入しない）を意味します。registry preset が補完するため、custom provider は上流仕様で確認できる場合だけ `true` にしてください。 |
 | `disabled?` | `boolean` |プロバイダーをディスク上に保持しますが、ルーティングおよびモデル/カタログのリストからは除外します。 |
 | `apiKey?` | `string` | API キー、またはリクエスト時に解決される `${ENV_VAR}` / `$ENV_VAR` 参照。 |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic キーのヘッダー スタイル。デフォルトはネイティブ `x-api-key` です。キー認証 `anthropic` プロバイダーにのみ有効です。 |

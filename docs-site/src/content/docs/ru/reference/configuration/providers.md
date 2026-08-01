@@ -57,6 +57,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (или alias `azure`). |
 | `baseUrl` | `string` | Базовый URL API upstream'а. Большинство built-in fixed-endpoint'ов игнорируют несовпадение; collision-safe key-preset'ы сохраняют старый custom destination с тем же именем. |
 | `responsesPath?` | `string` | Relative resource path для key-auth запросов `openai-responses`. Должен начинаться с `/` и не может содержать scheme, query или fragment. |
+| `supportsServiceTier?` | `boolean` | Capability уровня Responses: `true` разрешает proxy `fastMode` устанавливать/удалять OpenAI `service_tier`; `false` удаляет поле перед отправкой upstream, который его не поддерживает; отсутствие значения означает fail-closed — значение вызывающей стороны удаляется, а `fastMode` ничего не инъецирует. Registry preset дополняет capability; для custom provider задавайте `true` только при подтверждении в документации upstream. |
 | `disabled?` | `boolean` | Сохранить провайдера на диске, но исключить его из routing'а и из model/catalog-listing'ов. |
 | `apiKey?` | `string` | API-key либо ссылка `${ENV_VAR}` / `$ENV_VAR`, разрешаемая при каждом запросе. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Header-style для ключа Anthropic. По умолчанию нативный `x-api-key`; допустим только для key-auth-провайдеров `anthropic`. |

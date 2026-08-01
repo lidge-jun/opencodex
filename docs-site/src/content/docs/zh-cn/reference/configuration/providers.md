@@ -41,6 +41,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai`（或别名 `azure`）之一。 |
 | `baseUrl` | `string` | 上游 API 基础 URL。大多数内置固定端点会忽略不匹配的值；具备冲突安全键的预设会保留一个更早、同名的自定义目标。 |
 | `responsesPath?` | `string` | 用于 key-auth `openai-responses` 请求的相对资源路径。必须以 `/` 开头，且不能包含 scheme、query 或 fragment。 |
+| `supportsServiceTier?` | `boolean` | Responses 的 service-tier 能力：`true` 允许 proxy 的 `fastMode` 设置/移除 OpenAI fast/priority 的 `service_tier`；`false` 会为拒绝该字段的上游移除它；省略时 fail-closed —— 移除调用方已有值，且不让 `fastMode` 注入。registry preset 会回填此能力；自定义 provider 只有在上游文档明确支持时才应设为 `true`。 |
 | `disabled?` | `boolean` | 将提供者保留在磁盘上，但从路由和模型/目录列表中排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key 头部样式。默认使用原生 `x-api-key`；仅对 key-auth `anthropic` 提供者有效。 |

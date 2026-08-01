@@ -84,6 +84,7 @@ fast_mode = true
 ```
 
 但模型目录和运行时请求里的 tier id 使用的是 `priority`。opencodex 保留了这个拆分。原生 OpenAI 透传模型保留 fast 支持；路由到非 OpenAI 模型时会移除 service-tier 元数据，因此无法兑现的 fast 选项不会被展示出来。
+原生 OpenAI 透传模型保留 fast 支持。只有 registry capability 明确允许时，Responses provider 才会收到 proxy 注入的 OpenAI 专用 `service_tier`；省略 capability 时 fail-closed——调用方已有值会被移除，且 fastMode 不会注入。DeepSeek V4 Flash 与 Volcengine Agent Plan 的原生 Responses 路由被明确标记为不支持该字段，因此不会把它发送给上游。
 
 ## 子代理选择
 
