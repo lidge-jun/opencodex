@@ -180,11 +180,19 @@ describe("GET /api/system/memory", () => {
     });
     await new Promise(resolve => setTimeout(resolve, 20));
     const req = new Request("http://127.0.0.1:10100/api/system/memory");
-    const res = await handleManagementAPI(req, new URL(req.url), config());
+    const previousRuntimeSource = process.env.OCX_BUN_RUNTIME_SOURCE;
+    process.env.OCX_BUN_RUNTIME_SOURCE = "process";
+    let res: Response | null;
+    try {
+      res = await handleManagementAPI(req, new URL(req.url), config());
+    } finally {
+      if (previousRuntimeSource === undefined) delete process.env.OCX_BUN_RUNTIME_SOURCE;
+      else process.env.OCX_BUN_RUNTIME_SOURCE = previousRuntimeSource;
+    }
     expect(res).not.toBeNull();
     expect(res!.status).toBe(200);
 	    const body = await res!.json() as {
-	      pid: number; bunVersion: string; platform: string; rss: number;
+	      pid: number; bunVersion: string; bunRevision: string; bunRuntimeSource: string; platform: string; rss: number;
 	      heapUsed: number; external: number; arrayBuffers: number; observedBytes: number; observedMetric: string;
 	      jscHeap: { heapSize: number } | null;
 	      responseState: {
@@ -203,6 +211,8 @@ describe("GET /api/system/memory", () => {
 	    };
     expect(body.pid).toBe(process.pid);
     expect(body.bunVersion).toBe(Bun.version);
+	    expect(body.bunRevision).toBe(Bun.revision);
+	    expect(body.bunRuntimeSource).toBe("process");
 	    expect(body.rss).toBeGreaterThan(0);
 	    expect(body.heapUsed).toBeGreaterThan(0);
 	    expect(body.external).toBeGreaterThanOrEqual(0);

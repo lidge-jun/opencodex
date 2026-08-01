@@ -16,6 +16,7 @@ import { gracefulStopHost } from "../lib/process-control";
 import { maskAccountId } from "../lib/privacy";
 import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
 import { configuredAdminToken } from "../lib/admin-secrets";
+import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { readCodexTokens } from "../codex/auth-collision";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
@@ -523,6 +524,8 @@ export async function probeWham(fetchImpl: typeof fetch = fetch): Promise<WhamPr
 export type ServiceMemoryData = {
   pid: number;
   bunVersion: string;
+  bunRevision?: string;
+  bunRuntimeSource?: BunRuntimeSource;
   platform: string;
   rss: number;
   heapUsed: number;
@@ -579,6 +582,12 @@ export async function fetchServiceMemory(
       data: {
         pid: body.pid,
         bunVersion: body.bunVersion,
+        bunRevision: typeof body.bunRevision === "string" ? body.bunRevision : undefined,
+        bunRuntimeSource: body.bunRuntimeSource === "override"
+          || body.bunRuntimeSource === "bundled"
+          || body.bunRuntimeSource === "process"
+          ? body.bunRuntimeSource
+          : undefined,
         platform: typeof body.platform === "string" ? body.platform : "unknown",
         rss: body.rss,
         heapUsed: typeof body.heapUsed === "number" ? body.heapUsed : 0,
@@ -625,7 +634,13 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
     return lines;
   }
   const d = report.data;
-  lines.push(`  ok     service pid ${d.pid}: Bun ${d.bunVersion} on ${d.platform}`);
+  const sourceLabel = d.bunRuntimeSource === "override"
+    ? "OPENCODEX_BUN_PATH override"
+    : d.bunRuntimeSource ?? "unknown";
+  lines.push(
+    `  ok     service pid ${d.pid}: Bun ${d.bunVersion} on ${d.platform}`
+      + `${d.bunRevision ? ` (revision=${d.bunRevision}, source=${sourceLabel})` : ` (source=${sourceLabel})`}`,
+  );
   const observed = observedMemory(d);
   const observedBytes = d.observedBytes ?? d.watchdog?.observedBytes ?? observed.bytes;
   const observedMetric = d.observedMetric ?? d.watchdog?.observedMetric ?? observed.metric;
@@ -652,9 +667,19 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   } else {
     lines.push("  !!     high RSS, indeterminate split — capture two doctor runs over time to see the trend");
   }
-  // Version-claiming (never binary-claiming): the endpoint cannot distinguish
-  // the bundled binary from an OPENCODEX_BUN_PATH override of the same version.
+  // Runtime provenance is launcher-asserted and allowlisted. A missing marker is
+  // intentionally unknown; never infer an already-running service from this shell.
   if (d.platform === "win32" && d.eagerRelay?.reason === "auto-known-bad") {
+    if (d.bunRuntimeSource === "override") {
+      lines.push("         OPENCODEX_BUN_PATH is already active, but this runtime remains unvalidated for automatic eager relay.");
+      lines.push("         The conservative auto-known-bad decision remains in effect; bunRevision is informational only.");
+      return lines;
+    }
+    if (d.bunRuntimeSource === undefined) {
+      lines.push("         runtime source was not reported by this legacy service/payload; an active override cannot be determined safely.");
+      lines.push("         Repair or reinstall the service to add provenance; the conservative auto-known-bad decision remains in effect.");
+      return lines;
+    }
     lines.push(`         service is running Bun ${d.bunVersion} on Windows — a version affected by the upstream Bun memory issue.`);
     lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
     lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");

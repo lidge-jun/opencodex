@@ -79,6 +79,13 @@ describe("service listen-port bake", () => {
     expect(buildPlist()).toContain("start --port 13337");
     expect(buildUnit()).toContain("start --port 13337");
   });
+
+  test("scheduler, launchd, and systemd artifacts bake the selected Bun runtime source", () => {
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    expect(script).toMatch(/set "OCX_BUN_RUNTIME_SOURCE=(override|bundled|process)"/);
+    expect(buildPlist()).toMatch(/<key>OCX_BUN_RUNTIME_SOURCE<\/key><string>(override|bundled|process)<\/string>/);
+    expect(buildUnit()).toMatch(/Environment="OCX_BUN_RUNTIME_SOURCE=(override|bundled|process)"/);
+  });
 });
 
 describe("systemd service unit", () => {

@@ -39,6 +39,7 @@ describe("winsw xml", () => {
     const xml = buildWinswXml(entry, env);
 
     expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
+    expect(xml).toMatch(/<env name="OCX_BUN_RUNTIME_SOURCE" value="(override|bundled|process)"\/>/);
     expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
     expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());

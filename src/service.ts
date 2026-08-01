@@ -15,7 +15,7 @@ import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime } from "./codex/home";
-import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
+import { BUN_RUNTIME_SOURCE_ENV, durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
 import { randomUUID } from "node:crypto";
@@ -269,12 +269,14 @@ function writeServiceApiTokenFile(): string | null {
 
 export function buildPlist(): string {
   const { bun, cli } = cliEntry();
+  const bunRuntime = durableBunRuntime();
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
+    `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntime.source}</string>`,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
@@ -1032,6 +1034,7 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     // it to UTF-8 is safe (no leak into user shells) and lets cmd parse UTF-8 remnants.
     "chcp 65001 >nul",
     windowsBatchSet("OCX_SERVICE", "1"),
+    windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntime.source),
     windowsBatchSet("PATH", path, "pathList"),
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
@@ -1571,12 +1574,14 @@ function unitPath(): string {
 
 export function buildUnit(): string {
   const { bun, cli } = cliEntry();
+  const bunRuntime = durableBunRuntime();
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
+    systemdEnvironmentAssignment(BUN_RUNTIME_SOURCE_ENV, bunRuntime.source),
     systemdEnvironmentAssignment("PATH", path),
     codexHome,
     opencodexHome,
@@ -2172,4 +2177,3 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       process.exit(1);
   }
 }
-

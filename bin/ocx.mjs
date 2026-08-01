@@ -317,6 +317,7 @@ function bunBinDir() {
 }
 
 const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
+const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
 
 function findBunBinary(bunDir) {
   // The npm `bun` package ships the binary as bin/bun.exe on every platform;
@@ -347,7 +348,7 @@ function resolveBun() {
   const override = process.env[BUN_OVERRIDE_ENV]?.trim();
   if (override) {
     const overridePath = resolve(override);
-    if (isRealBunBinary(overridePath)) return overridePath;
+    if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };
     console.error(
       `opencodex: ${BUN_OVERRIDE_ENV} is missing, unreadable, or not a complete Bun binary; falling back to the bundled runtime.`,
     );
@@ -361,7 +362,7 @@ function resolveBun() {
   }
 
   let bin = findBunBinary(bunDir);
-  if (bin) return bin;
+  if (bin) return { path: bin, source: "bundled" };
 
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
@@ -371,7 +372,7 @@ function resolveBun() {
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
   if (!bin) fail("Bun binary missing after install attempt.");
-  return bin;
+  return { path: bin, source: "bundled" };
 }
 
 // `ocx update --help` prints usage and exits WITHOUT side effects. The npm launcher
@@ -389,7 +390,8 @@ if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstal
   runNpmSelfUpdate();
 }
 
-const bun = resolveBun();
+const runtime = resolveBun();
+const bun = runtime.path;
 
 // Run the Bun child asynchronously and FORWARD termination signals to it, then wait
 // for its graceful shutdown before this launcher exits. The previous blocking
@@ -414,7 +416,11 @@ const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
   .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
 const child = spawn(bun, [cliPath, ...process.argv.slice(2)], {
   stdio: "inherit",
-  env: { ...process.env, OCX_PRE_BUN_ANTHROPIC_ENV: preBunAnthropicSlots.join(",") },
+  env: {
+    ...process.env,
+    OCX_PRE_BUN_ANTHROPIC_ENV: preBunAnthropicSlots.join(","),
+    [BUN_RUNTIME_SOURCE_ENV]: runtime.source,
+  },
 });
 
 // Windows has no real POSIX signals (no SIGHUP); forwarding is best-effort there.

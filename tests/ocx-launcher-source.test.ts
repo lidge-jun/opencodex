@@ -43,7 +43,7 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
   test("valid Bun overrides are selected before the bundled runtime", () => {
     expect(source).toContain('const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";');
     expect(source).toContain("const overridePath = resolve(override);");
-    expect(source).toContain("if (isRealBunBinary(overridePath)) return overridePath;");
+    expect(source).toContain('if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };');
 
     const resolveStart = source.indexOf("function resolveBun() {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
@@ -53,6 +53,13 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(overrideCheck).toBeGreaterThan(resolveStart);
     expect(overrideResolve).toBeGreaterThan(overrideCheck);
     expect(bundledLookup).toBeGreaterThan(overrideResolve);
+  });
+
+  test("the direct Node launcher passes its allowlisted runtime source to Bun", () => {
+    expect(source).toContain('const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
+    expect(source).toContain('[BUN_RUNTIME_SOURCE_ENV]: runtime.source');
+    expect(source).toContain('source: "override"');
+    expect(source).toContain('source: "bundled"');
   });
 
   test("invalid Bun overrides warn safely and fall back without throwing", () => {

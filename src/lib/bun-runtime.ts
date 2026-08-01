@@ -19,10 +19,13 @@ export { isRealBunBinary };
 const require = createRequire(import.meta.url);
 
 const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
+export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
+
+export type BunRuntimeSource = "override" | "bundled" | "process";
 
 export type DurableBunRuntime = {
   path: string;
-  source: "override" | "bundled" | "process";
+  source: BunRuntimeSource;
   overrideEnv: typeof BUN_OVERRIDE_ENV;
 };
 
@@ -58,6 +61,22 @@ export function durableBunRuntime(): DurableBunRuntime {
   const bundled = bundledBunPath();
   if (bundled) return { path: bundled, source: "bundled", overrideEnv: BUN_OVERRIDE_ENV };
   return { path: process.execPath, source: "process", overrideEnv: BUN_OVERRIDE_ENV };
+}
+
+/**
+ * Runtime origin asserted by the launcher that started this process.
+ *
+ * This is diagnostic provenance, not a security boundary. Accept only the
+ * launcher allowlist and leave a missing/invalid marker unknown. In particular,
+ * never inspect the current shell to guess how an already-running service began.
+ */
+export function reportedBunRuntimeSource(
+  env: NodeJS.ProcessEnv = process.env,
+): BunRuntimeSource | undefined {
+  const source = env[BUN_RUNTIME_SOURCE_ENV]?.trim();
+  return source === "override" || source === "bundled" || source === "process"
+    ? source
+    : undefined;
 }
 
 /**
