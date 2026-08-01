@@ -184,6 +184,18 @@ describe("Codex autostart shim", () => {
     expect(script).toContain("& 'C:\\codex-real.ps1' @args");
   });
 
+  test("shim builders preserve explicit Bun runtime provenance", () => {
+    for (const source of ["override", "bundled"] as const) {
+      const unix = buildUnixCodexShim("/bin/codex", "/bin/bun", "/cli.ts", undefined, source);
+      const cmd = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts", source);
+      const powershell = buildWindowsPowerShellCodexShim("C:\\codex.ps1", "C:\\bun.exe", "C:\\cli.ts", source);
+
+      expect(unix).toContain(`OCX_BUN_RUNTIME_SOURCE='${source}'`);
+      expect(cmd).toContain(`set "OCX_BUN_RUNTIME_SOURCE=${source}"`);
+      expect(powershell).toContain(`$env:OCX_BUN_RUNTIME_SOURCE = '${source}'`);
+    }
+  });
+
   test("Unix shim treats executable paths as literals instead of shell interpolation", () => {
     if (process.platform === "win32") return;
 
