@@ -11,8 +11,10 @@
  * time (so we cannot miss `self.close()` / early exit), stays in `liveWorkers`
  * until that close settles, and `drainStorageWorkers()` joins every in-flight
  * terminate. Spawns are serialized through `withStorageWorkerSpawnGate` so the
- * next Worker cannot be created until prior threads have exited. On Windows, a
- * post-close settle covers the OS join gap Bun does not expose.
+ * next Worker cannot be created until prior threads have exited. On Windows and
+ * macOS, a post-close settle covers the OS join gap Bun does not expose
+ * (Windows unbalanced join panic; macOS Silicon balanced-count segfault under
+ * `bun test --isolate`).
  */
 
 import { createAdmissionGate, type AdmissionMetrics, type AdmissionReservation } from "../lib/admission";
@@ -47,8 +49,15 @@ let spawnGate: Promise<void> = Promise.resolve();
  */
 let spawnCancelEpoch = 0;
 
-/** Windows OS-join gap after the `close` event (not a CI job-timeout bump). */
-const WINDOWS_WORKER_JOIN_MS = 250;
+/**
+ * OS-join gap after the `close` event on platforms where Bun's Worker reclaim
+ * races the isolate/file boundary (not a CI job-timeout bump).
+ */
+const WORKER_OS_JOIN_MS = 250;
+
+function needsWorkerOsJoinSettle(): boolean {
+  return process.platform === "win32" || process.platform === "darwin";
+}
 
 /** Invalidate spawn callbacks still waiting on the gate (reset / server drain). */
 export function cancelQueuedStorageWorkerSpawns(): void {
@@ -161,13 +170,16 @@ export function terminateStorageWorker(worker: Worker, timeoutMs = 5_000): Promi
         tracked.resolveClosed();
       }
       await tracked.closed;
-      // Always run the Windows settle before throwing on timeout: the timer
+      // Disarm before the OS-join settle: a late timer firing during the sleep
+      // would set timedOut after close already won and throw a false timeout.
+      clearTimeout(timer);
+      // Always run the OS-join settle before throwing on timeout: the timer
       // only forces `closed`, it does not prove the OS thread has exited.
       // Callers that catch and continue (e.g. drainAndShutdown) still need
       // that gap before the next isolate reclaim or server.stop.
-      if (process.platform === "win32") {
+      if (needsWorkerOsJoinSettle()) {
         await Bun.sleep(0);
-        await Bun.sleep(WINDOWS_WORKER_JOIN_MS);
+        await Bun.sleep(WORKER_OS_JOIN_MS);
       }
       if (timedOut) {
         throw new Error(`storage worker did not exit within ${timeoutMs}ms`);
