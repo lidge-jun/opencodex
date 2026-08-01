@@ -381,6 +381,17 @@ ocx login xai
 
 ## Дашборд
 
+### `ocx remote <подкоманда>`
+
+Headless-эквивалент страницы **Remote**: `status` читает защищённое локальное состояние, `link`
+запускает подтверждение GitHub, `activate --name <имя> --slug <slug>` резервирует hostname и запускает
+встроенный подписанный Agent, `pairing-code` сохраняет прежний 10-минутный путь, а `disconnect --yes` отзывает этот ПК. Отдельный
+пароль передаётся через stdin, чтобы не попадать в аргументы процесса и историю shell.
+
+```bash
+printf '%s\n' 'long-remote-password' | ocx remote password
+```
+
 ### `ocx gui`
 
 Открывает [веб-дашборд](/ru/guides/web-dashboard/) по адресу `http://localhost:<port>`,

@@ -392,6 +392,14 @@ WebSocket 전송은 기본적으로 꺼져 있습니다. Codex가 HTTP/SSE 대�
 
 ### 원격 접근
 
+대시보드에는 중앙 `opencodexpages.me` MVP용 초대형 **Remote** 페이지가 추가됐습니다. 로컬
+`ocx gui`에서 GitHub로 이 PC를 승인하고, 별도 Remote 비밀번호와 hostname을 만든 뒤
+Tunnel/Agent provisioning 상태를 확인합니다. GitHub OAuth 토큰은 저장하거나 PC로 보내지 않습니다.
+관리자 권한이 필요한 서명된 Linux helper installer와 Windows/macOS helper는 아직 배포하지 않으므로
+일반 공개 기능이 아니며 **Super Sync는 포함하지 않습니다**.
+
+아래 LAN bind는 중앙 Remote 서비스와 별개의 자체 관리 방식입니다.
+
 기본적으로 opencodex는 `127.0.0.1`(루프백)에 바인딩되며 별도 인증이 필요 없습니다.
 `"hostname": "0.0.0.0"`으로 LAN에 노출할 경우, opencodex는 관리 API(`/api/*`)와 데이터 플레인
 (`/v1/responses`, `/v1/images/generations`, `/v1/images/edits`) 모두에 bearer 토큰을 요구합니다:

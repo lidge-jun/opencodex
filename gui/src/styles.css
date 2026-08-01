@@ -1642,6 +1642,73 @@ dialog.modal-overlay::backdrop {
 .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
 .modal-actions .btn { flex: 1; }
 
+/* Remote is a local control-plane onboarding surface: calm, medium-density cards use the
+   dashboard's existing opaque material while the three-step rail keeps account, password,
+   and Tunnel ownership visibly separate. */
+.remote-page { max-width: 900px; }
+.remote-page-sub { margin-bottom: 0; }
+.remote-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 22px 0 16px; }
+.remote-step { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--faint); background: var(--surface); }
+.remote-step > span { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-round); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.remote-step > span svg { width: 13px; height: 13px; }
+.remote-step strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-label); }
+.remote-step.is-current { color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.remote-step.is-current > span { color: var(--accent-hover); border-color: var(--accent-ring); background: var(--accent-soft); }
+.remote-step.is-done { color: var(--green); border-color: color-mix(in srgb, var(--green) 32%, var(--border)); }
+.remote-step.is-done > span { color: var(--green); border-color: transparent; background: var(--green-soft); }
+.remote-hero { display: flex; align-items: flex-start; gap: 18px; padding: 24px; margin-bottom: 14px; }
+.remote-hero-icon, .remote-account-icon { width: 46px; height: 46px; flex: 0 0 auto; display: grid; place-items: center; border-radius: var(--radius); color: var(--accent-hover); background: var(--accent-soft); }
+.remote-hero-icon svg, .remote-account-icon svg { width: 22px; height: 22px; }
+.remote-hero > div:last-child { min-width: 0; }
+.remote-hero h3, .remote-password-panel h3 { margin: 0 0 6px; font-size: var(--text-subtitle); }
+.remote-hero p, .remote-password-panel p { margin: 0 0 18px; max-width: 62ch; color: var(--muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.remote-explain-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.remote-explain { display: grid; align-content: start; gap: 8px; padding: 18px; }
+.remote-explain svg { width: 20px; height: 20px; color: var(--muted); }
+.remote-explain strong { font-size: var(--text-control); }
+.remote-explain span { color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
+.remote-code { display: inline-flex; flex-direction: column; gap: 5px; min-width: 220px; padding: 12px 14px; margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); }
+.remote-code span { color: var(--muted); font-size: var(--text-caption); }
+.remote-code strong { font-family: var(--font-code); font-size: var(--text-subtitle); letter-spacing: 0.08em; }
+.remote-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.remote-waiting, .remote-next-note { display: block; margin-top: 14px; color: var(--muted); font-size: var(--text-label); }
+.remote-domain-input { display: grid; grid-template-columns: minmax(120px, 1fr) auto; align-items: center; gap: 10px; }
+.remote-domain-input > span { color: var(--muted); font-size: var(--text-label); white-space: nowrap; }
+.remote-address { display: block; margin: 12px 0 4px; color: var(--accent); font-size: var(--text-label); overflow-wrap: anywhere; }
+.remote-open { width: fit-content; margin-top: 16px; }
+.remote-waiting::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: var(--radius-round); background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+.remote-account-card { display: flex; align-items: center; gap: 14px; padding: 16px; margin-bottom: 14px; }
+.remote-account-icon { width: 38px; height: 38px; color: var(--green); background: var(--green-soft); }
+.remote-account-icon svg { width: 18px; height: 18px; }
+.remote-account-card > div:nth-child(2) { display: flex; flex-direction: column; min-width: 0; }
+.remote-account-card > div:nth-child(2) > span, .remote-account-card small { color: var(--muted); font-size: var(--text-caption); overflow: hidden; text-overflow: ellipsis; }
+.remote-account-card .btn { margin-left: auto; }
+.remote-password-panel { padding: 22px; }
+.remote-password-panel .panel-head { display: flex; align-items: flex-start; justify-content: flex-start; gap: 12px; }
+.remote-password-panel .panel-head > div { min-width: 0; }
+.remote-password-panel .panel-head > svg { width: 20px; height: 20px; margin-top: 2px; color: var(--muted); flex: 0 0 auto; }
+.remote-password-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 16px; }
+.remote-password-grid label { display: grid; gap: 6px; }
+.remote-password-grid label > span { color: var(--muted); font-size: var(--text-label); }
+.remote-device-panel { margin-top: 14px; }
+.remote-device-list { display: grid; gap: 8px; margin-top: 15px; }
+.remote-device-row { min-height: 58px; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 9px 12px; display: grid; grid-template-columns: 9px 1fr auto; align-items: center; gap: 11px; }
+.remote-device-row > span { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
+.remote-device-row > span.is-online { background: var(--success); opacity: 1; box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 14%, transparent); }
+.remote-device-row > div { display: grid; gap: 3px; min-width: 0; }
+.remote-device-row small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.remote-device-row em { color: var(--muted); font-size: var(--text-label); font-style: normal; }
+.remote-ready { border-color: color-mix(in srgb, var(--green) 34%, var(--border)); background: color-mix(in srgb, var(--green-soft) 58%, var(--surface)); }
+.remote-ready .remote-hero-icon { color: var(--green); background: var(--green-soft); }
+.remote-loading { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.remote-loading svg { width: 18px; height: 18px; animation: spin 1s linear infinite; }
+@media (max-width: 700px) {
+  .remote-steps, .remote-explain-grid, .remote-password-grid { grid-template-columns: 1fr; }
+  .remote-hero { padding: 18px; }
+  .remote-account-card { align-items: flex-start; flex-wrap: wrap; }
+  .remote-account-card .btn { margin-left: 52px; }
+}
+
 /* request logs: clamped request id, status + details affordance, detail modal */
 .log-reqid {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;

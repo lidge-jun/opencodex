@@ -466,6 +466,14 @@ WebSocket transport is off by default. Set `"websockets": true` only if you want
 
 ### Remote access
 
+The dashboard now has an invite-only **Remote** page for the central `opencodexpages.me` MVP. It starts
+in local `ocx gui`: approve this PC with GitHub, set a separate Remote password, reserve a hostname,
+and follow Tunnel/Agent provisioning. GitHub OAuth tokens are not stored or sent to the PC. The signed
+privileged Linux helper installer and Windows/macOS helpers are not shipped yet, so this is not a
+general release and **does not include Super Sync**.
+
+The LAN bind below is a separate, self-managed option and does not use the central Remote service.
+
 By default opencodex binds to `127.0.0.1` (loopback) and requires no extra authentication.
 If you set `"hostname": "0.0.0.0"` to expose the proxy on the LAN, opencodex requires a bearer token
 to protect both the management API (`/api/*`) and the data-plane (`/v1/responses`,

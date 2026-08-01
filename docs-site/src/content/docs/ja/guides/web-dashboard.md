@@ -21,6 +21,17 @@ ocx start
 bun run dev:gui
 ```
 
+## Remote プライベートベータ
+
+**Remote** ページでは、ローカルの `ocx gui` からリモート設定を始めます。
+
+1. GitHub で続行します。`opencodexpages.me` が OAuth を処理し、デバイスコードの承認を求めます。
+2. GitHub パスワードとは別の Remote パスワードを設定します。GitHub OAuth トークンは保存せず、ローカル PC にも送りません。
+3. 重複しない 1 階層の `<名前>.opencodexpages.me` と、この PC 固有の名前を選びます。
+4. ページから署名済み非特権 Agent を起動します。Agent は暗号化 outbound WSS 接続を 1 本だけ開くため、root、ポート転送、inbound listener は不要です。割り当て済みアドレスでは所有者の GitHub アカウントと Remote パスワードを確認します。
+
+現在は招待制プライベートベータです。release package には Linux、macOS、Windows の x64・arm64 用署名検証済み Agent が含まれます。未対応 OS/architecture ではユーザー PC 上でコンパイルせず明確に停止します。**Super Sync はこのフローに含まれません。**
+
 ## できること
 
 | 領域 | 機能 |
@@ -35,6 +46,7 @@ bun run dev:gui
 | **プロバイダー** | プロバイダーを追加、編集、既定に設定（有効なプロバイダーのみ）、有効化/無効化、削除し、対応する OAuth アカウントプールと API キープールを管理します。現在の既定を削除すると、残っている最初の有効なプロバイダーに切り替わります（存在する場合）。なければ削除は拒否され、現在の既定は保持されます。Claude（Anthropic）OAuth プールでは、ログイン済みの各アカウントに独自の 5 時間・週間レート制限バーが表示され（利用量は資格情報単位）、取得失敗時は直近の値を保持して一時利用不可と表示します。 |
 | **プロバイダー追加** | レジストリベースのプリセットからアカウントログイン、API キーサービス、ローカルサーバー、custom エンドポイントを検索します。 |
 | **Codex 認証** | ChatGPT/Codex プールアカウントを追加し、次回セッションアカウントを選び、5 時間 / 週間 / 30 日クォータを更新し、クォータ自動切り替えのオン/オフと 1～100% のしきい値、一時的失敗フェイルオーバーを設定します。 |
+| **Remote** | この PC を中央 GitHub ID サービスへ接続し、別の E2EE パスワードと hostname を設定して署名済み outbound Agent を起動します。 |
 | **サブエージェント** | `spawn_agent` オーバーライド一覧にネイティブまたはルーティングモデルを最大 5 つまで優先公開します。 |
 | **モデル** | ネイティブ GPT とルーティングモデルをオン/オフし、プロバイダー許可リストとコンテキスト上限、v1/base/v2、v2 スレッド数を設定します。 |
 | **ログ** | トークン、要求された強度と（利用可能な場合は）実際に送信された強度、実際のモデル、プロバイダー、状態、リクエスト ID、所要時間、エラー詳細を含む最近のリクエストを自動更新します。アダプターが reasoning パラメーターを送信した場合、詳細表示に正確な wire field も表示されます。 |
@@ -98,6 +110,8 @@ GUI はプロキシの JSON 管理 API を使うシンクライアントです�
 | エンドポイント | 用途 |
  --- | --- |
 | `GET` / `PUT /api/settings` | 設定を読むか Codex 自動起動をオン/オフします。 |
+| `GET /api/remote/status` · `POST /api/remote/link` · `PUT /api/remote/password` | デバイス/GitHub トークンをブラウザへ公開せず、Remote 状態、デバイス承認、アクセスパスワードを管理します。 |
+| `POST /api/remote/activate` · `POST /api/remote/agent/start` · `POST /api/remote/pairing-code` · `DELETE /api/remote/device` | workspace/PC 名の予約、同梱 Agent の起動、従来のペアリング経路、またはこの PC の失効を行います。 |
 | `GET /api/startup-health` | 秘密情報を含まないルーティング、サービス、shim、再起動安全性診断を読み取ります。 |
 | `GET` / `POST /api/windows-tray` | Windows トレイの導入・表示状態を読み取り、`install`、`start`、`stop`、`uninstall` を実行します。 |
 | `POST /api/sync` | 共有モデルカタログを再構築し Codex モデルキャッシュを古い状態としてマークします。 |

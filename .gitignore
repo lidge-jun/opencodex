@@ -1,5 +1,6 @@
 node_modules/
 dist/
+/remote-agent/target/
 .env
 *.log
 .DS_Store

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
@@ -12,6 +13,11 @@ import {
   issueGuiSession,
   requireManagementAuth,
 } from "../src/server/management-auth";
+import {
+  REMOTE_ASSERTION_AUDIENCE,
+  remoteAssertionPathHash,
+  resetRemoteAssertionReplayCacheForTest,
+} from "../src/server/remote-assertion";
 import {
   resetHardenedStateForTests,
   setIcaclsRunnerForTests,
@@ -62,10 +68,93 @@ function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
 }
 
 beforeEach(() => {
+  resetRemoteAssertionReplayCacheForTest();
   testHome = mkdtempSync(join(tmpdir(), "ocx-management-auth-"));
   process.env.OPENCODEX_HOME = testHome;
   process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+});
+
+function remoteAssertionRequest(options: {
+  url?: string;
+  method?: string;
+  instanceId?: string;
+  issuer?: string;
+  expiresIn?: number;
+  issuedOffset?: number;
+  jti?: string;
+} = {}): { request: Request; config: OcxConfig; assertion: string } {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const url = options.url ?? "http://127.0.0.1:10100/api/config?view=remote&z=2&a=1";
+  const method = options.method ?? "GET";
+  const now = Math.floor(Date.now() / 1000);
+  const iat = now + (options.issuedOffset ?? 0);
+  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT", kid: "gateway-1" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({
+    iss: options.issuer ?? "opencodex-remote",
+    aud: REMOTE_ASSERTION_AUDIENCE,
+    instance_id: options.instanceId ?? "instance-1",
+    user_id: "user-1",
+    method,
+    path_sha256: remoteAssertionPathHash(url),
+    iat,
+    exp: iat + (options.expiresIn ?? 30),
+    jti: options.jti ?? randomUUID(),
+  })).toString("base64url");
+  const signingInput = `${header}.${payload}`;
+  const assertion = `${signingInput}.${sign(null, Buffer.from(signingInput), privateKey).toString("base64url")}`;
+  const config: OcxConfig = {
+    ...remoteConfig(),
+    remoteAccess: {
+      enabled: true,
+      instanceId: "instance-1",
+      issuer: "opencodex-remote",
+      publicKeys: [{
+        kid: "gateway-1",
+        publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+      }],
+    },
+  };
+  return {
+    request: new Request(url, { method, headers: { "X-OpenCodex-Remote-Assertion": assertion } }),
+    config,
+    assertion,
+  };
+}
+
+describe("remote management assertions", () => {
+  test("accepts a valid Ed25519 assertion and rejects replay", () => {
+    const { request, config } = remoteAssertionRequest();
+    const state = initializeManagementAuthState(config);
+    expect(requireManagementAuth(request, state, config)).toBeNull();
+    expect(requireManagementAuth(request, state, config)?.status).toBe(401);
+  });
+
+  test("binds the assertion to instance, method, and normalized path", () => {
+    const valid = remoteAssertionRequest();
+    const state = initializeManagementAuthState(valid.config);
+    const wrongMethod = new Request(valid.request.url, {
+      method: "POST",
+      headers: valid.request.headers,
+    });
+    expect(requireManagementAuth(wrongMethod, state, valid.config)?.status).toBe(401);
+
+    const wrongPath = new Request("http://127.0.0.1:10100/api/config?view=other", {
+      headers: valid.request.headers,
+    });
+    expect(requireManagementAuth(wrongPath, state, valid.config)?.status).toBe(401);
+
+    const wrongInstance = { ...valid.config, remoteAccess: { ...valid.config.remoteAccess!, instanceId: "instance-2" } };
+    expect(requireManagementAuth(valid.request, state, wrongInstance)?.status).toBe(401);
+  });
+
+  test("rejects expired and overlong assertions", () => {
+    for (const options of [{ issuedOffset: -60, expiresIn: 30 }, { expiresIn: 31 }]) {
+      const { request, config } = remoteAssertionRequest(options);
+      const state = initializeManagementAuthState(config);
+      expect(requireManagementAuth(request, state, config)?.status).toBe(401);
+    }
+  });
 });
 
 afterEach(() => {

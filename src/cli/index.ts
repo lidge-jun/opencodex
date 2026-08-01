@@ -1055,6 +1055,11 @@ switch (command) {
     process.exitCode = await handleSystemCommand(args.slice(1));
     break;
   }
+  case "remote": {
+    const { handleRemoteCommand } = await import("./remote-command");
+    process.exitCode = await handleRemoteCommand(args.slice(1));
+    break;
+  }
   case "config": {
     const { handleConfigCommand } = await import("./config-command");
     process.exitCode = await handleConfigCommand(args.slice(1));

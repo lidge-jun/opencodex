@@ -734,6 +734,15 @@ const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
+  remoteAccess: z.object({
+    enabled: z.boolean().optional(),
+    instanceId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
+    issuer: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/),
+    publicKeys: z.array(z.object({
+      kid: z.string().regex(/^[A-Za-z0-9._:-]{1,64}$/),
+      publicKeyPem: z.string().min(64).max(8192),
+    })).min(1).max(3),
+  }).optional(),
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).

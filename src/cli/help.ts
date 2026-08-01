@@ -175,6 +175,15 @@ const helpEntries: Record<string, HelpEntry> = {
     usage: "ocx system <status|settings|startup|diagnostics|sync|update> ...",
     summary: "Manage headless runtime settings, startup, sync, diagnostics, and updates.",
   },
+  remote: {
+    usage: "ocx remote <status|link|password|activate|pairing-code|disconnect> ...",
+    summary: "Manage the local-PC-first OpenCodex Remote onboarding flow.",
+    details: [
+      "GitHub sign-in starts with link; status reports the same protected local state as the GUI.",
+      "Read the Remote password from piped stdin so it never appears in shell history or process arguments.",
+      "activate reserves one hostname; pairing-code prepares the separately installed signed Linux helper.",
+    ],
+  },
   config: {
     usage: "ocx config <show|get|set|unset|validate|export|import> ...",
     summary: "Inspect and safely modify validated OpenCodex configuration.",

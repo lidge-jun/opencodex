@@ -20,6 +20,17 @@ ocx start
 bun run dev:gui
 ```
 
+## Remote 私测
+
+**Remote** 页面从本地 `ocx gui` 开始远程设置：
+
+1. 使用 GitHub 继续。`opencodexpages.me` 处理 OAuth 并要求确认设备码。
+2. 设置独立的 Remote 密码。GitHub OAuth token 不会保存，也不会发送到本地电脑。
+3. 选择不重复的一级 `<名称>.opencodexpages.me` 地址和此电脑的唯一名称。
+4. 从页面启动已签名的非特权 Agent。它只建立一条加密出站 WSS 连接，无需 root、端口转发或入站 listener。以后访问该地址时，必须同时验证所属 GitHub 账号和 Remote 密码。
+
+目前仍是仅限邀请的私测。Release 包包含 Linux、macOS、Windows 的 x64 和 arm64 签名验证 Agent。对不支持的操作系统/架构，OCX 会明确停止，不在用户电脑上临时编译。**Super Sync 不属于此流程。**
+
 ## 可以完成哪些操作
 
 | 区域 | 作用 |
@@ -34,6 +45,7 @@ bun run dev:gui
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 |
 | **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |
+| **Remote** | 将此电脑连接到中央 GitHub 身份服务，设置独立 E2EE 密码和 hostname，然后启动已签名的 outbound Agent。 |
 | **Subagents** | 在 `spawn_agent` override 列表中置顶最多五个原生或路由模型。 |
 | **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 数量。 |
 | **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
@@ -92,6 +104,8 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | Endpoint | 用途 |
 | --- | --- |
 | `GET` / `PUT /api/settings` | 读取设置或切换 Codex 自动启动。 |
+| `GET /api/remote/status` · `POST /api/remote/link` · `PUT /api/remote/password` | 在不向浏览器暴露设备/GitHub token 的情况下读取 Remote 状态、开始设备批准并设置访问密码。 |
+| `POST /api/remote/activate` · `POST /api/remote/agent/start` · `POST /api/remote/pairing-code` · `DELETE /api/remote/device` | 保留 workspace/电脑名称、启动随包 Agent、使用旧配对路径或撤销此电脑。 |
 | `GET /api/startup-health` | 读取不含秘密信息的路由、服务、shim 和重启安全诊断。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |

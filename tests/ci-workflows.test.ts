@@ -34,11 +34,13 @@ describe("GitHub Actions hardening", () => {
     // The cross-platform `test` job sits at 20 minutes: a green Windows run measured
     // 11.8 min against 4.6 on Linux, and the previous 12-minute ceiling left ~12s of
     // margin, so runner variance rather than the code decided the verdict (#717).
-    // `npm-global-smoke` stays at 8; it finishes in 1-2 minutes.
+    // `npm-global-smoke` stays at 8; the native six-platform Agent matrix is
+    // bounded separately at 25 because Rust release builds dominate it.
     expect(count(workflow, "timeout-minutes: 20")).toBe(1);
     expect(count(workflow, "timeout-minutes: 8")).toBe(1);
-    // Both jobs must stay bounded — an unbounded job can hang a queue for hours.
-    expect(count(workflow, "timeout-minutes:")).toBe(2);
+    // Every job family must stay bounded — an unbounded job can hang a queue for hours.
+    expect(count(workflow, "timeout-minutes: 25")).toBe(1);
+    expect(count(workflow, "timeout-minutes:")).toBe(3);
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
@@ -106,6 +108,8 @@ describe("GitHub Actions hardening", () => {
       "bun.lock",
       "gui/**",
       "package.json",
+      "platform/**",
+      "remote-agent/**",
       "scripts/**",
       "src/**",
       "tests/**",
@@ -115,6 +119,15 @@ describe("GitHub Actions hardening", () => {
     // Push and pull_request have to cover the same surfaces, or a change lands
     // on dev having been checked on one trigger and not the other.
     expect([...(ci.on?.push?.paths ?? [])].sort()).toEqual(ciPaths);
+
+    for (const packageName of [
+      "linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64", "windows-arm64",
+    ]) {
+      expect(await readText(".github/workflows/ci.yml")).toContain(`package: ${packageName}`);
+    }
+    expect(await readText(".github/workflows/ci.yml")).toContain(
+      "- name: Install pinned Rust target\n        working-directory: remote-agent",
+    );
   });
 
   test("cross-platform CI keeps the GUI lint and build gates", async () => {
@@ -217,7 +230,27 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(workflow).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+    expect(workflow).toContain("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // Every supported native build must finish before the only secret-bearing
+    // publish job assembles an exact signed bundle. PR jobs never receive the key.
+    expect(workflow).toContain("needs: remote-agent-build");
+    expect(workflow).toContain("name: ${{ inputs.dry-run && 'remote-agent-dry-run' || 'remote-agent-release' }}");
+    expect(workflow).toContain("REMOTE_AGENT_SIGNING_KEY: ${{ secrets.REMOTE_AGENT_SIGNING_KEY }}");
+    expect(workflow).toContain('OPENCODEX_REQUIRE_REMOTE_AGENT_BUNDLE: "1"');
+    expect(workflow).toContain("shred -u \"$signing_key\"");
+    expect(workflow).toContain("openssl genpkey -algorithm ED25519");
+    expect(workflow).toContain("OPENCODEX_REMOTE_AGENT_DRY_RUN_PUBLIC_KEY_FILE=$public_key");
+    expect(workflow).toContain("expected-sha is required; refusing to release an unaudited branch tip");
+    expect(workflow).toMatch(/expected-sha:[\s\S]*?required: true/);
+    expect(workflow).toContain("- name: Install pinned Rust target\n        working-directory: remote-agent");
+    for (const packageName of [
+      "linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64", "windows-arm64",
+    ]) {
+      expect(workflow).toContain(`package: ${packageName}`);
+    }
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).

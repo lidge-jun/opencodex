@@ -1,0 +1,32 @@
+[Unit]
+Description=OpenCodex Remote Control Plane
+After=network-online.target opencodex-remote-postgres.service
+Requires=opencodex-remote-postgres.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ocxr
+Group=ocxr
+WorkingDirectory=/opt/opencodex-remote/platform
+EnvironmentFile=/etc/opencodex-remote/common.env
+LoadCredential=database-url:/etc/opencodex-remote/credentials/database-url-host
+LoadCredential=better-auth-secret:/etc/opencodex-remote/credentials/better-auth-secret
+LoadCredential=github-client-secret:/etc/opencodex-remote/credentials/github-client-secret
+LoadCredential=gateway-ed25519-private-key:/etc/opencodex-remote/credentials/gateway-ed25519-private-key
+LoadCredential=platform-encryption-key:/etc/opencodex-remote/credentials/platform-encryption-key
+LoadCredential=audit-hmac-key:/etc/opencodex-remote/credentials/audit-hmac-key
+LoadCredential=synthetic-health-token:/etc/opencodex-remote/credentials/synthetic-health-token
+LoadCredential=cloudflare-api-token:/etc/opencodex-remote/credentials/cloudflare-api-token
+LoadCredential=cloudflare-auth-email:/etc/opencodex-remote/credentials/cloudflare-auth-email
+ExecStart=/usr/local/bin/bun server/src/control-plane.ts
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opencodex-remote
+
+[Install]
+WantedBy=multi-user.target

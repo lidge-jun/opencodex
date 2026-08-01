@@ -372,6 +372,14 @@ WebSocket 传输默认关闭。只有当你希望 Codex 使用 Responses WebSock
 
 ### 远程访问
 
+仪表盘新增了用于中央 `opencodexpages.me` MVP 的邀请制 **Remote** 页面。流程从本地
+`ocx gui` 开始：通过 GitHub 批准此电脑，设置独立 Remote 密码和 hostname，然后跟踪
+Tunnel/Agent 的 provisioning 状态。GitHub OAuth token 不会保存，也不会发送到电脑。
+需要管理员权限的签名 Linux helper installer 以及 Windows/macOS helper 尚未发布，因此这不是
+公开功能，且**不包含 Super Sync**。
+
+下面的 LAN bind 是与中央 Remote 服务无关的自托管方式。
+
 默认情况下 opencodex 绑定到 `127.0.0.1`（回环）且无需额外认证。
 如果你设置 `"hostname": "0.0.0.0"` 把代理暴露到局域网，opencodex 会要求一个 bearer token 来同时保护管理
 API（`/api/*`）和数据平面（`/v1/responses`、`/v1/images/generations`、`/v1/images/edits`）：

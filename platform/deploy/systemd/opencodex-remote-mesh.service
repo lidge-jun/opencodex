@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenCodex Remote Cloudflare Mesh Node
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm ocxr-mesh
+ExecStart=/usr/bin/docker run --rm --name ocxr-mesh --network ocxr-net --ip 172.30.0.3 --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 -p 127.0.0.1:10201:10201 -v ocxr-mesh-state:/var/lib/cloudflare-warp -v /etc/opencodex-remote/credentials/mesh-token:/run/secrets/mesh-token:ro opencodex-remote-mesh:2026.07.30
+ExecStop=/usr/bin/docker stop -t 20 ocxr-mesh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

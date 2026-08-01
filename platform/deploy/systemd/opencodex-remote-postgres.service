@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenCodex Remote PostgreSQL 17
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm ocxr-postgres
+ExecStart=/usr/bin/docker run --rm --name ocxr-postgres --network ocxr-net --ip 172.30.0.2 -p 127.0.0.1:15444:5432 -e POSTGRES_USER=ocxr -e POSTGRES_DB=ocxr -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password -v ocxr-postgres-data:/var/lib/postgresql/data -v /etc/opencodex-remote/credentials/postgres-password:/run/secrets/postgres-password:ro postgres:17-alpine
+ExecStop=/usr/bin/docker stop -t 30 ocxr-postgres
+Restart=always
+RestartSec=5
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

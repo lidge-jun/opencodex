@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenCodex Remote Public Cloudflare Tunnel
+After=network-online.target opencodex-remote-control.service opencodex-remote-gateway.service
+Requires=opencodex-remote-control.service opencodex-remote-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ocxr
+Group=ocxr
+LoadCredential=tunnel-token:/etc/opencodex-remote/credentials/central-tunnel-token
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token-file ${CREDENTIALS_DIRECTORY}/tunnel-token
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

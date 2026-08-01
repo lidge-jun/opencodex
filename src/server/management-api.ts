@@ -65,6 +65,7 @@ import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
+import { handleRemoteRoutes } from "./management/remote-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import type { ManagementContext } from "./management/context";
 export type { ManagementApiDeps } from "./management/context";
@@ -131,6 +132,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
+    ??     (await handleRemoteRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleSidebarRoutes(ctx));
   if (routed) return routed;

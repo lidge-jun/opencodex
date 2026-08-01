@@ -26,7 +26,7 @@ on:
         default: true
       expected-sha:
         description: "Immutable release commit this dispatch must publish (fail if the branch moved)"
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -40,9 +40,78 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  remote-agent-build:
+    name: Remote Agent ${{ matrix.package }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            executable: opencodex-remote-agent
+          - package: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            executable: opencodex-remote-agent
+          - package: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            executable: opencodex-remote-agent
+          - package: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            executable: opencodex-remote-agent
+          - package: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            executable: opencodex-remote-agent.exe
+          - package: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            executable: opencodex-remote-agent.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install musl build tools
+        if: ${{ startsWith(matrix.package, 'linux-') }}
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Install pinned Rust target
+        working-directory: remote-agent
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Build release binary
+        working-directory: remote-agent
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Stage release binary
+        shell: bash
+        run: |
+          mkdir -p remote-agent-artifact
+          cp "remote-agent/target/${{ matrix.target }}/release/${{ matrix.executable }}" \
+            "remote-agent-artifact/${{ matrix.executable }}"
+          test -s "remote-agent-artifact/${{ matrix.executable }}"
+
+      - name: Upload unsigned build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: remote-agent-${{ matrix.package }}
+          path: remote-agent-artifact/${{ matrix.executable }}
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
+    needs: remote-agent-build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: ${{ inputs.dry-run && 'remote-agent-dry-run' || 'remote-agent-release' }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -54,7 +123,8 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected-sha }}
         run: |
           if [ -z "$EXPECTED_SHA" ]; then
-            echo "::warning::no expected-sha supplied; publishing whatever the branch currently points at"
+            echo "::error::expected-sha is required; refusing to release an unaudited branch tip"
+            exit 1
           elif [ "$GITHUB_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error::branch moved after the release audit (expected ${EXPECTED_SHA}, got ${GITHUB_SHA}) — refusing to publish an unaudited commit"
             exit 1
@@ -91,6 +161,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Download platform Agent artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: remote-agent-*
+          path: remote-agent-artifacts
 
       - name: Verify version matches package.json
         env:
@@ -243,10 +319,51 @@ jobs:
             fi
           fi
 
+      - name: Assemble and sign Remote Agent bundle
+        shell: bash
+        env:
+          REMOTE_AGENT_SIGNING_KEY: ${{ secrets.REMOTE_AGENT_SIGNING_KEY }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          signing_key="$RUNNER_TEMP/opencodex-remote-agent-signing.pem"
+          public_key="$RUNNER_TEMP/opencodex-remote-agent-signing.pub.pem"
+          cleanup() {
+            if [ -f "$signing_key" ] && command -v shred >/dev/null 2>&1; then
+              shred -u "$signing_key"
+            else
+              rm -f "$signing_key"
+            fi
+          }
+          trap cleanup EXIT
+          umask 077
+          expected_public_key=""
+          if [ "$DRY_RUN" = "true" ]; then
+            openssl genpkey -algorithm ED25519 -out "$signing_key"
+            openssl pkey -in "$signing_key" -pubout -out "$public_key"
+            expected_public_key="$public_key"
+            echo "OPENCODEX_REMOTE_AGENT_DRY_RUN_PUBLIC_KEY_FILE=$public_key" >> "$GITHUB_ENV"
+          else
+            if [ -z "$REMOTE_AGENT_SIGNING_KEY" ]; then
+              echo "::error::REMOTE_AGENT_SIGNING_KEY is not configured in the protected release environment"
+              exit 1
+            fi
+            printf '%s' "$REMOTE_AGENT_SIGNING_KEY" > "$signing_key"
+          fi
+          REMOTE_AGENT_SIGNING_KEY_FILE="$signing_key" \
+          REMOTE_AGENT_EXPECTED_PUBLIC_KEY_FILE="$expected_public_key" \
+          GITHUB_SHA="$GITHUB_SHA" \
+            bun scripts/remote-agent-bundle.ts assemble \
+              remote-agent-artifacts \
+              bin/remote-agent \
+              .tmp/remote-agent-release
+
       - name: Publish (or dry-run)
         env:
           DRY_RUN: ${{ inputs.dry-run }}
           NPM_DIST_TAG: ${{ inputs.tag }}
+          OPENCODEX_REQUIRE_REMOTE_AGENT_BUNDLE: "1"
+          OPENCODEX_RELEASE_DRY_RUN: ${{ inputs.dry-run }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
             echo "::notice::DRY RUN — building + packing, not publishing"
@@ -452,5 +569,6 @@ jobs:
             git push origin "refs/tags/${release_tag}"
           fi
 
-          gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
+          gh release create "$release_tag" .tmp/remote-agent-release/* \
+            --target "$GITHUB_SHA" --title "$release_tag" \
             --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}

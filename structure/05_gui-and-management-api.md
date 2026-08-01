@@ -68,6 +68,7 @@ this document owns is which module holds which area and what invariant that area
 | Providers | Create/update/delete ordinary provider configs and enrich registry metadata. The reserved `openai` card exposes Pool(default)/Direct account mode; `openai-apikey` remains the separate API route. |
 | Models | Fetch routed model lists, disabled model visibility, and catalog-facing ids. |
 | OAuth | Login/status/logout for OAuth-backed providers, plus multiauth account management: `GET /api/oauth/accounts`, `PUT /api/oauth/accounts/active`, `PUT /api/oauth/accounts/alias`, `DELETE /api/oauth/accounts` list masked accounts per provider, switch the active one, edit its display-only alias, and remove one. The login flow itself is `GET /api/oauth/providers`, `POST /api/oauth/login`, `POST /api/oauth/login/code`, `POST /api/oauth/login/cancel`, `POST /api/oauth/logout`, and `GET /api/oauth/status`; pool controls are `GET/PUT/PATCH /api/oauth/accounts/pool` and `POST /api/oauth/accounts/clear-cooldown`. Login accepts `addAccount: true` to force a fresh browser identity. Device flows return a structured `deviceCode`; the GUI highlights and copies it before the user opens the verification page. |
+| Remote | `GET /api/remote/status`, `POST /api/remote/link`, `POST /api/remote/link/cancel`, `PUT/PATCH /api/remote/password`, `POST /api/remote/activate`, `POST /api/remote/agent/start`, `POST /api/remote/pairing-code`, and `DELETE /api/remote/device` own the local-PC-first Remote flow. The browser DTO never includes the polling secret, device token, Relay token, or GitHub token. Central state is mirrored into protected `remote.json`; a packaged unprivileged Rust Agent opens the outbound encrypted Relay connection without user port forwarding. |
 | Key providers | `GET /api/key-providers` exposes API-key provider presets for setup and dashboard flows, and `GET/POST/DELETE /api/keys` owns the proxy's own admission keys. Multi-key pool per key-auth provider: `GET /api/providers/keys`, `POST /api/providers/keys`, `PUT /api/providers/keys/active`, `PUT /api/providers/keys/alias`, `DELETE /api/providers/keys` masked list, add (upsert + activate), switch, rename, and remove keys. `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
 | OpenAI account mode | Report one OpenAI Codex card with Pool/Direct controls and one API-key card. Mode PATCH persists live without restart or catalog identity changes; Pool owns account/quota controls and Direct uses caller/main login only. Main-account DTOs report real credential presence and terminal `needsReauth` state instead of treating missing/invalid native auth as an unknown quota. |
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent OpenCodex guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. When OpenCodex owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
@@ -101,6 +102,32 @@ User aliases are display metadata only. Codex pool aliases live on `CodexAccount
 `ProviderAccount`, and API-key aliases reuse the existing key `label`; account ids, credential
 identity, active selection, and routing never consult these fields. The matching CLI is
 `ocx account alias <provider> <id> <display-name|->` (`rename` is accepted as a synonym).
+
+## Remote onboarding boundary
+
+`/#remote` is the user entrypoint. The local proxy creates an Ed25519 device key and a ten-minute
+polling secret, while the central browser receives only the request UUID and comparison code. After
+GitHub approval, the central service returns a revocable OpenCodex device token through that polling
+channel and deletes the encrypted handoff after the local ACK. GitHub OAuth access, refresh, and ID
+tokens are discarded by the central auth database hooks and never enter `remote.json`.
+
+The separate Remote password is derived with Argon2id locally. The central service stores only a
+hash of the HKDF-separated authentication secret and cannot unwrap the encrypted account vault.
+Changing the password requires the old password, rewraps the vault locally, and revokes existing
+instance browser sessions. Five failed attempts lock verification for 15 minutes. An unauthenticated
+top-level request to an active instance hostname redirects to `/access/<slug>` on the central origin;
+API and WebSocket requests still fail closed without redirection. Successful GitHub ownership and
+password verification creates a 60-second exchange code and then a host-only instance cookie.
+
+```text
+[Decision Log]
+- 목적과 의도: 중앙 운영 콘솔이 아니라 각 사용자 PC의 `ocx gui`에서 Remote 설정을 시작하고, 원격 접속에는 GitHub 소유권과 별도 비밀번호를 모두 요구한다.
+- 기존 구현 및 제약 조건: 기존 플랫폼 dashboard는 instance 생성과 Agent code를 직접 다뤘고 일반 npm OCX와 중앙 OAuth 사이의 장치 승인 상태가 없었다.
+- 검토한 주요 대안: localhost OAuth callback으로 GitHub token 전달, 장기 token을 URL fragment에 포함, polling secret이 분리된 device authorization과 중앙 password gate.
+- 선택한 방식: local device authorization, 중앙 GitHub identity-only OAuth, Argon2id password, hostname별 exchange session을 결합한다.
+- 다른 대안 대신 이 방식을 선택한 이유: GitHub/Cloudflare credential이 사용자 브라우저 history나 PC로 이동하지 않으며 각 PC와 instance session을 따로 폐기할 수 있다.
+- 장점, 단점 및 영향: Tailscale과 유사한 local-first UX와 중앙 정책 경계가 생긴다. Linux/macOS/Windows x64·arm64는 npm에 동봉된 서명 Agent로 연결되며 다른 조합은 명확히 미지원 처리한다.
+```
 
 ## Sidebar stop button
 

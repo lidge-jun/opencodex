@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenCodex Remote Streaming Gateway
+After=docker.service opencodex-remote-postgres.service opencodex-remote-mesh.service
+Requires=docker.service opencodex-remote-postgres.service opencodex-remote-mesh.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm ocxr-gateway
+ExecStart=/usr/bin/docker run --rm --name ocxr-gateway --network container:ocxr-mesh --user 0:0 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges --env-file /etc/opencodex-remote/common.env -e CREDENTIALS_DIRECTORY=/run/credentials -v /opt/opencodex-remote/platform:/app:ro -v /etc/opencodex-remote/credentials:/run/credentials:ro -w /app oven/bun:1.3.14 bun server/src/gateway.ts
+ExecStop=/usr/bin/docker stop -t 20 ocxr-gateway
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -29,6 +29,21 @@ they expire or the proxy restarts. Only a dashboard bound to a non-loopback host
 the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
 `~/.opencodex/admin-api-token` file).
 
+## Remote private beta
+
+The **Remote** page makes the local `ocx gui` the start of remote setup:
+
+1. Continue with GitHub. `opencodexpages.me` handles OAuth and asks you to approve the device code.
+2. Set a separate Remote password. GitHub OAuth tokens are not stored or sent to the local PC.
+3. Choose a unique one-level `<name>.opencodexpages.me` address and a unique name for this computer.
+4. Start the signed, unprivileged Agent from the page. It opens one outbound encrypted WSS connection;
+   no root access, port forwarding, or inbound listener is required. Visiting the assigned hostname
+   later requires both the owning GitHub account and the Remote password.
+
+This remains an invite-only beta. Release packages carry signature-verified Agent binaries for Linux,
+macOS, and Windows on x64 and arm64. Unsupported OS/architecture combinations fail honestly instead of
+compiling code on the user's computer. **Super Sync is not part of this flow.**
+
 ## What you can do
 
 | Area | What it does |
@@ -43,6 +58,7 @@ the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
+| **Remote** | Connect this PC to the central GitHub identity service, set a separate E2EE password, reserve its hostname, and start its signed outbound Agent. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
@@ -121,6 +137,8 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
+| `GET /api/remote/status` · `POST /api/remote/link` · `PUT /api/remote/password` | Read local Remote state, start device approval, and set the separate access password without exposing device or GitHub tokens to the browser. |
+| `POST /api/remote/activate` · `POST /api/remote/agent/start` · `POST /api/remote/pairing-code` · `DELETE /api/remote/device` | Reserve the workspace/computer names, start the packaged Agent, use the legacy pairing path, or revoke this PC. |
 | `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |

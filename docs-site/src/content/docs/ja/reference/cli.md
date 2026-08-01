@@ -339,6 +339,17 @@ ocx login xai
 
 ## ダッシュボード
 
+### `ocx remote <サブコマンド>`
+
+ダッシュボードの **Remote** ページに対応する headless コマンドです。`status`、`link`、
+`activate --name <名前> --slug <slug>` で hostname を予約して署名済み同梱 Agent を起動し、
+`pairing-code` は従来の 10 分ペアリング経路、`disconnect --yes` は解除を同じ local management API で実行します。別の Remote パスワードは process argument や shell history
+に残らないよう stdin から渡します。
+
+```bash
+printf '%s\n' 'long-remote-password' | ocx remote password
+```
+
 ### `ocx gui`
 
 `http://localhost:<port>` で [ウェブダッシュボード](/ja/guides/web-dashboard/) を開きます。

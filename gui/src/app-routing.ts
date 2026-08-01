@@ -5,6 +5,7 @@ import { normalizeHashPath } from "./hash-routing";
 export type Page =
   | "dashboard"
   | "startup"
+  | "remote"
   | "providers"
   | "models"
   | "combos"
@@ -20,6 +21,7 @@ export type Page =
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
   "startup",
+  "remote",
   "providers",
   "models",
   "combos",

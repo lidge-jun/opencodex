@@ -40,8 +40,8 @@ bun run build
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `pull_request` to `main`/`dev`, `push` to `main`/`preview`/`dev`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the GUI suite (`cd gui && bun test tests`), the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
-| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
+| `.github/workflows/ci.yml` | `pull_request` to `main`/`dev`, `push` to `main`/`preview`/`dev`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the GUI suite (`cd gui && bun test tests`), the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` proves the bundled-Bun global install; the six-entry `remote-agent` matrix runs native Rust fmt/clippy/test/release builds for Linux/macOS/Windows x64 and arm64. |
+| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, rebuilds all six native Remote Agents, assembles an Ed25519-signed exact manifest, requires that bundle during npm packaging, and attaches binaries/signatures to the GitHub Release. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, ready_for_review, synchronize) | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, and rejects empty or malformed descriptions. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
@@ -141,7 +141,12 @@ Invariants:
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
 typecheck and GUI build, and `scripts/release.ts` now runs local typecheck, `bun test --isolate tests`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
-Release workflow dispatch. Docs publishing is separate from npm release publishing.
+Release workflow dispatch. The release workflow rebuilds and signs the six-platform Remote Agent bundle;
+the private signing key exists only as the `REMOTE_AGENT_SIGNING_KEY` secret in the protected
+`remote-agent-release` environment, while dry-runs use a one-run ephemeral key and never receive the
+production key. The pinned public key and key ID are source-controlled for fail-closed runtime
+verification. Docs publishing is
+separate from npm release publishing.
 
 ## Release metadata invariants
 
@@ -176,8 +181,8 @@ version through `scripts/release.ts`.
 
 ## Cross-platform CI
 
-`.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. It runs on
-Linux, Windows, and macOS with two job families:
+`.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. It runs Bun/Node
+checks on Linux, Windows, and macOS plus a native Remote Agent matrix:
 
 ```bash
 bun install --frozen-lockfile
@@ -201,6 +206,12 @@ ocx help
 
 The CI intentionally does not build docs, run coverage, or perform remote Ubuntu/RDP smoke tests.
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
+
+The Agent matrix pins Rust via `remote-agent/rust-toolchain.toml` and covers Linux musl, macOS, and
+Windows on x64 and arm64. It does not sign pull-request artifacts. Signing happens only after a manual
+release dispatch, after all six native builds complete. Dry-runs sign with an ephemeral key; only a
+real release selects the protected `remote-agent-release` environment and can read the production
+signing secret. Every dispatch requires the exact audited SHA.
 
 The Release workflow remains manual and publish-focused. Before any dry-run or publish step, it
 checks that the exact release commit (`GITHUB_SHA`) already has a successful Cross-platform CI run.

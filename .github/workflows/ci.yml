@@ -9,6 +9,8 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "platform/**"
+      - "remote-agent/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -26,6 +28,8 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "platform/**"
+      - "remote-agent/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -45,6 +49,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  remote-agent:
+    name: Remote Agent ${{ matrix.package }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            executable: opencodex-remote-agent
+          - package: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            executable: opencodex-remote-agent
+          - package: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            executable: opencodex-remote-agent
+          - package: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            executable: opencodex-remote-agent
+          - package: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            executable: opencodex-remote-agent.exe
+          - package: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            executable: opencodex-remote-agent.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install musl build tools
+        if: ${{ startsWith(matrix.package, 'linux-') }}
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Install pinned Rust target
+        working-directory: remote-agent
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Format
+        working-directory: remote-agent
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: remote-agent
+        run: cargo clippy --locked --target "${{ matrix.target }}" --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: remote-agent
+        run: cargo test --locked --target "${{ matrix.target }}"
+
+      - name: Build release binary
+        working-directory: remote-agent
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Verify release binary exists
+        shell: bash
+        run: test -s "remote-agent/target/${{ matrix.target }}/release/${{ matrix.executable }}"
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

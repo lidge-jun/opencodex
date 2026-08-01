@@ -378,6 +378,14 @@ WebSocket トランスポートはデフォルトでオフです。Codex が HTT
 
 ### リモートアクセス
 
+ダッシュボードには中央 `opencodexpages.me` MVP 用の招待制 **Remote** ページがあります。ローカル
+`ocx gui` で GitHub からこの PC を承認し、別の Remote パスワードと hostname を設定して
+Tunnel/Agent の provisioning 状態を確認します。GitHub OAuth トークンは保存せず PC にも送りません。
+管理者権限が必要な署名済み Linux helper installer と Windows/macOS helper はまだ提供されず、
+一般公開機能ではありません。**Super Sync も含まれません。**
+
+以下の LAN bind は中央 Remote サービスとは別の自己管理方式です。
+
 デフォルトで opencodex は `127.0.0.1`(ループバック)にバインドされ、追加の認証は不要です。
 `"hostname": "0.0.0.0"` で LAN に公開する場合、opencodex は管理 API(`/api/*`)とデータプレーン
 (`/v1/responses`、`/v1/images/generations`、`/v1/images/edits`)の両方に bearer トークンを要求します:

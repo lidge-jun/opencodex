@@ -1,0 +1,37 @@
+[package]
+name = "opencodex-remote-agent"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+aes-gcm = "0.10"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek = { version = "2.2", features = ["pem", "pkcs8"] }
+futures-util = "0.3"
+hkdf = "0.12"
+http-body-util = "0.1"
+p256 = { version = "0.13", features = ["ecdh", "pem", "pkcs8"] }
+portable-pty = "0.9"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2.5"
+uuid = { version = "1", features = ["serde", "v4"] }
+zeroize = { version = "1", features = ["serde"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

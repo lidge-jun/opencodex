@@ -1,0 +1,37 @@
+{
+  "name": "@opencodex/remote-platform",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch server/src/control-plane.ts",
+    "dev:gateway": "bun --watch server/src/gateway.ts",
+    "dev:worker": "bun --watch server/src/worker.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "build:web": "vite build",
+    "typecheck": "bun x tsc --noEmit",
+    "test": "bun test server/tests web/src",
+    "start:control": "bun server/src/control-plane.ts",
+    "start:gateway": "bun server/src/gateway.ts",
+    "start:worker": "bun server/src/worker.ts"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.2.0",
+    "@tabler/icons-react": "^3.34.1",
+    "@xterm/xterm": "6.0.0",
+    "better-auth": "^1.6.25",
+    "hono": "^4.9.8",
+    "pg": "^8.16.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.4",
+    "typescript": "5.9.3",
+    "vite": "^7.1.7"
+  }
+}

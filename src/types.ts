@@ -752,6 +752,19 @@ export interface OcxConfig {
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+  /**
+   * Optional OpenCodex Remote management credential verifier.
+   *
+   * The local Rust agent validates the gateway assertion before proxying any
+   * request. Management routes verify it again here so a compromised or
+   * accidentally exposed local ingress cannot silently widen `/api/*` access.
+   */
+  remoteAccess?: {
+    enabled?: boolean;
+    instanceId: string;
+    issuer: string;
+    publicKeys: Array<{ kid: string; publicKeyPem: string }>;
+  };
 }
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";

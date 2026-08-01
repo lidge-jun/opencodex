@@ -9,6 +9,7 @@ import { handleConfigCommand } from "../src/cli/config-command";
 import { handleGrokCommand } from "../src/cli/integrations";
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
+import { handleRemoteCommand } from "../src/cli/remote-command";
 
 type Recorded = { path: string; method: string; body: unknown };
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
@@ -66,6 +67,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/oauth", "ocx account"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],
+      ["/api/remote", "ocx remote"],
       ["/api/provider-", "ocx provider/models"],
       ["/api/selected-models", "ocx models"],
       ["/api/custom-models", "ocx models"],
@@ -183,5 +185,17 @@ describe("headless GUI parity CLI", () => {
       else process.env.OPENCODEX_HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  test("remote activation and pairing reuse the local GUI management routes", async () => {
+    const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/remote/pairing-code"
+      ? { code: "ABCD2345EFGH", expiresAt: "2030-01-01T00:00:00.000Z" }
+      : undefined);
+    expect(await handleRemoteCommand(["activate", "--name", "Home PC", "--slug", "home-pc", "--json"], runtime.deps)).toBe(0);
+    expect(await handleRemoteCommand(["pairing-code", "--json"], runtime.deps)).toBe(0);
+    expect(runtime.requests).toEqual([
+      { path: "/api/remote/activate", method: "POST", body: { name: "Home PC", slug: "home-pc" } },
+      { path: "/api/remote/pairing-code", method: "POST", body: null },
+    ]);
   });
 });

@@ -23,6 +23,7 @@ import {
   managementRequestOrigin,
   parseHttpHost,
 } from "./auth-cors";
+import { verifyRemoteManagementAssertion } from "./remote-assertion";
 
 const GUI_SESSION_TTL_MS = 5 * 60_000;
 const GUI_SESSION_LIMIT = 128;
@@ -192,6 +193,7 @@ export function requireManagementAuth(
   if (!state.available) {
     return Response.json({ error: "management API unavailable" }, { status: 503 });
   }
+  if (config && verifyRemoteManagementAssertion(req, config)) return null;
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (actual && equalSecret(actual, state.token)) return null;

@@ -387,6 +387,17 @@ ocx login xai
 
 ## 대시보드
 
+### `ocx remote <하위 명령>`
+
+대시보드 **Remote** 페이지의 headless 대응 명령입니다. `status`는 보호된 로컬 상태를 읽고,
+`link`는 GitHub 장치 승인을 시작하고, `activate --name <이름> --slug <slug>`는 hostname을
+예약한 뒤 서명된 동봉 Agent를 시작하고, `pairing-code`는 기존 10분 페어링 경로를 유지하며, `disconnect --yes`는 이 PC를 해제합니다.
+별도 비밀번호는 process argument나 shell history에 남지 않도록 stdin으로 전달합니다.
+
+```bash
+printf '%s\n' '긴-리모트-비밀번호' | ocx remote password
+```
+
 ### `ocx gui`
 
 `http://localhost:<port>`에서 [웹 대시보드](/ko/guides/web-dashboard/)를 엽니다.
