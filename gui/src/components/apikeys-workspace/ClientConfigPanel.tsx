@@ -62,6 +62,11 @@ export default function ClientConfigPanel({
 
   useEffect(() => {
     const controller = new AbortController();
+    // `cancelled` is what actually gates the setters. The abort signal alone left the
+    // guard implicit — a reader (and react-doctor's no-set-state-after-await-in-effect)
+    // cannot tell from the setter call that a superseded run can no longer write. Both
+    // stay: abort stops the in-flight request, this flag stops the write.
+    let cancelled = false;
     void (async () => {
       try {
         const res = await fetch(`${apiBase}/api/client-config?client=${encodeURIComponent(client)}`, {
@@ -69,15 +74,18 @@ export default function ClientConfigPanel({
         });
         if (!res.ok) throw new Error(await apiErrorMessage(res, t("api.clientConfig.loadFailed")));
         const envelope = await res.json() as ClientConfigEnvelope;
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
         setResult({ key: requestKey, data: envelope, error: null });
       } catch (cause) {
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
         const message = cause instanceof Error && cause.message ? cause.message : t("api.clientConfig.loadFailed");
         setResult({ key: requestKey, data: null, error: message });
       }
     })();
-    return () => controller.abort();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [apiBase, client, requestKey, t]);
 
   const settled = result !== null && result.key === requestKey ? result : null;
