@@ -12,7 +12,6 @@ export type Page =
   | "logs"
   | "usage"
   | "storage"
-  | "codex-auth"
   | "api"
   | "claude"
   | "grok";
@@ -27,7 +26,6 @@ export const VALID_PAGES = new Set<Page>([
   "logs",
   "usage",
   "storage",
-  "codex-auth",
   "api",
   "claude",
   "grok",
@@ -80,6 +78,12 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
 
   // Legacy deep link from the removed dual-layout era.
   if (rawHash === "providers/workspace") {
+    return { page: "providers", replaceTo: "providers" };
+  }
+
+  // Account management used to be a Codex-only destination. Providers now owns
+  // OAuth accounts, API-key pools and the OpenAI/Codex pool in one place.
+  if (rawHash === "codex-auth" || rawHash.startsWith("codex-auth/")) {
     return { page: "providers", replaceTo: "providers" };
   }
 

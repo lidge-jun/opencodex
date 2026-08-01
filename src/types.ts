@@ -985,6 +985,14 @@ export interface OcxProviderConfig {
   /** Keep provider settings on disk but exclude it from routing and model/catalog listings. */
   disabled?: boolean;
   /**
+   * Ordered failover targets for plain (non-combo) requests that resolve to this provider.
+   * When the provider answers with a retryable failure — 429, 5xx, or an `upstream_server_error`
+   * such as a stream that dies without a terminal event — the request is replayed against these
+   * targets in order, reusing the combo failover engine's per-target cooldowns.
+   * Empty or omitted keeps today's behaviour: the failure is returned to the caller.
+   */
+  fallback?: OcxComboTarget[];
+  /**
    * Codex account-selection mode. Valid ONLY on the canonical built-in `openai` forward provider.
    * "pool" (default) rotates main + added Codex accounts through the affinity/quota/cooldown/
    * failover engine; "direct" pins the caller's main Codex login and never touches pool state.

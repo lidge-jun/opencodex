@@ -85,6 +85,11 @@ export interface ProviderAuthHandlers {
   onEditAlias: (provider: string, type: "oauth" | "api-key", id: string, current?: string) => void | Promise<void>;
 }
 
+export type ProviderFallbackTarget = {
+  provider: string;
+  model: string;
+};
+
 export type ProviderUpdatePatch = {
   adapter?: string;
   baseUrl?: string;
@@ -96,4 +101,6 @@ export type ProviderUpdatePatch = {
   disabled?: boolean;
   allowPrivateNetwork?: boolean;
   liveModels?: boolean;
+  /** Ordered failover chain; `[]` clears. */
+  fallback?: ProviderFallbackTarget[];
 };

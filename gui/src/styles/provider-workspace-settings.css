@@ -97,6 +97,14 @@
 .pwi-settings-textarea:focus { border-color: var(--accent-ring); outline: none; }
 .pwi-settings-hint { font-size: var(--text-caption); color: var(--muted); line-height: 1.4; }
 
+.pwi-fallback-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.pwi-fallback-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .pwi-settings-sticky-bar {
   position: sticky; bottom: 0; z-index: 2;
   display: flex; align-items: center; gap: 8px;

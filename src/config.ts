@@ -15,6 +15,7 @@ import { hardenSecretDir, hardenSecretPath, hardenSecretPathAsync } from "./lib/
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
+import { providerFallbackIssues } from "./providers/fallback";
 import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -769,6 +770,13 @@ const configSchema = z.object({
             : "openRouterRouting",
         ],
         message: openRouterRoutingError,
+      });
+    }
+    for (const issue of providerFallbackIssues(name, (provider as { fallback?: unknown }).fallback, config.providers)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, ...issue.path],
+        message: issue.message,
       });
     }
     if (Object.hasOwn(provider, "virtualModels")) {

@@ -45,6 +45,11 @@ export interface WorkspaceProvider {
   disabled?: boolean;
   note?: string;
   allowPrivateNetwork?: boolean;
+  /**
+   * Ordered failover targets for plain (non-combo) requests to this provider.
+   * Empty/omitted = no hop; failures return to the caller.
+   */
+  fallback?: Array<{ provider: string; model: string }>;
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */

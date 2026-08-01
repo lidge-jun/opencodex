@@ -26,6 +26,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
+import { providerFallbackError, providerFallbackTargets } from "../../providers/fallback";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
@@ -94,6 +95,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         authMode: p.authMode,
         apiKeyTransport: p.apiKeyTransport,
         disabled: p.disabled === true,
+        fallback: providerFallbackTargets(p),
         codexAccountMode: providerCodexAccountMode(name, p),
         discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
         ...(hideReason ? {
@@ -269,6 +271,23 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
    if (Object.hasOwn(rawBody, "liveModels")) {
      if (typeof rawBody.liveModels !== "boolean") return jsonResponse({ error: "liveModels must be a boolean" }, 400);
      next.liveModels = rawBody.liveModels;
+     touched = true;
+   }
+
+   if (Object.hasOwn(rawBody, "fallback")) {
+     const raw = rawBody.fallback;
+     // Validate against the providers map with this provider's own edit applied, so a
+     // fallback added in the same patch as a rename/disable is judged on the merged state.
+     const fallbackError = providerFallbackError(name, raw, { ...config.providers, [name]: next });
+     if (fallbackError) return jsonResponse({ error: fallbackError }, 400);
+     const targets = Array.isArray(raw)
+       ? (raw as Array<{ provider: string; model: string }>).map(t => ({
+           provider: t.provider.trim(),
+           model: t.model.trim(),
+         }))
+       : [];
+     if (targets.length) next.fallback = targets;
+     else delete next.fallback;
      touched = true;
    }
 

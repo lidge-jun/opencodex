@@ -399,6 +399,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "freeTier",
       "liveModels",
       "models",
+      "fallback",
       "contextWindow",
       "modelContextWindows",
       "defaultMaxOutputTokens",

@@ -281,6 +281,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             modelUsage={data.modelUsage}
             quotaReport={data.quotaReport}
             availableModels={data.availableModels}
+            peerProviders={Object.entries(config.providers).map(([name, p]) => ({
+              name,
+              disabled: p.disabled,
+              models: p.models,
+              defaultModel: p.defaultModel,
+            }))}
             hasLiveModels={data.hasLiveModels}
             selectedModels={data.selectedModels}
             modelsLoading={data.modelsLoading}

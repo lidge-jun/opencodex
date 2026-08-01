@@ -14,6 +14,7 @@ export interface ProvidersConfig {
     disabled?: boolean;
     note?: string;
     codexAccountMode?: "direct" | "pool";
+    fallback?: Array<{ provider: string; model: string }>;
   }>;
 }
 

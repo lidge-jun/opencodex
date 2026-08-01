@@ -26,6 +26,7 @@ import {
   pickComboTarget,
   targetKey,
 } from "../../combos";
+import { comboIdLabel, isProviderFallbackComboId, providerFallbackPlan } from "../../providers/fallback";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
@@ -894,24 +895,22 @@ export async function handleComboResponses(
   const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
     ? (rawBody as { model: string }).model
     : `combo/${comboId}`;
-  Object.assign(logCtx, {
-    requestedModel,
-    model: requestedModel,
-    provider: "combo",
-    comboId,
-  });
+  // A per-provider fallback chain runs on this same hop loop but is not a combo the user
+  // configured: the log row must keep the winning target's own provider/model rather than
+  // collapsing into a synthetic `combo` row nothing in the GUI can open.
+  const comboIdentity = isProviderFallbackComboId(comboId)
+    ? { requestedModel }
+    : { requestedModel, model: requestedModel, provider: "combo", comboId };
+  Object.assign(logCtx, comboIdentity);
   const combo = getCombo(config, comboId);
   if (!combo) {
-    return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
+    return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboIdLabel(comboId)}`);
   }
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
     // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
     Object.assign(logCtx, childLog, {
-      requestedModel,
-      model: requestedModel,
-      provider: "combo",
-      comboId,
+      ...comboIdentity,
       attempts: logCtx.attempts,
       activeAttempt: undefined,
       activeAttemptStartedAt: undefined,
@@ -944,7 +943,7 @@ export async function handleComboResponses(
       && !isComboTargetInCooldown(comboId, target, initialNow),
   });
   if (!pick) {
-    return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
+    return comboUnavailableResponse(`No available targets for combo: ${comboIdLabel(comboId)}`);
   }
 
   let lastFailure: Response | null = null;
@@ -1060,10 +1059,7 @@ export async function handleComboResponses(
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target);
       Object.assign(logCtx, childLog, {
-        requestedModel,
-        model: requestedModel,
-        provider: "combo",
-        comboId,
+        ...comboIdentity,
         attempts: logCtx.attempts,
         activeAttempt: attempt,
         activeAttemptStartedAt: started,
@@ -1116,7 +1112,7 @@ export async function handleComboResponses(
       return lastFailure;
     }
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
+      `[combo] ${comboIdLabel(comboId)}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
     );
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
@@ -1239,6 +1235,16 @@ export async function handleResponses(
     && !(hasUnexpandedPreviousResponse && isCanonicalOpenAiForwardProvider(route.provider))
   ) {
     await maybePrimeSubagentQuota(config);
+  }
+
+  // Per-provider fallback replays the request across the provider's configured targets using the
+  // combo hop loop. Thread spawns are excluded: they carry their own Codex account/model fallback
+  // below, which the combo path deliberately skips.
+  if (!options.comboAttempt && !isThreadSpawnRequest(req.headers)) {
+    const plan = providerFallbackPlan(config, { provider: route.providerName, modelId: route.modelId });
+    if (plan) {
+      return handleComboResponses(req, body, plan.comboId, plan.config, logCtx, options);
+    }
   }
 
   let authCtx: CodexAuthContext = { kind: "main", accountId: null };
