@@ -41,7 +41,7 @@ $ ocx export --client opencode
   ...
 }
 
-Destination: /Users/you/.config/opencode/opencode.json
+Destination: ~/.config/opencode/opencode.json
 Merge this provider block into that file; do not replace it.
 Before launching: export OPENCODEX_OPENCODE_API_KEY=<your ocx_... key>
 19 models; 2 omit context limits (the client applies its own defaults).
