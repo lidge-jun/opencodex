@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createGoogleAdapter } from "../src/adapters/google";
@@ -253,4 +254,4 @@ test("production adapter contract rejects omitted translator budgets at typechec
   expect(invalid.stdout.toString() + invalid.stderr.toString()).toContain("TS2554");
   const valid = Bun.spawnSync(["bun", ...base, "tests/fixtures/translator-budget-required.valid.ts"]);
   expect(valid.exitCode).toBe(0);
-});
+}, SPAWN_BUDGET_MS); // Two real tsc processes are the contract assertion; windows-latest exceeds Bun's 5s default.

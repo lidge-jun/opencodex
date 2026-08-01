@@ -84,7 +84,7 @@ describe("usage log", () => {
     const snapshot = await readUsageSnapshotForManagement();
     expect(snapshot.truncatedPrefixBytes).toBeGreaterThan(0);
     expect(snapshot.entries.map(entry => entry.requestId)).toEqual(["tail"]);
-  });
+  }, STORE_BUDGET_MS); // Reading the configured 64 MiB cap is intrinsic; windows-latest exceeds Bun's 5s default.
 
   test("usage tail exact row boundary keeps the complete newest row", async () => {
     const newest = Buffer.from(`${persistedLine("newest")}\n`);

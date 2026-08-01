@@ -482,10 +482,10 @@ describe("management and data-plane credential separation", () => {
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(args => {
       const target = args[0] ?? "";
-      if (target.endsWith("admin-api-token")) {
-        return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      if (target === testHome) {
+        return { success: false, exitCode: null, timedOut: true, stdout: "" };
       }
-      return { success: false, exitCode: null, timedOut: true, stdout: "" };
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     resetHardenedStateForTests();
     const state = initializeManagementAuthState(remoteConfig());
@@ -549,7 +549,13 @@ describe("management and data-plane credential separation", () => {
     saveConfig(remoteConfig());
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
-    setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+    setIcaclsRunnerForTests(args => {
+      const target = args[0] ?? "";
+      if (target === testHome || target.endsWith("admin-api-token") || target.endsWith(".admin-token.tmp")) {
+        return { success: false, exitCode: null, timedOut: true, stdout: "" };
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
     resetHardenedStateForTests();
 
     const state = initializeManagementAuthState(remoteConfig());
