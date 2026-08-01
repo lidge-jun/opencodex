@@ -340,7 +340,12 @@ function waitForBackgroundShellClose(entry: BackgroundShellEntry): Promise<boole
       settled = true;
       resolveWait(false);
     }, CURSOR_BACKGROUND_SHELL_TERM_GRACE_MS);
-    unrefTimer(timer);
+    // Deliberately REF'D: this is the bounded kill-grace wait that shutdown
+    // drain awaits. Bun on Windows can starve unref'd timers when a pending
+    // promise is the only other work, which would leave drainAndShutdown
+    // waiting on this resolution forever. The timer self-clears within the
+    // 2-second grace window (or earlier on close), so a ref cannot keep the
+    // process alive beyond that bound.
     void entry.closePromise.then(() => {
       if (settled) return;
       settled = true;

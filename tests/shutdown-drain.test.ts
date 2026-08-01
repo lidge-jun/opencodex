@@ -119,9 +119,13 @@ describe("background shell shutdown drain", () => {
     const unresolvedChild = installShutdownShell();
     setBackgroundShellRuntimeForTests({
       setTimer(callback) {
-        const timer = setTimeout(callback, 0);
-        timer.unref?.();
-        return timer;
+        // Keep this fixture timer REF'D: Bun on Windows can stop servicing
+        // unref'd timers while the test's only pending work is a promise,
+        // which left drainAndShutdown waiting forever and hung the isolate
+        // process until the 20-minute CI job timeout (same starvation the
+        // OAuth queue tests hit). A ref'd 0ms timer fires immediately and
+        // cannot keep the process alive.
+        return setTimeout(callback, 0);
       },
     });
     const unresolvedServer = fakeServer();
