@@ -93,6 +93,32 @@ describe("real-home write guard", () => {
     expect(() => readFileSync(join(opencodexHome, "codex-accounts.json"))).toThrow();
   });
 
+  test("armed + a symlink escaping a temp home into the protected home: refused", () => {
+    // Atomic writes resolve their destination through symlinks, so a temp home whose
+    // config.json points into the protected home would otherwise pass the caller's
+    // dir-level check and then write the real file anyway.
+    const { realHome, opencodexHome } = sentinelHome();
+    const protectedFile = join(opencodexHome, "config.json");
+    writeFileSync(protectedFile, '{"sentinel":true}', "utf8");
+    const dir = mkdtempSync(join(tmpdir(), "ocx-escape-home-"));
+    symlinkSync(protectedFile, join(dir, "config.json"));
+
+    const probe = runProbe(`
+      import { saveConfig } from "${REPO_ROOT_URL}src/config";
+      const REFUSAL = "refusing to write the real OpenCodex home";
+      try {
+        saveConfig({ providers: {}, defaultProvider: "openai", port: 10100 } as never);
+        console.log("wrote");
+      } catch (err) {
+        console.log(String(err).includes(REFUSAL) ? "refused" : "other");
+      }
+    `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome, OPENCODEX_HOME: dir });
+
+    expect(probe.stdout).toContain("refused");
+    // The protected file must be byte-for-byte untouched.
+    expect(readFileSync(protectedFile, "utf8")).toBe('{"sentinel":true}');
+  });
+
   test("armed + an unregistered temp home: writers succeed", () => {
     // The 54 suites that mkdtemp their own home must keep working with no opt-in.
     const dir = mkdtempSync(join(tmpdir(), "ocx-plain-home-"));

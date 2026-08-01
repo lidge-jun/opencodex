@@ -1418,6 +1418,27 @@ describe("Responses previous_response_id state", () => {
     for (const path of [live, current, young, unrelated, directory]) expect(existsSync(path)).toBe(true);
   });
 
+  test("load sweeps stale temps in a symlinked snapshot's real directory", () => {
+    // Atomic writes place their temp beside the RESOLVED target, so a dotfiles-managed
+    // config dir strands temps where a scan of the literal home would never find them.
+    const realDir = mkdtempSync(join(tmpdir(), "ocx-state-real-"));
+    const realSnapshot = join(realDir, "responses-state.json");
+    writeFileSync(realSnapshot, JSON.stringify({ version: 2, states: [] }));
+    symlinkSync(realSnapshot, join(home, "responses-state.json"));
+
+    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const stranded = join(realDir, `responses-state.json.ocx.${deadPid}.1.tmp`);
+    writeFileSync(stranded, "private state");
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    utimesSync(stranded, old, old);
+
+    clearResponseStateMemoryForTests();
+    previousResponseProviderState("trigger-load");
+
+    expect(existsSync(stranded)).toBe(false);
+    rmSync(realDir, { recursive: true, force: true });
+  });
+
   test("stale temp recovery is best-effort when unlink fails", () => {
     const deadPid = process.pid === 4242 ? 4243 : 4242;
     const path = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);

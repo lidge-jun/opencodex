@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import {
@@ -118,12 +118,26 @@ function isMissingPathError(error: unknown): boolean {
  * resolved target. An unresolvable path (not yet created) falls back to the literal
  * path, which is the correct target for a first write.
  */
-function resolveWriteTarget(path: string): string {
+export function resolveWriteTarget(path: string): string {
   try {
     return realpathSync(path);
   } catch {
     return path;
   }
+}
+
+/**
+ * Re-apply the real-home guard to a RESOLVED write target.
+ *
+ * Callers such as saveConfig check only their logical config dir, which passes when
+ * OPENCODEX_HOME points at a temp fixture. Following a symlink out of that fixture
+ * would land on the protected home the caller's own check just cleared, so the guard
+ * has to run again on wherever the write actually terminates. Inert in production,
+ * where the guard is disarmed.
+ */
+function assertResolvedTargetAllowed(path: string, target: string): void {
+  if (target === path) return;
+  assertNotRealHomeUnderTest(dirname(target));
 }
 
 export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO = {
@@ -138,6 +152,7 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
 }): void {
   recordOwnedConfigPath(resolveConfigDir(), path);
   const target = resolveWriteTarget(path);
+  assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {
@@ -225,6 +240,7 @@ export async function atomicWriteFileAsync(
     unlink: unlinkSync,
   };
   const target = resolveWriteTarget(path);
+  assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {

@@ -1726,6 +1726,9 @@ describe("config.ts – atomic writes preserve symlinked destinations", () => {
 
     atomicWriteFile(link, "recovered");
 
+    // Reading through the link cannot distinguish "link replaced" from "link kept,
+    // target created", so assert the link itself is gone.
+    expect(lstatSync(link).isSymbolicLink()).toBe(false);
     expect(readFileSync(link, "utf8")).toBe("recovered");
   });
 });
@@ -1776,6 +1779,9 @@ describe("config.ts – async atomic writes preserve symlinked destinations", ()
 
     await atomicWriteFileAsync(link, "recovered");
 
+    // Reading through the link cannot distinguish "link replaced" from "link kept,
+    // target created", so assert the link itself is gone.
+    expect(lstatSync(link).isSymbolicLink()).toBe(false);
     expect(readFileSync(link, "utf8")).toBe("recovered");
   });
 });

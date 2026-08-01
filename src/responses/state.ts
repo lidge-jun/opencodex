@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFileAsync, getConfigDir } from "../config";
+import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import type { OcxProviderContinuationState } from "../types";
 import {
@@ -454,10 +454,16 @@ function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
   const path = snapshotPath();
-  try {
-    recoverStaleResponseStateTemps(dirname(path));
-  } catch {
-    /* best-effort cleanup only; snapshot loading must remain independent */
+  // Atomic writes place their temp beside the RESOLVED target, so a symlinked
+  // snapshot (dotfiles-managed config dir) strands temps in the link's real
+  // directory where a scan of the literal config dir would never see them.
+  // Both locations are swept; they collapse to one when nothing is symlinked.
+  for (const dir of new Set([dirname(path), dirname(resolveWriteTarget(path))])) {
+    try {
+      recoverStaleResponseStateTemps(dir);
+    } catch {
+      /* best-effort cleanup only; snapshot loading must remain independent */
+    }
   }
   try {
     if (existsSync(path)) {
