@@ -97,8 +97,8 @@ Copilot's catalog is not uniformly served by `/chat/completions`. The provider a
 newer OpenAI models answer only on the Responses API. opencodex routes those over
 `openai-responses` automatically:
 
-`gpt-5.3-codex` · `gpt-5.4` · `gpt-5.4-mini` · `gpt-5.5` · `gpt-5.6-luna` · `gpt-5.6-sol` ·
-`gpt-5.6-terra`
+`gpt-5.3-codex` · `gpt-5.4` · `gpt-5.4-mini` · `gpt-5.4-nano` · `gpt-5.5` · `gpt-5.6-luna` ·
+`gpt-5.6-sol` · `gpt-5.6-terra`
 
 Without this, a chat-completions request fails with
 `model "…" is not accessible via the /chat/completions endpoint`. `gpt-5.4` is subtler: a text-only

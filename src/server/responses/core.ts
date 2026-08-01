@@ -1702,6 +1702,9 @@ async function handleResponsesInner(
             parsed.options.promptCacheKey,
             route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
           );
+          if (route.providerName === "kiro") {
+            parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
+          }
         } else if (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
           recoveryKind = "key-429";
           nextProvider = rotateProviderTransportOn429(config, route.providerName, route.provider, {
