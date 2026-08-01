@@ -82,11 +82,13 @@ function record(event: "write" | "fsync" | "close" | "harden" | "publish" | "dir
 
 function fsyncDirectoryBestEffort(dir: string): void {
   let fd: number | null = null;
+  // Record the durability attempt before opening the directory: Windows cannot
+  // open/fsync directory handles this way, but callers still cross this seam.
+  record("dir-fsync");
   try {
     fd = openSync(dir, "r");
     if (spillIoForTest?.fsync) spillIoForTest.fsync(fd);
     else fsyncSync(fd);
-    record("dir-fsync");
   } catch {
     // Windows and some filesystems do not support fsync on directory handles.
   } finally {

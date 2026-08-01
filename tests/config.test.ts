@@ -1619,7 +1619,7 @@ describe("config.ts – Windows ACL hardening integration", () => {
     }
   });
 
-  test("saveConfig throws when hardenSecretDir fails in required mode on win32", () => {
+  test("saveConfig degrades when config-mutation directory hardening fails on win32", () => {
     const origPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
@@ -1627,7 +1627,8 @@ describe("config.ts – Windows ACL hardening integration", () => {
         if (opts?.required) throw new Error("ACL hardening failed: access denied");
         return { ok: true };
       });
-      expect(() => saveConfig(getDefaultConfig())).toThrow(/ACL/i);
+      expect(() => saveConfig(getDefaultConfig())).not.toThrow();
+      expect(existsSync(getConfigPath())).toBe(true);
       spy.mockRestore();
     } finally {
       Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });

@@ -45,9 +45,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which Windows runner this run is allowed to use.
+  #
+  # The self-hosted Windows box is a maintainer's PERSONAL machine on a home
+  # network, reachable over Tailscale. Anything that runs on it runs as a local
+  # user with that user's filesystem and LAN in reach, so the only question that
+  # matters is whether the commit is trusted BEFORE a runner ever sees it.
+  #
+  # `push` on dev/main/preview is trusted: reaching those branches requires the
+  # push permission, which only the maintainers in MAINTAINERS.md hold.
+  # `pull_request` is NOT trusted, and no author check can make it so — the
+  # workflow file itself comes from the PR head, so any `if:` guard written here
+  # is deleted by the same patch it is meant to stop. Fork PRs therefore stay on
+  # GitHub-hosted runners, unconditionally.
+  #
+  # `workflow_dispatch` is the maintainer escape hatch: dispatch requires write
+  # access, so a maintainer can deliberately aim a branch at the home box.
+  select-windows-runner:
+    name: select windows runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      label: ${{ steps.pick.outputs.label }}
+    steps:
+      - name: Pick runner
+        id: pick
+        env:
+          # Read through env rather than interpolating directly into the script:
+          # `github.event_name` is a fixed vocabulary, but keeping the habit means
+          # no future edit here can grow a script-injection sink.
+          EVENT_NAME: ${{ github.event_name }}
+          USE_SELF_HOSTED: ${{ vars.OCX_SELF_HOSTED_WINDOWS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted=no
+          case "$EVENT_NAME" in
+            push|workflow_dispatch) trusted=yes ;;
+          esac
+
+          # Repository variable OCX_SELF_HOSTED_WINDOWS acts as a kill switch. When
+          # it is anything other than `1` — including unset, which is the state
+          # before the runner exists — every job falls back to windows-latest and
+          # CI keeps working with the box powered off.
+          if [ "$trusted" = "yes" ] && [ "${USE_SELF_HOSTED:-}" = "1" ]; then
+            echo 'runner=["self-hosted","Windows","X64","ocx-home"]' >> "$GITHUB_OUTPUT"
+            echo 'label=self-hosted (ocx-home)' >> "$GITHUB_OUTPUT"
+          else
+            echo 'runner="windows-latest"' >> "$GITHUB_OUTPUT"
+            echo 'label=windows-latest' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    needs: select-windows-runner
+    runs-on: ${{ matrix.runner }}
     # Windows dominates this matrix: on run 30459554635 the same suite took
     # ubuntu 4.6min / macos 5.6min / windows 11.8min. Against the previous
     # 12-minute ceiling that left ~12s of headroom, so runner variance decided
@@ -62,8 +115,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # `name` is spelled out rather than derived from `runner`: a runner given
+        # as a label array renders as "self-hosted Windows X64 ocx-home", so the
+        # check name would change with the routing and break any branch
+        # protection rule that names it. Keeping `windows` fixed means the
+        # required check stays the same whichever machine served it.
+        include:
+          - name: ubuntu
+            runner: ubuntu-latest
+          - name: windows
+            runner: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
+          - name: macos
+            runner: macos-latest
     steps:
+      - name: Show selected runner
+        if: matrix.name == 'windows'
+        shell: bash
+        run: echo "windows leg on ${{ needs.select-windows-runner.outputs.label }}"
+
+      # A self-hosted runner keeps its working directory between jobs. Without an
+      # explicit wipe, a file deleted in the commit under test survives on disk
+      # and the suite passes against a tree that no longer exists in git.
+      # `--ephemeral` registration de-registers the runner after each job but does
+      # not clean the workspace, so this step is what makes the checkout honest.
+      - name: Clean workspace (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: git clean -xffd . || true
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
@@ -113,6 +192,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Deliberately NOT routed to the self-hosted box. This job runs
+        # `npm install -g`, which writes into the machine's global prefix and
+        # would leave an `ocx` on a maintainer's personal PATH. It is an
+        # 8-minute job, so there is nothing to win by moving it.
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout

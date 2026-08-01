@@ -18,6 +18,7 @@ import {
   hardenSecretDir,
   hardenSecretPath,
   hardenSecretPathAsync,
+  windowsSecretAclApplies,
 } from "./lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
@@ -1506,6 +1507,7 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
 
 const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
+let warnedConfigMutationDirectoryAcl = false;
 
 export class ConfigMutationLockError extends Error {
   readonly code = "CONFIG_MUTATION_LOCK_UNAVAILABLE";
@@ -1526,8 +1528,18 @@ function configMutationDatabasePath(): string {
   } else {
     try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
-  if (process.platform === "win32") {
-    hardenSecretDir(dir, { required: true });
+  if (windowsSecretAclApplies()) {
+    try {
+      hardenSecretDir(dir, { required: true });
+    } catch (error) {
+      if (!warnedConfigMutationDirectoryAcl) {
+        warnedConfigMutationDirectoryAcl = true;
+        const diagnostics = error instanceof Error ? error.message : "ACL hardening failed";
+        console.warn(
+          `[opencodex] Config mutation coordination directory ACL hardening did not complete; continuing without it. ${diagnostics}`,
+        );
+      }
+    }
   }
   const path = join(dir, CONFIG_MUTATION_DB_FILENAME);
   recordOwnedConfigPath(dir, path);
