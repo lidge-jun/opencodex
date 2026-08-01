@@ -607,6 +607,13 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-sonnet-5");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-fable-5");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-sonnet-5"]).toBe(1_000_000);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-opus-4-7"]).toBe(1_000_000);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-opus-4-6"]).toBe(1_000_000);
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-sonnet-4-6"]).toBe(1_000_000);
+    // A missing window makes the model advertise max_input_tokens: null and lose its [1m] picker row.
+    for (const model of OAUTH_PROVIDERS.anthropic.providerConfig.models ?? []) {
+      expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.[model]).toBeGreaterThan(0);
+    }
     expect(OAUTH_PROVIDERS.xai.providerConfig.defaultModel).toBe("grok-4.5");
     expect(OAUTH_PROVIDERS.xai.providerConfig.liveModels).toBe(true);
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.5");
