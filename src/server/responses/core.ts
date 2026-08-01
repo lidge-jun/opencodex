@@ -1660,6 +1660,83 @@ async function handleResponsesInner(
         }
       }
     }
+    // Credential recovery for ROUTED Responses gateways (GitHub Copilot, key-pool gateways).
+    // The normal adapter loop refreshes an OAuth token on 401 and rotates a pool key on 429,
+    // but this branch formats non-2xx immediately — so a model a registry `modelWireDefaults`
+    // entry puts on the Responses wire would surface a 401 that a refresh fixes, or a 429 a
+    // healthy key absorbs, while its chat-wire siblings on the same provider recover. Nothing
+    // has streamed yet and the body is a replayable string, the same precondition the
+    // transient-5xx retry above relies on. The canonical ChatGPT forward provider is excluded:
+    // it owns the pool-retry path above, and its credential must never be swapped here.
+    if (!upstreamResponse.ok && !isCanonicalOpenAiForwardProvider(route.provider)) {
+      // Widened from the narrowed passthrough type: only buildRequest is needed here, and
+      // the rebuilt adapter for the rotated credential is a plain ProviderAdapter.
+      let passthroughAdapter: Pick<typeof adapter, "buildRequest"> = adapter;
+      let oauth401Replayed = false;
+      // Bounded: at most one token refresh, then one replay per remaining pool key. Both
+      // guards are monotonic, so a persistently-401/429 upstream cannot loop here.
+      for (;;) {
+        let nextProvider: OcxProviderConfig | undefined;
+        // Recorded on the replay's send so the request log explains WHY the send count grew,
+        // exactly as the normal loop's rebuildAndRefetch does.
+        let recoveryKind: AttemptRecoveryKind | undefined;
+        if (upstreamResponse.status === 401 && isOAuth401ReplayProvider && sentOAuthSnapshot && !oauth401Replayed) {
+          oauth401Replayed = true;
+          recoveryKind = "oauth-401";
+          // Release the rejected response's socket before the refresh round-trip, not just
+          // before the replay — a failed refresh returns without reaching the shared cancel.
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          let refreshed: OAuthAccessSnapshot;
+          try {
+            refreshed = await forceRefreshOAuthAccessSnapshot(sentOAuthSnapshot);
+          } catch (err) {
+            upstream.abort();
+            return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
+          }
+          sentOAuthSnapshot = refreshed;
+          // Rebuild the transport from the SAME provider name, so a refreshed credential can
+          // only ever be addressed at that provider's own validated destination.
+          nextProvider = resolveProviderTransport(
+            route.providerName,
+            { ...route.provider, apiKey: refreshed.accessToken },
+            parsed.options.promptCacheKey,
+            route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+          );
+        } else if (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
+          recoveryKind = "key-429";
+          nextProvider = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+            retryAfter: upstreamResponse.headers.get("retry-after"),
+            now: Date.now(),
+            attemptedKey: route.provider.apiKey,
+            promptCacheKey: parsed.options.promptCacheKey,
+          }) ?? undefined;
+        }
+        if (!nextProvider) break;
+        // Release the failed response's socket before replaying; unread bodies otherwise
+        // linger until runtime cleanup (one per rotated key under a rate-limit storm).
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        route.provider = nextProvider;
+        // Rebuild the request from the rotated provider so the new credential replaces the
+        // old one everywhere the request carries it — the adapter closes over the provider.
+        passthroughAdapter = resolveAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+          config.cacheRetention,
+        );
+        request = await passthroughAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
+        // Keep the request log's attempt count honest: a replay is a second upstream send,
+        // exactly as the transient-5xx retry above records one.
+        noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recoveryKind);
+        try {
+          upstreamResponse = await fetchWithHeaderTimeout(request.url, {
+            method: request.method, headers: request.headers, body: request.body,
+          }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+        } catch (err) {
+          return transportFailureResponse(err);
+        }
+        if (upstreamResponse.ok) break;
+      }
+    }
+
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) logCtx.resolvedModel = resolvedModel;

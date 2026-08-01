@@ -27,6 +27,7 @@ import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
+import { stripUnsupportedResponsesSamplingParams } from "./responses-wire-params";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
@@ -633,11 +634,7 @@ async function handleClaudeMessagesWithBudget(
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
-      delete internalBody.max_output_tokens;
-      delete internalBody.temperature;
-      delete internalBody.top_p;
-      delete internalBody.stop;
-      delete internalBody.user;
+      stripUnsupportedResponsesSamplingParams(internalBody, route.provider);
     }
     // Estimated-usage adapters (cursor/kiro) report no per-turn input tokens; stash a
     // request-side estimate so the log's in:0 rows get a floor. NEVER set this for

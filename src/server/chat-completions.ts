@@ -20,6 +20,7 @@ import { resolveClientRetryAfter } from "../lib/retry-after";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
+import { stripUnsupportedResponsesSamplingParams } from "./responses-wire-params";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import {
@@ -122,11 +123,7 @@ async function handleChatCompletionsWithBudget(
       directRoute = route.codexAccountMode === "direct";
       // ChatGPT backend rejects store:true and unsupported sampling knobs.
       internalBody.store = false;
-      delete internalBody.max_output_tokens;
-      delete internalBody.temperature;
-      delete internalBody.top_p;
-      delete internalBody.stop;
-      delete internalBody.user;
+      stripUnsupportedResponsesSamplingParams(internalBody, route.provider);
     } else if (internalBody.store === undefined) {
       internalBody.store = false;
     }
