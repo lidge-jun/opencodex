@@ -12,6 +12,21 @@ const MAX_COOLDOWN_MS = 10 * 60_000;
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
 const targetCooldowns = new Map<string, TargetCooldown>();
 
+/**
+ * Expired entries are normally dropped lazily by `isComboTargetInCooldown`, which only runs for
+ * combo ids that are asked about again. Per-provider fallback derives its combo id from the
+ * requested model, so a client that spreads traffic over many model names would otherwise retain
+ * one dead entry per (model, target) pair forever. Sweeping on insert once the map grows past
+ * this many entries bounds retention to cooldowns issued within the last `MAX_COOLDOWN_MS`.
+ */
+const COOLDOWN_SWEEP_THRESHOLD = 256;
+
+function sweepExpiredCooldowns(now: number): void {
+  for (const [key, entry] of targetCooldowns) {
+    if (entry.cooldownUntil <= now) targetCooldowns.delete(key);
+  }
+}
+
 function cooldownMapKey(
   comboId: string,
   target: Pick<OcxComboTarget, "provider" | "model">,
@@ -64,6 +79,12 @@ export function coolComboTarget(
   targetCooldowns.set(cooldownMapKey(comboId, target), {
     cooldownUntil: now + Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS),
   });
+  if (targetCooldowns.size > COOLDOWN_SWEEP_THRESHOLD) sweepExpiredCooldowns(now);
+}
+
+/** Retained cooldown entries; observability seam for the sweep-on-insert bound. */
+export function comboTargetCooldownCountForTests(): number {
+  return targetCooldowns.size;
 }
 
 export function clearComboTargetCooldowns(comboId?: string): void {

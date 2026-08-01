@@ -171,6 +171,14 @@ describe("useAppRouteState (real hook)", () => {
     expect(seen.current!.page).toBe("models");
   });
 
+  test("a bookmarked Codex Auth hash opens Providers on the initial load", async () => {
+    // `codex-auth` is no longer a page id, so the initial state must come from the same
+    // resolver `hashchange` uses — `readPageFromHash` alone would fall back to the dashboard.
+    const { seen } = await mountAt("#codex-auth/accounts");
+    expect(seen.current!.page).toBe("providers");
+    expect(normalizeHashPath(win.location.hash)).toBe("providers");
+  });
+
   test("an unknown suffix is normalised through the hook", async () => {
     const { seen } = await mountAt("#models/nope");
     expect(normalizeHashPath(win.location.hash)).toBe("models");

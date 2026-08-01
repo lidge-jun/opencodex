@@ -14,6 +14,7 @@ import {
   comboIdFromRawBody,
   comboModelId,
   comboPublicModelId,
+  comboTargetCooldownCountForTests,
   concreteComboRequestBody,
   coolComboTarget,
   getCombo,
@@ -277,6 +278,22 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("other", target, 1_050)).toBe(true);
     clearComboTargetCooldowns("other");
     expect(isComboTargetInCooldown("other", target, 1_050)).toBe(false);
+  });
+
+  test("expired entries for never-revisited combo ids are swept instead of retained forever", () => {
+    clearComboTargetCooldowns();
+    // Per-provider fallback derives its combo id from the requested model, so a client that
+    // spreads traffic over many model names never asks about most ids again and the lazy
+    // expiry in isComboTargetInCooldown cannot reclaim them.
+    for (let i = 0; i < 400; i++) {
+      coolComboTarget(`provider-fallback\u0000a\u0000m${i}`, target, { now: 1_000, cooldownMs: 100 });
+    }
+    expect(comboTargetCooldownCountForTests()).toBeGreaterThan(256);
+
+    coolComboTarget("live", target, { now: 5_000, cooldownMs: 100 });
+    expect(comboTargetCooldownCountForTests()).toBe(1);
+    expect(isComboTargetInCooldown("live", target, 5_050)).toBe(true);
+    clearComboTargetCooldowns();
   });
 });
 

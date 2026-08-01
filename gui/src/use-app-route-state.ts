@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   hashBelongsToPage,
-  readPageFromHash,
   resolveAppHashChange,
   type Page,
 } from "./app-routing";
@@ -42,7 +41,14 @@ function clearStaleViewKeys(): void {
  * router immediately rewrites.
  */
 export function useAppRouteState() {
-  const [page, setPageState] = useState<Page>(readPageFromHash);
+  // The first hash must go through the same resolver as `hashchange`: `readPageFromHash` only
+  // knows the current page ids, so a bookmarked legacy hash (`#codex-auth/accounts`) would land
+  // on the dashboard fallback instead of the page it was retired into.
+  const [page, setPageState] = useState<Page>(() =>
+    resolveAppHashChange(
+      normalizeHashPath(typeof window === "undefined" ? "" : window.location.hash),
+    ).page,
+  );
 
   useEffect(() => { clearStaleViewKeys(); }, []);
 

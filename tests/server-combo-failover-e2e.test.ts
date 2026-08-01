@@ -9,6 +9,7 @@ import {
   isComboTargetInCooldown,
 } from "../src/combos";
 import { readConfigDiagnostics, saveConfig } from "../src/config";
+import { clearResponseStateForTests, rememberResponseState } from "../src/responses/state";
 import type { ProviderAdapter } from "../src/adapters/base";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveCredential } from "../src/oauth/store";
@@ -1859,6 +1860,39 @@ describe("per-provider fallback for plain models", () => {
 
     const response = await postModelLogged(config, "a/m1");
     expect(response.status).toBe(503);
+  });
+
+  test("a previous_response_id chain is expanded exactly once on the way to a target", async () => {
+    // The hop loop re-enters handleResponses for every target, and expandPreviousResponseInput
+    // is not idempotent: replaying an already-expanded body would prepend the restored history
+    // a second time in each child request.
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("primary ok", "m1");
+    });
+    const b = serve(() => chatSuccess("must not be reached", "m2"));
+    const config = fallbackConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, [{ provider: "b", model: "m2" }]);
+
+    clearResponseStateForTests();
+    rememberResponseState(
+      { store: true, input: [{ role: "user", content: "restored turn" }] },
+      { id: "resp-chain", status: "completed", output: [] },
+    );
+
+    const response = await postModelLogged(config, "a/m1", {
+      previous_response_id: "resp-chain",
+      store: true,
+    });
+    expect(response.status).toBe(200);
+
+    const messages = bodies[0]?.messages as Array<Record<string, unknown>> | undefined;
+    const restored = (messages ?? []).filter(message => JSON.stringify(message).includes("restored turn"));
+    expect(restored).toHaveLength(1);
+    clearResponseStateForTests();
   });
 
   test("an explicit combo request is unaffected by provider fallback config", async () => {

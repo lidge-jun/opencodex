@@ -28,6 +28,7 @@ export {
 } from "./resolve";
 export {
   clearComboTargetCooldowns,
+  comboTargetCooldownCountForTests,
   coolComboTarget,
   isComboTargetInCooldown,
   parseRetryAfterMs,

@@ -78,4 +78,44 @@ describe("server terminal guard integration", () => {
     expect(messages.at(-1)?.content?.[0]?.text).toContain("你刚才只描述了计划");
   });
 
+  test("a configured per-provider fallback does not disable the guard on the primary hop", async () => {
+    // Per-provider fallback replays plain requests through the combo hop loop, so the primary
+    // attempt runs with comboAttempt set. That must not cost the request its bounded
+    // continuation: without the guard Claude's plan-only turn reaches the client tool-call free.
+    const fallbackConfig = {
+      port: 0,
+      defaultProvider: "claude-se",
+      providers: {
+        "claude-se": {
+          adapter: "anthropic",
+          baseUrl: "https://example.test",
+          apiKey: "sk-test",
+          fallback: [{ provider: "claude-backup", model: "se-claude-opus-4.8" }],
+        },
+        "claude-backup": {
+          adapter: "anthropic",
+          baseUrl: "https://backup.example.test",
+          apiKey: "sk-backup",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-se/se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+      }),
+    }), fallbackConfig, { model: "", provider: "" });
+
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(text).toContain("exec_command");
+    // The continuation stayed on the primary provider; the fallback target was never needed.
+    expect(requestBodies.every(body => body.model === "se-claude-opus-4.8")).toBe(true);
+  });
 });

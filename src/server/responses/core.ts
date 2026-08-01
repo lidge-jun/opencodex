@@ -559,6 +559,13 @@ export interface HandleResponsesOptions {
   promptCacheKeyIsSharedCohort?: boolean;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /**
+   * Internal: this combo attempt belongs to a synthetic per-provider fallback chain, not to a
+   * combo the user configured. Such a hop must otherwise behave exactly like the plain request
+   * it replaced (see `providerFallbackPlan`), so single-provider behaviour that combos disable
+   * on purpose — currently the Anthropic terminal-guard continuation — stays enabled.
+   */
+  providerFallbackAttempt?: boolean;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -898,7 +905,8 @@ export async function handleComboResponses(
   // A per-provider fallback chain runs on this same hop loop but is not a combo the user
   // configured: the log row must keep the winning target's own provider/model rather than
   // collapsing into a synthetic `combo` row nothing in the GUI can open.
-  const comboIdentity = isProviderFallbackComboId(comboId)
+  const providerFallbackChain = isProviderFallbackComboId(comboId);
+  const comboIdentity = providerFallbackChain
     ? { requestedModel }
     : { requestedModel, model: requestedModel, provider: "combo", comboId };
   Object.assign(logCtx, comboIdentity);
@@ -1011,6 +1019,9 @@ export async function handleComboResponses(
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
         comboAttempt: true,
+        // A synthetic fallback hop must keep the single-provider behaviour of the plain request
+        // it stands in for; a user-configured combo keeps the stricter combo semantics.
+        providerFallbackAttempt: providerFallbackChain,
         // Each combo target gets its own attempt budget. The shared budget bounds retries
         // against ONE upstream — transport retries plus account-pool rotation — but a combo
         // target is a different provider entirely, and the target list plus per-target
@@ -1243,7 +1254,11 @@ export async function handleResponses(
   if (!options.comboAttempt && !isThreadSpawnRequest(req.headers)) {
     const plan = providerFallbackPlan(config, { provider: route.providerName, modelId: route.modelId });
     if (plan) {
-      return handleComboResponses(req, body, plan.comboId, plan.config, logCtx, options);
+      // Hand the hop loop the PRE-expansion body, exactly as the `combo/<id>` entry point does.
+      // `expandPreviousResponseInput` is not idempotent and leaves `previous_response_id` in
+      // place, so replaying an already-expanded body would prepend the restored history a second
+      // time in every child request.
+      return handleComboResponses(req, originalBody, plan.comboId, plan.config, logCtx, options);
     }
   }
 
@@ -2696,7 +2711,11 @@ export async function handleResponses(
   // Keep the normal request/recovery path above intact, and use this bounded callback only for the
   // one internal continuation pass. A continuation failure becomes an in-stream adapter error so
   // the client never sees a second hidden HTTP response or an unbounded retry loop.
-  const terminalGuardEnabled = activeAdapter.name === "anthropic" && !options.comboAttempt && !routedCompaction;
+  // A per-provider fallback hop is a plain request wearing a combo's clothes, so it keeps the
+  // guard; a user-configured combo target does not (the parent hop loop owns that turn).
+  const terminalGuardEnabled = activeAdapter.name === "anthropic"
+    && (!options.comboAttempt || options.providerFallbackAttempt === true)
+    && !routedCompaction;
   const fetchTerminalGuardContinuation = async function* (nextParsed: OcxParsedRequest): AsyncGenerator<AdapterEvent> {
     let imageTierBias = 0;
     let response: Response | undefined;
