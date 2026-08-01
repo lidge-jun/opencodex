@@ -32,7 +32,7 @@ fetch path for no isolation benefit.
 {
   "client": "opencode",
   "filename": "opencode.json",
-  "destination": "/Users/you/.config/opencode/opencode.json",
+  "destination": "~/.config/opencode/opencode.json",
   "apiKeyEnv": "OPENCODEX_OPENCODE_API_KEY",
   "exportHint": "export OPENCODEX_OPENCODE_API_KEY=<your key>",
   "modelCount": 19,

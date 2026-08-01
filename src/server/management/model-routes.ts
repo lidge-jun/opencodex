@@ -31,6 +31,7 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
 }
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
 import {
   DEFAULT_SUBAGENT_MODELS,
@@ -85,11 +86,126 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO, corsHeaders } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
+import {
+  EXPORT_CLIENTS,
+  EXPORT_CLIENT_IDS,
+  OPENCODE_PROVIDER_ID,
+  buildClientConfig,
+  isExportClientId,
+  opencodeProxyBaseUrl,
+} from "../../clients/config-export";
+import type {
+  ExportClientId,
+  ExportModel,
+  OpencodeGeneratedConfig,
+  PiGeneratedConfig,
+} from "../../clients/config-export";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+
+/**
+ * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
+ * that model plus the identity/visibility fields this boundary computes for every row
+ * regardless of source. `disabled` is always present; the rest vary by row origin.
+ */
+type ManagementModelRow = Partial<CatalogModel> & {
+  provider: string;
+  id: string;
+  namespaced: string;
+  disabled: boolean;
+  native?: boolean;
+  custom?: boolean;
+  customId?: string;
+};
+
+/**
+ * The exact row list `/api/models` returns. Extracted so `/api/client-config` exports the
+ * models the GUI's Models tab shows — including this function's `disabled` computation,
+ * which the export core (src/clients/config-export.ts) deliberately does not perform.
+ */
+async function listManagementModelRows(config: OcxConfig): Promise<ManagementModelRow[]> {
+  const models = await fetchAllModels(config);
+  const disabled = new Set(config.disabledModels ?? []);
+  // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
+  // from the static supported set so a disabled model stays listed and re-enableable.
+  const native: ManagementModelRow[] = nativeModelRows(config).map(row => ({
+    provider: "openai",
+    id: row.slug,
+    namespaced: row.slug,
+    disabled: row.disabled,
+    native: true,
+    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+  }));
+  const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {
+    const namespaced = routedSlug(cm.provider, cm.modelId);
+    return {
+      provider: cm.provider,
+      id: cm.modelId,
+      namespaced,
+      disabled: [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId)),
+      custom: true,
+      customId: cm.id,
+      displayName: cm.displayName,
+      ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
+      ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
+    };
+  });
+  const publicModels = uniqueCatalogModelsForPublicList(models);
+  const comboNamespaced = new Set(
+    publicModels.filter(model => model.provider === "combo").map(catalogModelSlug),
+  );
+  const visibleCustomModels = customModels.filter(model => !comboNamespaced.has(model.namespaced));
+  // Custom metadata wins when a physical live/static row resolves to the same Codex-facing
+  // slug, while a combo keeps the same precedence it has in routing and /v1/models.
+  const customNamespaced = new Set(visibleCustomModels.map(c => c.namespaced));
+  const dedupedRouted = publicModels.map((m): ManagementModelRow | null => {
+    // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
+    const namespaced = catalogModelSlug(m);
+    if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
+    const contextCap = providerContextCap(config, m.provider);
+    return {
+      ...m,
+      namespaced,
+      disabled: [...disabled].some(stored => (
+        stored === namespaced || slugEquals(stored, m.provider, m.id)
+      )),
+      ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
+    };
+  }).filter((row): row is ManagementModelRow => row !== null);
+  return [...native, ...dedupedRouted, ...visibleCustomModels];
+}
+
+/** `/api/models` row → the narrower input the client-config serializers accept. */
+function toExportModel(row: ManagementModelRow): ExportModel {
+  return {
+    namespaced: row.namespaced,
+    provider: row.provider,
+    id: row.id,
+    ...(row.native ? { native: true } : {}),
+    ...(row.displayName ? { displayName: row.displayName } : {}),
+    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+    ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
+  };
+}
+
+/**
+ * Counts read back off the SERIALIZED document rather than recomputed from the input rows.
+ * `modelsWithoutLimits` drives a GUI line claiming "these models ship without limits", so it
+ * has to describe the bytes the user actually receives — a parallel reimplementation of the
+ * core's "authoritative context window" rule would be free to drift from it silently.
+ */
+function summarizeExportedModels(client: ExportClientId, document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  if (client === "opencode") {
+    const models = (document as OpencodeGeneratedConfig).provider[OPENCODE_PROVIDER_ID].models;
+    const entries = Object.values(models);
+    return { modelCount: entries.length, modelsWithoutLimits: entries.filter(entry => entry.limit === undefined).length };
+  }
+  const models = (document as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID].models;
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(entry => entry.contextWindow === undefined).length };
+}
 
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
@@ -114,55 +230,58 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   }
 
   if (url.pathname === "/api/models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
-    const disabled = new Set(config.disabledModels ?? []);
-    // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
-    // from the static supported set so a disabled model stays listed and re-enableable.
-    const native = nativeModelRows(config).map(row => ({
-      provider: "openai",
-      id: row.slug,
-      namespaced: row.slug,
-      disabled: row.disabled,
-      native: true,
-      ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-    }));
-    const customModels = (config.customModels ?? []).map(cm => {
-      const namespaced = routedSlug(cm.provider, cm.modelId);
-      return {
-        provider: cm.provider,
-        id: cm.modelId,
-        namespaced,
-        disabled: [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId)),
-        custom: true,
-        customId: cm.id,
-        displayName: cm.displayName,
-        ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
-        ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
-      };
+    return jsonResponse(await listManagementModelRows(config));
+  }
+
+  /**
+   * Client config document for OpenCode / Pi, built from the SAME function `ocx export`
+   * calls, so the bytes a user downloads here and the bytes they pipe from the CLI cannot
+   * disagree. Read-only: this route never writes the user's client config.
+   */
+  if (url.pathname === "/api/client-config" && req.method === "GET") {
+    const requested = url.searchParams.get("client")?.trim() ?? "";
+    if (!isExportClientId(requested)) {
+      return jsonResponse(
+        { error: `client must be one of: ${EXPORT_CLIENT_IDS.join(", ")}` },
+        400,
+        req,
+        config,
+      );
+    }
+    const spec = EXPORT_CLIENTS[requested];
+    let rows: ManagementModelRow[];
+    try {
+      rows = await listManagementModelRows(config);
+    } catch (error) {
+      // A partial or empty `models` block reads as a valid config while offering nothing,
+      // so a catalog failure is surfaced as unavailable rather than serialized. The
+      // catalog-busy error keeps its own 503 from handleManagementAPI.
+      if (error instanceof CatalogGatherBusyError) throw error;
+      return jsonResponse(
+        { error: `model catalog unavailable: ${error instanceof Error ? error.message : String(error)}` },
+        503,
+        req,
+        config,
+      );
+    }
+    // The export core does not filter visibility — it serializes what it is given. A model the
+    // user disabled in the Models tab is absent from /v1/models, so exporting it would hand the
+    // client a selector the proxy refuses to route.
+    const models = rows.filter(row => !row.disabled).map(toExportModel);
+    const document = buildClientConfig(requested, {
+      baseUrl: opencodeProxyBaseUrl(Number(url.port) || config.port, config.hostname),
+      models,
+      config,
     });
-    const publicModels = uniqueCatalogModelsForPublicList(models);
-    const comboNamespaced = new Set(
-      publicModels.filter(model => model.provider === "combo").map(catalogModelSlug),
-    );
-    const visibleCustomModels = customModels.filter(model => !comboNamespaced.has(model.namespaced));
-    // Custom metadata wins when a physical live/static row resolves to the same Codex-facing
-    // slug, while a combo keeps the same precedence it has in routing and /v1/models.
-    const customNamespaced = new Set(visibleCustomModels.map(c => c.namespaced));
-    const dedupedRouted = publicModels.map(m => {
-      // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
-      const namespaced = catalogModelSlug(m);
-      if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
-      const contextCap = providerContextCap(config, m.provider);
-      return {
-        ...m,
-        namespaced,
-        disabled: [...disabled].some(stored => (
-          stored === namespaced || slugEquals(stored, m.provider, m.id)
-        )),
-        ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
-      };
-    }).filter(Boolean);
-    return jsonResponse([...native, ...dedupedRouted, ...visibleCustomModels]);
+    return jsonResponse({
+      client: spec.id,
+      filename: spec.filename,
+      destination: spec.destination(process.env),
+      apiKeyEnv: spec.apiKeyEnv,
+      exportHint: spec.exportHint,
+      ...summarizeExportedModels(requested, document),
+      config: document,
+    }, 200, req, config);
   }
 
   // Enable/disable models: which routed models Codex sees. PUT hides them from the catalog +
