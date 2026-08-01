@@ -453,6 +453,111 @@
   margin-top: 0;
 }
 
+/* ── Client config export (devlog 260731_client_config_export/040) ────── */
+
+/* `.api-panel` clips overflow for every panel on this tab. That is wrong here for the
+   same reason it was wrong for the catalog: the JSON block is tall, and a `hidden`
+   ancestor eats the wheel event instead of handing it back to the page. Measured in a
+   real browser at 1280x720 — a bare `.awi-clientconfig-panel` selector ties `.api-panel`
+   on specificity and lost, so this carries the parent qualifier the catalog uses. The
+   unscoped `.api-example-pre` rules above (overflow-y: visible, overscroll-behavior:
+   auto) are what keep the block itself from trapping scroll — do not scope them to
+   .awi-usage-panel. */
+.awi-overview-left > .awi-clientconfig-panel,
+.awi-clientconfig-panel.api-panel {
+  overflow: visible;
+}
+
+.awi-clientconfig-head {
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.awi-clientconfig-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* Copy is the primary action and its label must not wrap into two lines at the
+   narrow breakpoint, where the head is the tightest row on the tab. */
+.awi-clientconfig-actions .btn {
+  white-space: nowrap;
+}
+
+.awi-clientconfig-segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  max-width: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft, var(--raised));
+  padding: var(--space-1);
+  gap: var(--space-1);
+}
+
+.awi-clientconfig-segmented .btn {
+  border-radius: var(--radius-pill);
+  min-width: 84px;
+  padding: var(--space-1-5) var(--space-3);
+  border: none;
+}
+
+.awi-clientconfig-segmented .btn.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+/* No vertical cap and no y-scroller of its own: the catalog table is the only capped
+   region on this tab, and the unscoped `.api-example-pre` rules above already give this
+   block `overflow-y: visible` + `overscroll-behavior: auto`. Adding a `max-height` here
+   would make the JSON a second wheel trap. */
+.awi-clientconfig-json {
+  margin: 0;
+}
+
+.awi-clientconfig-json:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.awi-clientconfig-count,
+.awi-clientconfig-degraded,
+.awi-clientconfig-nokey,
+.awi-clientconfig-merge {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.awi-clientconfig-line {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.awi-clientconfig-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.awi-clientconfig-error p {
+  margin: 0;
+  min-width: 0;
+}
+
+.awi-clientconfig-where > summary {
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.awi-clientconfig-where > p {
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
 .awi-section {
   margin-bottom: 20px;
 }

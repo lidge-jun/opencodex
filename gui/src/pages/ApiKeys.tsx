@@ -406,6 +406,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         <>
           <ApiKeysWorkspace
         keys={keys}
+        apiBase={apiBase}
         attributionSince={attributionSince}
         historyTruncated={historyTruncated}
         authMatrix={authMatrix}
