@@ -47,20 +47,31 @@ concurrency:
 jobs:
   # Which Windows runner this run is allowed to use.
   #
-  # The self-hosted Windows box is a maintainer's PERSONAL machine on a home
-  # network, reachable over Tailscale. Anything that runs on it runs as a local
-  # user with that user's filesystem and LAN in reach, so the only question that
-  # matters is whether the commit is trusted BEFORE a runner ever sees it.
+  # READ THIS BEFORE TREATING IT AS A SECURITY BOUNDARY: it is not one.
   #
-  # `push` on dev/main/preview is trusted: reaching those branches requires the
-  # push permission, which only the maintainers in MAINTAINERS.md hold.
-  # `pull_request` is NOT trusted, and no author check can make it so — the
-  # workflow file itself comes from the PR head, so any `if:` guard written here
-  # is deleted by the same patch it is meant to stop. Fork PRs therefore stay on
-  # GitHub-hosted runners, unconditionally.
+  # On `pull_request` this workflow is loaded from the PR head, so the `case`
+  # below is owned by the proposed patch exactly like an `if:` guard would be.
+  # A hostile PR can delete the branch and hardcode the self-hosted labels into
+  # `$GITHUB_OUTPUT`, and `runs-on` will honour it. That this job runs on
+  # `ubuntu-latest` changes nothing — the untrusted part is its OUTPUT, not its
+  # host. `.github/workflows/ci.yml` is in this workflow's `pull_request.paths`,
+  # so such an edit triggers its own run.
   #
-  # `workflow_dispatch` is the maintainer escape hatch: dispatch requires write
-  # access, so a maintainer can deliberately aim a branch at the home box.
+  # What actually keeps untrusted code off a self-hosted runner lives OUTSIDE
+  # this file, where a PR cannot reach it: the fork-PR approval policy
+  # (`all_external_contributors`) and the judgement of whoever clicks approve.
+  # Runner groups would be the other lever, but they are an organisation
+  # feature and this repository is user-owned, so the approval policy is the
+  # only one available here. GitHub's own guidance is to avoid self-hosted
+  # runners on public repositories for this reason.
+  #
+  # So read the routing below as a COST control that keeps honest pull requests
+  # on GitHub-hosted runners, not as a guarantee about hostile ones.
+  #
+  # `push` on dev/main/preview requires the push permission, and
+  # `workflow_dispatch` requires write access, so both carry a trusted author.
+  # A trusted author is not audited code: merging a contributor PR into `dev`
+  # fires `push`, and its dependencies and postinstall hooks then run here.
   select-windows-runner:
     name: select windows runner
     runs-on: ubuntu-latest
@@ -85,10 +96,12 @@ jobs:
             push|workflow_dispatch) trusted=yes ;;
           esac
 
-          # Repository variable OCX_SELF_HOSTED_WINDOWS acts as a kill switch. When
-          # it is anything other than `1` — including unset, which is the state
-          # before the runner exists — every job falls back to windows-latest and
-          # CI keeps working with the box powered off.
+          # Repository variable OCX_SELF_HOSTED_WINDOWS is an OPERATIONAL switch,
+          # not a security control: a PR that rewrites this script ignores it for
+          # the same reason it ignores the event check above. Its job is to keep CI
+          # working when the box is off or busy. Anything other than `1` —
+          # including unset, the state before a runner exists — falls back to
+          # windows-latest.
           if [ "$trusted" = "yes" ] && [ "${USE_SELF_HOSTED:-}" = "1" ]; then
             echo 'runner=["self-hosted","Windows","X64","ocx-home"]' >> "$GITHUB_OUTPUT"
             echo 'label=self-hosted (ocx-home)' >> "$GITHUB_OUTPUT"
