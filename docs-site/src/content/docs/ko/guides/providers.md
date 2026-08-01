@@ -85,7 +85,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 실험적 PKCE 로그인, HTTP/2 전송, 계정별 모델 탐색을 지원합니다. |
-| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적. GitHub 디바이스 플로우 + `copilot_internal` 교환(VS Code OAuth 클라이언트). 활성 Copilot 구독 필요; 공식 서드파티 API가 아닙니다. |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 실험적. GitHub 디바이스 플로우 + `copilot_internal` 교환(VS Code OAuth 클라이언트). 활성 Copilot 구독 필요; 공식 서드파티 API가 아닙니다. 카탈로그는 wire가 섞여 있습니다: `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`는 Chat Completions에서 `model "…" is not accessible via the /chat/completions endpoint`로 실패하므로 opencodex가 모든 inbound에서 `openai-responses`로 라우팅합니다. `gpt-5.4`는 텍스트 전용 요청은 성공하지만 Codex가 function tool과 reasoning effort를 함께 보내면 실패합니다. 나머지 모델은 `openai-chat` 그대로이며, 명시적인 `modelAdapters` 항목이 항상 우선합니다. bare OpenAI 이름은 canonical `openai` 전용이므로 `github-copilot/gpt-5.6-sol`처럼 선택하세요. |
 
 정식 Kimi Coding Plan 프리셋(`kimi` 계정 로그인과 `kimi-code` API key)의 경우, opencodex는
 호출자가 제공한 안정적인 `prompt_cache_key`만 Chat Completions 요청으로 전달하며 직접 생성하지

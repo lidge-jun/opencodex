@@ -88,7 +88,46 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install | bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
-| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. The catalog is mixed-wire — see [GitHub Copilot model wires](#github-copilot-model-wires). |
+
+### GitHub Copilot model wires
+
+Copilot's catalog is not uniformly served by `/chat/completions`. The provider adapter stays
+`openai-chat`, which is correct for the Claude, Gemini, GPT-3.5/4 and `gpt-5-mini` entries, but the
+newer OpenAI models answer only on the Responses API. opencodex routes those over
+`openai-responses` automatically:
+
+`gpt-5.3-codex` · `gpt-5.4` · `gpt-5.4-mini` · `gpt-5.5` · `gpt-5.6-luna` · `gpt-5.6-sol` ·
+`gpt-5.6-terra`
+
+Without this, a chat-completions request fails with
+`model "…" is not accessible via the /chat/completions endpoint`. `gpt-5.4` is subtler: a text-only
+request succeeds and only a real Codex request fails, because Codex supplies function tools plus a
+reasoning effort (`Function tools with reasoning_effort are not supported … use /v1/responses`).
+
+Unlike the DeepSeek default, which applies only to a Responses inbound, these apply to every
+inbound: Copilot serves no chat route at all for them, so a Chat Completions or Claude Code client
+is translated onto Responses too.
+
+An explicit [`modelAdapters`](/reference/configuration/) entry always wins, so you can move a model
+back onto chat completions — or route a new one onto Responses before the built-in map catches up:
+
+```json
+{
+  "providers": {
+    "github-copilot": {
+      "modelAdapters": { "gpt-5.4": "openai-chat" }
+    }
+  }
+}
+```
+
+Bare OpenAI model names such as `gpt-5.6-sol` are reserved for the canonical `openai` provider, so
+Copilot models must be selected with the provider prefix:
+
+```bash
+codex -m github-copilot/gpt-5.6-sol -c 'model_reasoning_effort="medium"'
+```
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;

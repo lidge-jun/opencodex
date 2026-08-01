@@ -1414,7 +1414,35 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro"],
+    // Seed refreshed 2026-07-30 from a live 37-entry Copilot catalog; embeddings and the
+    // internal `trajectory-compaction` entry are omitted because they are not chat models.
+    models: [
+      "claude-haiku-4.5", "claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.7",
+      "claude-opus-4.8", "claude-sonnet-4.5", "claude-sonnet-4.6", "claude-sonnet-5",
+      "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview",
+      "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-5-mini",
+      "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5",
+      "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+    ],
+    // Copilot's catalog is mixed-wire: `openai-chat` above is right for the Claude, Gemini,
+    // GPT-3.5/4 and gpt-5-mini entries, but these answer ONLY on the Responses API and fail
+    // chat completions with `model "…" is not accessible via the /chat/completions endpoint`.
+    // gpt-5.4 hides it behind a passing smoke test — a text-only chat request succeeds and
+    // only a real Codex request fails, because Codex supplies function tools plus a reasoning
+    // effort. Unlike DeepSeek's Flash entry these are bare strings, not inbound-scoped: the
+    // upstream serves no chat route at all for them, so every inbound must be translated
+    // rather than kept on the wire the client happened to speak.
+    // Verified 2026-07-30 with real `codex exec` runs, not minimal text probes: presence in
+    // GET /models proves neither. Recheck when Copilot changes models.
+    modelWireDefaults: {
+      "gpt-5.3-codex": "openai-responses",
+      "gpt-5.4": "openai-responses",
+      "gpt-5.4-mini": "openai-responses",
+      "gpt-5.5": "openai-responses",
+      "gpt-5.6-luna": "openai-responses",
+      "gpt-5.6-sol": "openai-responses",
+      "gpt-5.6-terra": "openai-responses",
+    },
     defaultModel: "gpt-4o",
     note: "Experimental unofficial Copilot bridge. Logs in via GitHub device flow using the public VS Code OAuth client id, then exchanges for a short-lived Copilot API token (copilot_internal). Requires an active Copilot subscription. GitHub may tighten or revoke this path; do not send confidential material you would not paste into Copilot Chat.",
   },

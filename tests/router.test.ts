@@ -175,6 +175,19 @@ describe("routeModel registry effort defaults", () => {
     const unavailable = { ...base, providers: { "openai-proxy": base.providers["openai-proxy"] } };
     expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(/ocx provider add openai/);
     expect(() => routeModel(unavailable, "codex-auto-review")).toThrow(NoEnabledOpenAiProviderError);
+    // A bare OpenAI-family id is reserved for the canonical provider, so a gateway that
+    // also serves it is only reachable qualified — name it instead of leaving the user
+    // to guess that `openai-proxy/gpt-5.5` is the working selector.
+    expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(/openai-proxy\/gpt-5\.5/);
+    // A provider that only names the model in modelAdapters still counts as serving it.
+    const viaAdapters = {
+      ...base,
+      providers: {
+        gw: { adapter: "openai-chat", baseUrl: "https://gw.example/v1", modelAdapters: { "gpt-5.5": "openai-responses" } },
+      },
+    } as OcxConfig;
+    expect(() => routeModel(viaAdapters, "gpt-5.5")).toThrow(/gw\/gpt-5\.5/);
+    expect(routeModel(viaAdapters, "gw/gpt-5.5")).toMatchObject({ providerName: "gw", modelId: "gpt-5.5" });
   });
 
   test("rejects legacy chatgpt namespaces even when configured", () => {

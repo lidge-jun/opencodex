@@ -53,6 +53,10 @@ export function knownModelIdsForProvider(provName: string, prov: OcxProviderConf
     registry?.modelDefaultReasoningEfforts,
     registry?.modelReasoningEffortMap,
     registry?.modelMaxOutputTokens,
+    registry?.modelWireDefaults,
+    // A user who names a model in `modelAdapters` has asserted it exists on this provider,
+    // so it is selectable as `provider/model` even when no seed or cache lists it.
+    prov.modelAdapters,
   ]) {
     for (const id of Object.keys(map ?? {})) ids.add(id);
   }
@@ -306,13 +310,27 @@ function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][]
 }
 
 export class NoEnabledOpenAiProviderError extends Error {
-  constructor(modelId: string) {
+  constructor(modelId: string, alternatives: string[] = []) {
     super(
       `Model ${modelId} requires the canonical openai provider. `
-      + `Run: ocx provider add openai && ocx sync && ocx restart`,
+      + `Run: ocx provider add openai && ocx sync && ocx restart`
+      // A bare OpenAI-family id is reserved for the canonical provider, so a gateway that
+      // also serves it (GitHub Copilot, OpenRouter, ...) is only reachable through a
+      // qualified selector. Name one instead of leaving the user to guess.
+      + (alternatives.length > 0
+        ? `. Or select it on a provider that serves it: ${alternatives.map(name => `${name}/${modelId}`).join(", ")}`
+        : ""),
     );
     this.name = "NoEnabledOpenAiProviderError";
   }
+}
+
+/** Enabled non-canonical providers whose known model ids include this bare OpenAI-family id. */
+function providersServingModelId(config: OcxConfig, modelId: string): string[] {
+  return activeProviderEntries(config)
+    .filter(([provName, prov]) => provName !== OPENAI_CODEX_PROVIDER_ID
+      && knownModelIdsForProvider(provName, prov).includes(modelId))
+    .map(([provName]) => provName);
 }
 
 // Codex uses a small number of control-plane model ids that are not part of the public GPT/o
@@ -373,7 +391,7 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
   if (isBareOpenAiFamilyModel(modelId)) {
     const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
     if (provider && provider.disabled !== true) return routeResult(OPENAI_CODEX_PROVIDER_ID, provider, modelId);
-    throw new NoEnabledOpenAiProviderError(modelId);
+    throw new NoEnabledOpenAiProviderError(modelId, providersServingModelId(config, modelId));
   }
 
   for (const [provName, prov] of activeProviderEntries(config)) {
