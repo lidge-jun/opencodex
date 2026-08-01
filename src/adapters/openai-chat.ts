@@ -7,7 +7,7 @@ import { isDebugEnabled } from "../lib/debug-settings";
 import { isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedCatalogModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import {
@@ -147,7 +147,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
     // base_instructions is ignored at request time). Neutralize that one identity line
     // so routed, non-OpenAI models don't misreport themselves as GPT-5 / OpenAI — without
     // leaking the proxy identity into the payload.
-    const sys = neutralizeIdentity(systemParts.join("\n\n"));
+    const sys = identifyRoutedCatalogModel(systemParts.join("\n\n"), parsed.modelId);
     out.push({ role: "system", content: sys });
   }
 

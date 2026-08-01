@@ -14,7 +14,7 @@ import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../..
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
-import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
+import { identifyRoutedCatalogModel } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -194,10 +194,7 @@ export function deriveEntry(
       if (typeof e.base_instructions === "string") {
         // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
-        e.base_instructions = e.base_instructions.replace(
-          CODEX_GPT5_IDENTITY_LINE,
-          `You are a coding agent powered by the ${modelName} model. Do not claim to be GPT-5 or made by OpenAI.`,
-        );
+        e.base_instructions = identifyRoutedCatalogModel(e.base_instructions, modelName);
       }
       applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);

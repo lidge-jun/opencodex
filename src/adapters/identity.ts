@@ -40,5 +40,30 @@ export function neutralizeIdentity(systemText: string): string {
   return systemText.replace(CODEX_GPT5_IDENTITY_RE, NEUTRAL_IDENTITY_LINE);
 }
 
+function safeRoutedModelIdentity(modelName: string): string {
+  const trimmed = modelName.trim();
+  if (trimmed.length === 0 || trimmed.length > 128) return "configured model";
+  const allowedPunctuation = "._/@:+-[]";
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    const isAsciiAlphaNumeric = (code >= 48 && code <= 57)
+      || (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122);
+    if (!isAsciiAlphaNumeric && !allowedPunctuation.includes(char)) return "configured model";
+  }
+  return trimmed;
+}
+
+/**
+ * Catalog identity for a routed model. Unlike the generic adapter-time neutralizer, the catalog
+ * already knows the concrete upstream model id, so identity questions can name it instead of
+ * falling back to Codex/GPT identity inherited from the native template.
+ */
+export function identifyRoutedCatalogModel(systemText: string, modelName: string): string {
+  const identity = safeRoutedModelIdentity(modelName);
+  const replacement = `You are a coding agent powered by the ${identity}. If asked which model you are, identify as ${identity}. Do not claim to be GPT-5 or made by OpenAI.`;
+  return systemText.replace(CODEX_GPT5_IDENTITY_RE, replacement);
+}
+
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */
 export const NEUTRAL_IDENTITY_CATALOG = NEUTRAL_IDENTITY_LINE;
