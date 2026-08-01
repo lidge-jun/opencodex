@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Storage from "../src/pages/Storage";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -41,6 +42,9 @@ function storageSideResponse(url: string): Response | null {
 }
 
 beforeEach(() => {
+  // The page now subscribes to a module-level resource store. Reset it so each case starts the
+  // exact cold or seeded state it is asserting instead of a sibling's completed report.
+  clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperties(globalThis, {
@@ -56,6 +60,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearClientResourceStoresForTests();
   testWindow.close();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
@@ -147,117 +152,29 @@ test("an aborted Storage fetch must not clear loading while its replacement is i
   container.remove();
 });
 
-test("effect cleanup invalidates generation before abort so loading stays owned across the deferred replacement gap", async () => {
+test("a cached Storage report stays visible and surfaces a failed revalidation", async () => {
   const { createRoot } = await import("react-dom/client");
   const container = document.createElement("div");
   document.body.append(container);
-
-  // Hold Storage's delay-0 deferred fetches so Windows/act timer flushing cannot
-  // collapse the cleanup→replacement gap this test is asserting.
-  type DeferredTimer = { id: number; run: () => void };
-  const deferredZero: DeferredTimer[] = [];
-  let nextTimerId = 1_000_000;
-  const realSetTimeout = window.setTimeout.bind(window);
-  const realClearTimeout = window.clearTimeout.bind(window);
-  window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
-    if (delay === 0 && typeof handler === "function") {
-      const id = nextTimerId++;
-      deferredZero.push({
-        id,
-        run: () => { (handler as (...a: unknown[]) => void)(...args); },
-      });
-      return id as unknown as ReturnType<typeof setTimeout>;
-    }
-    return realSetTimeout(handler as never, delay as never, ...(args as never[]));
-  }) as typeof setTimeout;
-  window.clearTimeout = ((id?: ReturnType<typeof setTimeout>) => {
-    const idx = deferredZero.findIndex(entry => entry.id === id);
-    if (idx >= 0) {
-      deferredZero.splice(idx, 1);
-      return;
-    }
-    return realClearTimeout(id as never);
-  }) as typeof clearTimeout;
-
-  type Gate = {
-    resolve: (body: unknown) => void;
-    reject: (reason?: unknown) => void;
-  };
-  const gates: Gate[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  testWindow.sessionStorage.setItem("ocx.storage.report.v1:http://localhost", JSON.stringify(REPORT_A));
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     const side = storageSideResponse(url);
     if (side) return side;
-    if (!url.includes("/api/storage")) return new Response(null, { status: 404 });
-    const signal = init?.signal;
-    const body = await new Promise<unknown>((resolve, reject) => {
-      const gate: Gate = { resolve, reject };
-      gates.push(gate);
-      if (signal?.aborted) {
-        reject(new DOMException("The operation was aborted.", "AbortError"));
-        return;
-      }
-      signal?.addEventListener("abort", () => {
-        reject(new DOMException("The operation was aborted.", "AbortError"));
-      }, { once: true });
-    });
-    return Response.json(body);
+    if (url.endsWith("/api/storage")) return new Response("upstream unavailable", { status: 503 });
+    return new Response(null, { status: 404 });
   }) as typeof fetch;
-
-  function Harness() {
-    const [apiBase, setApiBase] = useState("http://old");
-    (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
-    return (
-      <LanguageProvider>
-        <Storage apiBase={apiBase} />
-      </LanguageProvider>
-    );
-  }
 
   let root!: Root;
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<Harness />);
+      root.render(<LanguageProvider><Storage apiBase="http://localhost" /></LanguageProvider>);
     });
-    // Report schedules a delay-0 load; cleanup-policy mounts only after a report paints.
-    expect(deferredZero.length).toBe(1);
-    await act(async () => {
-      while (deferredZero.length > 0) deferredZero.shift()!.run();
-    });
-    await waitFor(() => gates.length === 1);
-
-    // Cleanup aborts + invalidates generation; replacement stays queued until we flush it.
-    await act(async () => {
-      (window as unknown as { __bumpApiBase: () => void }).__bumpApiBase();
-    });
-    expect(deferredZero.length).toBe(1);
-
-    // Flush abort rejection / finally microtasks without running the deferred fetch.
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const refresh = container.querySelector<HTMLButtonElement>("button.btn");
-    expect(gates.length).toBe(1);
-    expect(container.textContent).toContain("Scanning storage");
-    expect(refresh?.disabled).toBe(true);
-
-    await act(async () => {
-      while (deferredZero.length > 0) deferredZero.shift()!.run();
-    });
-    await waitFor(() => gates.length === 2);
-
-    await act(async () => {
-      gates[1]!.resolve(REPORT_B);
-      await Promise.resolve();
-    });
-    await waitFor(() => (container.textContent ?? "").includes("/tmp/b"));
-    expect(refresh?.disabled).toBe(false);
+    await waitFor(() => (container.textContent ?? "").includes("Storage scan failed"));
+    expect(container.textContent).toContain("/tmp/a");
+    expect(container.textContent).not.toContain("Your storage is empty");
   } finally {
-    window.setTimeout = realSetTimeout as typeof setTimeout;
-    window.clearTimeout = realClearTimeout as typeof clearTimeout;
     await act(async () => {
       root.unmount();
     });

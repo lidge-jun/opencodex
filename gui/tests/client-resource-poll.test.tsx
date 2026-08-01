@@ -26,7 +26,15 @@ afterEach(() => {
   }
 });
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+/**
+ * 1s was enough on an idle machine and not enough on a loaded CI runner: the
+ * visibility test waits for a poll that only fires after a real 20ms interval
+ * plus a React commit, and macOS CI blew through the budget mid-suite while the
+ * same file passed in isolation. The assertions below are about *whether* the
+ * fetch happens, never about how fast, so a longer ceiling costs nothing on a
+ * healthy run — it only stops a busy runner from reading as a product bug.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
@@ -34,6 +42,21 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
       await new Promise<void>((resolve) => testWindow.setTimeout(resolve, 10));
     });
   }
+}
+
+/**
+ * happy-dom derives `visibilityState` from internals, so drive it directly and fire the
+ * event the store listens for — the same pair a real tab switch produces.
+ */
+async function setVisibility(state: "visible" | "hidden"): Promise<void> {
+  Object.defineProperty(testWindow.document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+  await act(async () => {
+    testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange"));
+    await Promise.resolve();
+  });
 }
 
 test("after the latest subscriber unmounts, polling continues with the surviving loader", async () => {
@@ -99,6 +122,115 @@ test("after the latest subscriber unmounts, polling continues with the surviving
   await act(async () => {
     root.unmount();
   });
+  container.remove();
+});
+
+// A hidden tab has nobody reading the paint, so a passive poll there is pure waste. The
+// interesting part is what happens on the way back: the skipped ticks are made up once,
+// rather than the user waiting out the rest of the interval on stale content.
+test("a hidden tab stops passive polling and one quiet fetch makes up for it on return", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const KEY = `poll-visibility-${Date.now()}`;
+  let fetches = 0;
+
+  function Page() {
+    useClientResource(KEY, async () => { fetches += 1; return `v${fetches}`; }, { pollMs: 20 });
+    return null;
+  }
+
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<Page />);
+  });
+  await waitFor(() => fetches >= 1);
+
+  await setVisibility("hidden");
+  const atHide = fetches;
+  // Several intervals' worth of time passes with the tab in the background.
+  await act(async () => {
+    await new Promise<void>((resolve) => testWindow.setTimeout(resolve, 120));
+  });
+  expect(fetches).toBe(atHide);
+
+  await setVisibility("visible");
+  await waitFor(() => fetches === atHide + 1);
+  expect(fetches).toBe(atHide + 1);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+// The restart-reconnect poll is the counterexample: its entire job is to notice a server
+// coming back while the user is looking elsewhere. Pausing it while hidden would break the
+// one case it exists for, so it opts out and keeps ticking.
+test("a subscriber that opts out keeps polling while hidden", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const KEY = `poll-visibility-optout-${Date.now()}`;
+  let fetches = 0;
+
+  function Page() {
+    useClientResource(
+      KEY,
+      async () => { fetches += 1; return `v${fetches}`; },
+      { pollMs: 20, pauseWhenHidden: false },
+    );
+    return null;
+  }
+
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<Page />);
+  });
+  await waitFor(() => fetches >= 1);
+
+  await setVisibility("hidden");
+  const atHide = fetches;
+  await waitFor(() => fetches > atHide);
+  expect(fetches).toBeGreaterThan(atHide);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+// Options are per subscriber, not per store: a fixed key can be shared, and one consumer's
+// opt-out must not be dropped because a paused peer subscribed to the same key.
+test("on a shared key, one opted-out subscriber keeps the hidden tick alive for the store", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const KEY = `poll-visibility-mixed-${Date.now()}`;
+  let fetches = 0;
+
+  function Page() {
+    // Paused subscriber first, so the opt-out is the later of the two.
+    useClientResource(KEY, async () => { fetches += 1; return `v${fetches}`; }, { pollMs: 20 });
+    useClientResource(
+      KEY,
+      async () => { fetches += 1; return `v${fetches}`; },
+      { pollMs: 20, pauseWhenHidden: false },
+    );
+    return null;
+  }
+
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<Page />);
+  });
+  await waitFor(() => fetches >= 1);
+
+  await setVisibility("hidden");
+  const atHide = fetches;
+  await waitFor(() => fetches > atHide);
+  expect(fetches).toBeGreaterThan(atHide);
+
+  await act(async () => { root.unmount(); });
   container.remove();
 });
 

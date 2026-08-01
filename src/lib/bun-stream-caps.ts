@@ -1,13 +1,15 @@
 /**
- * Bun runtime stream-capability gate for the Windows SSE passthrough path (#314).
+ * Bun runtime stream-capability gate for eager SSE passthrough (#314).
  *
  * The eager bounded relay (src/server/relay-eager.ts) uses a JS async producer
  * loop — the exact shape of the Bun#32111 use-after-free (fixed upstream by Bun
  * PR #32120, merged 2026-06-21). No RELEASED Bun version is proven to carry
  * that fix yet, so `MIN_FIXED_BUN_VERSION` is null: every runtime is
- * "known-bad" until a bundle-bump commit sets it. Config `streamMode` can force
- * either path (persisted in config.json because Windows services do not
- * inherit shell env — see devlog/_plan/260723_win_mem_safestream/001).
+ * "known-bad" until a bundle-bump commit sets it. Windows no-rewrite traffic
+ * follows this runtime/config decision. Darwin no-rewrite traffic stays on tee
+ * for `auto` regardless of runtime capability and reaches eager relay only via
+ * explicit `streamMode: "eager-relay"` opt-in (see
+ * devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
  *
  * Prerelease conservatism: a version carrying a prerelease suffix (e.g.
  * `1.4.0-canary.3`) is NEVER treated as fixed even when its numeric triple
@@ -71,9 +73,8 @@ export type EagerRelayDecision = {
 };
 
 /**
- * Decide the win32 SSE client-path shape. `version`/`minFixed` are injectable
- * for tests. Non-win32 callers never consult this (their default path is
- * unchanged); the caller owns the platform check.
+ * Decide the runtime/config SSE client-path capability. `version`/`minFixed`
+ * are injectable for tests; `selectEagerPath` applies platform policy.
  */
 export function decideEagerRelay(
   mode: StreamMode,
@@ -85,4 +86,27 @@ export function decideEagerRelay(
   return bunHasAsyncPullCancelFix(version, minFixed)
     ? { useEagerRelay: true, reason: "auto-fixed-runtime" }
     : { useEagerRelay: false, reason: "auto-known-bad" };
+}
+
+/**
+ * Apply the two-platform eager-relay policy to the runtime/config capability.
+ * Windows preserves the decision for no-rewrite traffic. Darwin permits only
+ * explicit config opt-in; `auto` remains tee even on a future fixed runtime.
+ * Returns the normalized effective decision, or null when platform policy,
+ * rewrite needs, or a Darwin non-config-eager mode selects tee.
+ */
+export function selectEagerPath(
+  platform: NodeJS.Platform,
+  needsClientRewrite: boolean,
+  mode: StreamMode,
+  version: string = Bun.version,
+  minFixed: string | null = MIN_FIXED_BUN_VERSION,
+): EagerRelayDecision | null {
+  if (needsClientRewrite || (platform !== "win32" && platform !== "darwin")) {
+    return null;
+  }
+
+  const decision = decideEagerRelay(mode, version, minFixed);
+  if (platform === "win32") return decision;
+  return decision.reason === "config-eager" ? decision : null;
 }

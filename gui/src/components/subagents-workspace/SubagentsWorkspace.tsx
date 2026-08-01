@@ -1,8 +1,15 @@
 /**
- * SubagentsWorkspace — rail + main workspace for the Subagents tab, mirroring the
- * Providers/Combos workspace DNA. Left rail lists Featured and Available models with
- * add/remove toggles; the main pane shows either the featured roster (reorder + save)
- * or a per-model detail view.
+ * SubagentsWorkspace — a single stacked column for the Subagents tab: the featured roster
+ * (reorder + save), the model picker, then the delegation settings.
+ *
+ * The previous rail layout listed the featured models twice — once as a rail group, once in
+ * the main pane — which read as a rendering bug rather than two views of one thing. There is
+ * also nothing here that needs two panes: picking a model is one toggle, and the per-model
+ * detail pane carried no information the row did not already show.
+ *
+ * The sticky strip is the same `SectionTabs` the Logs and Usage tabs use: every section stays
+ * in the document and scrolling still works: the strip only jumps to one and reports where
+ * you are.
  */
 import { useMemo, useState } from "react";
 import {
@@ -10,7 +17,6 @@ import {
   IconArrowUp,
   IconBot,
   IconCheck,
-  IconChevron,
   IconInfo,
   IconPlus,
   IconX,
@@ -18,6 +24,10 @@ import {
 import { useT } from "../../i18n/shared";
 import { Trans } from "../../i18n/provider";
 import { modelLabel } from "../../model-display";
+import { SectionTabs } from "../section-tabs";
+import { sectionAnchorId } from "../../section-anchors";
+import SubagentDelegationSection from "./SubagentDelegationSection";
+import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
 
 export interface SubagentsWorkspaceProps {
   available: string[];
@@ -26,6 +36,16 @@ export interface SubagentsWorkspaceProps {
   onToggle: (m: string) => void;
   onMove: (i: number, dir: -1 | 1) => void;
   onSave: () => void;
+  delegation: {
+    model: string;
+    effort: string;
+    efforts: string[];
+    available: DelegationModelOption[];
+    guidanceEnabled: boolean;
+    syncCodexDefaults: boolean;
+    saving: boolean;
+    onSave: (patch: DelegationPatch) => void;
+  };
 }
 
 export const FEATURED_MAX = 5;
@@ -37,199 +57,174 @@ export default function SubagentsWorkspace({
   onToggle,
   onMove,
   onSave,
+  delegation,
 }: SubagentsWorkspaceProps) {
   const t = useT();
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
 
   const chosenSet = useMemo(() => new Set(chosen), [chosen]);
   const full = chosen.length >= FEATURED_MAX;
 
-  const featuredFiltered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return chosen.filter(m => !q || m.toLowerCase().includes(q));
-  }, [chosen, query]);
-
   const availableFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return available.filter(m => !chosenSet.has(m) && (!q || m.toLowerCase().includes(q)));
-  }, [available, chosenSet, query]);
+    return available.filter(m => !q || m.toLowerCase().includes(q));
+  }, [available, query]);
 
-  const selectedIndex = selected ? chosen.indexOf(selected) : -1;
-  const selectedIsFeatured = selectedIndex !== -1;
+  const tabs = useMemo(() => [
+    { id: "featured", label: t("sub.featured"), meta: `${chosen.length}/${FEATURED_MAX}` },
+    { id: "models", label: t("sub.models"), meta: String(availableFiltered.length) },
+    { id: "settings", label: t("sub.settings") },
+  ], [t, chosen.length, availableFiltered.length]);
 
   return (
     <div className="subagents-workspace-shell">
+      <SectionTabs scope="subagents" items={tabs} ariaLabel={t("sub.sections")} />
       <div className="subagents-workspace-root">
-        <aside className="subagents-workspace-rail" aria-label={t("nav.subagents")}>
-          <div className="subagents-workspace-rail-header">
-            <span className="subagents-workspace-rail-title">{t("nav.subagents")}</span>
-            <span className="subagents-workspace-rail-count">{chosen.length}/{FEATURED_MAX}</span>
+        <section
+          id={sectionAnchorId("subagents", "featured")}
+          className="subagents-workspace-section"
+          aria-label={t("sub.featured")}
+        >
+          <div className="swi-featured-head">
+            <h2 className="swi-featured-title">{t("sub.featured")}</h2>
+            <span className="swi-featured-count">{chosen.length}/{FEATURED_MAX}</span>
           </div>
-          <div className="subagents-workspace-rail-search">
-            <input
-              className="input"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder={t("sub.search")}
-              aria-label={t("sub.search")}
-            />
-          </div>
-          <div className="subagents-workspace-rail-list">
-            {featuredFiltered.length === 0 && availableFiltered.length === 0 && (
-              <span className="subagents-workspace-rail-empty">{t("sub.noModels")}</span>
-            )}
-            {featuredFiltered.length > 0 && (
-              <div className="subagents-workspace-rail-group">
-                <div className="subagents-workspace-rail-group-head">
-                  <span>{t("sub.featured")}</span>
-                  <span className="subagents-workspace-rail-group-count">{featuredFiltered.length}</span>
+          <p className="swi-featured-hint">
+            <IconInfo width={15} height={15} aria-hidden="true" />
+            <span><Trans k="sub.orderHint" cmd="spawn_agent" /></span>
+          </p>
+
+          {chosen.length === 0 ? (
+            <div className="swi-featured-empty">{t("sub.noneSelected")}</div>
+          ) : (
+            <div className="swi-featured-list">
+              {chosen.map((m, i) => (
+                <div key={m} className="swi-featured-row">
+                  <span className="swi-featured-pos">{i + 1}</span>
+                  <span className="swi-featured-name">{modelLabel(m)}</span>
+                  <span className="swi-featured-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon btn-sm"
+                      onClick={() => onMove(i, -1)}
+                      disabled={busy || i === 0}
+                      aria-label={t("sub.moveUp", { m })}
+                    >
+                      <IconArrowUp />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon btn-sm"
+                      onClick={() => onMove(i, 1)}
+                      disabled={busy || i === chosen.length - 1}
+                      aria-label={t("sub.moveDown", { m })}
+                    >
+                      <IconArrowDown />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon btn-sm"
+                      onClick={() => onToggle(m)}
+                      disabled={busy}
+                      aria-label={t("sub.removeAria", { m })}
+                      style={{ color: "var(--red)" }}
+                    >
+                      <IconX />
+                    </button>
+                  </span>
                 </div>
-                {featuredFiltered.map(m => {
-                  const priority = chosen.indexOf(m) + 1;
+              ))}
+            </div>
+          )}
+
+          <div className="swi-save-row">
+            <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
+              {t("common.save")}
+            </button>
+          </div>
+        </section>
+
+        <section
+          id={sectionAnchorId("subagents", "models")}
+          className="subagents-workspace-section"
+          aria-label={t("sub.models")}
+        >
+          <div className="swi-featured-head">
+            <h2 className="swi-featured-title">{t("sub.models")}</h2>
+            <span className="swi-featured-count">{availableFiltered.length}</span>
+          </div>
+          <div className="swi-picker-box">
+            <div className="subagents-workspace-rail-search">
+              <input
+                className="input"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder={t("sub.search")}
+                aria-label={t("sub.search")}
+              />
+            </div>
+            <div className="subagents-workspace-rail-list">
+              {availableFiltered.length === 0 ? (
+                <span className="subagents-workspace-rail-empty">{t("sub.noModels")}</span>
+              ) : (
+                availableFiltered.map(m => {
+                  const isFeatured = chosenSet.has(m);
+                  const priority = isFeatured ? chosen.indexOf(m) + 1 : null;
+                  // A featured row can always be removed; only adding is blocked when full.
+                  const blocked = !isFeatured && (full || busy);
                   return (
-                    <div key={m} className={`subagents-workspace-rail-row${selected === m ? " subagents-workspace-rail-row--selected" : ""}`}>
-                      <button
-                        type="button"
-                        className="subagents-workspace-rail-row-main"
-                        onClick={() => setSelected(m)}
-                        aria-current={selected === m ? "true" : undefined}
-                      >
-                        <span className="swi-rail-priority">{priority}</span>
+                    <div
+                      key={m}
+                      className={`subagents-workspace-rail-row${isFeatured ? " subagents-workspace-rail-row--selected" : ""}`}
+                    >
+                      <span className="subagents-workspace-rail-row-main">
+                        <span className="swi-rail-priority">{priority ?? ""}</span>
+                        <IconBot className="swi-rail-icon" aria-hidden="true" />
                         <span className="subagents-workspace-rail-name">{modelLabel(m)}</span>
-                      </button>
+                      </span>
                       <button
                         type="button"
-                        className="subagents-workspace-rail-toggle subagents-workspace-rail-toggle--on"
-                        onClick={() => onToggle(m)}
-                        disabled={busy}
-                        aria-label={t("sub.workspace.removeFromFeatured", { m })}
-                        title={t("sub.workspace.removeFromFeatured", { m })}
+                        className={`subagents-workspace-rail-toggle${isFeatured ? " subagents-workspace-rail-toggle--on" : ""}${blocked ? " subagents-workspace-rail-toggle--disabled" : ""}`}
+                        onClick={() => { if (!blocked) onToggle(m); }}
+                        disabled={blocked}
+                        aria-pressed={isFeatured}
+                        aria-label={isFeatured
+                          ? t("sub.workspace.removeFromFeatured", { m })
+                          : t("sub.workspace.addToFeatured", { m })}
+                        title={isFeatured
+                          ? t("sub.workspace.removeFromFeatured", { m })
+                          : full ? t("sub.workspace.featuredFull") : t("sub.workspace.addToFeatured", { m })}
                       >
-                        <IconCheck style={{ width: 14, height: 14 }} />
+                        {isFeatured
+                          ? <IconCheck style={{ width: 14, height: 14 }} />
+                          : <IconPlus style={{ width: 14, height: 14 }} />}
                       </button>
                     </div>
                   );
-                })}
-              </div>
-            )}
-            {availableFiltered.length > 0 && (
-              <div className="subagents-workspace-rail-group">
-                <div className="subagents-workspace-rail-group-head">
-                  <span>{t("sub.workspace.allModels")}</span>
-                  <span className="subagents-workspace-rail-group-count">{availableFiltered.length}</span>
-                </div>
-                {availableFiltered.map(m => (
-                  <div key={m} className={`subagents-workspace-rail-row${selected === m ? " subagents-workspace-rail-row--selected" : ""}`}>
-                    <button
-                      type="button"
-                      className="subagents-workspace-rail-row-main"
-                      onClick={() => setSelected(m)}
-                      aria-current={selected === m ? "true" : undefined}
-                    >
-                      <span className="swi-rail-priority" aria-hidden="true" />
-                      <span className="subagents-workspace-rail-name">{modelLabel(m)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`subagents-workspace-rail-toggle${full || busy ? " subagents-workspace-rail-toggle--disabled" : ""}`}
-                      onClick={() => { if (!full && !busy) onToggle(m); }}
-                      disabled={full || busy}
-                      aria-label={t("sub.workspace.addToFeatured", { m })}
-                      title={full ? t("sub.workspace.featuredFull") : t("sub.workspace.addToFeatured", { m })}
-                    >
-                      <IconPlus style={{ width: 14, height: 14 }} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <section className="subagents-workspace-main" aria-label={t("sub.workspace.mainAria")}>
-          {selected ? (
-            <div className="swi-detail">
-              <button type="button" className="swi-detail-back" onClick={() => setSelected(null)}>
-                <IconChevron className="swi-detail-back-chevron" />
-                {t("modal.back")}
-              </button>
-              <div className="swi-detail-head">
-                <span className="swi-detail-icon"><IconBot style={{ width: 24, height: 24 }} /></span>
-                <h2 className="swi-detail-title">{modelLabel(selected)}</h2>
-              </div>
-
-              <div className="swi-detail-section">
-                <dl className="swi-detail-kv">
-                  <div className="swi-detail-kv-row">
-                    <dt>{t("sub.workspace.selector")}</dt>
-                    <dd><code>{selected}</code></dd>
-                  </div>
-                  <div className="swi-detail-kv-row">
-                    <dt>{t("sub.workspace.priority")}</dt>
-                    <dd>{selectedIsFeatured ? selectedIndex + 1 : t("sub.workspace.notFeatured")}</dd>
-                  </div>
-                </dl>
-              </div>
-
-              <div className="swi-detail-section">
-                <h3 className="swi-detail-section-title">{t("sub.featured")}</h3>
-                <div className="swi-detail-actions">
-                  {selectedIsFeatured ? (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => onToggle(selected)} disabled={busy}>
-                      <IconX /> {t("sub.workspace.removeFromFeatured", { m: selected })}
-                    </button>
-                  ) : (
-                    <button type="button" className="btn btn-primary btn-sm" onClick={() => onToggle(selected)} disabled={full || busy}>
-                      <IconPlus /> {full ? t("sub.workspace.featuredFull") : t("sub.workspace.addToFeatured", { m: selected })}
-                    </button>
-                  )}
-                  <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
-                    {t("common.save")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="swi-featured-head">
-                <h2 className="swi-featured-title">{t("sub.featured")}</h2>
-                <span className="swi-featured-count">{chosen.length}/{FEATURED_MAX}</span>
-              </div>
-              <p className="swi-featured-hint">
-                <IconInfo width={15} height={15} aria-hidden="true" />
-                <span><Trans k="sub.orderHint" cmd="spawn_agent" /></span>
-              </p>
-
-              {chosen.length === 0 ? (
-                <div className="swi-featured-empty">{t("sub.noneSelected")}</div>
-              ) : (
-                <div className="swi-featured-list">
-                  {chosen.map((m, i) => (
-                    <div key={m} className="swi-featured-row">
-                      <span className="swi-featured-pos">{i + 1}</span>
-                      <span className="swi-featured-name">{modelLabel(m)}</span>
-                      <span className="swi-featured-actions">
-                        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => onMove(i, -1)} disabled={busy || i === 0} aria-label={t("sub.moveUp", { m })}>
-                          <IconArrowUp />
-                        </button>
-                        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => onMove(i, 1)} disabled={busy || i === chosen.length - 1} aria-label={t("sub.moveDown", { m })}>
-                          <IconArrowDown />
-                        </button>
-                        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => onToggle(m)} disabled={busy} aria-label={t("sub.removeAria", { m })} style={{ color: "var(--red)" }}>
-                          <IconX />
-                        </button>
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                })
               )}
+            </div>
+          </div>
+        </section>
 
-              <div className="swi-save-row">
-                <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>{t("common.save")}</button>
-              </div>
-            </>
-          )}
+        <section
+          id={sectionAnchorId("subagents", "settings")}
+          className="subagents-workspace-section"
+          aria-label={t("sub.settings")}
+        >
+          <div className="swi-featured-head">
+            <h2 className="swi-featured-title">{t("sub.settings")}</h2>
+          </div>
+          <SubagentDelegationSection
+            model={delegation.model}
+            effort={delegation.effort}
+            efforts={delegation.efforts}
+            available={delegation.available}
+            guidanceEnabled={delegation.guidanceEnabled}
+            syncCodexDefaults={delegation.syncCodexDefaults}
+            saving={delegation.saving}
+            onSave={delegation.onSave}
+          />
         </section>
       </div>
     </div>

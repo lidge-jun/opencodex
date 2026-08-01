@@ -3,7 +3,8 @@
 ## Public docs
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
-served at the site root, Korean under `/ko`, and Simplified Chinese under `/zh-cn`.
+served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-cn`, Russian under
+`/ru`, and Japanese under `/ja`. `docs-site/astro.config.mjs` is the locale source of truth.
 
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
@@ -39,15 +40,27 @@ bun run build
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`/`dev`/`preview`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
+| `.github/workflows/ci.yml` | `pull_request` to `main`/`dev`, `push` to `main`/`preview`/`dev`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate on Linux, Windows, and macOS. The `test` job (Bun) runs typecheck, `bun test --isolate tests`, the GUI suite (`cd gui && bun test tests`), the privacy scan, release-helper syntax check, GUI lint/build, and `ocx help`; `npm-global-smoke` (Node only, **no setup-bun**) builds package assets, packs the tarball, installs it globally, and runs `ocx help` to prove the bundled-Bun launcher works without a separate Bun install. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
-| `.github/workflows/service-lifecycle.yml` | `push` touching `src/service.ts`, `src/cli/index.ts`, or the workflow, or manual dispatch | Linux systemd smoke test: install, verify, `ocx stop` stops the service, uninstall. |
+| `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
+| `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, ready_for_review, synchronize) | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, and rejects empty or malformed descriptions. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
+| `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
+| `.github/workflows/issue-quality-tests.yml` | `pull_request` and `push` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
+| `.github/workflows/issue-triage.yml` | `issues` (opened) | Duplicate detection and triage labeling for new issues. |
+| `.github/workflows/pr-labeler.yml` | `pull_request_target` (opened, edited, synchronize, labeled, unlabeled) | Type and path labeling plus title sync; `labeled`/`unlabeled` let a human override enqueue a fresher run in the per-PR concurrency group. |
+| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) and `push` to `main`; no path filter | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows.test.ts`. |
+| `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
+
+`pull_request_target`, `issues`, and `schedule` workflows always load from the repository default
+branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until
+it is promoted, so those files follow the promotion model rather than ordinary integration.
 
 Docs-only changes intentionally route through the docs workflow instead of the runtime CI gate. If a
 docs change also edits runtime/package/release files, run the relevant local runtime checks before
 push and let `ci.yml` provide the Linux/Windows confirmation. Service-related changes
-(`src/service.ts`, `src/cli/index.ts`) additionally trigger the `service-lifecycle.yml` smoke test on Linux.
+(`src/service.ts`, `src/cli/index.ts`, and the rest of the service path set) additionally trigger the
+`service-lifecycle.yml` smoke test on all three platforms.
 
 ## Root README
 
@@ -60,6 +73,32 @@ invariants belong in `structure/`, not the README.
 `docs/` contains investigations and diagnostic notes. Do not treat it as the current public user
 manual. When an investigation graduates into a maintained invariant, summarize it here under
 `structure/` and link public workflows from `docs-site/`.
+
+## Branch and devlog policy
+
+[`AGENTS.md`](../AGENTS.md) and [`MAINTAINERS.md`](../MAINTAINERS.md) are authoritative; this section
+exists so the repository-shape source of truth does not omit the shape of its own history.
+
+- `dev` is the single integration branch and the target for ordinary pull requests. `main` moves only
+  by maintainer-controlled promotion; `preview` carries the `x.y.z-preview.*` train. One documented
+  exception: a stacked child PR may target another **open** PR's head branch as a review workflow, and
+  is retargeted to `dev` once the parent lands or closes.
+- Bun-native TypeScript on `dev` is the only runtime line. The former Go native-runtime experiment is
+  retired and archived, and no `go/` tree is tracked in this repository; a local `go/` directory is
+  untracked leftovers. If native code returns, the expectation is an incremental module landing on
+  `dev`, not a second full-runtime branch.
+- `devlog/` is a tracked directory in this repository — no submodule, no private mirror. Open units
+  live in `devlog/_plan/`, closed units in `devlog/_fin/`, and external parity references in
+  `devlog/_chase/` (the reference clones themselves are gitignored).
+- The runtime does not consume `devlog/`, so a contributor who ignores it still builds and runs.
+  Repository checks do read it deliberately: `privacy:scan` scans it, and
+  `tests/repo-hygiene.test.ts` enforces the mechanical guards — no tracked `160000` gitlink anywhere,
+  devlog Markdown tracked as ordinary blobs, no `.gitmodules`, and no open plan carrying an unresolved
+  security verdict on a security-boundary topic. Some unit-scoped release gate scripts resolve their
+  evidence directory from `devlog/_plan` or `_fin` as well.
+- Security work in progress does not go in any tracked directory. Scratch space only; only the
+  published outcome — the fix, its regression test, the release note, the advisory once public —
+  reaches the repository.
 
 ## Maintenance governance
 

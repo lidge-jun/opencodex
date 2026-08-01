@@ -53,6 +53,7 @@ import {
   type ProviderModelsApiItem,
 } from "../../providers/model-discovery";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
 
 
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
@@ -69,6 +70,21 @@ interface GatherFlightResult {
 }
 
 const gatherInflight = new Map<string, Promise<GatherFlightResult>>();
+const MAX_CONCURRENT_CATALOG_GATHERS = 8;
+const gatherGate = createAdmissionGate("catalog_gathers", MAX_CONCURRENT_CATALOG_GATHERS);
+
+export class CatalogGatherBusyError extends ResourceAdmissionError {
+  override readonly code = "catalog_busy";
+  readonly retryAfterSeconds = 1;
+  constructor() {
+    super("catalog_gathers", MAX_CONCURRENT_CATALOG_GATHERS);
+    this.name = "CatalogGatherBusyError";
+  }
+}
+
+export function catalogGatherAdmissionMetrics(): AdmissionMetrics {
+  return gatherGate.metrics();
+}
 
 function stableJson(value: unknown): string {
   return JSON.stringify(value, (_key, nested) => {
@@ -217,6 +233,15 @@ export function isDatedVariantId(liveId: string, configuredId: string): boolean 
 }
 
 export const lastDropWarnSignature = new Map<string, string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileProviderFetchWarnings(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = lastDropWarnSignature.size;
+  lastDropWarnSignature.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 
@@ -324,7 +349,12 @@ function modelInputModalities(
       ?? capabilityRecord?.input_modalities,
     8,
     24,
-  )?.filter(value => value === "text" || value === "image" || value === "audio" || value === "video");
+  )?.filter(value => (
+    // Codex parses `input_modalities` as a closed enum of text | image | audio. A provider that
+    // advertises anything else (zenmux reports "video") must not reach the catalog: Codex rejects
+    // the whole file, so plugins, apps and MCP servers all stop loading over one model's metadata.
+    value === "text" || value === "image" || value === "audio"
+  ));
   if (explicit && explicit.length > 0) return explicit;
   if (capabilityRecord?.vision === false) return ["text"];
   if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
@@ -340,6 +370,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
   const contextWindow =
     positiveSafeInteger(
       limits?.max_context_length,
+      metadata?.context_length,
       item.context_length,
       item.context_size,
       item.max_model_len,
@@ -643,10 +674,13 @@ export async function gatherRoutedModels(
   const key = gatherFlightKey(config);
   let promise = gatherInflight.get(key);
   if (!promise) {
+    const lease = gatherGate.tryAcquire();
+    if (!lease) throw new CatalogGatherBusyError();
     // Claim the slot synchronously before any await so same-key callers join this flight.
     // Distinct keys keep their own entries — a second config must not evict the first.
     const flight = gatherRoutedModelsUncached(config).finally(() => {
       if (gatherInflight.get(key) === flight) gatherInflight.delete(key);
+      lease.release();
     });
     gatherInflight.set(key, flight);
     promise = flight;

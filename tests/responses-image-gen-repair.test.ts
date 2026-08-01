@@ -1,11 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   imageGenToolCallAliases,
-  relaySseWithImageGenCallRestore,
+  relaySseWithImageGenCallRestore as relaySseWithImageGenCallRestoreProduction,
   restoreImageGenCallsInJson,
 } from "../src/server/responses-image-gen-repair";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import { finalizeTranslatorBudgetResponse } from "../src/lib/translator-budget";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+function relaySseWithImageGenCallRestore(
+  body: ReadableStream<Uint8Array>,
+  aliases: Parameters<typeof relaySseWithImageGenCallRestoreProduction>[1],
+): ReadableStream<Uint8Array> {
+  const budget = createTestTranslatorBudget();
+  return finalizeTranslatorBudgetResponse(
+    new Response(relaySseWithImageGenCallRestoreProduction(body, aliases, budget)),
+    budget,
+  ).body!;
+}
 
 function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();

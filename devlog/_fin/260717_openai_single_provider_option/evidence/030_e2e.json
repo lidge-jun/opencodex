@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "verdict": "PASS",
+  "publicNetworkFallback": false,
+  "poolDefault": "PASS",
+  "directIsolation": "PASS",
+  "http": "PASS",
+  "websocket": "PASS",
+  "compact": "PASS",
+  "apiProIsolation": "PASS",
+  "migrationRestore": "PASS",
+  "oneOpenAiModelGroup": "PASS",
+  "realClaudeStateUnchanged": true
+}

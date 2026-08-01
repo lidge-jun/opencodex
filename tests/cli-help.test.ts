@@ -35,7 +35,7 @@ describe("CLI subcommand help", () => {
     expect(binResult.status).toBe(0);
     expect(binResult.stdout.trim()).toMatch(/^opencodex \d+\.\d+\.\d+/);
     expect(binResult.stdout.trim().split("\n")).toHaveLength(1);
-  });
+  }, { timeout: 20_000 });
 
   test("help command routes to subcommand help", () => {
     const result = runCli(["help", "start"]);

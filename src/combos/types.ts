@@ -304,6 +304,18 @@ export function listComboIds(config: { combos?: Record<string, OcxComboConfig> }
   return Object.keys(config.combos ?? {}).sort((a, b) => a.localeCompare(b));
 }
 
+export function listLiveComboTargetKeys(
+  config: { combos?: Record<string, OcxComboConfig> },
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const id of listComboIds(config)) {
+    const combo = getCombo(config, id);
+    if (!combo) continue;
+    for (const target of combo.targets) keys.add(`${id}::${targetKey(target)}`);
+  }
+  return keys;
+}
+
 export function getCombo(
   config: { combos?: Record<string, OcxComboConfig> },
   id: string,

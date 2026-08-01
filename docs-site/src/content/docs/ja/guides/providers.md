@@ -60,9 +60,10 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 6 つです。認証情報は
-`~/.opencodex/auth.json` に保存され、自動更新されます。ログイン CLI は `chatgpt` も受け付けます。
-このコマンドは ChatGPT 認証情報を発行し `forward` モードのプロバイダーエントリを作成します。
+OAuth ログインを使うプロバイダープリセットは 6 つで、これに実験的な非公式デバイスフロー
+ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
+自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
+発行し `forward` モードのプロバイダーエントリを作成します。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -71,18 +72,20 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # kiro-cli 認証情報の取り込み(トークンフォールバック対応)
 ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
+ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
 ocx login chatgpt      # 別途 ChatGPT OAuth ログイン
 ocx logout <provider>
 ```
 
 | プロバイダー | アダプター | ベース URL | 備考 |
- --- | --- | --- | --- |
+| --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 コーディングモデル。 |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは Kiro CLI をインストール（`curl -fsSL https://cli.kiro.dev/install | bash`）し、`kiro-cli login` でサインインした既存セッションを取り込みます。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
 正規の Kimi Coding Plan プリセット（`kimi` アカウントログインと `kimi-code` API key）では、
 opencodex は呼び出し元が指定した安定した `prompt_cache_key` だけを Chat Completions リクエストへ
@@ -103,7 +106,7 @@ Providers ページでアカウントを追加し、別アカウントをログ�
 
 ### Kiro 認証情報の取り込み
 
-Kiro のログインには Kiro CLI が必要です。`curl -fsSL https://cli.kiro.dev/install | bash` でインストールし、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
+Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
 
 通常の `ocx login kiro` 取り込みは CLI の SQLite データベースを読み取り専用で開き、データベース、WAL、SHM を変更しません。
 
@@ -116,7 +119,7 @@ Kiro のログインには Kiro CLI が必要です。`curl -fsSL https://cli.ki
 
 ## 3. API キーカタログ
 
-opencodex v2.7.1 には組み込みプリセットが 50 個含まれています。キー方式 40、OAuth 6、ローカル 3、
+opencodex には組み込みプリセットが 65 個含まれています。キー方式 54、OAuth 7、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します。主な項目は以下のとおりです:
 
@@ -133,6 +136,8 @@ opencodex v2.7.1 には組み込みプリセットが 50 個含まれていま�
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| DeepInfra | `https://api.deepinfra.com/v1/openai` |
+| Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -143,14 +148,37 @@ opencodex v2.7.1 には組み込みプリセットが 50 個含まれていま�
 | Qwen Cloud | トークンプラン(デフォルト): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 従量課金: `https://dashscope.aliyuncs.com/compatible-mode/v1` · またはカスタム |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
+| Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
-| GitHub Copilot · GitLab Duo | `https://api.githubcopilot.com` · `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
+| GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …その他多数 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
 
 大半は bearer キーと共に `openai-chat` アダプターを使い、Anthropic 互換エンドポイントのみを公開する一部
 (例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
+Volcengine Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。
+
+> **Volcengine の 3 つの課金経路:** `volcengine` は従量課金 Ark API、
+> `volcengine-coding-plan` は Coding Plan の割り当て、`volcengine-agent-plan` は Agent Plan
+> の割り当てを使用します。同じ製品で発行されたキーとエンドポイントを組み合わせてください。
+> Plan 契約があっても通常の `/api/v3` 呼び出しには従量課金が発生する場合があります。
+> 3 つの preset は選別済みの静的モデルカタログを使用します。Ark の `/models` はテキストに加えて
+> Embedding、画像、動画、3D リソースも返し、Coding ゲートウェイも同じ広範なカタログを返します。
+> Agent Plan ゲートウェイには `/models` リソースがありません。従量課金のデフォルトは
+> `doubao-seed-2-1-pro-260628` で、静的カタログには現在の DeepSeek と GLM のテキストモデルも
+> 含まれます。Coding Plan のデフォルトは `ark-code-latest`、Agent Plan は
+> `deepseek-v4-pro` です。
+
+**DeepInfra の discovery:** キー方式の OpenAI Chat Completions プロバイダー `deepinfra` は、
+`openai-chat` アダプターと Bearer API キーを使います。registry が所有する DeepInfra のモデル一覧 URL から
+`chat` タグを持つ行だけを残し、スラッシュを含むネイティブモデル ID を保持します。live discovery は
+512 KiB、raw 512 行に制限します。キーは [DeepInfra dashboard](https://deepinfra.com/dash/api_keys) で作成します。
+
+**Hyperbolic の discovery:** preset は設定済みの bearer キーで `/v1/models` を読み、スラッシュを含む
+ネイティブモデル ID を保持し、live discovery を 256 KiB と raw 256 行に制限します。serverless text /
+vision-language chat のみを対象とし、別系統の image、audio、GPU endpoint は対象外です。キーは
+[Hyperbolic](https://app.hyperbolic.ai) で作成します。
 
 > **Tencent Cloud Coding Plan の利用制限:** Tencent はこのサブスクリプションを対話型
 > コーディングツール専用としています。一般的な API 自動化、カスタムアプリのバックエンド、

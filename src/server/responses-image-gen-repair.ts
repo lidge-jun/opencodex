@@ -1,5 +1,6 @@
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
+import type { TranslatorBudget } from "../lib/translator-budget";
 
 interface NamespacedTool {
   namespace: string;
@@ -22,12 +23,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function imageGenToolCallAliases(
   toolNsMap: ReadonlyMap<string, NamespacedTool>,
   requestBody?: unknown,
+  translatorBudget?: TranslatorBudget,
 ): Map<string, NamespacedTool> {
   const aliases = new Map<string, NamespacedTool>();
+  const retainAlias = (key: string, tool: NamespacedTool) => {
+    if (aliases.has(key)) {
+      aliases.set(key, tool);
+      return;
+    }
+    translatorBudget?.chargeRetained(
+      Buffer.byteLength(key) + Buffer.byteLength(tool.namespace) + Buffer.byteLength(tool.name),
+      { kind: "request_copies" },
+    );
+    aliases.set(key, tool);
+  };
   for (const [wireName, tool] of toolNsMap) {
     if (tool.namespace !== IMAGE_GEN_NAMESPACE) continue;
-    aliases.set(wireName, tool);
-    aliases.set(`${tool.namespace}.${tool.name}`, tool);
+    retainAlias(wireName, tool);
+    retainAlias(`${tool.namespace}.${tool.name}`, tool);
   }
   for (const group of collectResponsesToolGroups(requestBody)) {
     for (const tool of group) {
@@ -40,8 +53,8 @@ export function imageGenToolCallAliases(
       ) continue;
       const localName = tool.name.slice(IMAGE_GEN_DOTTED_PREFIX.length);
       const target = { namespace: IMAGE_GEN_NAMESPACE, name: localName };
-      aliases.set(`${IMAGE_GEN_NAMESPACE}__${localName}`, target);
-      aliases.set(tool.name, target);
+      retainAlias(`${IMAGE_GEN_NAMESPACE}__${localName}`, target);
+      retainAlias(tool.name, target);
     }
   }
   return aliases;
@@ -112,7 +125,8 @@ export function createImageGenCallRestoreRewrite(
 export function relaySseWithImageGenCallRestore(
   body: ReadableStream<Uint8Array>,
   aliases: ReadonlyMap<string, NamespacedTool>,
+  translatorBudget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
   const rewrite = createImageGenCallRestoreRewrite(aliases);
-  return rewrite ? relaySseWithPayloadRewrite(body, rewrite) : body;
+  return rewrite ? relaySseWithPayloadRewrite(body, rewrite, translatorBudget) : body;
 }

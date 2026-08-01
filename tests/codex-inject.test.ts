@@ -60,6 +60,7 @@ describe("Codex config injection", () => {
       'model_provider = "opencodex"',
       "model_context_window = 1000000",
       "model_auto_compact_token_limit = 900000",
+      'model_auto_compact_token_limit_scope = "total"',
       'model = "gpt-5.5"',
       "",
       "[model_providers.opencodex]",
@@ -68,9 +69,10 @@ describe("Codex config injection", () => {
       "",
     ].join("\n"));
 
-    // Root-level overrides (before the first table header) are removed.
+    // Only the stale root context-window override is removed. Compaction is a user-owned limit.
     expect(cleaned).not.toMatch(/^model_context_window = 1000000$/m);
-    expect(cleaned).not.toMatch(/^model_auto_compact_token_limit = 900000$/m);
+    expect(cleaned).toContain("model_auto_compact_token_limit = 900000");
+    expect(cleaned).toContain('model_auto_compact_token_limit_scope = "total"');
     // Non-context-window root keys are untouched.
     expect(cleaned).toContain('model_provider = "opencodex"');
     expect(cleaned).toContain('model = "gpt-5.5"');

@@ -1,0 +1,14 @@
+# Reference repos are cloned for analysis, never tracked. A nested .git becomes a
+# 160000 gitlink in the parent index and breaks actions/checkout downstream.
+_chase/_cca/
+_chase/_litellm/
+_fin/opencode-cursor/
+_plan/*/_ref_*/
+
+# Security working notes never belong in a repository, not even a private one.
+# Use .tmp/ in the public tree or a mktemp -d path instead. See README.md.
+*-security-redaction/
+*_security_findings/
+**/security-advisory-draft*
+
+.DS_Store

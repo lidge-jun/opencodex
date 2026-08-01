@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "verdict": "PASS",
+  "instances": [
+    {
+      "pid": 70490,
+      "version": "2.7.23",
+      "port": 63954
+    },
+    {
+      "pid": 70529,
+      "version": "2.7.23",
+      "port": 63956
+    }
+  ],
+  "distinctPids": true,
+  "catalogReady": true,
+  "poolDefault": {
+    "providerName": "openai",
+    "accountMode": "pool",
+    "selectedModel": "gpt-5.6-sol",
+    "wireModel": "gpt-5.6-sol",
+    "upstream": "chatgpt.com/backend-api/codex",
+    "credentialOwner": "added",
+    "safeAccountOwner": "added"
+  },
+  "direct": {
+    "providerName": "openai",
+    "accountMode": "direct",
+    "selectedModel": "gpt-5.6-terra",
+    "wireModel": "gpt-5.6-terra",
+    "upstream": "chatgpt.com/backend-api/codex",
+    "credentialOwner": "caller",
+    "safeAccountOwner": null
+  },
+  "apiPro": {
+    "providerName": "openai-apikey",
+    "accountMode": null,
+    "selectedModel": "openai-apikey/gpt-5.6-sol-pro",
+    "wireModel": "gpt-5.6-sol",
+    "reasoningMode": "pro",
+    "upstream": "api.openai.com/v1",
+    "credentialOwner": "api-key",
+    "safeAccountOwner": null
+  },
+  "oneOpenAiModelGroup": true,
+  "clientHistoryVerified": true,
+  "codexVersion": "codex-cli 0.144.4",
+  "userStateUnchanged": true,
+  "live10100Unchanged": true,
+  "liveKey": {
+    "status": "NOT RUN (credential unavailable)",
+    "liveCalls": 0,
+    "outcomes": []
+  }
+}

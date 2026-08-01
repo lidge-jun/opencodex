@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { commandInvocation } from "../src/lib/win-exec";
 
 setDefaultTimeout(30_000);
 
@@ -191,11 +192,23 @@ function runRelease(version: string, scenario: ReleaseScenario = {}) {
     installCommandShim(shimDir, name);
   }
 
+  // Windows names the variable `Path`, and `...process.env` copies it in under
+  // that spelling. Adding a separate `PATH` key leaves BOTH present, and which
+  // one wins is not something this test should be gambling on — the child saw
+  // the real git instead of the shim, so the branch guard read `dev` and the
+  // script aborted before logging a single call. Strip every case variant, then
+  // set exactly one.
+  const inheritedEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
+  );
+  const pathKey = process.platform === "win32" ? "Path" : "PATH";
+  const pathValue = `${shimDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? process.env.Path ?? ""}`;
+
   const result = spawnSync(process.execPath, [releaseScriptPath, version], {
     cwd: repoRoot,
     env: {
-      ...process.env,
-      PATH: `${shimDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+      ...inheritedEnv,
+      [pathKey]: pathValue,
       FAKE_RELEASE_LOG: logPath,
       FAKE_GIT_BRANCH: scenario.branch ?? "main",
       FAKE_GIT_HEAD_SHA: scenario.headSha ?? "abc123def456",
@@ -216,7 +229,10 @@ describe("release helper", () => {
   test("preflight runs typecheck, test suite, and privacy scan before version bump on main dry-runs", () => {
     const { calls, result } = runRelease("9.9.9");
 
-    expect(result.status).toBe(0);
+    // Report what the script actually said. A bare status assertion turned a
+    // Windows-only spawn failure into "Expected: 0 Received: 1" with no cause,
+    // which cost a full CI round to diagnose.
+    expect(`${result.status}\n${result.stderr ?? ""}`.trim()).toBe("0");
 
     const typecheckIndex = findCallIndex(calls, "bun", call => call.args.join(" ") === "x tsc --noEmit");
     const testIndex = findCallIndex(calls, "bun", call => call.args.join(" ") === "test --isolate tests");
@@ -281,5 +297,67 @@ describe("release helper", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr + result.stdout).toContain("moved while waiting for CI");
     expect(findCallIndex(calls, "gh", call => call.args[0] === "workflow" && call.args[1] === "run")).toBe(-1);
+  });
+
+  /**
+   * The preflight's `runQuiet` callers (`npm view`, `git ls-remote`, `gh release
+   * view`) are the first commands a release runs. On Windows they are `.cmd`
+   * shims, and a shell-less spawn of a bare `npm` neither consults PATHEXT nor
+   * accepts a `.cmd` target — so the script died before invoking anything and
+   * the four tests above failed with an empty call log on windows-latest only.
+   *
+   * The rest of this suite runs on the host platform, so on macOS/Linux it can
+   * never exercise that path. Pin the win32 resolution directly instead of
+   * waiting for CI to tell us.
+   */
+  test("preflight commands resolve through the Windows .cmd launcher", () => {
+    const env = { PATH: "C:\\shims", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+    const cmdShim = (name: string) => (path: string) => path.toLowerCase() === `c:\\shims\\${name}.cmd`;
+
+    const npm = commandInvocation("npm", ["view", "pkg@9.9.9", "version"], "win32", { env, exists: cmdShim("npm") });
+    expect(npm.file).toBe("cmd.exe");
+    expect(npm.options.windowsVerbatimArguments).toBe(true);
+    expect(npm.args.join(" ")).toContain("npm.cmd");
+    // A bare name would have survived unresolved and ENOENT'd at spawn time.
+    expect(npm.args.join(" ")).not.toBe("npm");
+
+    const gh = commandInvocation("gh", ["release", "view", "v9.9.9"], "win32", { env, exists: cmdShim("gh") });
+    expect(gh.file).toBe("cmd.exe");
+    expect(gh.args.join(" ")).toContain("gh.cmd");
+
+    // A real `.exe` (git) must NOT be wrapped: direct spawn keeps arg boundaries.
+    const git = commandInvocation("git", ["ls-remote", "origin"], "win32", {
+      env,
+      exists: (path: string) => path.toLowerCase() === "c:\\shims\\git.exe",
+    });
+    expect(git.file.toLowerCase()).toBe("c:\\shims\\git.exe");
+    expect(git.options.windowsVerbatimArguments).toBeUndefined();
+  });
+
+  /**
+   * The test above proves the LAUNCHER is correct; this one proves the release
+   * script actually uses it. That distinction is not academic: `runQuiet` was
+   * already routed through `commandInvocation` while every `git`/`bun`/`npm`
+   * call still went through `Bun.$`, and the suite stayed green on macOS while
+   * windows-latest failed. The built-in shell resolved PATH itself, walked past
+   * the extension-less shim it could not execute, and reached the real `git` —
+   * so the branch guard saw `dev` rather than the faked `main` and aborted
+   * before logging a single call.
+   *
+   * A source assertion is the honest check here: the failure is "which resolver
+   * ran", and no host-platform execution can observe that.
+   */
+  test("every external command goes through the shared launcher, not the built-in shell", () => {
+    const source = readFileSync(releaseScriptPath, "utf8");
+    const withoutComments = source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+    // Bun.$ resolves PATH with its own shell; that is exactly the bypass.
+    expect(withoutComments).not.toMatch(/\$`/);
+    expect(withoutComments).not.toMatch(/from\s+"bun"/);
+
+    // And the launcher must still be the thing it reaches for.
+    expect(withoutComments).toContain("commandInvocation");
   });
 });

@@ -7,6 +7,7 @@
  */
 import { resolve } from "node:path";
 import { resolveCodexHomeDir } from "../codex/home";
+import { createAdmissionGate, type AdmissionLease, type AdmissionMetrics } from "../lib/admission";
 
 export type StorageMutationKind = "cleanup" | "restore" | "policy";
 
@@ -20,9 +21,13 @@ export interface StorageMutationCoordinatorTestHooks {
 interface ActiveSlot {
   kind: StorageMutationKind;
   startedAt: number;
+  lease: AdmissionLease;
 }
 
+export const MAX_ACTIVE_STORAGE_HOME_SLOTS = 32;
 const slots = new Map<string, ActiveSlot>();
+const slotGate = createAdmissionGate("storage_home_slots", MAX_ACTIVE_STORAGE_HOME_SLOTS);
+let releaseMisses = 0;
 let testHooks: StorageMutationCoordinatorTestHooks | null = null;
 
 function slotKey(codexHome?: string): string {
@@ -37,7 +42,13 @@ export function setStorageMutationCoordinatorTestHooks(
 
 export function resetStorageMutationCoordinatorForTests(): void {
   testHooks = null;
+  for (const slot of slots.values()) slot.lease.release();
   slots.clear();
+}
+
+export function storageMutationAdmissionMetrics(): AdmissionMetrics {
+  const metrics = slotGate.metrics();
+  return { ...metrics, releaseMisses: metrics.releaseMisses + releaseMisses };
 }
 
 export function getActiveStorageMutation(
@@ -50,17 +61,36 @@ export function getActiveStorageMutation(
 export function tryBeginStorageMutation(
   kind: StorageMutationKind,
   codexHome?: string,
-): { acquired: true } | { acquired: false; error: StorageMutationBusyError } {
+): { acquired: true; lease: AdmissionLease } | { acquired: false; error: StorageMutationBusyError } {
   const key = slotKey(codexHome);
   if (slots.has(key)) {
     return { acquired: false, error: "storage_mutation_busy" };
   }
-  slots.set(key, { kind, startedAt: Date.now() });
-  return { acquired: true };
+  const lease = slotGate.tryAcquire();
+  if (!lease) return { acquired: false, error: "storage_mutation_busy" };
+  let active = true;
+  const ownerLease: AdmissionLease = {
+    release() {
+      if (!active) return;
+      active = false;
+      const owner = slots.get(key);
+      if (owner?.lease === ownerLease) slots.delete(key);
+      lease.release();
+    },
+  };
+  slots.set(key, { kind, startedAt: Date.now(), lease: ownerLease });
+  return { acquired: true, lease: ownerLease };
 }
 
 export function endStorageMutation(codexHome?: string): void {
-  slots.delete(slotKey(codexHome));
+  const key = slotKey(codexHome);
+  const slot = slots.get(key);
+  if (!slot) {
+    releaseMisses += 1;
+    return;
+  }
+  slots.delete(key);
+  slot.lease.release();
 }
 
 async function applyCoordinatorBlock(): Promise<void> {
@@ -87,7 +117,7 @@ export async function runPolicyStorageMutation<T>(
     await applyCoordinatorBlock();
     return await work();
   } finally {
-    endStorageMutation(codexHome);
+    gate.lease.release();
   }
 }
 
@@ -104,6 +134,6 @@ export async function withStorageMutationSlot<T>(
     await applyCoordinatorBlock();
     return await work();
   } finally {
-    endStorageMutation(codexHome);
+    gate.lease.release();
   }
 }

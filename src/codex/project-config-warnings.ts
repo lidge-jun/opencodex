@@ -3,9 +3,11 @@ import path, { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
 import { readRootTomlString } from "./paths";
+import { truncateRetainedUtf8 } from "../lib/admission";
 
 const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 const DIAGNOSTICS_CACHE_TTL_MS = 30_000;
+const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 
 function resolveCodexConfigPath(): string {
   const raw = process.env.CODEX_HOME?.trim();
@@ -309,7 +311,16 @@ export function getCachedProjectConfigDiagnostics(): {
 } {
   const now = Date.now();
   if (!diagnosticsCache || now - diagnosticsCache.at > DIAGNOSTICS_CACHE_TTL_MS) {
-    diagnosticsCache = { at: now, warnings: collectProjectCodexConfigWarnings() };
+    diagnosticsCache = {
+      at: now,
+      warnings: collectProjectCodexConfigWarnings().map(warning => ({
+        ...warning,
+        path: truncateRetainedUtf8(warning.path, MAX_DIAGNOSTIC_VALUE_BYTES),
+        detail: truncateRetainedUtf8(warning.detail, MAX_DIAGNOSTIC_VALUE_BYTES),
+        ...(warning.profileName === undefined ? {} : { profileName: truncateRetainedUtf8(warning.profileName, MAX_DIAGNOSTIC_VALUE_BYTES) }),
+        message: truncateRetainedUtf8(warning.message, MAX_DIAGNOSTIC_VALUE_BYTES),
+      })),
+    };
   }
   const warnings = diagnosticsCache.warnings;
   return { warnings, grouped: groupProjectCodexConfigWarningsByPath(warnings) };

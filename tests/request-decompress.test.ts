@@ -6,6 +6,9 @@ import {
   readJsonRequestBody,
   UnsupportedContentEncodingError,
 } from "../src/server/request-decompress";
+import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
+import { handleManagementAPI } from "../src/server/management-api";
+import type { OcxConfig } from "../src/types";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
 const PAYLOAD_BYTES = new TextEncoder().encode(JSON.stringify(PAYLOAD));
@@ -96,6 +99,33 @@ describe("decodeRequestBody", () => {
 });
 
 describe("readJsonRequestBody", () => {
+  test("rejects declared over-cap bodies before arrayBuffer allocation", async () => {
+    let arrayBufferCalls = 0;
+    const req = {
+      headers: new Headers({ "content-length": String(MAX_DECOMPRESSED_BODY_BYTES + 1) }),
+      arrayBuffer: async () => {
+        arrayBufferCalls += 1;
+        return new ArrayBuffer(0);
+      },
+    } as Request;
+
+    await expect(readJsonRequestBody(req)).rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
+    expect(arrayBufferCalls).toBe(0);
+  });
+
+  test("management routes reject a lying declaration when the buffered body exceeds 4 MiB", async () => {
+    const body = JSON.stringify({ codexAutoStart: "x".repeat(MANAGEMENT_JSON_BODY_MAX_BYTES) });
+    const req = new Request("http://localhost/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "content-length": "1", host: "localhost" },
+      body,
+    });
+    const config = { defaultProvider: "mock", providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } } as OcxConfig;
+    const response = await handleManagementAPI(req, new URL(req.url), config);
+    expect(response?.status).toBe(413);
+    expect(await response?.json()).toEqual({ error: "request body too large" });
+  });
+
   test("parses an uncompressed request without touching arrayBuffer path", async () => {
     const req = new Request("http://localhost/v1/responses", {
       method: "POST",

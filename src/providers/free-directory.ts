@@ -18,7 +18,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
   ],
   "recurring-credit": ["bytez", "nous-research"],
   "signup-credit": [
-    "agentrouter", "ai21", "baichuan", "deepinfra", "deepseek", "doubao", "fireworks", "freemodel-dev", "glm-cn",
+    "agentrouter", "ai21", "baichuan", "baseten", "deepinfra", "deepseek", "doubao", "fireworks", "freemodel-dev", "glm-cn",
     "hyperbolic", "longcat", "monsterapi", "nebius", "novita", "nscale", "nvidia", "predibase", "publicai", "qoder",
     "scaleway", "sensenova", "stepfun", "together", "vertex",
   ],
@@ -119,6 +119,9 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   agentrouter: { baseUrl: "https://agentrouter.org", dashboardUrl: "https://agentrouter.org", adapter: "anthropic", authKind: "key", supportLevel: "experimental", verification: "primary", modelsUrl: "https://agentrouter.org/v1/models", lastVerified: LAST_VERIFIED, discovery: "live", liveModels: true },
   ai21: openAi("https://api.ai21.com/studio/v1", "https://studio.ai21.com/account/api-key", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.ai21.com/reference/models" }),
   baichuan: openAi("https://api.baichuan-ai.com/v1", "https://platform.baichuan-ai.com/console/apikey", { verification: "official" }),
+  // Verified end-to-end 2026-07-30: /v1/models returns the OpenAI-shaped live catalog (13 models),
+  // and a chat completion against moonshotai/Kimi-K3 returned a standard chat.completion payload.
+  baseten: openAi("https://inference.baseten.co/v1", "https://app.baseten.co/settings/api_keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.baseten.co/inference/model-apis/overview", modelsUrl: "https://inference.baseten.co/v1/models", lastVerified: "2026-07-30" }),
   deepinfra: openAi("https://api.deepinfra.com/v1/openai", "https://deepinfra.com/dash/api_keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://deepinfra.com/docs/openai_api" }),
   deepseek: openAi("https://api.deepseek.com", "https://platform.deepseek.com/api_keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://api-docs.deepseek.com/api/list-models" }),
   doubao: openAi("https://ark.cn-beijing.volces.com/api/v3", "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", { verification: "official" }),

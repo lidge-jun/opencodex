@@ -4,7 +4,7 @@ import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, clearOAuthRefreshIntent } from "./store";
+import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, OAuthMutationBusyError } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
@@ -19,7 +19,12 @@ import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
+import { captureConfigGeneration, sweepExpiredOnWrite, type GenerationContext } from "../lib/state-store-sweeper";
+import { retainedUtf8Bytes } from "../lib/admission";
+import { randomUUID } from "node:crypto";
 export {
+  CODEX_HEALTH_AUTH_FAILED_NOTE,
+  CODEX_HEALTH_MANAGEMENT_API_UNAVAILABLE_NOTE,
   CODEX_HEALTH_UNAVAILABLE_NOTE,
   MASKED_ACCOUNT_FALLBACK,
   collectOAuthHealthEntries,
@@ -51,14 +56,57 @@ export interface OAuthAccessSnapshot {
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
 
-const tokenRefreshes = new Map<string, Promise<OAuthAccessSnapshot>>();
+const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
+const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
+interface OAuthRefreshFlightEvidence { flightId: string; dispatched: boolean }
+interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController }
+const tokenRefreshes = new Map<string, OAuthTokenRefreshFlight>();
+export class OAuthTokenRefreshBusyError extends Error {
+  readonly code = "OAUTH_TOKEN_REFRESH_BUSY";
+  readonly retryable = true;
+  constructor() { super("OAuth token refresh capacity reached"); this.name = "OAuthTokenRefreshBusyError"; }
+}
+export class OAuthTokenRefreshStaleError extends Error {
+  readonly code = "OAUTH_TOKEN_REFRESH_STALE";
+  readonly retryable = true;
+  constructor() { super("OAuth token refresh owner became stale"); this.name = "OAuthTokenRefreshStaleError"; }
+}
+
+/** Focused owner-identity tests only. Synthetic owners retain no account data. */
+export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; startedAt?: number; flightId?: string; dispatched?: boolean }>): {
+  promises: Promise<OAuthAccessSnapshot>[];
+  cleanup: () => void;
+} {
+  const inserted: OAuthTokenRefreshFlight[] = [];
+  const promises = rows.map(({ key, startedAt, flightId, dispatched }) => {
+    const abort = new AbortController();
+    const promise = new Promise<OAuthAccessSnapshot>((_resolve, reject) => {
+      abort.signal.addEventListener("abort", () => reject(abort.signal.reason), { once: true });
+    });
+    const flight = { promise, startedAt: startedAt ?? Date.now(), abort, flightId: flightId ?? randomUUID(), dispatched: dispatched ?? false };
+    tokenRefreshes.set(key, flight);
+    inserted.push(flight);
+    return promise;
+  });
+  return {
+    promises,
+    cleanup() {
+      for (const [key, flight] of tokenRefreshes) {
+        if (!inserted.includes(flight)) continue;
+        tokenRefreshes.delete(key);
+        flight.abort.abort(new Error("test cleanup"));
+      }
+    },
+  };
+}
 const XAI_PERMANENT_FAILURE_TTL_MS=30_000;
 const permanentRefreshFailures=new Map<string,number>();
-interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
-interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void> }
-interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void> }
+interface XaiRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
+interface AnthropicRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; now?:()=>number; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal; flight?: OAuthRefreshFlightEvidence; replacedStaleFlight?: OAuthRefreshFlightEvidence }
+interface GenericRefreshDeps { intentLock?:ReturnType<typeof createOAuthRefreshIntentLock>; afterPrePersistRead?:()=>void|Promise<void>; signal?: AbortSignal }
 function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${credentialGeneration(c)}`;}
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
+export function sweepExpiredXaiPermanentFailureVerdicts(now=Date.now()):number{let removed=0;for(const[key,until]of permanentRefreshFailures){if(until>now)continue;permanentRefreshFailures.delete(key);removed+=1;}return removed;}
 
 export interface LoginOpts { forceLogin?: boolean; /** When set, persist into this account slot and require matching identity. */ reauthAccountId?: string }
 
@@ -244,24 +292,44 @@ async function resolveAccessSnapshotForAccount(
   if (rejectedGeneration === undefined && cred.expires > Date.now() + REFRESH_SKEW_MS) return current;
 
   const key = `${provider}\u0000${accountId}`;
-  const existing = tokenRefreshes.get(key);
-  if (existing) {
+  let existing = tokenRefreshes.get(key);
+  let replacedStaleFlight: OAuthRefreshFlightEvidence | undefined;
+  if (existing && Date.now() - existing.startedAt <= OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS) {
     logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });
-    return existing;
+    return existing.promise;
   }
+  if (existing) {
+    replacedStaleFlight = { flightId: existing.flightId, dispatched: existing.dispatched };
+    existing.abort.abort(new OAuthTokenRefreshStaleError());
+    if (tokenRefreshes.get(key) === existing) tokenRefreshes.delete(key);
+    existing = undefined;
+  }
+  if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) throw new OAuthTokenRefreshBusyError();
 
+  const abort = new AbortController();
+  const flight: OAuthTokenRefreshFlight = {
+    promise: undefined as unknown as Promise<OAuthAccessSnapshot>,
+    startedAt: Date.now(),
+    abort,
+    flightId: randomUUID(),
+    dispatched: false,
+  };
   const refresh = (async (): Promise<OAuthAccessSnapshot> => {
-    const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred);
+    const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
     const persisted = getAccountCredential(provider, accountId);
     if (!persisted) throw new OAuthLoginRequiredError(provider);
     if (persisted.access !== accessToken) {
       throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
     }
     return accessSnapshot(provider, accountId, persisted);
-  })().finally(() => {
-    if (tokenRefreshes.get(key) === refresh) tokenRefreshes.delete(key);
+  })().catch(error => {
+    if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) throw abort.signal.reason;
+    throw error;
+  }).finally(() => {
+    if (tokenRefreshes.get(key) === flight) tokenRefreshes.delete(key);
   });
-  tokenRefreshes.set(key, refresh);
+  flight.promise = refresh;
+  tokenRefreshes.set(key, flight);
   return refresh;
 }
 
@@ -323,7 +391,7 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
   };
 }
-export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(!terminal(error))throw error;permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),now()+XAI_PERMANENT_FAILURE_TTL_MS);await markAccountNeedsReauthIfGeneration(provider,accountId,generation);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
+export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
 function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCredentials | undefined {
   if (stored.source !== "local-cli") return undefined;
@@ -339,6 +407,7 @@ export async function refreshAnthropicAccountWithLock(
   callerCredential: OAuthCredentials,
   deps: AnthropicRefreshDeps = {},
 ): Promise<string> {
+  const writerGeneration = captureConfigGeneration();
   const now = deps.now ?? Date.now;
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
@@ -346,7 +415,7 @@ export async function refreshAnthropicAccountWithLock(
     if (!stored) throw new OAuthLoginRequiredError(provider);
     const account = getAccountSet(provider)?.accounts.find(candidate => candidate.id === accountId);
     const generation = credentialGeneration(stored);
-    const pendingIntent = readOAuthRefreshIntent(provider, accountId);
+    let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const disk = newerClaudeCredential(stored, now());
     if (disk) {
       const outcome = await mergeAccountCredential(provider, accountId, disk, {
@@ -361,8 +430,19 @@ export async function refreshAnthropicAccountWithLock(
       if (pendingIntent) clearOAuthRefreshIntent(provider, accountId, pendingIntent.generation);
       return disk.access;
     }
+    if (!pendingIntent?.uncertain && pendingIntent?.generation === generation) {
+      if (pendingIntent.staleOwner) throw new OAuthTokenRefreshStaleError();
+      if (deps.replacedStaleFlight && pendingIntent.flightId === deps.replacedStaleFlight.flightId) {
+        if (deps.replacedStaleFlight.dispatched) {
+          markOAuthRefreshIntentStaleOwner(provider, accountId, generation, deps.replacedStaleFlight.flightId);
+          throw new OAuthTokenRefreshStaleError();
+        }
+        clearOAuthRefreshIntent(provider, accountId, generation);
+        pendingIntent = undefined;
+      }
+    }
     if (pendingIntent?.uncertain || pendingIntent?.generation === generation) {
-      await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
+      await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
       throw new OAuthLoginRequiredError(provider);
     }
     if (pendingIntent) clearOAuthRefreshIntent(provider, accountId, pendingIntent.generation);
@@ -374,8 +454,10 @@ export async function refreshAnthropicAccountWithLock(
     }
 
     try {
-      writeOAuthRefreshIntent(provider, accountId, generation, now());
-      const fresh = merged(await def.refresh(stored.refresh), stored);
+      writeOAuthRefreshIntent(provider, accountId, generation, now(), deps.flight?.flightId);
+      if (deps.signal?.aborted) throw deps.signal.reason;
+      if (deps.flight) deps.flight.dispatched = true;
+      const fresh = merged(await def.refresh(stored.refresh, deps.signal), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
@@ -388,8 +470,9 @@ export async function refreshAnthropicAccountWithLock(
       clearOAuthRefreshIntent(provider, accountId, generation);
       return fresh.access;
     } catch (error) {
+      if (error instanceof OAuthMutationBusyError) throw error;
       if (!terminal(error)) throw error;
-      await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
+      await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
       clearOAuthRefreshIntent(provider, accountId, generation);
       throw new OAuthLoginRequiredError(provider);
     }
@@ -405,6 +488,7 @@ export async function refreshGenericAccountWithLock(
   callerCredential: OAuthCredentials,
   deps: GenericRefreshDeps = {},
 ): Promise<string> {
+  const writerGeneration = captureConfigGeneration();
   logOAuthEvent("OAuth refresh started", { provider, accountId });
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
@@ -419,7 +503,7 @@ export async function refreshGenericAccountWithLock(
     }
     const generation = credentialGeneration(stored);
     try {
-      const fresh = merged(await def.refresh(stored.refresh, undefined, stored), stored);
+      const fresh = merged(await def.refresh(stored.refresh, deps.signal, stored), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
@@ -431,8 +515,9 @@ export async function refreshGenericAccountWithLock(
       logOAuthEvent("OAuth credentials rotated and persisted", { provider, accountId });
       return fresh.access;
     } catch (error) {
+      if (error instanceof OAuthMutationBusyError) throw error;
       if (!terminal(error)) throw error;
-      await markAccountNeedsReauthIfGeneration(provider, accountId, generation);
+      await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
       throw new OAuthLoginRequiredError(provider);
     }
   } finally {
@@ -445,10 +530,13 @@ async function refreshAndPersistAccessToken(
   accountId: string,
   def: OAuthProviderDef,
   cred: OAuthCredentials,
+  signal?: AbortSignal,
+  flight?: OAuthRefreshFlightEvidence,
+  replacedStaleFlight?: OAuthRefreshFlightEvidence,
 ): Promise<string> {
-  if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred);
-  if (provider === "anthropic") return refreshAnthropicAccountWithLock(provider, accountId, def, cred);
-  return refreshGenericAccountWithLock(provider, accountId, def, cred);
+  if (provider === "xai") return refreshXaiAccountWithLock(provider, accountId, def, cred, { signal });
+  if (provider === "anthropic") return refreshAnthropicAccountWithLock(provider, accountId, def, cred, { signal, flight, replacedStaleFlight });
+  return refreshGenericAccountWithLock(provider, accountId, def, cred, { signal });
 }
 
 /**
@@ -831,6 +919,21 @@ interface ManualCodeSlot {
   expectedState?: string;
 }
 const loginManual = new Map<string, ManualCodeSlot>();
+const OAUTH_PENDING_CODE_MAX_BYTES = 4 * 1024;
+let lastOAuthFlowReconciledGeneration = 0;
+
+export function reconcileOAuthFlowState(context: GenerationContext): number {
+  if (context.generation <= lastOAuthFlowReconciledGeneration) return 0;
+  let removed = 0;
+  for (const [provider, state] of loginState) {
+    if (context.providerNames.has(provider) || !state.done || loginAbort.has(provider)) continue;
+    if (loginState.delete(provider)) removed += 1;
+    if (loginManual.delete(provider)) removed += 1;
+    if (loginAbort.delete(provider)) removed += 1;
+  }
+  lastOAuthFlowReconciledGeneration = context.generation;
+  return removed;
+}
 
 function clearManualCodeSlot(provider: string): void {
   loginManual.delete(provider);
@@ -879,6 +982,7 @@ function waitForManualLoginCode(provider: string, signal: AbortSignal, expectedS
 export function submitManualLoginCode(provider: string, input: string): { ok: true } | { ok: false; error: string } {
   const trimmed = input.trim();
   if (!trimmed) return { ok: false, error: "empty code" };
+  if (retainedUtf8Bytes(trimmed) > OAUTH_PENDING_CODE_MAX_BYTES) return { ok: false, error: "code too large" };
   const st = loginState.get(provider);
   if (!st || st.done) return { ok: false, error: "no login in progress" };
   const slot = ensureManualCodeSlot(provider);

@@ -67,6 +67,10 @@ export function useProviderAccountPools(deps: {
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
+  // Provider lists this instance has already fetched for. The deferred loads below are deliberately
+  // uncancellable, and StrictMode double-invokes their effects, so dedupe by list identity here.
+  const accountSetsKeyRef = useRef<string | null>(null);
+  const keyPoolsKeyRef = useRef<string | null>(null);
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
 
   const fetchAccountSets = useCallback(async (providers: string[]) => {
@@ -239,8 +243,16 @@ export function useProviderAccountPools(deps: {
   );
   useEffect(() => {
     if (oauthCardProviders.length === 0) return;
-    const timeout = window.setTimeout(() => { void fetchAccountSets(oauthCardProviders); }, 0);
-    return () => window.clearTimeout(timeout);
+    // Deferred by a microtask, not a timer: a timer had to be cancelled in cleanup, so a mount
+    // followed by an immediate unmount (tab switch, provider list churn) issued no request and
+    // never retried. A microtask keeps the state update out of the effect body while still
+    // guaranteeing the request goes out.
+    // Keyed on the provider list because this effect re-runs whenever that memo changes, and
+    // StrictMode double-invokes it on mount; an uncancellable microtask would otherwise duplicate.
+    const key = oauthCardProviders.join(",");
+    if (accountSetsKeyRef.current === key) return;
+    accountSetsKeyRef.current = key;
+    void Promise.resolve().then(() => { void fetchAccountSets(oauthCardProviders); });
   }, [fetchAccountSets, oauthCardProviders]);
 
   const keyCardProviders = useMemo(
@@ -249,8 +261,10 @@ export function useProviderAccountPools(deps: {
   );
   useEffect(() => {
     if (keyCardProviders.length === 0) return;
-    const timeout = window.setTimeout(() => { void fetchKeyPools(keyCardProviders); }, 0);
-    return () => window.clearTimeout(timeout);
+    const key = keyCardProviders.join(",");
+    if (keyPoolsKeyRef.current === key) return;
+    keyPoolsKeyRef.current = key;
+    void Promise.resolve().then(() => { void fetchKeyPools(keyCardProviders); });
   }, [fetchKeyPools, keyCardProviders]);
 
   const activeAccountNeedsReauth = useMemo(

@@ -363,6 +363,9 @@ ocx service status
 ocx service uninstall
 ```
 
+在 Windows 上，`ocx service status` 会分别报告任务计划程序注册状态和经过身份验证的 OpenCodex
+代理可达性。它不会输出本地化的 `schtasks` 表，因此摘要不受 Windows 代码页影响，始终可读。
+
 在 Windows 上，创建任务计划程序条目需要提升权限。能识别的本地化“拒绝访问”文本继续使用现有
 处理路径。如果该文本不可读，则回退路径要求命令形状严格为
 `/create /tn opencodex-proxy /xml <非空路径> /f`、退出状态为 1，并确认当前 token 未提升；此时

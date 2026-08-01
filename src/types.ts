@@ -455,6 +455,11 @@ export interface OcxClaudeCodeConfig {
   desktopProfile?: OcxClaudeDesktopProfile;
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
   desktopAutoApply?: boolean;
+  /**
+   * When false, omit `native/*` rows from Claude Desktop show/export/apply. Default: enabled.
+   * Routing-sidecar alias decoding is unchanged — only the Desktop model list writer.
+   */
+  desktopNativeModels?: boolean;
 }
 
 export type OcxClaudeDesktopFamily = "opus" | "fable" | "sonnet" | "haiku";
@@ -511,8 +516,22 @@ export interface OcxCustomModel {
   addedAt?: string;
 }
 
+/**
+ * A generated `ocx_` data-plane key. `key` is the secret itself and never leaves
+ * the server except in the one-time POST /api/keys response; every other surface
+ * sees only the masked prefix.
+ */
+export interface OcxApiKeyEntry {
+  id: string;
+  name: string;
+  key: string;
+  createdAt: string;
+}
+
 export interface OcxConfig {
   port: number;
+  /** Maximum usage-log bytes read for one management snapshot. */
+  managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -547,6 +566,17 @@ export interface OcxConfig {
    */
   injectionEffort?: string;
   /**
+   * Explicit sideband websocket base for realtime/live joins, mirroring upstream's
+   * `experimental_realtime_ws_base_url`. The value is a ROOT (or a recognized
+   * `/realtime`, `/realtime/calls/<id>`, `/live/<id>` endpoint form, which is
+   * stripped back to the root); `/v1` is appended during normalization. Intended
+   * for local development against a fake realtime server — plaintext `http`/`ws`
+   * is accepted only for loopback hosts, and URL userinfo is rejected; both
+   * failures close to the canonical `https://api.openai.com/v1`. Configured by
+   * editing this file; there is deliberately no management-API or GUI surface.
+   */
+  experimentalRealtimeWsBaseUrl?: string;
+  /**
    * Model ids the user has EXCLUDED from the Grok Build managed block. Absent or empty
    * means "everything visible", which is the historical behaviour — so an existing
    * config keeps the fence it already had.
@@ -563,11 +593,12 @@ export interface OcxConfig {
    */
   fastMode?: boolean;
   /**
-   * Windows SSE passthrough stream shape (#314 mitigation).
-   * "auto" (default): eager bounded relay only on runtimes proven to carry the
-   * Bun#32111 fix (none today → legacy tee). "eager-relay": force the new relay
-   * (accepts #32111 crash risk on Bun 1.3.14). "legacy-tee": pin the tee path.
-   * Persisted in config.json because Windows services do not inherit shell env.
+   * Windows/macOS SSE passthrough stream shape (#314 mitigation).
+   * On Windows, "auto" (default) selects eager relay only on a runtime proven
+   * to carry the Bun#32111 fix. On macOS, "auto" always stays on legacy tee and
+   * eager relay is explicit-only. "eager-relay" opts into the new relay (and
+   * accepts #32111 crash risk on Bun 1.3.14); "legacy-tee" pins the tee path.
+   * Persisted in config.json so service users can select the stream shape.
    * See src/lib/bun-stream-caps.ts.
    */
   streamMode?: "auto" | "legacy-tee" | "eager-relay";
@@ -659,7 +690,7 @@ export interface OcxConfig {
    */
   storageCleanupPolicy?: StorageCleanupPolicy;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
-  apiKeys?: Array<{ id: string; name: string; key: string; createdAt: string }>;
+  apiKeys?: OcxApiKeyEntry[];
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
   /** Restore an installed shim after a stable external Codex update replaces it. Default true. */
@@ -673,6 +704,8 @@ export interface OcxConfig {
   syncResumeHistory?: boolean;
   /** Freshness window (ms) for the per-provider live `/models` cache. Defaults to 5 min. */
   modelCacheTtlMs?: number;
+  /** Evictable retained app-state budget in MiB. Default 256; valid 64..4096. */
+  appOwnedMemoryBudgetMb?: number;
   /** Anthropic prompt-cache retention: "short" = 5-min ephemeral (default), "long" = 1-hour extended, "none" = disabled. */
   cacheRetention?: "none" | "short" | "long";
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
@@ -874,6 +907,10 @@ export interface ResponsesItemIdRepairConfig {
 
 export interface OcxProviderConfig {
   adapter: string;
+  /** Cursor MCP compatibility bounds; positive integers when configured. */
+  mcpMaxTools?: number;
+  mcpMaxSchemaBytes?: number;
+  mcpMaxResultBytes?: number;
   /**
    * Per-model wire override, keyed by the upstream native model id (after namespace
    * and combo resolution). A single gateway can front models that speak different
@@ -892,6 +929,13 @@ export interface OcxProviderConfig {
    * the legacy `/v1/responses` construction.
    */
   responsesPath?: string;
+  /**
+   * Responses upstream that stores nothing server-side (DeepSeek documents "the API
+   * is stateless"). Stateful request parameters are dropped, `store` is pinned false,
+   * and orphaned tool results left by a replay miss are repaired rather than
+   * forwarded to an upstream that cannot resolve their pair.
+   */
+  statelessResponses?: boolean;
   /**
    * Explicit opt-in for non-registry private-network destinations such as localhost, RFC1918,
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.

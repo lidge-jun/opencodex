@@ -5,7 +5,7 @@
  * via the injectable clock/short drain windows.
  */
 import { describe, expect, test } from "bun:test";
-import { createSseInspector } from "../src/server/relay";
+import { createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS } from "../src/server/relay";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../src/server/relay-eager";
 import type { RequestLogContext } from "../src/server/request-log";
 
@@ -17,17 +17,32 @@ function sse(event: string): Uint8Array {
 
 const COMPLETED = JSON.stringify({ type: "response.completed", response: { id: "resp_1", status: "completed", output: [] } });
 const DELTA = JSON.stringify({ type: "response.output_text.delta", delta: "hi" });
+const FAILED_EVENT_MARKER = "event: response.failed\ndata: ";
+
+function countOccurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+function failedPayload(text: string): {
+  type: string;
+  response: { status: string; error: { code: string; message: string } };
+} {
+  const payload = text.split(FAILED_EVENT_MARKER)[1]?.split("\n")[0];
+  if (!payload) throw new Error("missing response.failed payload");
+  return JSON.parse(payload);
+}
 
 type Recorded = {
   terminals: Array<{ status: string; httpStatus?: number }>;
   completed: unknown[];
   cancels: number;
   dones: number;
+  disposes: number;
   synthetics: string[];
 };
 
 function makeHooks(): { hooks: EagerRelayHooks; rec: Recorded; inspector: ReturnType<typeof createSseInspector> } {
-  const rec: Recorded = { terminals: [], completed: [], cancels: 0, dones: 0, synthetics: [] };
+  const rec: Recorded = { terminals: [], completed: [], cancels: 0, dones: 0, disposes: 0, synthetics: [] };
   const inspector = createSseInspector({
     onTerminal: (status, httpStatus) => rec.terminals.push({ status, httpStatus }),
     onCompletedResponse: r => rec.completed.push(r),
@@ -35,6 +50,7 @@ function makeHooks(): { hooks: EagerRelayHooks; rec: Recorded; inspector: Return
   const hooks: EagerRelayHooks = {
     inspectChunk: c => inspector.feed(c),
     finishInspection: () => inspector.finish(),
+    disposeInspection: () => { rec.disposes += 1; inspector.dispose(); },
     sawTerminal: () => inspector.reported(),
     onSynthetic: kind => rec.synthetics.push(kind),
     onClientCancel: () => { rec.cancels += 1; },
@@ -137,6 +153,7 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     expect(rec.terminals).toEqual([{ status: "completed", httpStatus: undefined }]);
     expect(rec.completed.length).toBe(1);
     expect(rec.dones).toBe(1);
+    expect(rec.disposes).toBe(1);
     expect(rec.cancels).toBe(0);
     expect(rec.synthetics).toEqual([]);
   });
@@ -325,34 +342,209 @@ describe("relaySseEagerBounded — #44 cancel semantics", () => {
 });
 
 describe("relaySseEagerBounded — error paths", () => {
-  test("(e) mid-stream upstream error → synthetic failed + onDone", async () => {
+  test("(e/090-1) mid-stream upstream error → clean failed tail + onSynthetic/onDone once", async () => {
+    const { hooks, rec } = makeHooks();
+    const inspectChunk = hooks.inspectChunk;
+    let inspectedChunks = 0;
+    hooks.inspectChunk = chunk => {
+      inspectedChunks += 1;
+      inspectChunk(chunk);
+    };
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks);
+    up.push(sse(DELTA));
+    up.fail(new Error("socket reset"));
+    const out = await readAll(relayed);
+    await settle();
+
+    expect(out.startsWith(new TextDecoder().decode(sse(DELTA)))).toBe(true);
+    expect(out).toContain(`\n\n${FAILED_EVENT_MARKER}`);
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(failedPayload(out).response.error.message).toContain("socket reset");
+    // The synthetic tail is client-only; only the upstream DELTA reached inspection.
+    expect(inspectedChunks).toBe(1);
+    expect(rec.synthetics).toEqual(["failed"]);
+    expect(rec.dones).toBe(1);
+    expect(upstreamAc.signal.aborted).toBe(true);
+  });
+
+  test("(090-2) upstream failure after a protocol terminal emits no duplicate terminal", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();
     const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(sse(COMPLETED));
+    up.fail(new Error("late socket reset"));
+
+    const out = await readAll(relayed);
+    await settle();
+    expect(countOccurrences(out, "response.completed")).toBe(1);
+    expect(countOccurrences(out, "event: response.failed")).toBe(0);
+    expect(rec.terminals).toEqual([{ status: "completed", httpStatus: undefined }]);
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("(090-3) upstream failure after client cancel emits no tail and preserves cancel accounting", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const reader = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
+      postCancelDrainMs: 5_000,
+    }).getReader();
+    up.push(sse(DELTA));
+    await reader.read();
+    const cancel = reader.cancel();
+    up.fail(new Error("reset after cancel"));
+
+    await cancel;
+    await settle();
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.cancels).toBe(1);
+    expect(rec.dones).toBe(1);
+    expect(upstreamAc.signal.aborted).toBe(true);
+  });
+
+  test("(g/090-4) shutdown abort mid-stream → onDone, NO synthetic failed-502 or tail", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks);
     const reader = relayed.getReader();
     up.push(sse(DELTA));
-    up.fail(new Error("socket reset"));
-    await expect(async () => {
-      for (;;) {
-        const { done } = await reader.read();
-        if (done) break;
-      }
-    }).toThrow();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    upstreamAc.abort(new Error("server shutdown"));
+    up.fail(new Error("aborted")); // upstream read rejects due to teardown
+    expect((await reader.read()).done).toBe(true);
     await settle();
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("(090-5) long error messages are capped and the failed frame remains valid JSON", async () => {
+    const { hooks } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.fail(new Error(`reset-${"x".repeat(4_096)}-uncapped-suffix`));
+
+    const parsed = failedPayload(await readAll(relayed));
+    expect(parsed.response.error.message.length).toBe(MAX_TAIL_ERROR_MESSAGE_CHARS);
+    expect(parsed.response.error.message).not.toContain("uncapped-suffix");
+  });
+
+  test("(090-6) failure before any client bytes yields a standalone failed tail", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.fail(new Error("pre-byte reset"));
+
+    const out = await readAll(relayed);
+    expect(out.startsWith(`\n\n${FAILED_EVENT_MARKER}`)).toBe(true);
+    expect(failedPayload(out).response.status).toBe("failed");
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(rec.synthetics).toEqual(["failed"]);
+  });
+
+  test("(090-7) concurrent client cancel wins over an in-flight failing read with one accounting outcome", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const reader = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
+      postCancelDrainMs: 5_000,
+    }).getReader();
+    const pendingRead = reader.read();
+    const cancel = reader.cancel();
+    up.fail(new Error("cancel/reset race"));
+
+    await Promise.allSettled([pendingRead, cancel]);
+    await settle();
+    expect(rec.synthetics.length + rec.cancels).toBe(1);
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.cancels).toBe(1);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("(090-8) one reset emits exactly one terminal, one DONE, one synthetic, and completes lifecycle", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(sse(DELTA));
+    up.fail(new Error("single reset"));
+
+    const out = await readAll(relayed);
+    await settle();
+    expect(countOccurrences(out, "event: response.failed")).toBe(1);
+    expect(countOccurrences(out, "data: [DONE]")).toBe(1);
     expect(rec.synthetics).toEqual(["failed"]);
     expect(rec.dones).toBe(1);
   });
 
-  test("(g) shutdown abort mid-stream → onDone, NO synthetic failed-502", async () => {
+  test("(090-9) synthetic-failed teardown aborts upstream and cancels its active reader", async () => {
+    let sourceCancels = 0;
+    const src = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(sse(DELTA)); },
+      cancel() { sourceCancels += 1; },
+    }, { highWaterMark: 0 });
+    const { hooks, rec } = makeHooks();
+    hooks.inspectChunk = () => { throw new Error("producer inspection failure"); };
+    const upstreamAc = new AbortController();
+    const relayed = relaySseEagerBounded(src, upstreamAc, hooks);
+
+    const out = await readAll(relayed);
+    await settle();
+    expect(out).toContain(FAILED_EVENT_MARKER);
+    expect(upstreamAc.signal.aborted).toBe(true);
+    expect(sourceCancels).toBe(1);
+    expect(rec.synthetics).toEqual(["failed"]);
+  });
+
+  test("(090-11) re-entrant cancel from the error serializer suppresses the tail (exactly-one accounting)", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();
     const upstreamAc = new AbortController();
-    relaySseEagerBounded(up.stream, upstreamAc, hooks);
-    up.push(sse(DELTA));
-    await settle(5);
-    upstreamAc.abort(new Error("server shutdown"));
-    up.fail(new Error("aborted")); // upstream read rejects due to teardown
-    await settle(20);
+    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
+      postCancelDrainMs: 5_000,
+    });
+    const reader = relayed.getReader();
+    const pendingRead = reader.read();
+    let cancelPromise: Promise<void> | null = null;
+    const evil = new Error("re-entrant");
+    Object.defineProperty(evil, "message", {
+      get() {
+        // User-defined accessor runs inside buildFailedTailPayload — it must
+        // not be able to sneak past the eligibility guard.
+        cancelPromise ??= reader.cancel();
+        return "re-entrant cancel";
+      },
+    });
+    up.fail(evil);
+
+    await Promise.allSettled([pendingRead, cancelPromise ?? Promise.resolve()]);
+    await settle();
+    // Exactly one accounting outcome: the cancel wins, no synthetic tail.
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.cancels).toBe(1);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("(090-12) re-entrant upstream abort from the error serializer suppresses the tail", async () => {
+    const { hooks, rec } = makeHooks();
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks);
+    const evil = new Error("re-entrant");
+    Object.defineProperty(evil, "message", {
+      get() {
+        upstreamAc.abort(new Error("shutdown during serialization"));
+        return "re-entrant abort";
+      },
+    });
+    up.fail(evil);
+
+    const out = await readAll(relayed).catch(() => "");
+    await settle();
+    expect(out).not.toContain(FAILED_EVENT_MARKER);
     expect(rec.synthetics).toEqual([]);
     expect(rec.dones).toBe(1);
   });

@@ -1,0 +1,138 @@
+{
+  "generatedAt": "2026-07-04T18:44:58.437Z",
+  "items": [
+    {
+      "filename": "openrouter-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/openrouter.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "deepseek-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/deepseek.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "ollama-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/ollama.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "mistral-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/mistralai.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "vllm-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/vllm.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "lm-studio-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/lmstudio.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "moonshot-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/moonshotai.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "kimi-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/moonshotai.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "qwen-portal-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/qwen.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "github-copilot-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/githubcopilot.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "gitlab-duo-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/gitlab.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "cloudflare-ai-gateway-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/cloudflare.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "vercel-ai-gateway-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/vercel.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "xiaomi-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/xiaomi.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "nvidia-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/nvidia.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "huggingface-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/huggingface.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "azure-openai-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/azure.svg",
+      "status": 404,
+      "ok": false
+    },
+    {
+      "filename": "qianfan-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/baidu.svg",
+      "status": 200,
+      "ok": true,
+      "sourceAlias": "baidu"
+    },
+    {
+      "filename": "alibaba-color.svg",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/alibabacloud.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "groq-color.svg",
+      "url": "https://unpkg.com/@lobehub/icons-static-svg@1.66.0/icons/groq.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "fireworks-color.svg",
+      "url": "https://unpkg.com/@lobehub/icons-static-svg@1.66.0/icons/fireworks.svg",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "filename": "firepass-color.svg",
+      "url": "https://unpkg.com/@lobehub/icons-static-svg@1.66.0/icons/fireworks.svg",
+      "status": 200,
+      "ok": true
+    }
+  ]
+}

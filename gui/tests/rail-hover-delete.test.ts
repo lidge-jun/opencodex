@@ -77,6 +77,10 @@ test("the accelerator is hidden where hover does not exist", async () => {
   expect(rule(".pws-rail-row-remove {")).toContain("opacity: 0;");
   expect(rule(".pws-rail-row-remove {")).toContain("pointer-events: none;");
   expect(rule(".pws-rail-row-wrap:hover .pws-rail-row-remove")).toContain("opacity: 1;");
+  // The floating control overlays the trailing star/status area. Hide those markers
+  // while the control is visible so the default star cannot be partially cropped.
+  expect(css).toContain(".pws-rail-row-wrap:hover .providers-workspace-rail-trail");
+  expect(rule(".pws-rail-row-wrap:hover .providers-workspace-rail-trail")).toContain("opacity: 0;");
 
   // Touch devices have no hover, so it would otherwise be permanently visible.
   expect(css).toContain("@media (hover: none)");

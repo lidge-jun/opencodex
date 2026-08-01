@@ -1,0 +1,23 @@
+# WP090 — #139 overview, models, and usage panels
+
+- Base/branch: WP080 tip -> `codex/wibias-139-09-workspace-detail`.
+- P stale-check (2026-07-17, dev@dc0e88bd):
+  - **Scope narrowed for this cycle (AuthAccountsCard → WP091):** the interview's 4-file split stands, but AuthAccountsCard (the source's 250-line auth surface consuming ProviderAuthHandlers/accounts/keys/loginHint) belongs with WP091's auth/settings cluster per the 000_plan split (Auth in 091). WP090 builds: ProviderDetails.tsx (DetailPanel header + tab shell, tabs Overview/Models/Usage enabled — Settings tab present but disabled until WP091), ProviderOverview.tsx (ConnectionCard + StatsSidebar + a compact auth summary line linking to WP091), ProviderModels.tsx (TabModels incl. useVirtualizer >40 rows, search, copy-id, default/selected flags), ProviderUsage.tsx (TabUsage on the WP070 stacked QuotaBars + formatRelativeTime/formatQuotaSourceLabel + accountQuotaFromReport adapter).
+  - Data plumbing added to the shell: usageTotals (/api/usage?range=30d), quotaReports (/api/provider-quotas with the source's local-merge pattern), availableModels/selectedModels (already fetched for counts — extend countAvailableModels usage to keep the parsed lists). Props-down per interview (no shared hook).
+  - accountQuotaFromReport + formatQuotaSourceLabel are pure — they go in a data module (provider-workspace/report.ts) with unit tests, per the WP030/080 pattern.
+  - @tanstack/react-virtual: dev gui already depends on it (check package.json) — TabModels virtualization keeps it.
+  - NEW tests/provider-workspace-state.test.ts drives the four derived states via the PURE module: empty models, filtered models, missing usage, quota-unavailable (accountQuotaFromReport null paths).
+  - Runtime GUI QA deferred to WP100 (standing ruling). 500-line risk: 4 components ~600 + plumbing — NEW-file exemption applies to the components; if own-diff on EXISTING files exceeds 200 the settings-tab disable trick must not leak scope.
+- A-audit corrections (2026-07-17 — 2 blockers folded):
+  - **Auth summary pinned:** the Overview auth line renders the STATIC oauth/login status the classic page already knows (logged-in email or auth-mode label) with NO link/button until WP091 delivers the card — dead links are forbidden.
+  - **filterModels pure helper:** extract `filterModels(base: string[], defaultModel: string | undefined, query: string): string[]` into report.ts; TabModels consumes it; the state test drives the filtered-models case through the pure helper (plus empty-base + default-model-fallback branches).
+  - Settings tab: rendered disabled with a tooltip-style title (coming in 091) — visible affordance beats a layout shift when 091 lands.
+- NEW bounded components under `gui/src/components/provider-workspace/`: `ProviderOverview.tsx`, `ProviderDetails.tsx`, `ProviderModels.tsx`, `ProviderUsage.tsx`.
+- Interview decision: 4-file functional split. Each file ≤400 lines. Props-down state model (no shared hook). Files: ProviderOverview.tsx (connection status, stats sidebar), ProviderDetails.tsx (header, tab navigation shell), ProviderModels.tsx (model list, filter, selection), ProviderUsage.tsx (quota bars, usage timeline from WP070 contract).
+- MODIFY `ProviderWorkspaceShell.tsx` and `gui/src/pages/Providers.tsx` only to compose the new panels and existing WP040 actions.
+- NEW `gui/src/styles/provider-workspace-detail.css`; add only overview/model/usage locale keys.
+- NEW `tests/provider-workspace-state.test.ts`: empty models, filtered models, missing usage, and quota-unavailable derived states.
+- Before -> after: monolithic overview/model/usage tabs -> explicit component owners, no file >400 lines and no function >50 without documented exception.
+- Conditional activation: empty models, filtered models, missing usage, and quota unavailable states each get a test and browser trigger.
+- Verification: `bun test tests/provider-workspace-state.test.ts`; `bun run --cwd gui lint`; `bun run --cwd gui build`; `git diff --check`; diff <=500. Run `006_gui_qa_protocol.md` with `WP_ID=090 ROUTE='#providers'`; save empty-models/filtered-models/missing-usage/quota-unavailable evidence in `evidence/WP090/<state>.md` plus screenshot JSON.
+- Rollback: overview/model/usage panels revert without affecting rail, APIs, or WP091 settings.

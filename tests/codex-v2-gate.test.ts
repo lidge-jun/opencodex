@@ -10,13 +10,23 @@ import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { buildCatalogEntries, mergeCatalogEntriesForSync, nativeEffortClamp, shouldApplyNativeEffortClamp, type MultiAgentMode } from "../src/codex/catalog";
 import {
+  getAgentsEnabled,
+  getAgentsMaxDepth,
   getAgentsMaxThreads,
   getLogicalMaxThreads,
   getMaxConcurrentThreads,
+  getSubagentDeveloperInstructions,
   hasAgentsMaxThreads,
   isMultiAgentV2Enabled,
+  isTranslatableV1ChildLimit,
+  isTranslatableV2TotalLimit,
+  setAgentsEnabled,
+  setAgentsMaxDepth,
   setMaxConcurrentThreads,
+  setSubagentDeveloperInstructions,
   transitionMultiAgentV2,
+  v1ChildLimitToV2TotalLimit,
+  v2TotalLimitToV1ChildLimit,
 } from "../src/codex/features";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -202,7 +212,7 @@ describe("max_concurrent_threads_per_session reader/writer", () => {
     };
     expect(transitionMultiAgentV2(true, flipPrefixFlag, { configPath: prefixOnly }).ok).toBe(true);
     expect(readFileSync(prefixOnly, "utf8")).toContain("backup_max_concurrent_threads_per_session = 7");
-    expect(getMaxConcurrentThreads(prefixOnly)).toBe(100);
+    expect(getMaxConcurrentThreads(prefixOnly)).toBe(101);
     // Two transitions × several atomic writes; on Windows each write runs icacls and
     // can exceed bun's 5s default under CI load.
   }, { timeout: 20_000 });
@@ -217,9 +227,11 @@ describe("thread-limit-preserving v1/v2 transition", () => {
   test("off -> on carries the active legacy value and removes the boot conflict", () => {
     const path = fixtureConfig("# keep\n[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const result = transitionMultiAgentV2(true, flipTableFlag(path), { configPath: path });
-    expect(result).toEqual({ ok: true, changed: true, threadLimit: 100 });
+    // The legacy key counts spawned children; the V2 key also counts the root agent's
+    // own slot, so crossing the boundary adds 1 (upstream saturating_add(1)).
+    expect(result).toEqual({ ok: true, changed: true, threadLimit: 101 });
     expect(isMultiAgentV2Enabled(path)).toBe(true);
-    expect(getMaxConcurrentThreads(path)).toBe(100);
+    expect(getMaxConcurrentThreads(path)).toBe(101);
     expect(getAgentsMaxThreads(path)).toBe(null);
     expect(readFileSync(path, "utf8")).toContain("max_depth = 2");
     expect(readFileSync(path, "utf8")).toContain("# keep");
@@ -228,16 +240,17 @@ describe("thread-limit-preserving v1/v2 transition", () => {
   test("on -> off carries the active v2 value and removes v2 limit storage", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 64\n\n[agents]\nmax_depth = 2\n");
     const result = transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path });
-    expect(result).toEqual({ ok: true, changed: true, threadLimit: 64 });
+    // V2 total 64 = 63 spawned children + the root slot; the legacy key counts only children.
+    expect(result).toEqual({ ok: true, changed: true, threadLimit: 63 });
     expect(isMultiAgentV2Enabled(path)).toBe(false);
-    expect(getAgentsMaxThreads(path)).toBe(64);
+    expect(getAgentsMaxThreads(path)).toBe(63);
     expect(getMaxConcurrentThreads(path)).toBe(null);
   });
 
   test("migration carries the active limit comment in both directions", () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100 # tuned\n");
     expect(transitionMultiAgentV2(true, flipTableFlag(path), { configPath: path }).ok).toBe(true);
-    expect(readFileSync(path, "utf8")).toContain("max_concurrent_threads_per_session = 100 # tuned");
+    expect(readFileSync(path, "utf8")).toContain("max_concurrent_threads_per_session = 101 # tuned");
     expect(transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path }).ok).toBe(true);
     expect(readFileSync(path, "utf8")).toContain("max_threads = 100 # tuned");
   });
@@ -258,7 +271,9 @@ describe("thread-limit-preserving v1/v2 transition", () => {
     expect(getLogicalMaxThreads(targetOnly)).toBe(32);
 
     const equal = fixtureConfig("[features.multi_agent_v2]\nenabled = false\nmax_concurrent_threads_per_session = 64\n\n[agents]\nmax_threads = 64\n");
-    expect(transitionMultiAgentV2(true, flipTableFlag(equal), { configPath: equal })).toMatchObject({ ok: true, threadLimit: 64 });
+    // The legacy key is the active storage under V1, so it is the migration source and
+    // gains the root slot on the way to V2.
+    expect(transitionMultiAgentV2(true, flipTableFlag(equal), { configPath: equal })).toMatchObject({ ok: true, threadLimit: 65 });
     expect(getAgentsMaxThreads(equal)).toBe(null);
 
     const disabled = fixtureConfig("[features.multi_agent_v2]\nenabled = false\nmax_concurrent_threads_per_session = 32\n\n[agents]\nmax_threads = 100\n");
@@ -308,8 +323,309 @@ describe("thread-limit-preserving v1/v2 transition", () => {
   });
 });
 
+describe("v1<->v2 root-slot translation", () => {
+  const flipTableFlag = (path: string) => (enabled: boolean) => {
+    const content = readFileSync(path, "utf8");
+    writeFileSync(path, content.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+  };
+
+  test("round trip v1 -> v2 -> v1 is identity for every value 1..10", () => {
+    for (let child = 1; child <= 10; child++) {
+      expect(v2TotalLimitToV1ChildLimit(v1ChildLimitToV2TotalLimit(child))).toBe(child);
+    }
+  });
+
+  test("directional maxima: 1_000_000 -> 1_000_001 -> 1_000_000 round-trips", () => {
+    expect(isTranslatableV1ChildLimit(1_000_000)).toBe(true);
+    expect(isTranslatableV1ChildLimit(1_000_001)).toBe(false);
+    expect(isTranslatableV2TotalLimit(1_000_001)).toBe(true);
+    expect(isTranslatableV2TotalLimit(1_000_002)).toBe(false);
+    expect(v1ChildLimitToV2TotalLimit(1_000_000)).toBe(1_000_001);
+    expect(v2TotalLimitToV1ChildLimit(1_000_001)).toBe(1_000_000);
+  });
+
+  test("helpers throw RangeError outside their own directional range", () => {
+    expect(() => v1ChildLimitToV2TotalLimit(1_000_001)).toThrow(RangeError);
+    expect(() => v2TotalLimitToV1ChildLimit(1_000_002)).toThrow(RangeError);
+    expect(() => v1ChildLimitToV2TotalLimit(0)).toThrow(RangeError);
+    expect(() => v2TotalLimitToV1ChildLimit(0)).toThrow(RangeError);
+  });
+
+  test("clamp: V2 total 1 disables to legacy 1, never 0", () => {
+    expect(v2TotalLimitToV1ChildLimit(1)).toBe(1);
+    expect(v2TotalLimitToV1ChildLimit(2)).toBe(1);
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 1\n");
+    const result = transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path });
+    expect(result).toEqual({ ok: true, changed: true, threadLimit: 1 });
+    expect(getAgentsMaxThreads(path)).toBe(1);
+    expect(getMaxConcurrentThreads(path)).toBe(null);
+  });
+
+  test("read paths return out-of-range stored values raw instead of throwing", () => {
+    const hugeV2 = fixtureConfig("[features.multi_agent_v2]\nenabled = false\nmax_concurrent_threads_per_session = 100000000000000000000\n");
+    expect(getLogicalMaxThreads(hugeV2)).toBe(1e20);
+    const hugeLegacy = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 100000000000000000000\n");
+    expect(getLogicalMaxThreads(hugeLegacy)).toBe(1e20);
+  });
+
+  test("legacy-only under V2: disable preserves an untranslatable value; automatic re-enable is rejected; explicit limit recovers", () => {
+    const original = "[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 1000001\n";
+    const path = fixtureConfig(original);
+    // Disable: source and destination are both v1-child, so nothing crosses the
+    // boundary and the value is preserved untranslated.
+    const off = transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path });
+    expect(off).toMatchObject({ ok: true, threadLimit: 1_000_001 });
+    expect(getAgentsMaxThreads(path)).toBe(1_000_001);
+    // Re-enable would need v1-child -> v2-total translation of a value beyond
+    // MAX_TRANSLATABLE_V1_CHILD_LIMIT, so it is rejected before any write.
+    const on = transitionMultiAgentV2(true, flipTableFlag(path), { configPath: path });
+    expect(on.ok).toBe(false);
+    expect(on.ok === false && on.error).toContain("out of translatable range");
+    expect(readFileSync(path, "utf8")).toBe(readFileSync(path, "utf8"));
+    expect(getAgentsMaxThreads(path)).toBe(1_000_001);
+    expect(isMultiAgentV2Enabled(path)).toBe(false);
+    // Escape hatch: an explicit destination-unit limit is never translated.
+    const recovered = transitionMultiAgentV2(true, flipTableFlag(path), { configPath: path, threadLimit: 5 });
+    expect(recovered).toEqual({ ok: true, changed: true, threadLimit: 5 });
+    expect(getMaxConcurrentThreads(path)).toBe(5);
+    expect(getAgentsMaxThreads(path)).toBe(null);
+  });
+
+  test("untranslatable V2 total disable is rejected with bytes unchanged; explicit limit recovers", () => {
+    const original = "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 100000000000000000000\n";
+    const path = fixtureConfig(original);
+    const result = transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("out of translatable range");
+    expect(readFileSync(path, "utf8")).toBe(original);
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+    const recovered = transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path, threadLimit: 4 });
+    expect(recovered).toEqual({ ok: true, changed: true, threadLimit: 4 });
+    expect(getAgentsMaxThreads(path)).toBe(4);
+  });
+
+  test("idempotent re-enable on a V2 config leaves the limit unchanged", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 32\n");
+    const result = transitionMultiAgentV2(true, () => { /* no flip needed */ }, { configPath: path });
+    expect(result).toMatchObject({ ok: true, threadLimit: 32 });
+    expect(getMaxConcurrentThreads(path)).toBe(32);
+  });
+
+  test("idempotent re-disable on a V1 config leaves the legacy limit unchanged", () => {
+    const path = fixtureConfig("[agents]\nmax_threads = 100\n");
+    let calls = 0;
+    const result = transitionMultiAgentV2(false, () => { calls++; }, { configPath: path });
+    expect(result).toMatchObject({ ok: true, threadLimit: 100 });
+    expect(calls).toBe(0);
+    expect(getAgentsMaxThreads(path)).toBe(100);
+  });
+
+  test("same-state storage migration: legacy-only under V2 gains the root slot when the value moves to V2 storage", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 10\n");
+    const result = transitionMultiAgentV2(true, () => { /* already enabled */ }, { configPath: path });
+    expect(result).toMatchObject({ ok: true, threadLimit: 11 });
+    expect(getMaxConcurrentThreads(path)).toBe(11);
+    expect(getAgentsMaxThreads(path)).toBe(null);
+  });
+});
+
+describe("config-surface parity: agents.enabled, max_depth, subagent_developer_instructions", () => {
+  test("opencodex mirrors exactly one upstream feature key", async () => {
+    const source = await Bun.file(new URL("../src/codex/features.ts", import.meta.url)).text();
+    // Upstream feature keys are snake_case, so the underscore requirement is the
+    // discriminator: JS member accesses on locals named `features` (features.match,
+    // features.slice, features.ts) are camelCase and never match, while a mirrored
+    // key matches wherever it is written — string, template, escape, or regex
+    // literal. Residual: a bare quoted key with no dotted prefix (e.g. passed to a
+    // future helper) is not caught here; the behavioral half below is the net for
+    // that case.
+    const referenced = new Set(
+      [...source.matchAll(/features\.([a-z0-9]+(?:_[a-z0-9]+)+)/g)].map(m => m[1]),
+    );
+    // multi_agent_v2 is deliberately mirrored because opencodex migrates its
+    // concurrency value across the v1/v2 boundary and exposes the multi-agent
+    // config surface. Every other upstream feature flag is delegated to
+    // `codex features` and must NOT be hardcoded in src/codex/features.ts: upstream
+    // reshapes flags freely (code_mode_host became a table; enable_fanout and
+    // item_ids are Stage::Removed but still accepted), and a mirrored list rots.
+    expect([...referenced].sort()).toEqual(["multi_agent_v2"]);
+  });
+
+  test("the retired/reshaped upstream flags do not perturb the v2 read surface", () => {
+    // Behavioral half of the delegation boundary: a config carrying the current
+    // upstream table shape for code_mode_host plus the two inert Removed keys must
+    // be indistinguishable from one without them, as far as this module sees.
+    const bare = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const decorated = fixtureConfig(
+      "[features.multi_agent_v2]\nenabled = true\n\n[features.code_mode_host]\nenabled = true\n\n[features]\nenable_fanout = true\nitem_ids = false\n",
+    );
+    expect(isMultiAgentV2Enabled(decorated)).toBe(true);
+    expect(isMultiAgentV2Enabled(decorated)).toBe(isMultiAgentV2Enabled(bare));
+    const offDecorated = fixtureConfig("[features]\nenable_fanout = true\nitem_ids = false\n");
+    expect(isMultiAgentV2Enabled(offDecorated)).toBe(false);
+  });
+
+  test("feature toggling delegates to exactly the multi_agent_v2 native key", () => {
+    expect(codexFeaturesInvocation("enable").args).toEqual(["features", "enable", "multi_agent_v2"]);
+    expect(codexFeaturesInvocation("disable").args).toEqual(["features", "disable", "multi_agent_v2"]);
+  });
+
+  test("getAgentsEnabled is tri-state: absent, true, false", () => {
+    expect(getAgentsEnabled(fixtureConfig("[agents]\nmax_threads = 4\n"))).toBe(null);
+    expect(getAgentsEnabled(fixtureConfig("[agents]\nenabled = true\n"))).toBe(true);
+    expect(getAgentsEnabled(fixtureConfig("[agents]\nenabled = false # off\n"))).toBe(false);
+    expect(getAgentsEnabled(fixtureConfig("[other]\nx = 1\n"))).toBe(null);
+  });
+
+  test("setAgentsEnabled creates the table, toggles, removes, and is idempotent", () => {
+    const path = fixtureConfig("# keep me\n[features]\nmulti_agent_v2 = false\n");
+    expect(setAgentsEnabled(false, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsEnabled(path)).toBe(false);
+    const afterCreate = readFileSync(path, "utf8");
+    expect(afterCreate).toContain("[agents]\nenabled = false");
+    expect(afterCreate).toContain("# keep me");
+    expect(afterCreate).toContain("multi_agent_v2 = false");
+    expect(setAgentsEnabled(false, path)).toEqual({ ok: true, changed: false });
+    expect(setAgentsEnabled(true, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsEnabled(path)).toBe(true);
+    expect(setAgentsEnabled(null, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsEnabled(path)).toBe(null);
+    expect(readFileSync(path, "utf8")).not.toContain("enabled =");
+    expect(setAgentsEnabled(null, path)).toEqual({ ok: true, changed: false });
+  });
+
+  test("max_depth parity is the signed-i32 contract, not >= 1", () => {
+    const path = fixtureConfig("[agents]\nmax_depth = -1\nmax_threads = 8\n");
+    expect(getAgentsMaxDepth(path)).toBe(-1);
+    expect(setAgentsMaxDepth(0, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsMaxDepth(path)).toBe(0);
+    expect(setAgentsMaxDepth(-2_147_483_648, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsMaxDepth(path)).toBe(-2_147_483_648);
+    expect(setAgentsMaxDepth(2_147_483_647, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsMaxDepth(path)).toBe(2_147_483_647);
+    // Out-of-i32 values would produce a config upstream cannot deserialize.
+    const before = readFileSync(path, "utf8");
+    expect(setAgentsMaxDepth(2_147_483_648, path).ok).toBe(false);
+    expect(setAgentsMaxDepth(-2_147_483_649, path).ok).toBe(false);
+    expect(setAgentsMaxDepth(1.5, path).ok).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    // A stored out-of-range value is unparseable upstream, so the reader treats it as absent.
+    const corrupt = fixtureConfig("[agents]\nmax_depth = 99999999999999999999\n");
+    expect(getAgentsMaxDepth(corrupt)).toBe(null);
+    // Sibling keys are never disturbed.
+    expect(getAgentsMaxThreads(path)).toBe(8);
+    expect(setAgentsMaxDepth(null, path)).toEqual({ ok: true, changed: true });
+    expect(getAgentsMaxDepth(path)).toBe(null);
+    expect(getAgentsMaxThreads(path)).toBe(8);
+  });
+
+  test("subagent_developer_instructions distinguishes absent from empty, and round-trips ordinary text", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    expect(getSubagentDeveloperInstructions(path)).toBe(null);
+    expect(setSubagentDeveloperInstructions("", path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe("");
+    expect(setSubagentDeveloperInstructions("You are a careful reviewer.", path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe("You are a careful reviewer.");
+    expect(setSubagentDeveloperInstructions("You are a careful reviewer.", path)).toEqual({ ok: true, changed: false });
+    expect(setSubagentDeveloperInstructions(null, path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe(null);
+    expect(readFileSync(path, "utf8")).toContain("enabled = true");
+  });
+
+  test("key name is emitted character-for-character (upstream deny_unknown_fields)", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    setSubagentDeveloperInstructions("x", path);
+    const written = readFileSync(path, "utf8");
+    expect(written).toContain("subagent_developer_instructions = ");
+    expect(written).not.toContain("subagent_developer_instruction =");
+    expect(written).not.toContain("subagentDeveloperInstructions");
+  });
+
+  test("realistic instruction text with quotes, newlines, backslashes, and triple-quotes round-trips", () => {
+    const values = [
+      'has "quotes" inside',
+      "line one\nline two",
+      "back\\slash",
+      'triple """ quotes',
+      "crlf\r\nend",
+      'mixed \\" and \ttab',
+      "keep # not comment",
+    ];
+    for (const value of values) {
+      const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+      expect(setSubagentDeveloperInstructions(value, path)).toEqual({ ok: true, changed: true });
+      expect(getSubagentDeveloperInstructions(path)).toBe(value);
+    }
+  });
+
+  test("control characters are asserted at the byte level (Bun 1.3.14 TOML.parse decodes \\t as \\f)", () => {
+    // Do NOT assert this through Bun.TOML.parse: its reader mis-decodes the \t escape
+    // and would fail against this correct encoder. Assert the emitted bytes directly.
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    setSubagentDeveloperInstructions("tab\there", path);
+    expect(readFileSync(path, "utf8")).toContain('subagent_developer_instructions = "tab\\there"');
+    expect(getSubagentDeveloperInstructions(path)).toBe("tab\there");
+  });
+
+  test("\\u fallback branch fires for control characters without a named escape", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    setSubagentDeveloperInstructions("bellend", path);
+    expect(readFileSync(path, "utf8")).toContain('subagent_developer_instructions = "bell\\u0007end"');
+    expect(getSubagentDeveloperInstructions(path)).toBe("bellend");
+  });
+
+  test("inline form: values containing } and , round-trip without disturbing siblings", () => {
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 9 } # keep\n");
+    const value = "close } brace, and comma";
+    expect(setSubagentDeveloperInstructions(value, path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe(value);
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+    expect(getMaxConcurrentThreads(path)).toBe(9);
+    expect(readFileSync(path, "utf8")).toContain("# keep");
+    // Replacement and removal inside the inline table.
+    expect(setSubagentDeveloperInstructions("second", path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe("second");
+    expect(setSubagentDeveloperInstructions("second", path)).toEqual({ ok: true, changed: false });
+    expect(setSubagentDeveloperInstructions(null, path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe(null);
+    expect(getMaxConcurrentThreads(path)).toBe(9);
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+  });
+
+  test("user-authored TOML literal strings are read verbatim and survive edits", () => {
+    // A literal string ('...') has NO escapes: backslash is literal. A scanner that
+    // only understands basic strings would treat the } inside as the table close.
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = { enabled = true, subagent_developer_instructions = 'keep } literal' }\n");
+    expect(getSubagentDeveloperInstructions(path)).toBe("keep } literal");
+    expect(setSubagentDeveloperInstructions("replaced", path)).toEqual({ ok: true, changed: true });
+    expect(getSubagentDeveloperInstructions(path)).toBe("replaced");
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+    const literalWithComma = fixtureConfig("[features]\nmulti_agent_v2 = { subagent_developer_instructions = 'a, b # c', enabled = false }\n");
+    expect(getSubagentDeveloperInstructions(literalWithComma)).toBe("a, b # c");
+  });
+
+  test("bare boolean form is upgraded in place to an inline table, preserving the flag and comment", () => {
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = true # my flag\n");
+    expect(setSubagentDeveloperInstructions("instructions", path)).toEqual({ ok: true, changed: true });
+    const written = readFileSync(path, "utf8");
+    expect(written).toContain("multi_agent_v2 = { enabled = true, subagent_developer_instructions = \"instructions\" } # my flag");
+    expect(getSubagentDeveloperInstructions(path)).toBe("instructions");
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+  });
+
+  test("no existing v2 config creates a dedicated table carrying only the key", () => {
+    const path = fixtureConfig("[agents]\nmax_threads = 2\n");
+    expect(setSubagentDeveloperInstructions("fresh", path)).toEqual({ ok: true, changed: true });
+    const written = readFileSync(path, "utf8");
+    expect(written).toContain("[features.multi_agent_v2]\nsubagent_developer_instructions = \"fresh\"");
+    expect(written).toContain("max_threads = 2");
+    expect(getSubagentDeveloperInstructions(path)).toBe("fresh");
+    expect(setSubagentDeveloperInstructions(null, fixtureConfig("[agents]\nmax_threads = 2\n"))).toEqual({ ok: true, changed: false });
+  });
+});
+
 describe("management API logical v1/v2 switching", () => {
-  test("mode-only switches preserve the logical limit in both directions", async () => {
+  test("mode-only switches translate the limit across the root-slot boundary in both directions", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOcxHome = process.env.OPENCODEX_HOME;
@@ -327,13 +643,13 @@ describe("management API logical v1/v2 switching", () => {
       });
       const v2Response = await handleManagementAPI(toV2, new URL(toV2.url), config, deps);
       expect(v2Response?.status).toBe(200);
-      expect(await v2Response?.json()).toMatchObject({ enabled: true, multiAgentMode: "v2", maxConcurrentThreadsPerSession: 100 });
-      expect(getMaxConcurrentThreads(path)).toBe(100);
+      expect(await v2Response?.json()).toMatchObject({ enabled: true, multiAgentMode: "v2", maxConcurrentThreadsPerSession: 101 });
+      expect(getMaxConcurrentThreads(path)).toBe(101);
       expect(getAgentsMaxThreads(path)).toBe(null);
 
       const getV2 = new Request("http://localhost/api/v2");
       const getV2Response = await handleManagementAPI(getV2, new URL(getV2.url), config, deps);
-      expect(await getV2Response?.json()).toMatchObject({ enabled: true, maxConcurrentThreadsPerSession: 100 });
+      expect(await getV2Response?.json()).toMatchObject({ enabled: true, maxConcurrentThreadsPerSession: 101 });
 
       const toV1 = new Request("http://localhost/api/v2", {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ multiAgentMode: "v1" }),
@@ -361,11 +677,12 @@ describe("management API logical v1/v2 switching", () => {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ multiAgentMode: "default", enabled: false }),
       });
       const defaultResponse = await handleManagementAPI(defaultWithFlag, new URL(defaultWithFlag.url), config, deps);
-      expect(await defaultResponse?.json()).toMatchObject({ enabled: false, multiAgentMode: "default", maxConcurrentThreadsPerSession: 77 });
+      // V2 total 77 crosses back to 76 spawned children once the root slot is out of scope.
+      expect(await defaultResponse?.json()).toMatchObject({ enabled: false, multiAgentMode: "default", maxConcurrentThreadsPerSession: 76 });
 
       const get = new Request("http://localhost/api/v2");
       const getResponse = await handleManagementAPI(get, new URL(get.url), config, deps);
-      expect(await getResponse?.json()).toMatchObject({ enabled: false, maxConcurrentThreadsPerSession: 77 });
+      expect(await getResponse?.json()).toMatchObject({ enabled: false, maxConcurrentThreadsPerSession: 76 });
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
       if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
@@ -404,10 +721,144 @@ describe("management API logical v1/v2 switching", () => {
   });
 });
 
+describe("management API parity surface for the WP2 keys", () => {
+  const withConfig = (content: string, run: (path: string, deps: { toggleCodexMultiAgentV2: (enabled: boolean) => void; refreshCodexCatalog: () => Promise<void> }) => Promise<void>) => {
+    const path = fixtureConfig(content);
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-parity-"));
+    const toggle = (enabled: boolean) => {
+      const current = readFileSync(path, "utf8");
+      writeFileSync(path, current.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+    };
+    return run(path, { toggleCodexMultiAgentV2: toggle, refreshCodexCatalog: async () => {} })
+      .finally(() => {
+        if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+        if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+      });
+  };
+  const put = (payload: unknown) => new Request("http://localhost/api/v2", {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  });
+  const config = { providers: [] } as never;
+
+  test("GET reports the three keys tri-state plus the V2-disabled applicability flag", async () => {
+    await withConfig("[agents]\nmax_depth = 2\n", async (path, deps) => {
+      const res = await handleManagementAPI(new Request("http://localhost/api/v2"), new URL("http://localhost/api/v2"), config, deps);
+      expect(await res?.json()).toMatchObject({
+        enabled: false,
+        agentsEnabled: null,
+        agentsMaxDepth: 2,
+        subagentDeveloperInstructions: null,
+        agentsMaxDepthAppliesWhenV2Disabled: true,
+      });
+      const v2Path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+      process.env.CODEX_HOME = dirname(v2Path);
+      const res2 = await handleManagementAPI(new Request("http://localhost/api/v2"), new URL("http://localhost/api/v2"), config, deps);
+      expect(await res2?.json()).toMatchObject({ enabled: true, agentsMaxDepthAppliesWhenV2Disabled: false });
+    });
+  });
+
+  test("PUT writes each new field independently and re-reads them", async () => {
+    await withConfig("[features.multi_agent_v2]\nenabled = false\n", async (path, deps) => {
+      const onlyNew = await handleManagementAPI(put({ agentsEnabled: false }), new URL("http://localhost/api/v2"), config, deps);
+      expect(onlyNew?.status).toBe(200);
+      expect(getAgentsEnabled(path)).toBe(false);
+      const depth = await handleManagementAPI(put({ agentsMaxDepth: 3 }), new URL("http://localhost/api/v2"), config, deps);
+      expect(depth?.status).toBe(200);
+      expect(getAgentsMaxDepth(path)).toBe(3);
+      const instructions = await handleManagementAPI(put({ subagentDeveloperInstructions: "be thorough" }), new URL("http://localhost/api/v2"), config, deps);
+      expect(instructions?.status).toBe(200);
+      expect(getSubagentDeveloperInstructions(path)).toBe("be thorough");
+    });
+  });
+
+  test("empty string writes an empty value; null removes the key", async () => {
+    await withConfig("[features.multi_agent_v2]\nenabled = false\n", async (path, deps) => {
+      await handleManagementAPI(put({ subagentDeveloperInstructions: "" }), new URL("http://localhost/api/v2"), config, deps);
+      expect(getSubagentDeveloperInstructions(path)).toBe("");
+      const cleared = await handleManagementAPI(put({ subagentDeveloperInstructions: null }), new URL("http://localhost/api/v2"), config, deps);
+      expect(await cleared?.json()).toMatchObject({ subagentDeveloperInstructions: null });
+      expect(getSubagentDeveloperInstructions(path)).toBe(null);
+    });
+  });
+
+  test("wrong types are rejected with field-specific 400 and untouched config", async () => {
+    await withConfig("[agents]\nmax_depth = 2\n", async (path, deps) => {
+      const before = readFileSync(path, "utf8");
+      for (const payload of [
+        { agentsEnabled: "yes" },
+        { agentsMaxDepth: 1.5 },
+        { agentsMaxDepth: 2_147_483_648 },
+        { subagentDeveloperInstructions: 42 },
+      ]) {
+        const res = await handleManagementAPI(put(payload), new URL("http://localhost/api/v2"), config, deps);
+        expect(res?.status).toBe(400);
+      }
+      expect(readFileSync(path, "utf8")).toBe(before);
+      const empty = await handleManagementAPI(put({}), new URL("http://localhost/api/v2"), config, deps);
+      expect(empty?.status).toBe(400);
+    });
+  });
+
+  test("agentsEnabled false with V2 enabled warns but does not reject", async () => {
+    await withConfig("[features.multi_agent_v2]\nenabled = true\n", async (path, deps) => {
+      const res = await handleManagementAPI(put({ agentsEnabled: false }), new URL("http://localhost/api/v2"), config, deps);
+      expect(res?.status).toBe(200);
+      const body = await res?.json();
+      expect(body.warnings).toContain("agents.enabled = false has no effect while features.multi_agent_v2 is enabled; upstream keeps V2 active.");
+      expect(getAgentsEnabled(path)).toBe(false);
+    });
+  });
+
+  test("null agentsEnabled unsets the key and is not confused with false", async () => {
+    await withConfig("[agents]\nenabled = false\n", async (path, deps) => {
+      expect(getAgentsEnabled(path)).toBe(false);
+      const res = await handleManagementAPI(put({ agentsEnabled: null }), new URL("http://localhost/api/v2"), config, deps);
+      expect(res?.status).toBe(200);
+      expect(getAgentsEnabled(path)).toBe(null);
+    });
+  });
+});
+
 describe("cli surface", () => {
   test("status lines describe the multi-agent surface", () => {
     expect(v2StatusLine(true)).toContain("ON");
     expect(v2StatusLine(false)).toContain("OFF");
+  });
+
+  test("status reports the WP2 keys with tri-state rendering and the V1-only label", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nenabled = false\nmax_depth = 2\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    const logs: string[] = [];
+    try {
+      expect(await cmdV2(["status"], { log: { log: (m?: unknown) => { logs.push(String(m)); }, error: (m?: unknown) => { logs.push(String(m)); } } })).toBe(0);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
+    const out = logs.join("\n");
+    expect(out).toContain("agents.enabled: false");
+    expect(out).toContain("agents.max_depth: 2 (V1-only — ignored while multi_agent_v2 is enabled)");
+    expect(out).toContain("subagent_developer_instructions: (unset — children inherit)");
+  });
+
+  test("status renders empty-string instructions distinctly from unset", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\nsubagent_developer_instructions = \"\"\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    const logs: string[] = [];
+    try {
+      expect(await cmdV2(["status"], { log: { log: (m?: unknown) => { logs.push(String(m)); }, error: (m?: unknown) => { logs.push(String(m)); } } })).toBe(0);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
+    const out = logs.join("\n");
+    expect(out).toContain('subagent_developer_instructions: "" (clears inherited instructions)');
+    expect(out).toContain("agents.enabled: (unset — upstream default true)");
+    expect(out).toContain("agents.max_depth: (unset — upstream default 1)");
+    expect(out).not.toContain("V1-only");
   });
 
   test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (devlog 260715 020)", () => {
@@ -440,7 +891,7 @@ describe("cli surface", () => {
     expect(exe).toEqual({ file: "C:\\bin\\codex.exe", args: ["features", "enable", "multi_agent_v2"], options: {} });
   });
 
-  test("mode v2/v1 preserves the same logical limit", async () => {
+  test("mode v2/v1 translates the limit across the root-slot boundary", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\n");
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOcxHome = process.env.OPENCODEX_HOME;
@@ -461,18 +912,19 @@ describe("cli surface", () => {
     try {
       expect(await cmdV2(["mode", "v2"], deps)).toBe(0);
       expect(isMultiAgentV2Enabled(path)).toBe(true);
-      expect(getLogicalMaxThreads(path)).toBe(100);
+      expect(getLogicalMaxThreads(path)).toBe(101);
       expect(await cmdV2(["threads", "77"], deps)).toBe(0);
       expect(getLogicalMaxThreads(path)).toBe(77);
       expect(await cmdV2(["off"], deps)).toBe(0);
       expect(isMultiAgentV2Enabled(path)).toBe(false);
-      expect(getLogicalMaxThreads(path)).toBe(77);
+      // Explicit V2 total 77 was caller-supplied; disabling crosses back to 76 children.
+      expect(getLogicalMaxThreads(path)).toBe(76);
       expect(await cmdV2(["on"], deps)).toBe(0);
       expect(isMultiAgentV2Enabled(path)).toBe(true);
       expect(getLogicalMaxThreads(path)).toBe(77);
       expect(await cmdV2(["mode", "v1"], deps)).toBe(0);
       expect(isMultiAgentV2Enabled(path)).toBe(false);
-      expect(getLogicalMaxThreads(path)).toBe(77);
+      expect(getLogicalMaxThreads(path)).toBe(76);
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
       if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
@@ -543,6 +995,60 @@ describe("3-state multi-agent mode", () => {
     expect(luna.multi_agent_version).toBe("v1");
     // gpt-5.5 follows codex flag (null in catalog → codex decides)
     expect(native.multi_agent_version).toBeUndefined();
+  });
+
+  /*
+   * Option B's write half: the native binary validates spawn_agent models against the
+   * catalog WE write, so an unpinned routed model must be stamped "v2" there or it is
+   * refused at spawn time no matter what our own roster advertises. The stamp is gated
+   * on the feature being ON, which is why the default-mode test above stays green: it
+   * runs with the feature off and must remain byte-identical to the old behavior.
+   *
+   * Both callers of applyMultiAgentMode are covered, because a feature flag threaded
+   * through only one of them is the failure this contract exists to catch.
+   */
+  test("default mode + v2 feature ON stamps unpinned entries via BOTH catalog paths", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    try {
+      expect(isMultiAgentV2Enabled()).toBe(true);
+
+      // Path 1: buildCatalogEntries (fresh catalog).
+      const built = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "default");
+      // Unpinned native gains the stamp so the binary will accept it as a subagent.
+      expect(built.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBe("v2");
+      // Genuine upstream pins are never rewritten: "v1" stays excluded, "v2" stays "v2".
+      expect(built.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v1");
+      expect(built.find(e => e.slug === "gpt-5.6-sol")!.multi_agent_version).toBe("v2");
+
+      // Path 2: mergeCatalogEntriesForSync (existing catalog on disk).
+      const merged = mergeCatalogEntriesForSync(
+        [{ slug: "opencode-go/glm-5.2", display_name: "glm", visibility: "list", priority: 1 } as never],
+        [], new Map(), [], false,
+        new Set(), null, new Set(), new Set(), "default",
+      );
+      const routed = merged.find(e => e.slug === "opencode-go/glm-5.2");
+      if (routed) expect(routed.multi_agent_version).toBe("v2");
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
+  });
+
+  test("default mode + v2 feature OFF is byte-identical to the historical behavior", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    try {
+      expect(isMultiAgentV2Enabled()).toBe(false);
+      const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "default");
+      // No stamp: the key stays absent exactly as before this change.
+      expect(entries.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBeUndefined();
+      expect(entries.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v1");
+      expect(entries.find(e => e.slug === "gpt-5.6-sol")!.multi_agent_version).toBe("v2");
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
   });
 
   test("mode v1 in mergeCatalogEntriesForSync overrides preserved genuine native", () => {

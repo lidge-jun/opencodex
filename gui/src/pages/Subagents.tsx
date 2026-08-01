@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
 import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-workspace/SubagentsWorkspace";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { useSubagentDelegation } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[] };
 
@@ -14,44 +17,42 @@ function seedSubagents(cacheKey: string): CachedSubagents | null {
 export default function Subagents({ apiBase }: { apiBase: string }) {
   const t = useT();
   const cacheKey = `ocx.subagents.v1:${apiBase}`;
-  const [available, setAvailable] = useState<string[]>(() => seedSubagents(cacheKey)?.available ?? []);
-  const [chosen, setChosen] = useState<string[]>(() => seedSubagents(cacheKey)?.chosen ?? []);
+  const cached = seedSubagents(cacheKey);
+  const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(() => !seedSubagents(cacheKey));
   const [busy, setBusy] = useState(false);
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
-  const hasCacheRef = useRef(Boolean(seedSubagents(cacheKey)));
+  const delegation = useSubagentDelegation(apiBase);
 
-  const load = useCallback(async () => {
-    if (!hasCacheRef.current) setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/subagent-models`);
-      const r = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(res, t("sub.loadFail"));
-      if (!r) throw new Error(t("sub.loadFail"));
-      const avail: string[] = r.available ?? [];
-      const availSet = new Set(avail);
-      const nextChosen = (r.chosen ?? []).filter((m: string) => availSet.has(m));
-      setAvailable(avail);
-      setChosen(nextChosen);
-      hasCacheRef.current = true;
-      writeSessionListCache(cacheKey, { available: avail, chosen: nextChosen });
-    } catch {
-      if (!hasCacheRef.current) {
-        setOk(false);
-        setStatus(t("sub.loadFail"));
-      }
-    } finally {
-      setLoading(false);
-    }
+  const loadSubagents = useCallback(async (): Promise<CachedSubagents> => {
+    const res = await fetch(`${apiBase}/api/subagent-models`);
+    const response = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(res, t("sub.loadFail"));
+    if (!response) throw new Error(t("sub.loadFail"));
+    const available = response.available ?? [];
+    const availableSet = new Set(available);
+    const next = {
+      available,
+      chosen: (response.chosen ?? []).filter(model => availableSet.has(model)),
+    };
+    setChosen(next.chosen);
+    writeSessionListCache(cacheKey, next);
+    return next;
   }, [apiBase, cacheKey, t]);
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [load]);
+
+  // The shared resource owns mount loading and retries; the session seed keeps this workspace
+  // usable while the first live response is in flight.
+  const resource = useDataSurface<CachedSubagents>(
+    cacheKey,
+    [apiBase],
+    loadSubagents,
+    { isEmpty: () => false },
+  );
+  const { state } = resource;
+  const load = resource.refresh;
+  const snapshot = state.data ?? cached;
+  const available = snapshot?.available ?? [];
 
   const toggle = (m: string) => {
     if (busy) return;
@@ -95,7 +96,20 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     }
   };
 
-  if (loading) return <div className="muted" style={{ padding: 8 }}>{t("sub.loading")}</div>;
+  // The skeleton owns the live region while this resource has no content yet.
+  if (state.showSkeleton && !snapshot) {
+    return <DataSurfaceSkeleton label={t("sub.loading")} rows={4} />;
+  }
+
+  if (state.kind === "failed-cold") {
+    const reason = state.error instanceof Error ? state.error.message : t("sub.loadFail");
+    return (
+      <>
+        <Notice tone="err">{reason}</Notice>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => load()}>{t("common.retry")}</button>
+      </>
+    );
+  }
 
   return (
     <>
@@ -103,6 +117,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         <h2>{t("nav.subagents")}</h2>
       </div>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
+      {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
+      {state.refreshing && <DataSurfaceStatus live={!state.showError}>{t("sub.loading")}</DataSurfaceStatus>}
       <SubagentsWorkspace
         available={available}
         chosen={chosen}
@@ -110,6 +126,16 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         onToggle={toggle}
         onMove={move}
         onSave={() => { void save(); }}
+        delegation={{
+          model: delegation.model,
+          effort: delegation.effort,
+          efforts: delegation.efforts,
+          available: delegation.available,
+          guidanceEnabled: delegation.guidanceEnabled,
+          syncCodexDefaults: delegation.syncCodexDefaults,
+          saving: delegation.saving,
+          onSave: patch => { void delegation.save(patch); },
+        }}
       />
     </>
   );

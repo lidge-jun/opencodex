@@ -18,6 +18,7 @@ import {
   persistKiroCliSessionRecovery,
   readImportedKiroCredential,
   readKiroCliSqliteCredential,
+  resolveKiroCliExecutable,
   restoreKiroCliSession,
   restoreStaleKiroCliSessionRecovery,
   requireKiroRegion,
@@ -25,11 +26,14 @@ import {
   type KiroCliSessionSnapshot,
   type KiroImportDiagnostic,
 } from "./kiro-credentials";
+import { homedir } from "node:os";
 import { getAccountSet, saveAccountCredential } from "./store";
 
 const DEFAULT_REGION = "us-east-1";
 const REFRESH_URL = "https://prod.{region}.auth.desktop.kiro.dev/refreshToken";
 const OIDC_URL = "https://oidc.{region}.amazonaws.com/token";
+const KIRO_CLI_UNIX_INSTALL_COMMAND = "curl -fsSL https://cli.kiro.dev/install | bash";
+const KIRO_CLI_WINDOWS_INSTALL_COMMAND = "irm 'https://cli.kiro.dev/install.ps1' | iex";
 const KIRO_TERMINAL_REFRESH_ERRORS = new Set([
   "invalid_grant",
   "refresh_token_reused",
@@ -68,13 +72,28 @@ export interface KiroLoginOptions {
   cliRunner?: KiroCliRunner;
 }
 
+export function kiroCliInstallGuidance(platform = process.platform): string {
+  return platform === "win32"
+    ? `install the Kiro CLI in PowerShell (\`${KIRO_CLI_WINDOWS_INSTALL_COMMAND}\`)`
+    : `install the Kiro CLI (\`${KIRO_CLI_UNIX_INSTALL_COMMAND}\`)`;
+}
+
 const pendingKiroLoginTransactions = new WeakMap<OAuthCredentials, KiroCliSessionSnapshot>();
 /** Forced logins that started with no native CLI DB must logout on persistence failure. */
 const pendingKiroEmptyPriorSessions = new WeakSet<OAuthCredentials>();
 
+
+function resolveRuntimeKiroCliExecutable(): string {
+  return resolveKiroCliExecutable({
+    env: process.env,
+    platform: process.platform,
+    home: process.platform === "win32" ? homedir() : (process.env.HOME || homedir()),
+  });
+}
+
 function logoutKiroCliBestEffort(): void {
   try {
-    Bun.spawnSync(["kiro-cli", "logout"], {
+    Bun.spawnSync([resolveRuntimeKiroCliExecutable(), "logout"], {
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
@@ -128,7 +147,7 @@ async function defaultKiroCliRunner(args: string[], signal?: AbortSignal): Promi
   throwIfKiroLoginCancelled(signal);
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn(["kiro-cli", ...args], {
+    child = Bun.spawn([resolveRuntimeKiroCliExecutable(), ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",
@@ -346,7 +365,7 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
       url: "",
       instructions:
         "No kiro-cli token found. Paste a Kiro access token below (starts with 'aoa'). " +
-        "Otherwise install the Kiro CLI (`curl -fsSL https://cli.kiro.dev/install | bash`), " +
+        `Otherwise ${kiroCliInstallGuidance()}, ` +
         "run `kiro-cli login`, and retry — or set KIRO_ACCESS_TOKEN.",
     });
     ctrl.onProgress?.("No kiro-cli token found. Paste a Kiro access token (starts with 'aoa'), or install the Kiro CLI and run `kiro-cli login` first.");
@@ -364,7 +383,7 @@ export async function loginKiro(ctrl: OAuthController, options: KiroLoginOptions
   }
 
   throw new Error(
-    "Kiro: no token found. Install the Kiro CLI (`curl -fsSL https://cli.kiro.dev/install | bash`) " +
+    `Kiro: no token found. ${kiroCliInstallGuidance()} ` +
       "and run `kiro-cli login` to import its session, or set KIRO_ACCESS_TOKEN. " +
       "Browser login is not supported for Kiro.",
   );

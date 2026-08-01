@@ -5,6 +5,7 @@ import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
   QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
   ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+  ALIBABA_CODING_BASE_URL_CHOICES, ALIBABA_CODING_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
@@ -16,6 +17,19 @@ import {
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
+
+/**
+ * Wire protocol a client spoke when it reached the proxy. Chat and Anthropic surfaces
+ * translate into a Responses-shaped body and replay through `handleResponses`, so the
+ * original inbound has to travel with the request or the replay looks native.
+ */
+export type InboundWire = "responses" | "chat" | "anthropic";
+
+/**
+ * A per-model wire default: a bare string applies to every inbound, while the object
+ * form applies only to the listed inbound protocols.
+ */
+export type ModelWireDefault = string | { wire: string; inbound: readonly InboundWire[] };
 
 export type ProviderModelDiscoveryScalar = string | number | boolean;
 
@@ -123,6 +137,30 @@ export interface ProviderRegistryEntry {
   defaultModel?: string;
   models?: string[];
   liveModels?: boolean;
+  /**
+   * Registry-only per-model wire defaults for mixed OpenAI-compatible gateways.
+   * These are intentionally not seeded into saved config: an explicit `modelAdapters`
+   * entry must remain distinguishable and must always win over a default.
+   *
+   * A bare string applies to every inbound protocol. The object form scopes the
+   * default to the inbound surfaces named in `inbound`, which is how a model that is
+   * native on two wires can serve each client on the wire it already speaks instead
+   * of paying a translation hop.
+   */
+  modelWireDefaults?: Record<string, ModelWireDefault>;
+  /**
+   * Responses-API resource path for providers whose route is not `/v1/responses`.
+   * Unlike `modelWireDefaults` above, this IS seeded into saved config: it describes
+   * the provider's fixed endpoint rather than a default a user might want to override
+   * per model. DeepSeek documents `POST /responses` with no `/v1` segment.
+   */
+  responsesPath?: string;
+  /**
+   * Responses upstream that stores nothing server-side. Stateful request parameters
+   * are dropped and `store` is pinned false, and orphaned tool results left by a
+   * replay miss are repaired rather than forwarded.
+   */
+  statelessResponses?: boolean;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -162,7 +200,7 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "apiKeyTransport" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
@@ -326,6 +364,67 @@ const ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS = [
 // coding tools (not custom application backends or non-interactive batch automation).
 // Evidence: https://cloud.tencent.cn/document/product/1823/130092
 const TENCENT_CODING_PLAN_MODELS = ["tc-code-latest", "glm-5", "kimi-k2.5", "minimax-m2.5"];
+// Volcengine's authenticated /api/v3/models catalog mixes chat models with embedding,
+// image, video, and 3D generation resources. Keep the Codex-facing presets scoped to
+// models documented for text/agent or Coding Plan use.
+//
+// Maintenance owner: @lidge-jun. Verified 2026-08-01 against the vendor's own docs —
+// endpoints https://docs.volcengine.com/docs/82379/1528783 (Coding Plan) and
+// https://docs.volcengine.com/docs/82379/2165245 (Agent Plan); Codex CLI integration
+// https://www.volcengine.com/docs/82379/2556056; supported clients
+// https://www.volcengine.com/docs/82379/2188957; terms https://www.volcengine.com/docs/6256/64903
+// (北京火山引擎科技有限公司). Plan quota is restricted to supported AI coding tools and misuse
+// is documented as grounds for suspension — see the `note` on both Plan entries.
+// Report a break by opening an issue tagging the owner; the three things that rot first are the
+// static catalogs (liveModels:false cannot self-heal), the base URLs, and those Plan terms.
+// Full evidence ledger: devlog/_plan/260801_pr611_volcengine_evidence/000_evidence_ledger.md
+const VOLCENGINE_ARK_MODELS = [
+  "doubao-seed-2-1-pro-260628",
+  "doubao-seed-2-1-turbo-260628",
+  "doubao-seed-evolving",
+  "deepseek-v4-pro-260425",
+  "deepseek-v4-flash-260425",
+  "deepseek-v3-2-251201",
+  "glm-5-2-260617",
+  "glm-4-7-251222",
+];
+const VOLCENGINE_DOUBAO_THINKING_MODELS = [
+  "doubao-seed-2-1-pro-260628",
+  "doubao-seed-2-1-turbo-260628",
+  "doubao-seed-evolving",
+];
+const VOLCENGINE_CODING_PLAN_MODELS = [
+  "ark-code-latest",
+  "doubao-seed-2.0-code",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "kimi-k2.6",
+  "minimax-m3",
+];
+const VOLCENGINE_AGENT_PLAN_MODELS = [
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "kimi-k2.6",
+  "minimax-m3",
+  "doubao-seed-2.0-pro",
+];
+const VOLCENGINE_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
+  "kimi-k2.6": ["text", "image"],
+  "minimax-m3": ["text", "image"],
+};
+// Every other Plan model is text-only. Declaring this explicitly keeps the vision
+// sidecar from advertising image input for models that cannot accept it — the same
+// treatment tencent-coding-plan gives its (entirely text-only) plan catalog.
+const VOLCENGINE_PLAN_TEXT_ONLY_MODELS = [
+  "ark-code-latest",
+  "doubao-seed-2.0-code",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "doubao-seed-2.0-pro",
+];
 const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "qwen3.8-max-preview": ["text", "image"],
   "qwen3.7-max": ["text", "image"],
@@ -796,7 +895,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, defaultModel: "gemini-3.6-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: false, defaultModel: "gemini-3.6-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -813,6 +912,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
     defaultModel: "deepseek-v4-flash",
     modelContextWindows: { "deepseek-v4-flash": 1_000_000, "deepseek-v4-pro": 1_000_000 },
+    // DeepSeek documents V4-Flash as a native Responses API model adapted for Codex. The
+    // API id is `deepseek-v4-flash`; `DeepSeek-V4-Flash-0731` is a release/version label.
+    modelWireDefaults: {
+      // Codex speaks Responses natively and DeepSeek ships a Codex-compatible
+      // apply_patch tool on that wire, so a Responses inbound goes straight out with
+      // no translation. Claude Code and OpenAI-compatible clients keep the
+      // provider-wide Chat wire: DeepSeek serves Chat Completions natively too, so
+      // translating them into Responses would add a hop onto our newest upstream path
+      // for no gain.
+      "deepseek-v4-flash": { wire: "openai-responses", inbound: ["responses"] },
+    },
+    // DeepSeek's Responses route is `POST /responses` with no `/v1` segment. Without
+    // this the passthrough adapter falls back to its legacy `/v1/responses`
+    // construction and the wire above can never route.
+    // Evidence: https://api-docs.deepseek.com/api/create-response/
+    responsesPath: "/responses",
+    // "The API is stateless: responses and conversations are not stored on the
+    // server." https://api-docs.deepseek.com/api/create-response/
+    statelessResponses: true,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
@@ -828,6 +946,43 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
+  {
+    id: "deepinfra",
+    label: "DeepInfra",
+    baseUrl: "https://api.deepinfra.com/v1/openai",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://deepinfra.com/dash/api_keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelDiscovery: {
+      // DeepInfra documents the OpenAI model catalog outside the chat-compatible `/v1/openai`
+      // namespace, so keep this destination registry-owned instead of deriving it from baseUrl.
+      url: "https://api.deepinfra.com/v1/models",
+      maxResponseBytes: 512 * 1024,
+      maxModels: 512,
+      filter: {
+        allOf: [{ path: ["metadata", "tags"], containsAny: ["chat"] }],
+      },
+    },
+    note: "OpenAI-compatible chat models only; live discovery excludes non-chat rows from DeepInfra's mixed model catalog.",
+  },
+  {
+    id: "hyperbolic",
+    label: "Hyperbolic",
+    baseUrl: "https://api.hyperbolic.xyz/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://app.hyperbolic.ai",
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 256 * 1024,
+      maxModels: 256,
+    },
+    note: "Serverless text and vision-language chat models only; Hyperbolic's separate image, audio, and GPU endpoints are out of scope.",
+  },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
   { id: "fireworks", label: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://fireworks.ai/account/api-keys" },
@@ -966,10 +1121,81 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: TENCENT_CODING_PLAN_MODELS,
     note: "Coding tools only. Tencent forbids general API automation, custom backends, and non-interactive batch use.",
   },
+  {
+    id: "volcengine",
+    label: "Volcengine Ark",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    adapter: "openai-chat",
+    authKind: "key",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+    defaultModel: "doubao-seed-2-1-pro-260628",
+    models: VOLCENGINE_ARK_MODELS,
+    liveModels: false,
+    modelReasoningEfforts: Object.fromEntries(
+      VOLCENGINE_DOUBAO_THINKING_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS]),
+    ),
+    modelReasoningEffortMap: Object.fromEntries(
+      VOLCENGINE_DOUBAO_THINKING_MODELS.map(id => [id, THINKING_TOGGLE_MAP]),
+    ),
+    thinkingToggleModels: VOLCENGINE_DOUBAO_THINKING_MODELS,
+    preserveReasoningContentModels: [
+      "deepseek-v4-pro-260425",
+      "deepseek-v4-flash-260425",
+      "glm-5-2-260617",
+      "glm-4-7-251222",
+    ],
+    noVisionModels: [
+      "deepseek-v4-pro-260425",
+      "deepseek-v4-flash-260425",
+      "deepseek-v3-2-251201",
+      "glm-5-2-260617",
+      "glm-4-7-251222",
+    ],
+    note: "Pay-as-you-go Ark API with a curated text/agent catalog. Calls on this endpoint do not consume Coding Plan or Agent Plan quota.",
+  },
+  {
+    id: "volcengine-coding-plan",
+    label: "Volcengine Ark Coding Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+    adapter: "openai-chat",
+    authKind: "key",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
+    defaultModel: "ark-code-latest",
+    models: VOLCENGINE_CODING_PLAN_MODELS,
+    liveModels: false,
+    modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
+    noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
+    modelReasoningEfforts: Object.fromEntries(
+      DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS]),
+    ),
+    modelReasoningEffortMap: Object.fromEntries(
+      DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP]),
+    ),
+    preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
+    note: "Coding tools only. Volcengine restricts Coding Plan quota to supported AI coding tools and warns that using this key for general API calls may suspend the subscription or ban the account. Use the plan key issued by the Ark console.",
+  },
+  {
+    id: "volcengine-agent-plan",
+    label: "Volcengine Ark Agent Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+    responsesPath: "/responses",
+    adapter: "openai-responses",
+    authKind: "key",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
+    defaultModel: "deepseek-v4-pro",
+    models: VOLCENGINE_AGENT_PLAN_MODELS,
+    liveModels: false,
+    modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
+    noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
+    note: "Coding tools only. Agent Plan is a subscription endpoint over the native Responses API with a static fallback catalog; Ark plan quota is intended for supported AI coding and agent tools, so avoid using this key as a general-purpose API key.",
+  },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
-  { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
+  { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: ALIBABA_CODING_INTL_BASE_URL, adapter: "openai-chat", authKind: "key", allowBaseUrlOverride: true, baseUrlChoices: ALIBABA_CODING_BASE_URL_CHOICES, dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
   {
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
@@ -1233,6 +1459,56 @@ export function providerMatchesRegistryTransport(
   if (provider.adapter !== entry.adapter) return false;
   if (provider.authMode !== undefined && provider.authMode !== "key") return false;
   return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
+}
+
+/**
+ * Resolve the registry entry a configured provider actually points at, by TRANSPORT
+ * rather than by name.
+ *
+ * `providerMatchesRegistryTransport` answers "does the row named X still point at X's
+ * documented destination", which is the right question for routing but the wrong one
+ * for user-facing metadata: the GUI lets a preset be saved under any name, and a
+ * renamed row would silently lose a usage restriction it still needs to display.
+ *
+ * Only fixed key destinations are matched. Entries with an overridable or templated
+ * base URL are skipped, because their configured URL cannot identify one vendor route.
+ */
+export function registryEntryForProviderDestination(
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+): ProviderRegistryEntry | undefined {
+  if (typeof provider.baseUrl !== "string" || !provider.baseUrl) return undefined;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
+  const endpoint = normalizedProviderEndpoint(provider.baseUrl);
+  return PROVIDER_REGISTRY.find(entry =>
+    entry.authKind === "key"
+    && !entry.allowBaseUrlOverride
+    && !/\{[^}]*\}/.test(entry.baseUrl)
+    && entry.adapter === provider.adapter
+    && normalizedProviderEndpoint(entry.baseUrl) === endpoint);
+}
+
+/**
+ * Resolve a registry-only default for a mixed-wire provider. Defaults only move a provider
+ * between the two OpenAI-shaped adapters and never override a provider configured on another
+ * wire. The resolver receives the allow-list so this helper cannot accidentally widen the
+ * adapter-selection boundary when a new registry entry is added.
+ */
+export function providerModelWireDefault(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+  allowedWires: ReadonlySet<string>,
+  inbound: InboundWire,
+): string | undefined {
+  if (!allowedWires.has(provider.adapter)) return undefined;
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  if (declared === undefined) return undefined;
+  // A bare string applies to every inbound; the object form only to the listed ones.
+  if (typeof declared !== "string" && !declared.inbound.includes(inbound)) return undefined;
+  const wire = typeof declared === "string" ? declared : declared.wire;
+  return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
 }
 
 /**

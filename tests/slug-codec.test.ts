@@ -158,7 +158,9 @@ describe("catalog emission (Codex-facing)", () => {
     const routed = entries.find(e => typeof e.slug === "string" && e.slug.startsWith("zenmux/"));
     expect(routed?.slug).toBe("zenmux/moonshotai-kimi-k3-free");
     expect((routed?.slug as string).split("/")).toHaveLength(2);
-    expect(routed?.display_name).toBe("zenmux/moonshotai-kimi-k3-free");
+    // The picker label is display-only and keeps the model name visible; routing still uses the
+    // exactly-one-slash Codex slug asserted above.
+    expect(routed?.display_name).toBe("kimi-k3-free");
     // Identity text uses the NATIVE model name, not the encoded alias.
     expect(String(routed?.base_instructions)).toContain("moonshotai/kimi-k3-free");
   });

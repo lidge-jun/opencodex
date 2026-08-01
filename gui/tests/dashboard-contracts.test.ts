@@ -123,16 +123,19 @@ test("Dashboard workspace pane is a labelled section, not a nested main landmark
 
 test("native Codex subagent defaults stay separate from OpenCodex guidance", async () => {
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
-  const sections = await Bun.file(new URL("../src/pages/dashboard-overview-sections.tsx", import.meta.url)).text();
+  // The controls live on the Subagents tab now; the Dashboard keeps only a link to them.
+  const sections = await Bun.file(new URL("../src/components/subagents-workspace/SubagentDelegationSection.tsx", import.meta.url)).text();
   const head = await Bun.file(new URL("../src/pages/dashboard-overview-head.tsx", import.meta.url)).text();
   expect(core).toContain("syncCodexSubagentDefaults: data.syncCodexSubagentDefaults === true");
-  expect(sections).toContain("saveInjection({ syncCodexSubagentDefaults: !syncCodexSubagentDefaults })");
-  expect(sections).toContain("disabled={injectionSaving || !injectionModel}");
-  expect(sections).not.toContain("injectionSaving || !multiAgentGuidanceEnabled");
+  expect(sections).toContain("onSave({ syncCodexSubagentDefaults: !syncCodexDefaults })");
+  expect(sections).toContain("disabled={saving || !model}");
+  expect(sections).not.toContain("saving || !guidanceEnabled");
   expect(sections).not.toContain("dash.injectionActive");
-  expect(en["dash.syncCodexSubagentDefaults"]).toBe("Use as native Codex subagent defaults");
-  expect(en["dash.syncCodexSubagentDefaultsHint"]).toContain("Off by default");
-  expect(en["dash.syncCodexSubagentDefaultsHint"]).toContain("existing user-owned [agents] defaults are preserved rather than overwritten");
+  // Two promises this copy must keep, asserted by meaning rather than by an exact
+  // sentence so the wording can be made plainer without breaking the contract:
+  // the off state is explained, and it does not clobber hand-written [agents] settings.
+  expect(en["dash.syncCodexSubagentDefaultsHint"]).toMatch(/\boff\b/i);
+  expect(en["dash.syncCodexSubagentDefaultsHint"]).toMatch(/\[agents\][^.]*\b(left alone|preserved|not overwritten|untouched)\b/i);
   expect(en["dash.multiAgentGuidanceHint"]).not.toContain("proactive");
   expect(head).toContain("models.v2Mode_");
 });
@@ -171,6 +174,34 @@ test("fetchStartupHealth does not map abort into a sticky error status", async (
   }) as typeof fetch;
   try {
     await expect(fetchStartupHealth("http://test", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// The chip used to sit on the server's conservative placeholder until the next 30s tick, which is
+// why an unrelated action (refresh quota, tab hop) looked like the thing that fixed it. The probe
+// has to carry `stale` through so the caller can re-ask in seconds.
+test("fetchStartupHealth reports whether the server answer is still being resolved", async () => {
+  const { fetchStartupHealth } = await import("../src/pages/dashboard-core-poll");
+  const { probeNeedsFastRetry } = await import("../src/startup-health-ui");
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => Response.json({ status: "at-risk", diagnosticStale: true })) as typeof fetch;
+    const stale = await fetchStartupHealth("http://test", new AbortController().signal);
+    expect(stale).toEqual({ status: "at-risk", stale: true });
+    expect(probeNeedsFastRetry(stale)).toBe(true);
+
+    globalThis.fetch = (async () => Response.json({ status: "protected", diagnosticStale: false })) as typeof fetch;
+    const settled = await fetchStartupHealth("http://test", new AbortController().signal);
+    expect(settled).toEqual({ status: "protected", stale: false });
+    expect(probeNeedsFastRetry(settled)).toBe(false);
+
+    // A hard failure is the normal poll's job; re-asking every 2s would just hammer it.
+    globalThis.fetch = (async () => new Response("nope", { status: 503 })) as typeof fetch;
+    const failed = await fetchStartupHealth("http://test", new AbortController().signal);
+    expect(failed).toEqual({ status: "error", stale: false });
+    expect(probeNeedsFastRetry(failed)).toBe(false);
   } finally {
     globalThis.fetch = originalFetch;
   }

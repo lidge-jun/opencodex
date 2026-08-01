@@ -420,6 +420,17 @@ describe("priority (Fast) service tier multiplier", () => {
     expect(base!.priorityMultiplier).toBeUndefined();
   });
 
+  test("P1b. Fast mode applies the current 0.4x price for gpt-5.6-luna", () => {
+    const base = estimateRequestCost({ provider: "openai", model: "gpt-5.6-luna", usageStatus: "reported", usage });
+    const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.6-luna", usageStatus: "reported", usage, serviceTier: "priority" });
+    expect(base).not.toBeNull();
+    expect(fast).not.toBeNull();
+    // Standard: $1 input + $0.60 output = $1.60. Fast: $0.40 + $0.24 = $0.64.
+    expect(base!.cost.total).toBeCloseTo(1.6, 9);
+    expect(fast!.cost.total).toBeCloseTo(0.64, 9);
+    expect(fast!.priorityMultiplier).toBe(0.4);
+  });
+
   test("P2. priority tier applies 2.5x multiplier for gpt-5.5", () => {
     const base = estimateRequestCost({ provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage }, overlays);
     const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.5", usageStatus: "reported", usage, serviceTier: "priority" }, overlays);
@@ -474,18 +485,22 @@ describe("priority (Fast) service tier multiplier", () => {
 
   test("P8. resolvePriorityMultiplier returns correct values", () => {
     expect(resolvePriorityMultiplier("gpt-5.6-sol")).toBe(2);
-    expect(resolvePriorityMultiplier("gpt-5.6-terra")).toBe(2);
-    expect(resolvePriorityMultiplier("gpt-5.6-luna")).toBe(2);
+    expect(resolvePriorityMultiplier("gpt-5.6-terra")).toBe(1.6);
+    expect(resolvePriorityMultiplier("gpt-5.6-luna")).toBe(0.4);
     expect(resolvePriorityMultiplier("gpt-5.5")).toBe(2.5);
+    expect(resolvePriorityMultiplier("gpt-5.4-mini")).toBe(2);
     expect(resolvePriorityMultiplier("gpt-5.4")).toBe(2);
     expect(resolvePriorityMultiplier("gpt-5.3-codex-spark")).toBe(1);
     expect(resolvePriorityMultiplier("unknown-model")).toBe(1);
   });
 
   test("P9. PRIORITY_MULTIPLIERS table has expected entries", () => {
-    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(5);
+    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(6);
     expect(PRIORITY_MULTIPLIERS["gpt-5.6-sol"]).toBe(2);
+    expect(PRIORITY_MULTIPLIERS["gpt-5.6-terra"]).toBe(1.6);
+    expect(PRIORITY_MULTIPLIERS["gpt-5.6-luna"]).toBe(0.4);
     expect(PRIORITY_MULTIPLIERS["gpt-5.5"]).toBe(2.5);
+    expect(PRIORITY_MULTIPLIERS["gpt-5.4-mini"]).toBe(2);
   });
 
   test("P10. attempt cost with priority tier", () => {

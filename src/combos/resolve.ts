@@ -2,12 +2,17 @@ import type { OcxComboTarget, OcxConfig } from "../types";
 import { coolComboTarget, isComboTargetInCooldown } from "./failover";
 import { getCombo, resolveComboId, targetKey } from "./types";
 import type { NormalizedComboConfig } from "./types";
+import {
+  captureConfigGeneration,
+  type GenerationContext,
+} from "../lib/state-store-sweeper";
 
 export interface ComboPick {
   comboId: string;
   target: Required<OcxComboTarget>;
   targetIndex: number;
   attempted: string[];
+  writerGeneration: number;
 }
 
 interface SelectionState {
@@ -17,6 +22,17 @@ interface SelectionState {
 }
 
 const selectionState = new Map<string, SelectionState>();
+let lastReconciledGeneration = 0;
+let liveComboTargets = new Set<string>();
+
+function comboTargetOwnerKey(comboId: string, key: string): string {
+  return `${comboId}::${key}`;
+}
+
+function mayCommitComboState(comboId: string, key: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration
+    || liveComboTargets.has(comboTargetOwnerKey(comboId, key));
+}
 
 export class UnknownComboError extends Error {
   constructor(readonly comboId: string) {
@@ -74,6 +90,7 @@ export function pickComboTarget(
     eligible?: (target: Required<OcxComboTarget>) => boolean;
   } = {},
 ): ComboPick | null {
+  const writerGeneration = captureConfigGeneration();
   const combo = getCombo(config, comboId);
   if (!combo) throw new UnknownComboError(comboId);
   const excluded = new Set(options.exclude ?? []);
@@ -114,6 +131,7 @@ export function pickComboTarget(
     target,
     targetIndex,
     attempted: [...excluded, targetKey(target)],
+    writerGeneration,
   };
 }
 
@@ -121,10 +139,13 @@ export function noteComboSuccess(
   comboId: string,
   combo: NormalizedComboConfig,
   target: Required<OcxComboTarget>,
+  writerGeneration = captureConfigGeneration(),
 ): void {
   if (combo.strategy !== "round-robin") return;
+  const key = targetKey(target);
+  if (!mayCommitComboState(comboId, key, writerGeneration)) return;
   const state = selectionState.get(comboId);
-  if (!state || state.activeKey !== targetKey(target)) return;
+  if (!state || state.activeKey !== key) return;
   state.successes += 1;
   if (state.successes >= combo.stickyLimit) {
     delete state.activeKey;
@@ -132,7 +153,12 @@ export function noteComboSuccess(
   }
 }
 
-export function noteComboFailure(comboId: string, target: OcxComboTarget): void {
+export function noteComboFailure(
+  comboId: string,
+  target: OcxComboTarget,
+  writerGeneration = captureConfigGeneration(),
+): void {
+  if (!mayCommitComboState(comboId, targetKey(target), writerGeneration)) return;
   const state = selectionState.get(comboId);
   if (state?.activeKey === targetKey(target)) {
     delete state.activeKey;
@@ -149,8 +175,11 @@ export function advanceComboAfterFailure(
     eligible?: (target: Required<OcxComboTarget>) => boolean;
   } = {},
 ): ComboPick | null {
-  noteComboFailure(pick.comboId, pick.target);
-  coolComboTarget(pick.comboId, pick.target, options);
+  noteComboFailure(pick.comboId, pick.target, pick.writerGeneration);
+  coolComboTarget(pick.comboId, pick.target, {
+    ...options,
+    writerGeneration: pick.writerGeneration,
+  });
   return pickComboTarget(config, pick.comboId, {
     exclude: pick.attempted,
     eligible: target => !isComboTargetInCooldown(pick.comboId, target, options.now)
@@ -158,9 +187,36 @@ export function advanceComboAfterFailure(
   });
 }
 
+export function reconcileComboRotationState(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  let removed = 0;
+  for (const [comboId, state] of selectionState) {
+    if (!context.comboIds.has(comboId)) {
+      selectionState.delete(comboId);
+      removed += 1;
+      continue;
+    }
+    if (state.activeKey && !context.comboTargets.has(comboTargetOwnerKey(comboId, state.activeKey))) {
+      delete state.activeKey;
+      state.successes = 0;
+      removed += 1;
+    }
+    for (const key of state.currentWeights.keys()) {
+      if (context.comboTargets.has(comboTargetOwnerKey(comboId, key))) continue;
+      state.currentWeights.delete(key);
+      removed += 1;
+    }
+  }
+  liveComboTargets = new Set(context.comboTargets);
+  lastReconciledGeneration = context.generation;
+  return removed;
+}
+
 export function clearComboSelectionState(comboId?: string): void {
   if (comboId === undefined) {
     selectionState.clear();
+    liveComboTargets.clear();
+    lastReconciledGeneration = 0;
     return;
   }
   selectionState.delete(comboId);

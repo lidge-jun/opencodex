@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import ClaudeDesktop from "../src/pages/ClaudeDesktop";
 import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 /**
  * The family stack is vertical and collapsible. These are mounted rather than
@@ -44,6 +45,7 @@ function payload() {
 }
 
 beforeEach(() => {
+  clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
@@ -75,6 +77,7 @@ afterEach(async () => {
     await act(async () => { current.unmount(); });
     root = null;
   }
+  clearClientResourceStoresForTests();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
   }

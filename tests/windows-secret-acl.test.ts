@@ -10,13 +10,15 @@
  *  - hardenSecretDir mirrors the same contract for directories.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   hardenSecretDir,
+  forgetHardenedSecretPath,
   hardenSecretPath,
   hardenSecretPathAsync,
+  hardenedSecretPathCountForTests,
   resetHardenedStateForTests,
   setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests,
@@ -25,6 +27,7 @@ import {
   type HardenResult,
   type IcaclsResult,
 } from "../src/lib/windows-secret-acl";
+import { atomicWriteFile } from "../src/config";
 
 let testDir = "";
 
@@ -102,6 +105,44 @@ describe("hardenSecretPath – required mode (required: true)", () => {
 
     expect(result.ok).toBe(true);
     expect(existsSync(filePath)).toBe(false);
+  });
+});
+
+describe("ephemeral harden success memo lifecycle", () => {
+  test("forgetHardenedSecretPath releases only the actual temp and a second temp hardens again", () => {
+    // Earlier cases in this file harden real paths under the win32 override and
+    // legitimately leave success memos behind; this test asserts exact memo
+    // counts, so it must start from a clean slate rather than inherit them.
+    resetHardenedStateForTests();
+    const tempA = join(testDir, "config.json.ocx.1.1.tmp");
+    const tempB = join(testDir, "config.json.ocx.1.2.tmp");
+    writeFileSync(tempA, "first", "utf8");
+    writeFileSync(tempB, "second", "utf8");
+    setPlatformForTests("win32");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    let grants = 0;
+    setIcaclsRunnerForTests(args => {
+      if (args.includes("/grant:r")) grants += 1;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    try {
+      expect(hardenSecretPath(tempA, { required: true })).toEqual({ ok: true });
+      expect(hardenedSecretPathCountForTests()).toBe(1);
+      forgetHardenedSecretPath(tempA);
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+
+      expect(hardenSecretPath(tempB, { required: true })).toEqual({ ok: true });
+      expect(grants).toBe(2);
+      expect(hardenedSecretPathCountForTests()).toBe(1);
+      forgetHardenedSecretPath(tempB);
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+    } finally {
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+    }
   });
 });
 
@@ -251,15 +292,29 @@ describe("icacls failure paths (injected seams)", () => {
     return filePath;
   }
 
-  test("a genuine timeout on a required path soft-fails with a warning instead of blocking auth", () => {
+  test("a genuine timeout on a required path fails closed", () => {
     setIcaclsRunnerForTests(() => timeout);
     const filePath = secretFile();
 
-    const result = hardenSecretPath(filePath, { required: true });
+    expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/ETIMEDOUT/);
+    expect(warnings).toEqual([]);
+  });
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContain("ETIMEDOUT");
-    expect(warnings.some(w => w.includes("continuing without NTFS ACL harden"))).toBe(true);
+  test("required ACL timeout prevents atomic rename and scrubs the temporary file", () => {
+    setIcaclsRunnerForTests(() => timeout);
+    const destination = join(testDir, "atomic-secret.json");
+    let renamed = false;
+    let scrubbed = false;
+    expect(() => atomicWriteFile(destination, "secret", {
+      write: (path, content) => writeFileSync(path, content, { mode: 0o600 }),
+      harden: path => { hardenSecretPath(path, { required: true }); },
+      rename: (source, target) => { renamed = true; renameSync(source, target); },
+      truncate: path => { scrubbed = true; truncateSync(path, 0); },
+      unlink: unlinkSync,
+    })).toThrow(/ETIMEDOUT/);
+    expect(renamed).toBe(false);
+    expect(scrubbed).toBe(true);
+    expect(existsSync(destination)).toBe(false);
   });
 
   test("a real permission failure on a required path still throws (no blanket soft-fail)", () => {
@@ -301,26 +356,26 @@ describe("icacls failure paths (injected seams)", () => {
       return ok;
     });
 
-    const first = hardenSecretPath(filePath, { required: true });
-    expect(first.ok).toBe(false); // second step hits the exhausted deadline → timeout soft-fail
+    expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/ETIMEDOUT/);
     expect(budgets.length).toBe(1); // only step 1 ran; step 2 was cut off by the shared deadline
     expect(budgets[0]).toBeLessThanOrEqual(5_000);
 
     // The timed-out path short-circuits without invoking the runner again.
-    const second = hardenSecretPath(filePath, { required: true });
-    expect(second.ok).toBe(false);
-    expect(second.diagnostics).toContain("skipped");
+    expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/skipped/);
     expect(budgets.length).toBe(1);
   });
 
   test("a timeout diagnostic no longer claims filesystem non-support (issue #160)", () => {
     setIcaclsRunnerForTests(() => timeout);
-    const result = hardenSecretPath(secretFile(), { required: true });
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContain("timed out");
-    expect(result.diagnostics).toContain("transient icacls stall");
-    expect(result.diagnostics).not.toContain("may not support per-user NTFS ACLs");
+    let message = "";
+    try {
+      hardenSecretPath(secretFile(), { required: true });
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain("timed out");
+    expect(message).toContain("transient icacls stall");
+    expect(message).not.toContain("may not support per-user NTFS ACLs");
   });
 
   test("one timeout retry within the same total budget can still succeed", () => {
@@ -356,13 +411,10 @@ describe("icacls failure paths (injected seams)", () => {
       return timeout; // both harden attempts time out
     });
 
-    const result = hardenSecretPath(filePath, { required: true });
-    expect(result.ok).toBe(false); // clean /findsid is diagnostic-only
-    expect(result.diagnostics).toContain("no broad ACL grants detected");
-    expect(result.diagnostics).toContain("hardening still incomplete");
+    expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/no broad ACL grants detected.*hardening still incomplete/);
 
     // And the path landed in the timed-out cache, not the hardened cache.
-    expect(hardenSecretPath(filePath, { required: true }).diagnostics).toContain("skipped");
+    expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/skipped/);
   });
 
   test("a dirty post-timeout probe reports the remaining broad grants", () => {
@@ -372,9 +424,7 @@ describe("icacls failure paths (injected seams)", () => {
       return timeout;
     });
 
-    const result = hardenSecretPath(filePath, { required: true });
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContain("broad ACL grants still present");
+    expect(() => hardenSecretPath(filePath, { required: true })).toThrow(/broad ACL grants still present/);
   });
 
   test("OPENCODEX_ACL_TIMEOUT_MS overrides the total budget with clamping", () => {
@@ -470,9 +520,7 @@ describe("icacls failure paths (injected seams)", () => {
       return ok;
     });
 
-    const result = hardenSecretPath(secretFile(), { required: true });
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContain("ETIMEDOUT");
+    expect(() => hardenSecretPath(secretFile(), { required: true })).toThrow(/ETIMEDOUT/);
     expect(inheritanceRemoved).toBe(true);
     expect(ownerHasExplicitAce).toBe(true);
   });
@@ -512,12 +560,10 @@ describe("async hardenSecretPath (issue #612)", () => {
     return filePath;
   }
 
-  test("async timeout soft-fails with the same policy as sync", async () => {
+  test("async timeout fails closed with the same policy as sync", async () => {
     setAsyncIcaclsRunnerForTests(async () => timeout);
-    const result = await hardenSecretPathAsync(secretFile(), { required: true });
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContain("ETIMEDOUT");
-    expect(warnings.some(w => w.includes("continuing without NTFS ACL harden"))).toBe(true);
+    await expect(hardenSecretPathAsync(secretFile(), { required: true })).rejects.toThrow(/ETIMEDOUT/);
+    expect(warnings).toEqual([]);
   });
 
   test("async permission failure still throws on required paths", async () => {
@@ -533,19 +579,30 @@ describe("async hardenSecretPath (issue #612)", () => {
     writeFileSync(tempA, "a", "utf-8");
     writeFileSync(tempB, "b", "utf-8");
 
-    const first = await hardenSecretPathAsync(tempA, { required: true, timeoutMemoKey: dest });
-    expect(first.ok).toBe(false);
-    expect(first.diagnostics).toContain("ETIMEDOUT");
+    await expect(hardenSecretPathAsync(tempA, { required: true, timeoutMemoKey: dest })).rejects.toThrow(/ETIMEDOUT/);
 
     let calls = 0;
     setAsyncIcaclsRunnerForTests(async () => {
       calls += 1;
       return timeout;
     });
-    const second = await hardenSecretPathAsync(tempB, { required: true, timeoutMemoKey: dest });
-    expect(second.ok).toBe(false);
-    expect(second.diagnostics).toContain("skipped");
+    await expect(hardenSecretPathAsync(tempB, { required: true, timeoutMemoKey: dest })).rejects.toThrow(/skipped/);
     expect(calls).toBe(0); // destination-keyed memo; not a parent-directory shortcut
+  });
+
+  test("optional timeout memo does not poison a later required harden of the same path", () => {
+    setIcaclsRunnerForTests(() => timeout);
+    const first = hardenSecretPath(secretFile(), { required: false });
+    expect(first.ok).toBe(false);
+
+    let calls = 0;
+    setIcaclsRunnerForTests(() => {
+      calls += 1;
+      return ok;
+    });
+    const second = hardenSecretPath(secretFile(), { required: true });
+    expect(second.ok).toBe(true);
+    expect(calls).toBeGreaterThan(0);
   });
 
   test("async harden still grants owner before inheritance removal", async () => {

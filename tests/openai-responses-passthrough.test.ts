@@ -1,12 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
+import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
+import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const provider = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.example/backend-api/codex",
   authMode: "forward" as const,
 };
+
+test("passthrough serialized-body observation releases after the request settles", () => {
+  const budget = createTranslatorBudget();
+  const request = createResponsesPassthroughAdapter(provider).buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers({ authorization: "Bearer token" }), translatorBudget: budget });
+  expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+  request.releaseBodyObservation?.();
+  expect(budget.snapshot().currentBytes).toBe(0);
+  budget.dispose();
+});
 
 function buildKeyAuthUrl(baseUrl: string, responsesPath?: string): string {
   const adapter = createResponsesPassthroughAdapter({
@@ -49,7 +71,114 @@ describe("OpenAI Responses key-auth URL construction", () => {
   });
 });
 
+/**
+ * DeepSeek documents `POST /responses` with no `/v1` segment
+ * (https://api-docs.deepseek.com/api/create-response/). Commit e743660fc defaulted
+ * deepseek-v4-flash onto the Responses wire but left the path unset, so the adapter
+ * fell back to the legacy `/v1/responses` construction and the wire could never route.
+ */
+describe("DeepSeek Responses endpoint contract", () => {
+  test("the seeded deepseek provider targets the documented /responses route", () => {
+    const seed = providerConfigSeed(getProviderRegistryEntry("deepseek")!);
+    expect(seed.responsesPath).toBe("/responses");
+    expect(buildKeyAuthUrl(seed.baseUrl, seed.responsesPath))
+      .toBe("https://api.deepseek.com/responses");
+  });
+
+  test("a provider that declares no responsesPath still gets the legacy construction", () => {
+    // Negative control: the fix must not become a global change of the default branch.
+    const seed = providerConfigSeed(getProviderRegistryEntry("cerebras")!);
+    expect(seed.responsesPath).toBeUndefined();
+    expect(buildKeyAuthUrl("https://api.cerebras.ai/v1", seed.responsesPath))
+      .toBe("https://api.cerebras.ai/v1/responses");
+  });
+
+  test("a config saved before the fix is backfilled, and a hand-set path is preserved", () => {
+    const saved = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test" } as Parameters<typeof enrichProviderFromRegistry>[1];
+    enrichProviderFromRegistry("deepseek", saved);
+    expect(saved.responsesPath).toBe("/responses");
+
+    const custom = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", responsesPath: "/custom/responses" } as Parameters<typeof enrichProviderFromRegistry>[1];
+    enrichProviderFromRegistry("deepseek", custom);
+    expect(custom.responsesPath).toBe("/custom/responses");
+  });
+});
+
 describe("OpenAI Responses passthrough sanitization", () => {
+  test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
+    const validParameters = {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          { type: "function", name: "missing_parameters" },
+          { type: "function", name: "missing_root_type", parameters: { properties: { query: { type: "string" } } } },
+          { type: "function", name: "valid_schema", parameters: validParameters },
+        ],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as { tools: { name: string; parameters: Record<string, unknown> }[] };
+
+    expect(body.tools).toEqual([
+      { type: "function", name: "missing_parameters", parameters: { type: "object" } },
+      {
+        type: "function",
+        name: "missing_root_type",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { type: "function", name: "valid_schema", parameters: validParameters },
+    ]);
+  });
+
+  test("normalizes additional_tools function schemas in the serialized raw body (#745)", () => {
+    const validParameters = {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [{
+          type: "additional_tools",
+          tools: [
+            { type: "function", name: "missing_parameters" },
+            { type: "function", name: "missing_root_type", parameters: { properties: { query: { type: "string" } } } },
+            { type: "function", name: "valid_schema", parameters: validParameters },
+          ],
+        }],
+      },
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as {
+      input: { type: string; tools: { name: string; parameters: Record<string, unknown> }[] }[];
+    };
+
+    expect(body.input[0].tools).toEqual([
+      { type: "function", name: "missing_parameters", parameters: { type: "object" } },
+      {
+        type: "function",
+        name: "missing_root_type",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { type: "function", name: "valid_schema", parameters: validParameters },
+    ]);
+  });
+
   test("model reasoning-summary opt-out strips unsupported delivery fields (#323)", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses",
@@ -1008,7 +1137,7 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
     const body = JSON.parse(request.body) as { tools: Array<Record<string, unknown>> };
 
     expect(body.tools).toEqual([
-      { type: "function", name: "image_gen", parameters: {} },
+      { type: "function", name: "image_gen", parameters: { type: "object" } },
       { type: "image_generation" },
     ]);
   });

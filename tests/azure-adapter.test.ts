@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAzureAdapter } from "../src/adapters/azure";
+import { createAzureAdapter as createAzureAdapterProduction } from "../src/adapters/azure";
 import { getConfigPath, loadConfig, readConfigDiagnostics } from "../src/config";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAzureAdapter = (...args: Parameters<typeof createAzureAdapterProduction>) =>
+  withTestTranslatorBudget(createAzureAdapterProduction(...args));
 
 const parsed: OcxParsedRequest = {
   modelId: "gpt-5.5",
@@ -53,7 +57,10 @@ describe("Azure OpenAI adapter hardening", () => {
     };
 
     expect(body.input[0]?.tools).toEqual([
-      { type: "function", name: "image_gen__imagegen", parameters: {} },
+      // parameters gains an object root on the way out (#745): the passthrough normalizer
+      // runs on additional_tools too, so a schema declared as {} ships as {type:"object"}.
+      // What this test is about is the namespace lowering in the name.
+      { type: "function", name: "image_gen__imagegen", parameters: { type: "object" } },
     ]);
   });
 

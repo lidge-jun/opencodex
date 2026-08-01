@@ -30,7 +30,28 @@ export interface LivenessIo {
   readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
+  /**
+   * How many times to retry a probe that failed with a transport error (timeout /
+   * connection refused). Definitive answers (non-OK HTTP, foreign /healthz body, pid
+   * mismatch) do not retry. Default 1 = no retry. Stop paths should pass 2–3 (#764).
+   */
+  attempts?: number;
+  sleepFn?: (ms: number) => Promise<void>;
+  /**
+   * Absolute wall-clock deadline for discovery. When set, each probe attempt aborts
+   * once the remaining budget cannot cover another fetch — so multi-candidate
+   * `findLiveProxy` under `SERVICE_STOP_LIVENESS` cannot overrun the stop-path
+   * verification window (#764 / CodeRabbit).
+   */
+  deadlineAt?: number;
+  nowFn?: () => number;
 }
+
+/** Default probe options for service stop / orphan cleanup — a just-bound proxy can miss a single 750ms probe. */
+export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
+  timeoutMs: 1500,
+  attempts: 3,
+};
 
 export interface LiveProxy {
   pid: number | null;
@@ -72,19 +93,37 @@ export async function proxyIdentityAt(
   io: LivenessIo = {},
 ): Promise<{ pid: number | null } | null> {
   const fetchFn = io.fetchFn ?? fetch;
-  try {
-    const res = await fetchFn(`http://${probeHostname(opts.hostname)}:${port}/healthz`, {
-      signal: AbortSignal.timeout(io.timeoutMs ?? 750),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
-    if (!isOpencodexHealthz(body)) return null;
-    const pid = typeof body?.pid === "number" ? body.pid : null;
-    if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return null;
-    return { pid };
-  } catch {
-    return null;
+  const sleepFn = io.sleepFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const nowFn = io.nowFn ?? Date.now;
+  const baseTimeoutMs = io.timeoutMs ?? 750;
+  const requestedAttempts = Math.trunc(io.attempts ?? 1);
+  const attempts = Number.isNaN(requestedAttempts)
+    ? 1
+    : Math.max(1, Math.min(requestedAttempts, 5));
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const remainingMs = io.deadlineAt === undefined ? baseTimeoutMs : io.deadlineAt - nowFn();
+    if (remainingMs <= 0) return null;
+    const timeoutMs = Math.min(baseTimeoutMs, remainingMs);
+    try {
+      const res = await fetchFn(`http://${probeHostname(opts.hostname)}:${port}/healthz`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return null;
+      const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
+      if (!isOpencodexHealthz(body)) return null;
+      const pid = typeof body?.pid === "number" ? body.pid : null;
+      if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return null;
+      return { pid };
+    } catch {
+      // Transport failure (timeout / refused) — retry while budget remains; a proxy that
+      // has only just begun listening can miss a single short probe (#764).
+      if (attempt >= attempts) return null;
+      if (io.deadlineAt !== undefined && io.deadlineAt - nowFn() <= 0) return null;
+      await sleepFn(100);
+    }
   }
+  return null;
 }
 
 /**
@@ -107,6 +146,13 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
     if (candidate === null) return null;
     const verified = verifyPidFn(candidate);
     return verified === candidate ? verified : null;
+  };
+
+  const verifiedReportedPid = (reported: number | null): number | null => {
+    if (reported === null) return null;
+    if (!Number.isSafeInteger(reported) || reported <= 0) return null;
+    const verified = verifyPidFn(reported);
+    return verified === reported ? verified : null;
   };
 
   const pid = readPidFn();
@@ -136,7 +182,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
     // (its process dead, the port reused by a pidless legacy proxy) — synthesizing it
     // would hand destructive callers (stopProxy → kill fallback) a reusable pid.
     if (identity) {
-      return { pid: identity.pid ?? null, port: record.port, hostname: record.hostname, source: "runtime" };
+      return { pid: verifiedReportedPid(identity.pid), port: record.port, hostname: record.hostname, source: "runtime" };
     }
   }
 
@@ -145,7 +191,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
   const identity = await proxyIdentityAt(port, { hostname: config.hostname }, io);
   if (identity) {
     return {
-      pid: identity.pid ?? killablePid(pid),
+      pid: verifiedReportedPid(identity.pid) ?? killablePid(pid),
       port,
       hostname: config.hostname,
       source: "config",

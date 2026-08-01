@@ -1,0 +1,40 @@
+# WP050 — #139 decomposed add-provider catalog
+
+- Base/branch: ~~WP040 tip -> `codex/wibias-139-05-add-provider-catalog`~~ **P-amendment (2026-07-17): commit directly onto dev@d624a526.**
+- P stale-check (2026-07-17, dev@d624a526):
+  - Dev's AddProviderModal.tsx is 456 lines (search + flat preset list + custom form + reserved-preset handling via provider-payload.ts); the source's is a 908-line rewrite adding Free/Paid/Accounts ("Logins") tabs with account-login rows threaded in via ~15 props from Providers.tsx. The v2 single-provider session just touched both files (14e57661) — re-verify no conflict at B (tree is clean now).
+  - Single-provider v2 note: interview said "forward presets (openai, openai-multi) in Accounts tab" — openai-multi no longer exists as a preset; the Accounts tab shows the single canonical `openai` preset (plus oauth login rows). Adapt the interview line accordingly (recorded here; the 3-tab structure itself is unchanged).
+  - Decomposition dispositions:
+    - NEW `gui/src/components/provider-catalog/provider-presets.ts`: pure data — preset row typing (mirrors /api/provider-presets DTO), tier classification via WP030 catalog.ts (providerTier/isAccountProvider on preset seeds; freeTier flag from WP010 now flows through deriveProviderPresets → DTO), search filtering, sort. NO React.
+    - NEW `gui/src/components/provider-catalog/ProviderCatalog.tsx`: tabs (Free/Paid/Accounts) + browse rows + account-row rendering, props-down; ≤400 lines.
+    - MODIFY AddProviderModal.tsx: keep form/submission shell (provider-payload.ts contract intact incl. isReservedCodexForwardPreset), import the catalog; ≤400 lines after split.
+    - Providers.tsx hunks: ONLY the modal-invocation/props wiring belongs to this child (the source's full Providers rewrite is WP080+ territory); keep the existing page shape.
+    - Locale files: only keys the catalog/tabs actually render (en/ko/de/zh).
+    - NEW styles/provider-catalog.css imported from styles.css; selectors scoped `.provider-catalog-`.
+  - Account rows in the Accounts tab: reuse dev's existing oauth login flow surfaces (start/cancel/status from WP040 cancel endpoint + existing endpoints); do NOT re-implement login state machinery inside the catalog — thread minimal props.
+  - GUI QA protocol (006_gui_qa_protocol.md) requires a running dev server + browser; the runtime GUI smoke is deferred to the WP100 integration child (recorded) — this child's gates are lint/tsc/build/tests.
+  - Tests: extend tests/provider-workspace-data.test.ts with preset-derivation coverage (NVIDIA lands in Free tier rows while its auth remains key-required; canonical openai preset classifies accounts; custom rows default paid).
+- A-audit corrections (2026-07-17, claude-fable-5 — 2 blockers folded):
+  - **DTO evidence (blocker 1 closed):** `DerivedProviderPreset` DOES carry `freeTier` (src/providers/derive.ts:59, propagated at :254 by WP010) plus `auth`/`keyOptional` — the /api/provider-presets DTO is sufficient. Mandated adapter in provider-presets.ts: `presetTierInput(p) = { adapter: p.adapter, baseUrl: p.baseUrl, authMode: p.auth, freeTier: !!p.freeTier, keyOptional: !!p.keyOptional }` feeding WP030 `providerTier(p.id, shape)`.
+  - **Split (blocker 2):** estimated ~790 lines > 500. Sub-children: **WP050a** = provider-presets.ts (data + adapter) + tests; **WP050b** = ProviderCatalog.tsx + modal shell restructure + locales + css. Goalplan amended.
+  - Minimal Accounts-tab prop surface (7): accountRows, accountStatus, busyProvider, loginHint, onLogin, onCancelLogin, onLogout. Manual-code paste stays local state hitting /api/oauth/login/code (as dev-modal does today).
+  - The stale "Run 006_gui_qa_protocol.md" verification line is VOID (superseded by the WP100 deferral in P stale-check).
+  - lint:i18n glob check: gui lint:i18n covers `src/pages src/components src/App.tsx src/ui.tsx` — components/provider-catalog/ IS covered.
+  - Test pins: NVIDIA → Free row with key-required auth (freeTier true, keyOptional false distinction), canonical openai → Accounts, custom → Paid, local/loopback → Free, sort determinism, search on label/id only.
+- WP050b P-notes (2026-07-17, dev@73e371ca — sub-child b scope):
+  - NEW ProviderCatalog.tsx: props-down tabs (Accounts/Free/Paid via bucketPresets from 050a), home/browse views (HOME_SLOT_COUNT rows + browse w/ search box wired to filterPresets), usage-rank sort (usage desc then label — the source's sortedByUsage; 050a sortPresets is the no-usage fallback), account rows in the Accounts tab rendered from the 7-prop surface. ≤400 lines.
+  - MODIFY AddProviderModal.tsx: keep form/submission/oauth-login machinery + focus trap + preset fetch; replace inline catalog rendering with <ProviderCatalog>; add the 7 optional account props (default empty = tab shows only the openai preset row); keep fallbackPresets/custom flow. ≤400 lines after split.
+  - Providers.tsx: pass-through wiring only if needed this cycle; account props may remain unwired (defaults) until WP080 — the tab degrades gracefully to preset-only.
+  - Locales: only new tab/browse keys (modal.tab.accounts/free/paid, modal.browseAll, modal.accountsHint + Codex Auth link label) in en/ko/de/zh.
+  - NEW styles/provider-catalog.css imported from styles.css; `.provider-catalog-` scoped selectors.
+  - Verification: gui lint + lint:i18n + tsc -b + build; bun test provider-workspace-data (unchanged green); diff ≤500 for this sub-child.
+- Interview decision: preset catalog renders three tabs (Free/Paid/Accounts) matching WP030 classification. Forward presets (openai, openai-multi) appear in the Accounts tab with a link to Codex Auth for account management.
+- NEW `gui/src/components/provider-catalog/provider-presets.ts`: derive free/paid/account/local rows from WP010/WP030 contracts.
+- NEW `gui/src/components/provider-catalog/ProviderCatalog.tsx`: Free/Paid/Accounts tabs and browse rows only.
+- MODIFY `gui/src/components/AddProviderModal.tsx`: keep custom form/submission shell; import catalog instead of carrying preset/data/render logic in one file.
+- MODIFY four locale files with only keys rendered by this child.
+- NEW `gui/src/styles/provider-catalog.css`; import from `gui/src/styles.css`.
+- Before -> after: 900-line mixed modal -> data owner + catalog component + bounded form shell, each <=400 lines.
+- MODIFY `tests/provider-workspace-data.test.ts`: preset derivation proves NVIDIA is in Free while still rendering key-required auth.
+- Verification: `bun test tests/provider-workspace-data.test.ts`; `bun run --cwd gui lint`; `bun run --cwd gui build`; `git diff --check`; diff <=500. Run `006_gui_qa_protocol.md` with `WP_ID=050 ROUTE='#providers'`; save Free/Paid/Accounts/NVIDIA-form in `evidence/WP050/<state>.md` plus screenshot JSON.
+- Rollback: revert catalog child; management API remains usable through prior UI/JSON.

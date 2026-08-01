@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { parseRequest } from "../src/responses/parser";
 import { encodeReasoningEnvelope, decodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../src/responses/reasoning-envelope";
 import type { AdapterEvent, OcxProviderConfig, OcxThinkingContent } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
 const provider: OcxProviderConfig = {
   adapter: "anthropic",
@@ -273,9 +277,9 @@ describe("parser ocxr1 decode + anthropic replay", () => {
 describe("passthrough scrub of ocxr1 envelopes", () => {
   test("sanitize strips ocxr1 encrypted_content even with empty content", async () => {
     const { createResponsesPassthroughAdapter } = await import("../src/adapters/openai-responses");
-    const adapter = createResponsesPassthroughAdapter({
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
       adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", passthrough: true,
-    } as OcxProviderConfig);
+    } as OcxProviderConfig));
     expect(adapter.passthrough).toBe(true);
     const body = {
       model: "gpt-5.5",

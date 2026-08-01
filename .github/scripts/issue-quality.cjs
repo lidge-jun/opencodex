@@ -251,11 +251,282 @@ const KIND_TO_LABEL = {
 };
 
 /**
+ * Orthogonal product-area labels (additive beside kind/process labels).
+ * Colors/descriptions are used when the workflow ensures labels exist.
+ */
+const AREA_LABELS = {
+  provider: {
+    color: "1D76DB",
+    description: "Provider adapters, OpenAI-compat presets, upstream API quirks",
+  },
+  "account-pool": {
+    color: "5319E7",
+    description: "OAuth, credentials, Codex pool, quota, failover, plans",
+  },
+  catalog: {
+    color: "006B75",
+    description: "Model catalog, slugs, visibility, routed entries",
+  },
+  gui: {
+    color: "D93F0B",
+    description: "Dashboard, tray, settings UI",
+  },
+  cli: {
+    color: "FBCA04",
+    description: "CLI, config inject, packaging flags",
+  },
+  proxy: {
+    color: "0E8A16",
+    description: "HTTP proxy, routing, reverse-proxy / management auth",
+  },
+  platform: {
+    color: "BFDADC",
+    description: "OS/service/tray/ACL (Windows-heavy, not Windows-only)",
+  },
+  streaming: {
+    color: "C5DEF5",
+    description: "SSE, WebSocket, terminal stream frames",
+  },
+  tools: {
+    color: "F9D0C4",
+    description: "tool_calls, MCP, web-search / sidecar tools",
+  },
+  install: {
+    color: "EDEDED",
+    description: "Installation or packaging",
+  },
+  service: {
+    color: "EDEDED",
+    description: "Service lifecycle (WinSW/launchd/scheduler)",
+  },
+};
+
+/** Canonical Area dropdown text → area label(s). Keys are lowercased. */
+const AREA_FIELD_TO_LABELS = {
+  cli: ["cli"],
+  "proxy and routing": ["proxy"],
+  dashboard: ["gui"],
+  "provider adapter": ["provider"],
+  "provider adapters": ["provider"],
+  "authentication and account pool": ["account-pool"],
+  "catalog / models": ["catalog"],
+  streaming: ["streaming"],
+  "tools / mcp / web search": ["tools"],
+  "installation or packaging": ["install"],
+  "service lifecycle": ["service"],
+  "service lifecycle (config injection)": ["service"],
+  "platform (windows / macos / linux)": ["platform"],
+  // Do not map to kind label `documentation` — that collides with labelBasedKind
+  // when a feature/bug form picks Area: Documentation. Docs form already seeds
+  // the kind label; Area selection alone does not add an area tag.
+  documentation: [],
+  // No dedicated label; heuristics still run in detectAreaLabels.
+  "multiple areas": [],
+  other: [],
+};
+
+/** Body headings used for area heuristics (excludes Environment / OS metadata). */
+const AREA_HEURISTIC_BODY_HEADINGS = [
+  "Summary",
+  "Reproduction",
+  "What are you trying to accomplish?",
+  "What prevents this today?",
+  "What should OpenCodex do?",
+  "Example usage or interface",
+  "Current behaviour",
+  "Expected behaviour",
+  "Minimal redacted request or reproduction",
+  "What is wrong or missing?",
+  "Documentation problem type",
+  "Documentation location",
+];
+
+/**
+ * Heuristic rules. `scope: "title"` avoids false hits from template Environment /
+ * OS fields in the body; `scope: "full"` is for distinctive technical tokens.
+ */
+const AREA_HEURISTICS = [
+  {
+    label: "account-pool",
+    scope: "full",
+    re: /\b(oauth|reauth|needsreauth|account pool|codex.?auth|auto[- ]?switch|account failover|refresh token|plan_type|chatgpt[- ]account|reset credit)\b/i,
+  },
+  {
+    label: "account-pool",
+    scope: "title",
+    re: /\b(quota|failover|pool account|account switch)\b/i,
+  },
+  {
+    label: "catalog",
+    scope: "full",
+    re: /\b(model catalog|opencodex-catalog|model list|model visibility|virtual model|routed (catalog|entries|slug)|model slug)\b/i,
+  },
+  {
+    label: "catalog",
+    scope: "title",
+    re: /\bcatalog\b/i,
+  },
+  {
+    label: "gui",
+    scope: "title",
+    re: /\b(dashboard|\bgui\b|tray|sidebar|settings (page|tab|ui))\b/i,
+  },
+  {
+    label: "cli",
+    scope: "title",
+    re: /\b(ocx\b|config\.toml|config inject)\b/i,
+  },
+  {
+    label: "proxy",
+    scope: "full",
+    re: /\b(reverse[- ]proxy|management api|admin[- ]token|\/api\/\*|bind(s)? the (old )?port)\b/i,
+  },
+  {
+    label: "proxy",
+    scope: "title",
+    re: /\b(reverse[- ]proxy|management api|admin[- ]token)\b/i,
+  },
+  {
+    label: "platform",
+    scope: "full",
+    re: /\b(winsw|launchd|schtasks|icacls|windows-latest|tray host|scheduler backend)\b/i,
+  },
+  {
+    label: "platform",
+    scope: "title",
+    re: /\b(\[windows\]|\[macos\]|windows|macos|darwin|win32|wsl)\b/i,
+  },
+  {
+    label: "streaming",
+    scope: "full",
+    re: /\b(sse|websocket|\bws\b|stream(ing)?\b.{0,40}\btruncat\w*|stream(ing)?\b.{0,40}\bterminal\b|terminal (sse )?frame|without a terminal)\b/i,
+  },
+  {
+    label: "tools",
+    scope: "full",
+    re: /\b(tool_calls?|tool[- ]calls?|\bmcp\b|web[- ]search|tool[- ]recall)\b/i,
+  },
+  {
+    label: "install",
+    scope: "full",
+    re: /\b(npm (global )?install|packaging|release asset|npx ocx)\b/i,
+  },
+  {
+    label: "service",
+    scope: "full",
+    re: /\b(ocx service|winsw|scheduler backend|launchd service)\b/i,
+  },
+  {
+    label: "provider",
+    scope: "full",
+    re: /\b(provider adapter|openai[- ]compatible|provider[- ]compat|adapter quirk|built[- ]in provider|provider preset)\b/i,
+  },
+  {
+    label: "provider",
+    scope: "title",
+    re: /\b(\[provider\]|provider compat|openai[- ]compatible)\b/i,
+  },
+];
+
+/**
  * Map a detected issue kind to its triage label. Returns null when unknown.
  */
 function labelForKind(kind) {
   if (!kind || typeof kind !== "string") return null;
   return KIND_TO_LABEL[kind] || null;
+}
+
+/**
+ * Map a template Area dropdown value to orthogonal area label names.
+ * Returns [] for Other / Multiple areas / unknown / empty.
+ *
+ * @param {unknown} areaText
+ * @returns {string[]}
+ */
+function mapAreaFieldToLabels(areaText) {
+  if (typeof areaText !== "string") return [];
+  const key = areaText.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!key) return [];
+  return AREA_FIELD_TO_LABELS[key] ? [...AREA_FIELD_TO_LABELS[key]] : [];
+}
+
+/**
+ * Build heuristic text from title-relevant semantic sections only — never from
+ * Operating system / Version / Checks metadata that every template includes.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+function bodyForAreaHeuristics(body) {
+  if (typeof body !== "string" || !body.trim()) return "";
+  const parts = [];
+  for (const heading of AREA_HEURISTIC_BODY_HEADINGS) {
+    const section = extractSection(body, heading);
+    if (section) parts.push(section);
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Conservative title/body heuristics for orthogonal area labels.
+ *
+ * @param {string} title
+ * @param {string} body semantic body text (already filtered)
+ * @returns {string[]}
+ */
+function heuristicAreaLabels(title, body) {
+  const titleText = title || "";
+  const fullText = `${titleText}\n${body || ""}`;
+  const seen = new Set();
+  const out = [];
+  for (const { label, re, scope } of AREA_HEURISTICS) {
+    const text = scope === "title" ? titleText : fullText;
+    if (!re.test(text) || seen.has(label)) continue;
+    seen.add(label);
+    out.push(label);
+  }
+  return out;
+}
+
+/**
+ * Detect additive product-area labels from Area field, form defaults, and
+ * title/body heuristics. Never invents per-provider labels.
+ *
+ * @param {{
+ *   title?: string,
+ *   body?: string,
+ *   labels?: string[],
+ *   heuristicBody?: string,
+ * }} issue
+ *   `body` is the source form (for Area / provider headings).
+ *   `heuristicBody` may include English translation text for heuristics only.
+ * @returns {string[]}
+ */
+function detectAreaLabels(issue) {
+  const title = typeof issue?.title === "string" ? issue.title : "";
+  const body = typeof issue?.body === "string" ? issue.body : "";
+  const labels = Array.isArray(issue?.labels) ? issue.labels : [];
+  const heuristicSource = typeof issue?.heuristicBody === "string" ? issue.heuristicBody : body;
+
+  const areaSection = extractSection(body, "Area");
+  const fromArea = mapAreaFieldToLabels(areaSection);
+  const fromHeur = heuristicAreaLabels(title, bodyForAreaHeuristics(heuristicSource));
+  const fromForm = [];
+  if (labels.includes("provider-compatibility")) fromForm.push("provider");
+  // Provider-compat form uses this heading instead of Area.
+  if (extractSection(body, "Provider or upstream service") !== null) {
+    fromForm.push("provider");
+  }
+
+  const seen = new Set();
+  const out = [];
+  for (const label of [...fromArea, ...fromForm, ...fromHeur]) {
+    if (!label || seen.has(label)) continue;
+    if (!AREA_LABELS[label]) continue;
+    seen.add(label);
+    out.push(label);
+  }
+  return out;
 }
 
 function countHeadings(body, headings) {
@@ -952,6 +1223,12 @@ module.exports = {
   hasConcreteDetail,
   labelForKind,
   KIND_TO_LABEL,
+  AREA_LABELS,
+  AREA_FIELD_TO_LABELS,
+  mapAreaFieldToLabels,
+  bodyForAreaHeuristics,
+  heuristicAreaLabels,
+  detectAreaLabels,
   hasSubstantialStructuredContent,
   rejectsWorkflowDispatchPullRequest,
   rejectsWorkflowDispatchNonDefaultBranch,

@@ -175,7 +175,7 @@ with `claude` or `anthropic`, opencodex exposes routed models as stable, reversi
 
 | Surface | Format | Example |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) or `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3-char base36 hash) | `claude-opus-4-8-ncb` |
 
 The proxy picks the family per request: `?ids=cli` or `?ids=desktop` wins; otherwise the
@@ -200,11 +200,13 @@ slots via
 `ANTHROPIC_MODEL` or type any routed id with `/model` (Claude Code passes strings through).
 
 **Alias grammar rules:** provider must not contain `/` or `--` or equal `native`.
-Model ids may contain `/` — encoded as `~s` in the alias (e.g. `openrouter/anthropic/claude-opus-4-8`
-→ `claude-ocx-openrouter--anthropic~sclaude-opus-4-8`). Literal `~` in a model id is encoded as `~t`.
-Bare `~` not followed by `s`/`t` is treated as a literal tilde so older persisted aliases keep resolving.
-Routes the readable form cannot express fall back to the hashed alias. Model ids MAY contain `--`
-(resolution splits on the first `--` only); native slugs containing `--` fall back to the hashed form.
+Plain model ids (no `/` or `~`) keep the v1 prefix `claude-ocx-…`. Model ids that contain `/` or
+`~` mint the v2 prefix `claude-ocx2-…` with escapes (`/` → `~s`, `~` → `~t`), e.g.
+`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`.
+v1 aliases decode literally (so a historical model id that contained the two-char sequences
+`~s` / `~t` is preserved); v2 aliases expand the escapes. Routes that the readable form cannot
+express fall back to the hashed alias. Model ids MAY contain `--` (resolution splits on the first
+`--` only); native slugs containing `--` fall back to the hashed form.
 
 **Model resolution order:** `[1m]` marker stripped → readable alias decoded → Desktop hashed
 alias decoded → `modelMap` exact match → date-stripped match (`-20250514` removed) → passthrough.

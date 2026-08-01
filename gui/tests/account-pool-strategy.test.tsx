@@ -177,7 +177,7 @@ describe("AccountPoolStrategyControls", () => {
     expect(rr).toContain('value="2"');
   });
 
-  test("keeps the visual field label by default (Anthropic card has its own title)", () => {
+  test("renders a canonical setting row: visible name, control beside it, no sr-only label", () => {
     const markup = renderToStaticMarkup(
       <LanguageProvider>
         <AccountPoolStrategyControls
@@ -189,27 +189,61 @@ describe("AccountPoolStrategyControls", () => {
         />
       </LanguageProvider>,
     );
-    expect(markup).toContain('class="field-label"');
+    expect(markup).toContain('class="setting-row"');
+    expect(markup).toContain('class="setting-label"');
+    expect(markup).toContain('class="setting-controls"');
+    // The name is visible copy now, not a hidden label above an unnamed picker.
     expect(markup).not.toContain('class="sr-only"');
+    expect(markup).toContain("Rotation strategy");
+    // And the select keeps its accessible name.
+    expect(markup).toContain('aria-label="Rotation strategy"');
   });
 
-  test("strategyLabelHidden drops the duplicate visual label but keeps the accessible name", () => {
+  // The regression this guards: the two strings answer different questions — what the setting
+  // does, and what happens to threads that are already running. Collapsing them to one line
+  // silently drops the account-affinity answer, which is what the plan originally proposed.
+  test("keeps both the strategy description and the session-affinity notice", () => {
     const markup = renderToStaticMarkup(
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy="quota"
           stickyDraft="1"
-          strategyLabelHidden
           onStrategyChange={() => {}}
           onStickyDraftChange={() => {}}
           onStickyCommit={() => {}}
         />
       </LanguageProvider>,
     );
-    expect(markup).not.toContain('class="field-label"');
-    expect(markup).toContain('class="sr-only"');
-    // The select must still expose an accessible name.
-    expect(markup).toContain('aria-label="Rotation strategy"');
+    expect(markup).toContain("How new sessions pick an account from the pool.");
+    expect(markup).toContain("Applies to new sessions only");
+    expect((markup.match(/class="desc"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  /*
+   * Both callers share this component, so a content loss in one of them is a content loss in
+   * the other. The Anthropic pool card had no test mounting it at all, which is how the two
+   * screens drifted apart in the first place.
+   */
+  test("both descriptions survive for the Anthropic caller's id set too", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls
+          strategy="round-robin"
+          stickyDraft="3"
+          strategySelectId="anthropic-pool-strategy"
+          stickyInputId="anthropic-pool-sticky-limit"
+          onStrategyChange={() => {}}
+          onStickyDraftChange={() => {}}
+          onStickyCommit={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markup).toContain("How new sessions pick an account from the pool.");
+    expect(markup).toContain("Applies to new sessions only");
+    expect(markup).toContain('id="anthropic-pool-strategy"');
+    // Round-robin adds its own row, and the sticky help text is a desc rather than a card-sub.
+    expect(markup).toContain("Sticky successes before rotate");
+    expect((markup.match(/class="setting-row"/g) ?? []).length).toBe(2);
   });
 });
 

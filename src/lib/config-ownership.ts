@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { GenerationContext } from "./state-store-sweeper";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
@@ -47,6 +48,10 @@ const INITIAL_OWNED_PATHS = [
   "codex-shim.autorestore.lock",
   "codex-shim.json",
   "config.json",
+  "config-mutation.sqlite",
+  "config-mutation.sqlite-journal",
+  "config-mutation.sqlite-shm",
+  "config-mutation.sqlite-wal",
   "crash.log",
   "kimi-device-id",
   "mimo-client-id",
@@ -76,6 +81,34 @@ const ownershipCache = new Map<string, {
   owner: ConfigOwner;
   manifest: ConfigUninstallManifest;
 } | null>();
+let lastReconciledGeneration = 0;
+
+export function listLiveConfigOwnershipRoots(currentConfigDir: string): ReadonlySet<string> {
+  const currentRoot = ownershipCacheKey(currentConfigDir);
+  const roots = new Set<string>([currentRoot]);
+  for (const [root, ownership] of ownershipCache) {
+    if (root === currentRoot) continue;
+    if (ownership?.manifest.paths.some(rel => existsSync(join(root, ...rel.split("/"))))) {
+      roots.add(root);
+    }
+  }
+  return roots;
+}
+
+export function reconcileConfigOwnershipRoots(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  let removed = 0;
+  for (const [root, ownership] of ownershipCache) {
+    if (context.configRoots.has(root)) continue;
+    const hasLiveOwnedPath = ownership?.manifest.paths.some(rel =>
+      existsSync(join(root, ...rel.split("/"))));
+    if (hasLiveOwnedPath) continue;
+    ownershipCache.delete(root);
+    removed += 1;
+  }
+  lastReconciledGeneration = context.generation;
+  return removed;
+}
 
 function ownershipCacheKey(configDir: string): string {
   const key = resolve(configDir);

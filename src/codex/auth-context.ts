@@ -1,11 +1,14 @@
 import {
   CodexCredentialGenerationConflictError,
   CodexCredentialRefreshLockTimeoutError,
+  CodexCredentialRefreshBusyError,
+  CodexCredentialRefreshStaleError,
   getValidCodexToken,
   isCodexAccountGenerationLive,
 } from "./account-store";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { isCodexAccountPaused } from "./account-pause";
+import { ConfigMutationLockError } from "../config";
 import { isCodexAccountUsable } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
@@ -25,12 +28,14 @@ import { formatErrorResponse } from "../bridge";
 import { getAccountQuota } from "./quota";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { captureConfigGeneration } from "../lib/state-store-sweeper";
 
 export type CodexAuthContext =
   | { kind: "main"; accountId: null }
   | {
       kind: "pool";
       accountId: string;
+      writerGeneration: number;
       generation: number;
       accessToken: string;
       chatgptAccountId: string;
@@ -52,6 +57,7 @@ export type CodexAuthContext =
       // (Option A). Distinct from "main" (passthrough fallback that forwards the client token).
       kind: "main-pool";
       accountId: string;
+      writerGeneration: number;
       accessToken: string;
       chatgptAccountId: string;
       /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
@@ -194,7 +200,11 @@ export class CodexThreadAffinityExpiredError extends Error {
 }
 
 export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown): boolean {
-  return !(cause instanceof CodexCredentialGenerationConflictError) && !(cause instanceof CodexCredentialRefreshLockTimeoutError);
+  return !(cause instanceof CodexCredentialGenerationConflictError)
+    && !(cause instanceof CodexCredentialRefreshLockTimeoutError)
+    && !(cause instanceof CodexCredentialRefreshBusyError)
+    && !(cause instanceof CodexCredentialRefreshStaleError)
+    && !(cause instanceof ConfigMutationLockError);
 }
 
 export interface ResolveCodexAuthContextOptions {
@@ -211,6 +221,7 @@ export async function resolveCodexAuthContext(
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
+  const writerGeneration = captureConfigGeneration();
   const fixedAccountId = options.accountId;
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
@@ -300,6 +311,7 @@ export async function resolveCodexAuthContext(
     return {
       kind: "main-pool",
       accountId,
+      writerGeneration,
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
       ...(fixedAccountId !== undefined ? { fixedAccount: true } : {}),
@@ -314,6 +326,7 @@ export async function resolveCodexAuthContext(
     return {
       kind: "pool",
       accountId,
+      writerGeneration,
       generation: token.generation,
       accessToken: token.accessToken,
       chatgptAccountId: token.chatgptAccountId,
@@ -326,7 +339,7 @@ export async function resolveCodexAuthContext(
     if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
     else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
     if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
-      markAccountNeedsReauth(accountId);
+      markAccountNeedsReauth(accountId, writerGeneration);
     }
     throw new CodexAuthContextError(accountId, cause);
   }

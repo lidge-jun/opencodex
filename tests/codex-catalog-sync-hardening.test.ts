@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -7,13 +7,41 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-function runScript(codexHome: string, opencodexHome: string, script: string): { stdout: string; status: number; stderr: string } {
+function runScript(
+  codexHome: string,
+  opencodexHome: string,
+  script: string,
+  extraEnv: Record<string, string> = {},
+): { stdout: string; status: number; stderr: string } {
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome, ...extraEnv },
     encoding: "utf8",
   });
   return { stdout: result.stdout?.trim() ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
+}
+
+function createCodexCatalogFixture(dir: string): string {
+  const scriptPath = join(dir, "codex-catalog-fixture.js");
+  const bundled = JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] });
+  writeFileSync(scriptPath, [
+    'if (process.argv.includes("--version")) {',
+    '  console.log("codex-cli 0.999.0");',
+    '} else {',
+    `  process.stdout.write(${JSON.stringify(bundled)});`,
+    '}',
+  ].join("\n"), "utf8");
+
+  if (process.platform === "win32") {
+    const commandPath = join(dir, "codex-catalog-fixture.cmd");
+    writeFileSync(commandPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
+    return commandPath;
+  }
+
+  const commandPath = join(dir, "codex-catalog-fixture");
+  writeFileSync(commandPath, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, "utf8");
+  chmodSync(commandPath, 0o755);
+  return commandPath;
 }
 
 function nativeEntry(slug: string, priority: number): Record<string, unknown> {
@@ -118,6 +146,35 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.5");
   });
 
+  test("default catalog path merges from disk instead of replacing it with bundled rows", () => {
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'openai_base_url = "http://127.0.0.1:10100/v1"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        nativeEntry("user-native", 4),
+        routedEntry("kiro/claude-opus-4.8", 5),
+        routedEntry("opencode-go/glm-5.2", 6),
+      ],
+    }, null, 2) + "\n");
+
+    // Force the default-path bundled shortcut to succeed. The fixture intentionally returns only
+    // a native row so this test fails if sync uses the bundled catalog as its merge input.
+    const codexCliPath = createCodexCatalogFixture(opencodexHome);
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
+    `, { CODEX_CLI_PATH: codexCliPath });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+
+    const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
+    expect(slugs).toContain("gpt-5.5");
+    expect(slugs).toContain("user-native");
+    expect(slugs).toContain("kiro/claude-opus-4.8");
+    expect(slugs).toContain("opencode-go/glm-5.2");
+  });
+
   test("empty routed refresh drops compatibility-excluded rows while preserving other routed entries", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
@@ -141,6 +198,56 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("kiro/claude-opus-4.8");
     expect(slugs).toContain("opencode-go/glm-5.2");
     expect(slugs).not.toContain("opencode-go/hy3-preview");
+  });
+
+  /*
+   * #759. A provider advertised `input_modalities: [..., "video"]`, which Codex parses as a
+   * closed text|image|audio enum, so it rejected the ENTIRE catalog file: plugins, apps and
+   * MCP servers all went to zero over one model's metadata, with only "Unable to load apps"
+   * on screen.
+   *
+   * The provider-side filter and the ensureStrictCatalogFields normalization cover entry
+   * construction, and unit tests already pin those. This covers the case those miss: a
+   * poisoned row ALREADY on disk, which sync deliberately preserves when no provider is
+   * configured and must repair on the way back out.
+   *
+   * The model must survive. Asserting only "no video in the output" would pass just as
+   * happily if sync dropped the row instead of cleaning it, which would quietly delete a
+   * provider model and call it a fix.
+   */
+  test("a poisoned routed row already on disk is repaired, not dropped, by the next sync", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    const poisoned = {
+      ...routedEntry("zenmux/meta-muse-spark-1.1", 5),
+      input_modalities: ["text", "image", "video"],
+    };
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [nativeEntry("gpt-5.5", 0), poisoned],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(r.status).toBe(0);
+
+    const written = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+      models: Array<{ slug: string; input_modalities?: unknown }>;
+    };
+    const row = written.models.find(m => m.slug === "zenmux/meta-muse-spark-1.1");
+    // Survives the sync rather than being discarded as unparseable.
+    expect(row).toBeDefined();
+    expect(row!.input_modalities).toEqual(["text", "image"]);
+
+    // And nothing anywhere in the written file is outside the enum Codex accepts, because one
+    // bad value in any entry rejects the whole file.
+    const outOfEnum = written.models.flatMap(m => (
+      Array.isArray(m.input_modalities)
+        ? (m.input_modalities as unknown[]).filter(v => v !== "text" && v !== "image" && v !== "audio")
+        : []
+    ));
+    expect(outOfEnum).toEqual([]);
   });
 
   test("preserves existing routed entries for providers absent from the current sync config", () => {

@@ -14,6 +14,7 @@ import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import {
   resetRestoreTrashJobForTests,
+  resetRestoreTrashJobForTestsAsync,
   setRestoreTrashJobTestHooks,
 } from "../src/storage/restore-job";
 
@@ -58,8 +59,8 @@ beforeEach(() => {
   resetRestoreTrashJobForTests();
 });
 
-afterEach(() => {
-  resetRestoreTrashJobForTests();
+afterEach(async () => {
+  await resetRestoreTrashJobForTestsAsync();
   setRestoreTrashJobTestHooks(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -202,7 +203,7 @@ describe("storage trash restore job responsiveness", () => {
       expect(existsSync(join(isolatedCodexHome!.path, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
     } finally {
       await server.stop(true);
-      resetRestoreTrashJobForTests();
+      await resetRestoreTrashJobForTestsAsync();
     }
   }, { timeout: 30_000 });
 });

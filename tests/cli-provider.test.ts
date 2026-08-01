@@ -1,13 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-prov-codex-home-"));
+
+// Every case below spawns the real CLI. Cold Bun starts on a loaded windows-latest runner
+// routinely blow the 5s default before --help returns; the spawn IS the assertion.
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 function runCli(args: string[], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
@@ -17,6 +22,9 @@ function runCli(args: string[], env: Record<string, string> = {}) {
     // a test run would WIPE the user's routed catalog entries (live-catalog pollution).
     env: { ...process.env, CODEX_HOME: isolatedCodexHome, ...env },
     encoding: "utf8",
+    // Contended windows-latest cold starts regularly exceed Bun's 5s default before --help
+    // even prints; keep the child deadline under the test budget so status is not null.
+    timeout: SPAWN_BUDGET_MS - 5_000,
   });
 }
 

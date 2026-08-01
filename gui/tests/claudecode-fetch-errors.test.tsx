@@ -4,12 +4,14 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import ClaudeCode from "../src/pages/ClaudeCode";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 const originalFetch = globalThis.fetch;
 let previousLanguageDescriptor: PropertyDescriptor | undefined;
 let restoreGlobals: (() => void) | undefined;
 
 beforeEach(() => {
+  clearClientResourceStoresForTests();
   previousLanguageDescriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, "language");
   Object.defineProperty(globalThis.navigator, "language", { configurable: true, value: "en-US" });
   const previous = {
@@ -37,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearClientResourceStoresForTests();
   globalThis.fetch = originalFetch;
   restoreGlobals?.();
 });

@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import Grok from "../src/pages/Grok";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 
 /**
@@ -36,6 +37,9 @@ const STATUS = () => ({
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
+  // The page reads through the shared resource layer, whose cache is module-level: without this
+  // the previous case's payload seeds the next mount and hides the state under test.
+  clearClientResourceStoresForTests();
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -78,6 +82,7 @@ afterEach(async () => {
     await act(async () => { current.unmount(); });
     root = null;
   }
+  clearClientResourceStoresForTests();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
   }
@@ -106,6 +111,13 @@ function saveApplyButton(): HTMLButtonElement {
   return btn as unknown as HTMLButtonElement;
 }
 
+function saveOnlyButton(): HTMLButtonElement {
+  const btn = Array.from(container.querySelectorAll("button.btn-ghost"))
+    .find(b => (b.textContent ?? "").includes("Save"));
+  if (!btn) throw new Error("save-only button not found");
+  return btn as unknown as HTMLButtonElement;
+}
+
 test("each candidate renders a switch reflecting the exclusion state", async () => {
   await mount();
   expect(switchFor("gpt-5.6-sol").className).toContain("on");
@@ -126,6 +138,26 @@ test("flipping a switch marks the page dirty and Save & apply writes both endpoi
   expect(applyPosts).toBe(1);
   // After a successful apply the page reloads and is clean again.
   expect(saveApplyButton().disabled).toBe(true);
+});
+
+// Save-only does NOT reload, so the acknowledged selection has to be published into the
+// resource store before the draft is dropped. Otherwise clearing the draft falls back to
+// the pre-save snapshot: the switch silently springs back to registered while the bar
+// claims the selection is up to date.
+test("save without apply keeps the flipped switch off and reports up to date", async () => {
+  await mount();
+  await act(async () => { switchFor("cursor/grok-4.5").click(); });
+  expect(switchFor("cursor/grok-4.5").className).not.toContain("on");
+
+  await act(async () => { saveOnlyButton().click(); });
+  await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+
+  expect(selectionPuts).toEqual([JSON.stringify({ excluded: ["cursor/grok-4.5"] })]);
+  expect(applyPosts).toBe(0);
+  expect(switchFor("cursor/grok-4.5").className).not.toContain("on");
+  expect(switchFor("gpt-5.6-sol").className).toContain("on");
+  expect(container.textContent).toContain("Selection is up to date");
+  expect(saveOnlyButton().disabled).toBe(true);
 });
 
 // The policy-skip path is the one that must never read as success: the user's Grok

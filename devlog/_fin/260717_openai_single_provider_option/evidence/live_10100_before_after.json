@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "verdict": "PASS",
+  "before": {
+    "present": true,
+    "listeners": [
+      {
+        "pid": 17423,
+        "command": "bun.exe",
+        "endpoint": "127.0.0.1:10100"
+      }
+    ]
+  },
+  "after": {
+    "present": true,
+    "listeners": [
+      {
+        "pid": 17423,
+        "command": "bun.exe",
+        "endpoint": "127.0.0.1:10100"
+      }
+    ]
+  },
+  "unchanged": true
+}

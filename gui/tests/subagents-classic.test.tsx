@@ -90,10 +90,16 @@ function removeButtons(): HTMLButtonElement[] {
     /^Remove /.test(b.getAttribute("aria-label") ?? "")) as unknown as HTMLButtonElement[];
 }
 
-test("renders the denser workspace shell", async () => {
+test("renders one featured list and one picker, never the same list twice", async () => {
   await mount();
   expect(container.querySelector(".subagents-workspace-shell")).toBeTruthy();
-  expect(container.querySelector(".subagents-workspace-rail")).toBeTruthy();
+  // Three stacked sections: the featured roster, the model picker, then delegation settings.
+  expect(container.querySelectorAll(".subagents-workspace-section").length).toBe(3);
+  // The rail listed the featured models a second time, which read as a rendering bug.
+  expect(container.querySelector(".subagents-workspace-rail")).toBeNull();
+  const featuredHeadings = Array.from(container.querySelectorAll(".swi-featured-title"))
+    .map(node => node.textContent?.trim());
+  expect(featuredHeadings.filter(text => text === "Featured").length).toBe(1);
 });
 
 test("caps featured selections at five", async () => {

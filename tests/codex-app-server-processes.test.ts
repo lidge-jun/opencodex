@@ -359,16 +359,23 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         [
           "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
           "-Command",
-          "Start-Sleep -Seconds 25 # codex app-server integration-probe",
+          "Start-Sleep -Seconds 45 # codex app-server integration-probe",
         ],
         { stdio: "ignore", windowsHide: true },
       );
       try {
         expect(child.pid).toBeGreaterThan(1);
-        // Brief settle so Win32_Process can observe the child.
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-        const snapshots = listWindowsSnapshots();
-        const match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        // Brief settle so Win32_Process can observe the child. A loaded Windows
+        // runner can also exhaust one CIM enumeration deadline, so tolerate one
+        // transient empty result while keeping the production timeout unchanged.
+        Bun.sleepSync(250);
+        let snapshots = listWindowsSnapshots();
+        let match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        if (!match) {
+          Bun.sleepSync(250);
+          snapshots = listWindowsSnapshots();
+          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        }
         expect(match).toBeDefined();
         expect(match!.owner).toMatch(/\\/);
         expect(match!.commandLine.toLowerCase()).toContain("codex app-server");
@@ -381,6 +388,6 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         }
       }
     },
-    { timeout: 30_000 },
+    { timeout: 35_000 },
   );
 });

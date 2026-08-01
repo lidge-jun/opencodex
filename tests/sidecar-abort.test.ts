@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { runWebSearch } from "../src/web-search/executor";
-import { runWithWebSearch } from "../src/web-search/loop";
+import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../src/web-search/loop";
 import { describeImage } from "../src/vision/describe";
 import { parseRequest } from "../src/responses/parser";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import type { ProviderAdapter } from "../src/adapters/base";
 import type { OcxProviderConfig } from "../src/types";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+function runWithWebSearch(
+  deps: Omit<WebSearchLoopDeps, "incomingMeta"> & { incomingMeta?: WebSearchLoopDeps["incomingMeta"] },
+): Promise<Response> {
+  return runWithWebSearchProduction({
+    ...deps,
+    incomingMeta: deps.incomingMeta ?? {
+      headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget(),
+    },
+  });
+}
 
 const originalFetch = globalThis.fetch;
 

@@ -67,7 +67,8 @@ export default function ProviderWorkspaceShell({
   modelsRefreshToken = 0,
   activeAccountNeedsReauth,
   /** Stable key of active OAuth account ids — refetch overview quotas after account switch. */
-  quotaRefreshKey = "",
+  quotaRefreshEpoch = 0,
+  quotaForceRefresh = false,
   detail,
 }: {
   providers: Record<string, WorkspaceProvider>;
@@ -85,10 +86,13 @@ export default function ProviderWorkspaceShell({
   modelsRefreshToken?: number;
   activeAccountNeedsReauth?: Record<string, boolean>;
   /**
-   * Explicit active-account identity key (e.g. `anthropic:<id>|…`). Prefer this over
-   * `activeAccountNeedsReauth` object identity so healthy account switches still refresh.
+   * Monotonic quota revision. It moves only when something actually invalidates the quota
+   * view — an account switch, a login or logout, a key change, a config save — so account
+   * data arriving on a cold load no longer re-triggers the read once per provider.
    */
-  quotaRefreshKey?: string;
+  quotaRefreshEpoch?: number;
+  /** True when the bump came from a mutation that needs the server to bypass its TTL. */
+  quotaForceRefresh?: boolean;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
   detail?: (item: WorkspaceItem, data: DetailSlotData) => ReactNode;
 }) {
@@ -210,7 +214,10 @@ export default function ProviderWorkspaceShell({
     let cancelled = false;
     const timeout = window.setTimeout(() => {
       if (!readSessionListCache(quotasCacheKey)) setQuotasLoading(true);
-      void fetch(`${apiBase}/api/provider-quotas`)
+      // A forced bump means a mutation just changed the answer, so the server's TTL has to
+      // be bypassed. The old derived-key effect always read the cached view, which is why a
+      // switch could leave the bars showing the previous account's quota.
+      void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
         .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown }> }>(r))
         .then((data) => {
           if (cancelled || !data) return;
@@ -237,9 +244,8 @@ export default function ProviderWorkspaceShell({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-    // Key on active-account identity (not the reauth boolean map) so switching between two
-    // healthy accounts still re-reads /api/provider-quotas for the Usage/overview bars.
-  }, [apiBase, quotaRefreshKey, quotasCacheKey]);
+    // Keyed on the explicit revision: account arrival is silent, real mutations re-read.
+  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, quotasCacheKey]);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -308,7 +314,7 @@ export default function ProviderWorkspaceShell({
   const duplicateDisplayNames = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of allItems) {
-      const label = formatProviderDisplayName(item.name);
+      const label = formatProviderDisplayName(item.name, t);
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
     const dups = new Set<string>();
@@ -316,7 +322,7 @@ export default function ProviderWorkspaceShell({
       if (n > 1) dups.add(label);
     }
     return dups;
-  }, [allItems]);
+  }, [allItems, t]);
 
   if (allItems.length === 0) {
     return <WorkspaceEmptyState onAddProvider={onAddProvider} />;
@@ -479,7 +485,7 @@ export default function ProviderWorkspaceShell({
                       tabbable={railTabbableName === item.name}
                       modelCount={modelCounts[item.name]}
                       isDefault={defaultProvider === item.name}
-                      showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name))}
+                      showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name, t))}
                       onClick={() => onSelect(item.name)}
                       onFocus={() => setRailFocusName(item.name)}
                     />
@@ -532,7 +538,7 @@ export default function ProviderWorkspaceShell({
             onRetryModels: retryModels,
           }) ?? (
             <div className="pws-detail-placeholder">
-              <h3>{formatProviderDisplayName(selectedItem.name)}</h3>
+              <h3>{formatProviderDisplayName(selectedItem.name, t)}</h3>
               <p className="muted">{t("pws.detailComingSoon")}</p>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSelect(null)}>
                 {t("modal.back")}

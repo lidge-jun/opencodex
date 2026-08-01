@@ -316,3 +316,69 @@ test("a mutation updates the one shared controller state", async () => {
   // The reconciliation reload landed on the same controller instance.
   expect(seen.current!.accounts.map(a => a.id)).toEqual(["a1", "a2"]);
 });
+
+/**
+ * WP2 (260730_gui_hydration_loading_unify/010): the forced quota refresh keeps rows on screen and
+ * deliberately does not touch `loadState`, so `refreshing` is the only signal a surface can use to
+ * show that a slow wait is in progress. It counts requests rather than tracking one, because the
+ * initial load, the 30s poll and an explicit action can overlap.
+ */
+test("refreshing stays true until the newest load settles, not the first", async () => {
+  const seen = await mountController();
+  expect(seen.current!.refreshing).toBe(false);
+  expect(seen.current!.initialLoading).toBe(false);
+
+  let releaseForced!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseForced = resolve; });
+
+  // Start the slow forced refresh, then let a plain load finish underneath it.
+  let forced: Promise<boolean>;
+  await act(async () => {
+    forced = seen.current!.load(true);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(seen.current!.refreshing).toBe(true);
+  // The forced path must not blank the surface.
+  expect(seen.current!.loadState).toBe("ready");
+  expect(seen.current!.accounts.length).toBe(1);
+
+  await act(async () => { await seen.current!.load(); });
+  // An older/other load settling must not clear the indicator while the forced one is in flight.
+  expect(seen.current!.refreshing).toBe(true);
+
+  await act(async () => { releaseForced(); await forced!; });
+  expect(seen.current!.refreshing).toBe(false);
+});
+
+test("a first attempt that fails settles initialLoading instead of hanging on the skeleton", async () => {
+  // Install the failing router BEFORE the first mount: the point is a cold failure, and a
+  // controller that already succeeded keeps its rows by design.
+  const failing = async (url: string, init?: RequestInit) => {
+    const path = String(url).split("/api/")[1] ?? String(url);
+    calls.push(`${init?.method ?? "GET"} ${path}`);
+    if (path.startsWith("codex-auth/accounts")) return { ok: false, status: 500 } as unknown as Response;
+    if (path.startsWith("codex-auth/active")) {
+      return { ok: true, json: async () => ({ activeCodexAccountId: null, autoSwitchThreshold: threshold }) } as unknown as Response;
+    }
+    return { ok: true, json: async () => ({}) } as unknown as Response;
+  };
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: failing });
+
+  const seen: { current: CodexAccountPoolController | null } = { current: null };
+  function Probe() {
+    // A fresh apiBase keeps this cold: the module-level last-good map is keyed by it.
+    seen.current = useCodexAccountPool(`cold-${Date.now()}`, true);
+    return null;
+  }
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<Probe />);
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+  // The attempt settled, so the surface shows its failure rather than an endless skeleton.
+  expect(seen.current!.initialLoading).toBe(false);
+  expect(seen.current!.refreshing).toBe(false);
+  expect(seen.current!.loadState).toBe("error");
+});

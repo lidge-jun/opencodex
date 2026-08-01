@@ -1,5 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../src/server/responses-item-id-repair";
+import {
+  hasResponsesItemIdRepair,
+  relaySseWithResponsesItemIdRepair as relaySseWithResponsesItemIdRepairProduction,
+} from "../src/server/responses-item-id-repair";
+import { finalizeTranslatorBudgetResponse } from "../src/lib/translator-budget";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+function relaySseWithResponsesItemIdRepair(
+  body: ReadableStream<Uint8Array>,
+  config: Parameters<typeof relaySseWithResponsesItemIdRepairProduction>[1],
+): ReadableStream<Uint8Array> {
+  const budget = createTestTranslatorBudget();
+  return finalizeTranslatorBudgetResponse(
+    new Response(relaySseWithResponsesItemIdRepairProduction(body, config, budget)),
+    budget,
+  ).body!;
+}
 
 function streamFromText(text: string): ReadableStream<Uint8Array> {
   const chunk = new TextEncoder().encode(text);

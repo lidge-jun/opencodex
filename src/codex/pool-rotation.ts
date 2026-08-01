@@ -1,4 +1,5 @@
 import type { OcxAccountPoolRotationStrategy } from "../types";
+import type { GenerationContext } from "../lib/state-store-sweeper";
 
 export const POOL_KEY_CODEX = "codex";
 export const POOL_KEY_ANTHROPIC = "anthropic";
@@ -10,6 +11,7 @@ interface SelectionState {
 }
 
 const selectionState = new Map<string, SelectionState>();
+let lastReconciledGeneration = 0;
 
 const DEFAULT_STICKY_LIMIT = 1;
 const MIN_STICKY_LIMIT = 1;
@@ -183,4 +185,41 @@ export function clearPoolRotationState(poolKey?: string): void {
     return;
   }
   selectionState.delete(poolKey);
+}
+
+export function reconcilePoolRotationState(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  const anthropicIds = new Set<string>();
+  for (const key of context.oauthAccountKeys) {
+    const separator = key.indexOf("\0");
+    if (separator > 0 && key.slice(0, separator) === "anthropic") {
+      anthropicIds.add(key.slice(separator + 1));
+    }
+  }
+  let removed = 0;
+  for (const [poolKey, state] of selectionState) {
+    const valid = poolKey === POOL_KEY_ANTHROPIC
+      ? anthropicIds
+      : poolKey === POOL_KEY_CODEX || poolKey.startsWith(`${POOL_KEY_CODEX}:`)
+        ? context.codexAccountIds
+        : null;
+    if (!valid) continue;
+    if (valid.size === 0) {
+      selectionState.delete(poolKey);
+      removed += 1;
+      continue;
+    }
+    if (state.activeKey && !valid.has(state.activeKey)) {
+      delete state.activeKey;
+      state.successes = 0;
+      removed += 1;
+    }
+    for (const accountId of state.currentWeights.keys()) {
+      if (valid.has(accountId)) continue;
+      state.currentWeights.delete(accountId);
+      removed += 1;
+    }
+  }
+  lastReconciledGeneration = context.generation;
+  return removed;
 }

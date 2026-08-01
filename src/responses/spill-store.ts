@@ -1,0 +1,378 @@
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  opendirSync,
+  readFileSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { join } from "node:path";
+import { getConfigDir } from "../config";
+import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import type { OcxProviderContinuationState } from "../types";
+
+export const RESPONSE_SPILL_VERSION = 1;
+export const RESPONSE_SPILL_DIR_NAME = "responses-state-spill";
+export const RESPONSE_SPILL_ORPHAN_GRACE_MS = 15 * 60_000;
+export const RESPONSE_SPILL_SCAN_MAX = 4_096;
+export const RESPONSE_SPILL_CLEANUP_MAX = 512;
+
+const RESPONSE_SPILL_PUBLISH_RETRIES = 64;
+const OWNED_SPILL_NAME = /^([A-Za-z0-9._-]{1,80})\.([0-9a-f]{12})\.([0-9a-f]{24})\.(\d+)\.(\d+)\.spill\.json$/;
+const OWNED_SPILL_TEMP_NAME = /^\.response-spill\.[0-9]+\.[0-9a-f]{16}\.tmp$/;
+
+export interface ResponseSpillPayload {
+  version: 1;
+  responseId: string;
+  createdAt: number;
+  items: unknown[];
+  providers?: OcxProviderContinuationState;
+}
+
+export interface ResponseSpillRef {
+  version: 1;
+  fileName: string;
+  digest: string;
+  payloadBytes: number;
+}
+
+export type ResponseSpillReadResult =
+  | { ok: true; payload: ResponseSpillPayload }
+  | { ok: false; reason: "missing" | "corrupt" };
+
+export interface ResponseSpillCleanupResult {
+  scanned: number;
+  removed: number;
+  failed: number;
+  bytesRemoved: number;
+}
+
+export interface ResponseSpillIoForTest {
+  write?: (fd: number, bytes: Uint8Array) => void;
+  fsync?: (fd: number) => void;
+  link?: (tempPath: string, destinationPath: string) => void;
+  copyFileExcl?: (tempPath: string, destinationPath: string) => void;
+  unlink?: (path: string) => void;
+  /** Orphan-GC enumeration seam: returns the next directory entry NAME or
+   *  null for end-of-directory. Lets tests prove the scan cap binds without
+   *  materializing thousands of real files. */
+  readdirEntry?: () => string | null;
+  record?: (event: "write" | "fsync" | "close" | "harden" | "publish" | "dir-fsync" | "stub-swap") => void;
+}
+
+let spillIoForTest: ResponseSpillIoForTest | null = null;
+let spillGeneration = 0;
+
+export function setSpillIoForTest(io: ResponseSpillIoForTest | null): void {
+  spillIoForTest = io;
+}
+
+function record(event: "write" | "fsync" | "close" | "harden" | "publish" | "dir-fsync" | "stub-swap"): void {
+  spillIoForTest?.record?.(event);
+}
+
+function fsyncDirectoryBestEffort(dir: string): void {
+  let fd: number | null = null;
+  try {
+    fd = openSync(dir, "r");
+    if (spillIoForTest?.fsync) spillIoForTest.fsync(fd);
+    else fsyncSync(fd);
+    record("dir-fsync");
+  } catch {
+    // Windows and some filesystems do not support fsync on directory handles.
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+  }
+}
+
+export function noteStubSwapForTest(): void {
+  record("stub-swap");
+}
+
+export function responseSpillDirectory(dir = getConfigDir()): string {
+  return join(dir, RESPONSE_SPILL_DIR_NAME);
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function sanitizeResponseId(responseId: string): string {
+  const visible = responseId
+    .normalize("NFC")
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 80);
+  return visible || "response";
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return !!error && typeof error === "object" && (error as NodeJS.ErrnoException).code === code;
+}
+
+function canUseExclusiveCopyFallback(error: unknown): boolean {
+  return process.platform === "win32" || ["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]
+    .some(code => isErrno(error, code));
+}
+
+function harden(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    if (process.platform !== "win32") throw new Error("Response spill permission hardening failed");
+  }
+  if (process.platform === "win32") {
+    const result = mode === 0o700
+      ? hardenSecretDir(path, { required: true })
+      : hardenSecretPath(path, { required: true });
+    if (!result.ok) throw new Error("Response spill permission hardening failed");
+  }
+}
+
+function writeAll(fd: number, bytes: Uint8Array): void {
+  if (spillIoForTest?.write) spillIoForTest.write(fd, bytes);
+  else {
+    let offset = 0;
+    while (offset < bytes.byteLength) offset += writeSync(fd, bytes, offset, bytes.byteLength - offset);
+  }
+  record("write");
+}
+
+function fsyncFile(fd: number): void {
+  if (spillIoForTest?.fsync) spillIoForTest.fsync(fd);
+  else fsyncSync(fd);
+  record("fsync");
+}
+
+function closeFile(fd: number): void {
+  closeSync(fd);
+  record("close");
+}
+
+function unlink(path: string): void {
+  try {
+    if (spillIoForTest?.unlink) spillIoForTest.unlink(path);
+    else unlinkSync(path);
+    forgetHardenedSecretPath(path);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) forgetHardenedSecretPath(path);
+    throw error;
+  }
+}
+
+function publishNoReplace(tempPath: string, destinationPath: string): void {
+  try {
+    if (spillIoForTest?.link) spillIoForTest.link(tempPath, destinationPath);
+    else linkSync(tempPath, destinationPath);
+  } catch (error) {
+    if (isErrno(error, "EEXIST")) throw error;
+    if (!canUseExclusiveCopyFallback(error)) throw error;
+    let copied = false;
+    try {
+      if (spillIoForTest?.copyFileExcl) spillIoForTest.copyFileExcl(tempPath, destinationPath);
+      else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
+      copied = true;
+      harden(destinationPath, 0o600);
+      const copyFd = openSync(destinationPath, "r");
+      try {
+        if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
+        else fsyncSync(copyFd);
+      } finally {
+        closeSync(copyFd);
+      }
+    } catch (copyError) {
+      if (copied) {
+        try { unlink(destinationPath); } catch { /* startup GC reclaims an incomplete publication */ }
+      }
+      throw copyError;
+    }
+  }
+  record("publish");
+}
+
+function validSpillRef(ref: ResponseSpillRef): boolean {
+  return ref.version === 1
+    && OWNED_SPILL_NAME.test(ref.fileName)
+    && /^[0-9a-f]{64}$/.test(ref.digest)
+    && Number.isSafeInteger(ref.payloadBytes)
+    && ref.payloadBytes >= 0;
+}
+
+function validPayload(value: unknown, responseId: string): value is ResponseSpillPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  const keys = Object.keys(payload);
+  if (keys.some(key => !["version", "responseId", "createdAt", "items", "providers"].includes(key))) return false;
+  if (payload.version !== 1 || payload.responseId !== responseId) return false;
+  if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
+  if (!Array.isArray(payload.items)) return false;
+  if (payload.providers !== undefined) {
+    if (!payload.providers || typeof payload.providers !== "object" || Array.isArray(payload.providers)) return false;
+    for (const providerState of Object.values(payload.providers)) {
+      if (!providerState || typeof providerState !== "object" || Array.isArray(providerState)) return false;
+    }
+  }
+  return true;
+}
+
+export function writeResponseSpillDurably(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+): ResponseSpillRef {
+  let tempPath: string | null = null;
+  let fd: number | null = null;
+  try {
+    const payload: ResponseSpillPayload = {
+      version: 1,
+      responseId,
+      createdAt: state.createdAt,
+      items: state.items,
+      ...(state.providers ? { providers: state.providers } : {}),
+    };
+    const serialized = JSON.stringify(payload);
+    if (serialized === undefined) throw new Error("Response spill serialization failed");
+    const bytes = Buffer.from(serialized, "utf8");
+    const digest = sha256(bytes);
+    const idDigest = sha256(responseId).slice(0, 12);
+    const contentDigest = digest.slice(0, 24);
+    const dir = responseSpillDirectory();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    harden(dir, 0o700);
+
+    tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+    fd = openSync(tempPath, "wx", 0o600);
+    writeAll(fd, bytes);
+    fsyncFile(fd);
+    closeFile(fd);
+    fd = null;
+    harden(tempPath, 0o600);
+    record("harden");
+    const publishTempPath = tempPath;
+
+    for (let attempt = 0; attempt < RESPONSE_SPILL_PUBLISH_RETRIES; attempt++) {
+      spillGeneration += 1;
+      const fileName = `${sanitizeResponseId(responseId)}.${idDigest}.${contentDigest}.${spillGeneration}.${bytes.byteLength}.spill.json`;
+      if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
+      const destinationPath = join(dir, fileName);
+      try {
+        publishNoReplace(publishTempPath, destinationPath);
+        fsyncDirectoryBestEffort(dir);
+        unlink(publishTempPath);
+        tempPath = null;
+        return { version: 1, fileName, digest, payloadBytes: bytes.byteLength };
+      } catch (error) {
+        if (isErrno(error, "EEXIST")) continue;
+        throw error;
+      }
+    }
+    throw new Error("Response spill publication retries exhausted");
+  } catch {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+    if (tempPath) {
+      try { unlink(tempPath); } catch { /* best effort */ }
+    }
+    throw new Error("Response spill write failed");
+  }
+}
+
+export function readResponseSpill(responseId: string, ref: ResponseSpillRef): ResponseSpillReadResult {
+  if (!validSpillRef(ref)) return { ok: false, reason: "corrupt" };
+  const match = OWNED_SPILL_NAME.exec(ref.fileName);
+  if (!match
+    || match[2] !== sha256(responseId).slice(0, 12)
+    || match[3] !== ref.digest.slice(0, 24)
+    || !Number.isSafeInteger(Number(match[4]))
+    || Number(match[4]) <= 0
+    || Number(match[5]) !== ref.payloadBytes) return { ok: false, reason: "corrupt" };
+  const path = join(responseSpillDirectory(), ref.fileName);
+  let bytes: Buffer;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return { ok: false, reason: "corrupt" };
+    if (stat.size !== ref.payloadBytes) return { ok: false, reason: "corrupt" };
+    bytes = readFileSync(path);
+  } catch (error) {
+    return { ok: false, reason: isErrno(error, "ENOENT") ? "missing" : "corrupt" };
+  }
+  if (bytes.byteLength !== ref.payloadBytes || sha256(bytes) !== ref.digest) return { ok: false, reason: "corrupt" };
+  try {
+    const payload = JSON.parse(bytes.toString("utf8")) as unknown;
+    return validPayload(payload, responseId) ? { ok: true, payload } : { ok: false, reason: "corrupt" };
+  } catch {
+    return { ok: false, reason: "corrupt" };
+  }
+}
+
+export function deleteResponseSpill(ref: ResponseSpillRef): void {
+  if (!validSpillRef(ref)) return;
+  const dir = responseSpillDirectory();
+  try {
+    unlink(join(dir, ref.fileName));
+    fsyncDirectoryBestEffort(dir);
+  } catch { /* best effort */ }
+}
+
+export function recoverOrphanedResponseSpills(
+  referencedFileNames: ReadonlySet<string>,
+  dir = responseSpillDirectory(),
+  opts?: { graceMs?: number },
+): ResponseSpillCleanupResult {
+  const result: ResponseSpillCleanupResult = { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+  const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
+  // ONE loop serves both the real directory handle and the injected test seam
+  // (review C2-2: two duplicated loops let the test prove only its own copy).
+  // The reader is called strictly AFTER the scan-cap check, so entry
+  // SCAN_MAX+1 is never requested from either source.
+  let handle: ReturnType<typeof opendirSync> | null = null;
+  const injected = spillIoForTest?.readdirEntry;
+  if (!injected) {
+    try { handle = opendirSync(dir); } catch { return result; }
+  }
+  const nextName = (): string | null => {
+    if (injected) return injected();
+    const entry = handle!.readSync();
+    return entry ? entry.name : null;
+  };
+  try {
+    while (result.scanned < RESPONSE_SPILL_SCAN_MAX) {
+      const name = nextName();
+      if (name === null) break;
+      result.scanned += 1;
+      if (result.removed + result.failed >= RESPONSE_SPILL_CLEANUP_MAX) break;
+      const spillMatch = OWNED_SPILL_NAME.exec(name);
+      const isOwnedTemp = OWNED_SPILL_TEMP_NAME.test(name);
+      if ((!spillMatch && !isOwnedTemp) || referencedFileNames.has(name)) continue;
+      const path = join(dir, name);
+      let stat: ReturnType<typeof lstatSync>;
+      try { stat = lstatSync(path); } catch { continue; }
+      if (!stat.isFile() || stat.isSymbolicLink() || Date.now() - stat.mtimeMs < graceMs) continue;
+      try {
+        unlink(path);
+        result.removed += 1;
+        result.bytesRemoved += stat.size;
+      } catch {
+        result.failed += 1;
+      }
+    }
+  } finally {
+    try { handle?.closeSync(); } catch { /* best effort */ }
+  }
+  return result;
+}
+
+export function responseSpillExistsForTests(ref: ResponseSpillRef): boolean {
+  return validSpillRef(ref) && existsSync(join(responseSpillDirectory(), ref.fileName));
+}

@@ -184,7 +184,15 @@ start and on `ocx sync`, opencodex:
 4. **Filters** `config.disabledModels` and each provider's non-empty `selectedModels` allowlist.
 5. **Re-ranks** so featured models sort first (see below), then writes the merged catalog back.
 
-Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
+The cloned catalog `base_instructions` identity line is rewritten to the real upstream model name
+as static catalog metadata. Runtime request identity is handled separately: routed adapters replace
+Codex's live GPT-5 identity line with a model-agnostic coding-agent introduction.
+When unique, their default picker label is the final segment of the native model id, so provider
+namespaces do not hide the model name in narrow pickers. Basename collisions retain enough native
+route context to distinguish the rows; if the same native id comes from multiple providers, the
+provider is shown too. The full catalog slug remains in the description. Configure a custom display
+name when the route itself matters visually (for example, `Claude Opus 5 (TeamClaude)`); custom
+names continue to take precedence.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
 
@@ -200,6 +208,22 @@ Add a display name from the CLI (the proxy syncs the catalog right away when liv
 ```bash
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
+
+Remote Codex clients can fetch the same generated catalog over the management API (same
+admission token as other `/api/*` routes):
+
+```bash
+dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+tmp="$(mktemp "${dest}.XXXXXX")"
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
+  "https://proxy.example.com/api/catalog" > "$tmp" \
+  && mv "$tmp" "$dest"
+ocx sync-cache
+```
+
+The response is the raw `opencodex-catalog.json` document (no provider credentials). When
+available, the `x-opencodex-codex-version` header reports the Codex runtime version on the
+server so clients can spot version skew.
 
 You can also set or edit it through the management API (`POST /api/custom-models`,
 `PUT /api/custom-models/<id>` with a `displayName` string) and the web dashboard. A `/` is rejected

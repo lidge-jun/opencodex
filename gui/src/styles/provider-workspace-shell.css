@@ -278,6 +278,16 @@
   background: var(--raised);
 }
 
+/* The absolute delete button occupies the rail's trailing status area. Hide the
+   star/status while it is visible instead of letting the button crop either icon. */
+.pws-rail-row-wrap:hover .providers-workspace-rail-trail {
+  opacity: 0;
+}
+
+.providers-workspace-rail-trail {
+  transition: opacity var(--motion-fast);
+}
+
 .pws-rail-row-remove:hover {
   background: var(--raised);
 }

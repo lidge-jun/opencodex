@@ -1,5 +1,7 @@
 import { maskAccountId } from "../lib/privacy";
 import {
+  CODEX_HEALTH_AUTH_FAILED_NOTE,
+  CODEX_HEALTH_MANAGEMENT_API_UNAVAILABLE_NOTE,
   CODEX_HEALTH_UNAVAILABLE_NOTE,
   MASKED_ACCOUNT_FALLBACK,
   type OAuthAccountHealth,
@@ -59,8 +61,16 @@ export function formatOAuthHealthForStatus(
     : input;
 
   const parts: string[] = [];
-  if (report.codexHealthSource === "unavailable") {
-    parts.push(CODEX_HEALTH_UNAVAILABLE_NOTE);
+  switch (report.codexHealthSource) {
+    case "unavailable":
+      parts.push(CODEX_HEALTH_UNAVAILABLE_NOTE);
+      break;
+    case "management-auth-failed":
+      parts.push(CODEX_HEALTH_AUTH_FAILED_NOTE);
+      break;
+    case "management-api-unavailable":
+      parts.push(CODEX_HEALTH_MANAGEMENT_API_UNAVAILABLE_NOTE);
+      break;
   }
   const oauthBlock = formatEntryBlock(report.entries);
   if (oauthBlock) parts.push(oauthBlock);

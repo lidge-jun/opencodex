@@ -55,8 +55,9 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 账号登录（OAuth）
 
-有六个提供商预设使用 OAuth 登录。opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。
-登录 CLI 也接受 `chatgpt`：它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
+有六个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
+opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。登录 CLI 也接受 `chatgpt`：
+它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -65,6 +66,7 @@ ocx login kimi         # Moonshot Kimi
 ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
 ocx login google-antigravity
 ocx login cursor       # 独立的 Cursor PKCE 登录
+ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
 ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
 ocx logout <provider>
 ```
@@ -74,9 +76,10 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | 优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 编程模型。 |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装，然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、HTTP/2 传输和按账号筛选的模型发现。 |
+| `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
 对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），opencodex
 只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求，绝不自行生成。Kimi
@@ -95,7 +98,7 @@ OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登�
 
 ### Kiro 凭据导入
 
-Kiro 登录需要 Kiro CLI：使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装，并先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ocx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
+Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ocx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
 
 普通的 `ocx login kiro` 导入会以只读方式打开 CLI SQLite 数据库，不修改数据库、WAL 或 SHM。
 
@@ -108,7 +111,7 @@ Kiro 登录需要 Kiro CLI：使用 `curl -fsSL https://cli.kiro.dev/install | b
 
 ## 3. API 密钥目录
 
-opencodex v2.7.1 内置 50 个预设：40 个密钥预设、6 个 OAuth 预设、3 个本地预设，以及默认的
+opencodex 内置 65 个预设：54 个密钥预设、7 个 OAuth 预设、3 个本地预设，以及默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 主要条目包括：
 
@@ -125,6 +128,8 @@ ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| DeepInfra | `https://api.deepinfra.com/v1/openai` |
+| Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -135,13 +140,33 @@ ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提
 | Qwen Cloud | Token plan（默认）: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
 | 腾讯云 Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
+| 火山方舟 · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
-| GitHub Copilot · GitLab Duo | `https://api.githubcopilot.com` · `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
+| GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | ……以及更多 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
+火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
+
+> **三条火山方舟计费线路：**`volcengine` 是按量付费方舟 API，`volcengine-coding-plan`
+> 消耗 Coding Plan 额度，`volcengine-agent-plan` 消耗 Agent Plan 额度。密钥与端点需要属于
+> 同一产品；已经订阅 Plan 时调用普通 `/api/v3` 端点仍可能产生按量费用。
+> 三个 preset 使用经过筛选的静态模型目录：方舟 `/models` 同时返回文本、Embedding、图片、
+> 视频和 3D 资源，Coding 网关也会返回这份宽泛目录，Agent Plan 网关没有 `/models` 资源。
+> 按量付费默认使用 `doubao-seed-2-1-pro-260628`，静态目录还包含当前 DeepSeek 和 GLM
+> 文本模型。Coding Plan 默认使用 `ark-code-latest`，Agent Plan 默认使用
+> `deepseek-v4-pro`。
+
+**DeepInfra 发现：**`deepinfra` 是使用 `openai-chat` adapter 和 Bearer API 密钥的密钥型
+OpenAI Chat Completions 提供商。registry 固定的 DeepInfra 模型列表 URL 仅保留带 `chat` 标签的记录，
+同时保留含 `/` 的原生模型 id，并把实时发现限制为 512 KiB 和 512 条原始记录。
+密钥可在 [DeepInfra 控制台](https://deepinfra.com/dash/api_keys)创建。
+
+**Hyperbolic 发现：**该预设会使用已配置的 bearer 密钥读取 `/v1/models`，保留含 `/` 的原生模型 id，
+并将实时发现限制为 256 KiB 和 256 条原始记录。它仅覆盖 serverless text 与 vision-language chat；独立的
+image、audio 和 GPU 端点不在范围内。密钥可在 [Hyperbolic](https://app.hyperbolic.ai) 创建。
 
 > **腾讯云 Coding Plan 使用限制：**腾讯将此订阅限定为交互式编程工具使用。禁止通用 API
 > 自动化、自定义应用后端和非交互式批量调用；违规使用可能导致套餐密钥被停用。

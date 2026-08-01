@@ -1,4 +1,4 @@
-import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import { bridgeToResponsesSSE } from "../bridge";
@@ -8,6 +8,11 @@ import { clearableDeadline } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
+import {
+  isTranslatorBudgetExceededError,
+  TRANSLATOR_MAX_TURN_BYTES,
+  TranslatorBudgetExceededError,
+} from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
@@ -204,6 +209,7 @@ class LoopError extends Error {
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
   adapter: ProviderAdapter;
+  incomingMeta: IncomingMeta;
   /** Which executor runs searches. Defaults to "openai" so existing callers keep the ChatGPT path (audit F4). */
   backend?: "openai" | "anthropic";
   /** Required for the openai backend; unused (and typically undefined) for the anthropic backend. */
@@ -247,6 +253,7 @@ export interface WebSearchLoopDeps {
  * inject the answer as a tool_result, and loop (bounded by `maxSearches`).
  */
 export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Response> {
+  const translatorBudget = deps.incomingMeta.translatorBudget;
   const { parsed, selectedForwardHeaders, forwardProvider, hostedTool, settings, maxSearches, abortSignal, recordSidecarOutcome } = deps;
   const backend = deps.backend ?? "openai";
   const anthropicSidecar = deps.anthropicSidecar;
@@ -312,14 +319,17 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const request = await requestAdapter.buildRequest(iterParsed, {
           headers: selectedForwardHeaders,
           abortSignal: headerDeadline.signal,
+          translatorBudget,
         });
         try {
           deps.onRequestBuilt?.(request);
         } catch {
           // Diagnostics are best-effort and must never abort a web-search iteration.
         }
-        const response = requestAdapter.fetchResponse
-          ? await requestAdapter.fetchResponse(request, {
+        let response: Response;
+        try {
+          response = requestAdapter.fetchResponse
+            ? await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
@@ -337,7 +347,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 });
               },
               { abortSignal: headerDeadline.signal, label: "web-search-loop" },
-            );
+              );
+        } finally {
+          request.releaseBodyObservation?.();
+        }
         return { response, responseAdapter: requestAdapter };
       };
 
@@ -385,6 +398,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       return prepared;
     } catch (error) {
+      if (isTranslatorBudgetExceededError(error)) throw error;
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
@@ -412,6 +426,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       for await (const event of parseStreamWithProgress(prepared.response, parse, {
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
+        translatorBudget,
       })) {
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
@@ -424,6 +439,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         else events.push(event);
       }
     } catch (error) {
+      if (isTranslatorBudgetExceededError(error)) throw error;
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
@@ -436,7 +452,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, `Web-search adapter stream protocol error: expected one final terminal event, received ${terminalIndexes.length}`);
     }
     const terminal = events[terminalIndexes[0]!];
-    if (terminal.type === "error") throw new LoopError(502, terminal.message);
+    if (terminal.type === "error") {
+      if (terminal.code === "translation_buffer_limit") {
+        throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
+      }
+      throw new LoopError(502, terminal.message);
+    }
     return scanEventsForWebSearch(events);
   };
 
@@ -603,7 +624,17 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* runSearchCall(call, callIndex === 0 ? iterationThinking : []);
           }
         } catch (e) {
-          yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
+          if (isTranslatorBudgetExceededError(e)) {
+            yield {
+              type: "error",
+              status: 502,
+              errorType: "upstream_error",
+              code: e.code,
+              message: "upstream translation buffer exceeded the safe limit",
+            };
+          } else {
+            yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
+          }
           return;
         }
       }
@@ -621,6 +652,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       internalAbort.abort("client closed responses stream");
     }, undefined,
     {
+      translatorBudget,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),

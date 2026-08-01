@@ -44,8 +44,18 @@ export function resolveWindowsCommand(command: string, deps: ResolveDeps = {}): 
   if (win32.extname(command) || command.includes("\\") || command.includes("/") || win32.isAbsolute(command)) {
     return command;
   }
-  const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-  for (const dir of (env.PATH ?? env.Path ?? "").split(win32.delimiter).filter(Boolean)) {
+  // Windows environment variables are case-insensitive, and a spawned child can
+  // arrive with `Path`, `PATH`, or both depending on who built its env. Reading
+  // only two fixed spellings silently resolved against the wrong list once a
+  // caller added a second casing, so match however the key is spelled.
+  const lookup = (name: string): string | undefined => {
+    const direct = env[name] ?? env[name.toUpperCase()] ?? env[name.toLowerCase()];
+    if (direct !== undefined) return direct;
+    const key = Object.keys(env).find(k => k.toLowerCase() === name.toLowerCase());
+    return key ? env[key] : undefined;
+  };
+  const exts = (lookup("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  for (const dir of (lookup("PATH") ?? "").split(win32.delimiter).filter(Boolean)) {
     for (const ext of exts) {
       const candidate = win32.join(dir, command + ext.toLowerCase());
       if (exists(candidate)) return candidate;

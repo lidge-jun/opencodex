@@ -3,8 +3,9 @@
  *
  * Cursor model ids encode the reasoning effort as a suffix (`claude-4.6-opus-high`), and the available
  * tiers differ per model — `claude-4.6-opus` tops out at `-max`, `claude-opus-4-8` at `-xhigh`,
- * `claude-4.6-sonnet` only has `-medium`, and `composer`/`grok`/`gemini` take no suffix at all. A bare
- * id for a model that requires a suffix is rejected `ERROR_BAD_MODEL_NAME` (devlog 350.105).
+ * `claude-4.6-sonnet` only has `-medium`, and most `composer`/`gemini` models take no suffix at all.
+ * Grok Fast puts its mode marker after the effort (`grok-4.5-high-fast`). A bare id for a model that
+ * requires a suffix is rejected `ERROR_BAD_MODEL_NAME` (devlog 350.105).
  *
  * Canonical effort order is always low < medium < high < xhigh < max (max is the top tier, confirmed
  * against Anthropic docs and Cursor's live lineup). Tiers are stored in ascending canonical order.
@@ -30,10 +31,10 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // GetUsableModels (2026-07-28) lists kimi-k3 only as effort-suffixed kimi-k3-{low,high,max};
   // the bare id returns not_found. Tiers mirror the native Kimi provider's K3 ladder.
   "kimi-k3": ["low", "high", "max"],
-  // GetUsableModels (2026-07-09) lists grok-4.5-{medium,high,xhigh} and grok-4.5-fast-{medium,high,xhigh};
-  // the bare "grok-4.5-fast" id was removed upstream and now returns not_found.
-  "grok-4.5": ["medium", "high", "xhigh"],
-  "grok-4.5-fast": ["medium", "high", "xhigh"],
+  // Cursor renamed the Grok 4.5 slugs to cursor-grok-4.5-{low,medium,high} and
+  // cursor-grok-4.5-{low,medium,high}-fast. The bare Fast id returns not_found.
+  "grok-4.5": ["low", "medium", "high"],
+  "grok-4.5-fast": ["low", "medium", "high"],
   "gpt-5.1": ["low", "high"],
   "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
   "gpt-5.1-codex-mini": ["low", "high"],
@@ -112,4 +113,15 @@ export function cursorModelEffortLadder(baseModelId: string): string[] | undefin
 /** Base models known to carry a reasoning-effort suffix (everything else is sent bare). */
 export function cursorModelHasEffortTiers(baseModelId: string): boolean {
   return (CURSOR_MODEL_EFFORT_TIERS[baseModelId]?.length ?? 0) > 0;
+}
+
+/**
+ * Compose a Cursor wire id from a Codex-facing base id and effort tier.
+ * Fast variants put the mode after the effort; other models use the ordinary `{base}-{effort}` form.
+ */
+export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
+  if (baseModelId.endsWith("-fast")) {
+    return `${baseModelId.slice(0, -"-fast".length)}-${effortSuffix}-fast`;
+  }
+  return `${baseModelId}-${effortSuffix}`;
 }

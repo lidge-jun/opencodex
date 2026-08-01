@@ -1,5 +1,11 @@
 import type { ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent } from "../types";
+import {
+  isTranslatorBudgetExceededError,
+  TRANSLATOR_MAX_TURN_BYTES,
+  TranslatorBudgetExceededError,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 
 const DEFAULT_POST_TERMINAL_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -22,6 +28,7 @@ export class WebSearchStreamProtocolError extends Error {
 
 export interface ParseStreamWithProgressOptions {
   inactivityTimeoutMs: number;
+  translatorBudget: TranslatorBudget;
   signal?: AbortSignal;
   /** Kept configurable for focused tests; production callers should use the 5 second default. */
   postTerminalDrainTimeoutMs?: number;
@@ -243,7 +250,7 @@ export async function* parseStreamWithProgress(
   const parserPump = (async (): Promise<void> => {
     let heldTerminal: Extract<AdapterEvent, { type: "done" | "incomplete" }> | undefined;
     try {
-      iterator = parseStream(tappedResponse);
+      iterator = parseStream(tappedResponse, options.translatorBudget);
       if (settled) {
         closeIterator();
         return;
@@ -289,7 +296,9 @@ export async function* parseStreamWithProgress(
           );
         }
         if (event.type === "error") {
-          fail(new Error(event.message));
+          fail(event.code === "translation_buffer_limit"
+            ? new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES)
+            : new Error(event.message));
           return;
         }
         if (event.type === "done" || event.type === "incomplete") {
@@ -299,7 +308,9 @@ export async function* parseStreamWithProgress(
         await handoff.deliver(event);
       }
     } catch (error) {
-      fail(error instanceof WebSearchStreamProtocolError
+      fail(isTranslatorBudgetExceededError(error)
+        ? error
+        : error instanceof WebSearchStreamProtocolError
         ? error
         : new WebSearchStreamProtocolError(
           `adapter threw${heldTerminal ? " after its terminal event" : ""}: ${error instanceof Error ? error.message : String(error)}`,

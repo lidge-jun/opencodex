@@ -1,0 +1,18 @@
+schemaVersion=1
+verdict=PASS
+commit=14e57661
+command=rg -n 'openai-multi|OPENAI_MULTI_PROVIDER_ID|Codex Multi-account|three-tier' src gui/src tests scripts README.md README.ko.md README.zh-CN.md structure docs-site/src/content/docs
+matches=118
+matchedFiles=21
+oldConstantExactMatches=0
+currentReadmeDocsAndStructureSummaryMatches=0
+
+approved[migration-parsing-projection]=src/config.ts,src/providers/openai-tiers.ts
+approved[legacy-route-and-management-rejection]=src/router.ts,src/server/auth-cors.ts
+approved[historical-usage-canonicalization]=src/providers/label.ts,tests/usage-provider-label.test.ts
+approved[runtime-negative-catalog-guards]=scripts/openai-provider-option-runtime-child.ts,scripts/openai-provider-option-runtime-smoke.ts
+approved[supersession-and-migration-prose]=structure/08_openai-provider-tiers.md
+approved[migration-fixtures-and-restore]=tests/fixtures/openai-provider-option-migration-child.ts,tests/openai-provider-option-migration.test.ts,tests/openai-provider-option-startup.test.ts,tests/openai-provider-option.test.ts
+approved[legacy-absence-rejection-assertions]=tests/codex-account-mode-state.test.ts,tests/codex-catalog.test.ts,tests/openai-provider-option-e2e.test.ts,tests/provider-payload.test.ts,tests/provider-registry-parity.test.ts,tests/provider-workspace-data.test.ts,tests/router.test.ts,tests/server-auth.test.ts
+
+No registry, preset, current DTO/GUI, current runtime fixture, current user instructions, or model/catalog output publishes the legacy provider identity.

@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  anthropicImageNormalizeRetainedStoreSnapshot,
+  evictOldestAnthropicImageNormalizeForBudget,
   normalizeAnthropicImages,
   getNormalizeStatsForTests,
   resetNormalizeStateForTests,
+  setNormalizeCacheLimitsForTests,
   TIER_SPECS,
   IMAGE_NORMALIZE_CONCURRENCY,
   normalizeImageTargets,
@@ -68,6 +71,100 @@ function sizedEncoder(sizeFor: (maxEdge: number) => number): EncodeFn {
 }
 
 beforeEach(() => resetNormalizeStateForTests());
+afterEach(() => setNormalizeCacheLimitsForTests());
+
+describe("bounded normalization cache accounting", () => {
+  const target = (base64: string): NormalizeTarget => ({
+    base64,
+    mediaType: "image/png",
+    replace: () => {},
+    drop: () => {},
+  });
+  const validate = () => Promise.resolve();
+
+  test("unique pass and miss sentinels consume metadata bytes and hit the count cap", async () => {
+    const pass = fakePngBase64(100, 100, 128);
+    await normalizeImageTargets([target(pass)], { validate });
+    const afterPass = getNormalizeStatsForTests();
+    const passKey = `${Bun.hash(pass).toString(36)}:image/png:0`;
+    const expectedPassBytes = Buffer.byteLength(passKey, "utf8") + Buffer.byteLength("pass", "utf8");
+    expect(afterPass.sentinelEntries).toBe(1);
+    expect(afterPass.metadataBytes).toBe(expectedPassBytes);
+    expect(afterPass.cacheBytes).toBe(expectedPassBytes);
+
+    const missEncoder = sizedEncoder(() => 3 * 1024 * 1024);
+    await normalizeImageTargets([target(fakePngBase64(3000, 2000, 256))], { encode: missEncoder });
+    expect(getNormalizeStatsForTests().sentinelEntries).toBeGreaterThan(1);
+
+    setNormalizeCacheLimitsForTests({ maxEntries: 2, maxBytes: 1024 * 1024 });
+    for (let i = 0; i < 3; i++) {
+      await normalizeImageTargets([target(fakePngBase64(100 + i, 100 + i, 128 + i))], { validate });
+    }
+    const capped = getNormalizeStatsForTests();
+    expect(capped.cacheEntries).toBe(2);
+    expect(capped.sentinelEntries).toBe(2);
+    expect(capped.metadataBytes).toBeGreaterThan(0);
+  });
+
+  test("encoded replacement keeps aggregate accounting exact", async () => {
+    let arrivals = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let both!: () => void;
+    const reached = new Promise<void>(resolve => { both = resolve; });
+    const encode: EncodeFn = async () => {
+      arrivals++;
+      if (arrivals === 2) both();
+      await gate;
+      return { data: "a".repeat(1_000), mediaType: "image/jpeg" };
+    };
+    const source = fakePngBase64(3000, 2000, 256);
+    const first = normalizeImageTargets([target(source)], { encode });
+    const second = normalizeImageTargets([target(source)], { encode });
+    await reached;
+    release();
+    await Promise.all([first, second]);
+    const stats = getNormalizeStatsForTests();
+    expect(stats.cacheEntries).toBe(1);
+    expect(stats.cacheBytes).toBe(anthropicImageNormalizeRetainedStoreSnapshot().bytes);
+    expect(stats.cacheBytes).toBeGreaterThan(1_000);
+  });
+
+  test("one encoded value above maxEntrySize is returned but not cached", async () => {
+    setNormalizeCacheLimitsForTests({ maxEntryBytes: 1_000 });
+    let replaced = "";
+    const oversized: NormalizeTarget = {
+      ...target(fakePngBase64(3000, 2000, 256)),
+      replace: data => { replaced = data; },
+    };
+    await normalizeImageTargets([oversized], {
+      encode: async () => ({ data: "z".repeat(2_000), mediaType: "image/jpeg" }),
+    });
+    expect(replaced).toHaveLength(2_000);
+    expect(getNormalizeStatsForTests().cacheEntries).toBe(0);
+  });
+
+  test("cache eviction occurs before insertion and never exceeds 64 MiB", async () => {
+    setNormalizeCacheLimitsForTests({ maxBytes: 2_500, maxEntryBytes: 2_000 });
+    const encode: EncodeFn = async () => ({ data: "e".repeat(1_100), mediaType: "image/jpeg" });
+    for (let i = 0; i < 3; i++) {
+      await normalizeImageTargets([target(fakePngBase64(3000 + i, 2000 + i, 256 + i))], { encode });
+      expect(getNormalizeStatsForTests().cacheBytes).toBeLessThanOrEqual(2_500);
+    }
+    expect(getNormalizeStatsForTests().cacheEntries).toBeLessThanOrEqual(2);
+  });
+
+  test("040 snapshot is observe-only and oldest-row eviction returns full metadata-inclusive released bytes", async () => {
+    await normalizeImageTargets([target(fakePngBase64(100, 100, 128))], { validate });
+    await normalizeImageTargets([target(fakePngBase64(101, 101, 129))], { validate });
+    const before = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(anthropicImageNormalizeRetainedStoreSnapshot()).toEqual(before);
+    const released = evictOldestAnthropicImageNormalizeForBudget();
+    expect(released).toBeGreaterThan(0);
+    expect(released).toBeGreaterThanOrEqual(getNormalizeStatsForTests().metadataBytes / Math.max(1, before.count));
+    expect(anthropicImageNormalizeRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
+  });
+});
 
 describe("normalizeAnthropicImages — real Bun.Image path", () => {
   test("N1: oversized-dimension PNG is resized under the tier-0 edge and 2MiB cap, not dropped", async () => {

@@ -104,7 +104,7 @@ Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 
 
 | 화면 | 형식 | 예시 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) 또는 `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3자리 base36 해시) | `claude-opus-4-8-ncb` |
 
 프록시는 요청마다 계열을 골라요. `?ids=cli` 또는 `?ids=desktop`이 우선하고, 지정하지 않으면
@@ -116,13 +116,14 @@ Claude Desktop의 하단 선택기로 이미 실행 중인 3P 대화의 모델�
 `/model <id>`를 사용하세요. OpenCodex는 선택기 상태를 따로 볼 수 없고 각 요청에 실린 모델 ID를
 라우팅해요. 적용 결과는 **Logs → requestedModel**에서 확인할 수 있어요.
 
-**별칭 문법 규칙:** provider에는 `/`나 `--`를 넣을 수 없고 `native`와 같아도 안 돼요. model ID에
-`/`가 있으면 별칭에서 `~s`로 인코딩해요(예: `openrouter/anthropic/claude-opus-4-8` →
-`claude-ocx-openrouter--anthropic~sclaude-opus-4-8`). model ID의 리터럴 `~`는 `~t`로 인코딩해요.
-`s`/`t`가 따르지 않는 단독 `~`는 예전 설정과의 호환을 위해 리터럴 `~`로 해석해요. 읽기 쉬운
-형식으로 표현할 수 없는 라우트는 해시 별칭으로 대체해요. 모델 ID에는 `--`를 넣을 **수 있어요**
-(해석할 때 첫 번째 `--`만 기준으로 나눠요). `--`가 포함된 네이티브 슬러그는 해시 형식으로
-대체해요.
+**별칭 문법 규칙:** provider에는 `/`나 `--`를 넣을 수 없고 `native`와 같아도 안 돼요. `/`와 `~`가
+없는 plain model ID는 v1 접두사 `claude-ocx-…`를 유지해요. `/` 또는 `~`가 있는 model ID는 v2
+접두사 `claude-ocx2-…`로 만들고 이스케이프해요(`/` → `~s`, `~` → `~t`). 예:
+`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`.
+v1 별칭은 리터럴로 디코딩해요(예전 model ID에 들어 있던 두 글자 시퀀스 `~s` / `~t`도 그대로 보존).
+v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 수 없는 라우트는 해시 별칭으로 대체해요.
+모델 ID에는 `--`를 넣을 **수 있어요**(해석할 때 첫 번째 `--`만 기준으로 나눠요). `--`가 포함된
+네이티브 슬러그는 해시 형식으로 대체해요.
 
 **모델 해석 순서:** `[1m]` 표식 제거 → 읽기 쉬운 별칭 디코딩 → Desktop 해시 별칭 디코딩 →
 `modelMap` 정확히 일치 → 날짜를 제거한 값과 일치(`-20250514` 제거) → 패스스루 순서예요.

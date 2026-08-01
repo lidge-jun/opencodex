@@ -65,6 +65,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `accountPoolStickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only applies when `accountPoolStrategy` is `round-robin`. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache (5 min). |
+| `appOwnedMemoryBudgetMb?` | `number` | `256` | Process-wide cap in MiB for evictable app-owned retained state (logs, caches, blobs, and continuation payloads), valid from 64 to 4096. This does not cap RSS or native runtime memory. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on | Web-search sidecar options (see below). |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | Vision sidecar options (see below). |
@@ -255,9 +256,22 @@ systemd, or Task Scheduler receives it. Clients must include the token in every 
 x-opencodex-api-key: your-secret-token
 ```
 
-An `Authorization: Bearer …` header is also accepted. Dashboard-generated `apiKeys` may be used in
-place of the environment token after startup; all candidates are compared in constant time
-(`timingSafeEqual`) to prevent timing side-channels.
+Which headers work depends on the endpoint, so `x-opencodex-api-key` is the one that always does:
+
+| Endpoint | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | not accepted | **required** | not accepted |
+| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/messages` | accepted | accepted | accepted |
+| `/v1/models` | accepted | accepted | accepted |
+
+Responses and Chat Completions accept only the dedicated header because `Authorization` on those
+transports may belong to Codex Direct passthrough, and the two bearer domains must not be
+confusable. The API tab in the dashboard renders this same table from the server, so it cannot
+drift from the code.
+
+Dashboard-generated `apiKeys` may be used in place of the environment token after startup; all
+candidates are compared in constant time (`timingSafeEqual`) to prevent timing side-channels.
 
 :::caution[LAN exposure]
 Binding to `0.0.0.0` exposes your proxy — and all configured provider credentials — to the local
@@ -328,7 +342,7 @@ or bind the forward explicitly to loopback (`ssh -L 127.0.0.1:20100:localhost:10
 | `modelReasoningEfforts?` | `Record<string,string[]>` | Model-specific reasoning labels. An empty list hides the effort control for that model. |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | Model-specific reasoning-summary capability. Set a model to `false` to stop advertising summaries and strip summary-delivery fields before an `openai-responses` request. |
 | `modelReasoningSummaryDelivery?` | `Record<string,"sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Model-specific Responses delivery enum. A configured model stays summary-capable and only an existing `stream_options.reasoning_summary_delivery` is rewritten; do not combine it with a `false` summary capability for the same model. |
-| `modelAdapters?` | `Record<string,string>` | Per-model wire override for a gateway that fronts models speaking different wires. Keys are upstream native model ids; values must be `openai-chat` or `openai-responses`. Useful when one model needs the Responses API for hosted tools such as `web_search` while its siblings are fine on chat completions. Models the upstream pins to a single wire, and the canonical ChatGPT forward provider, reject overrides. |
+| `modelAdapters?` | `Record<string,string>` | Per-model wire override for a gateway that fronts models speaking different wires. Keys are upstream native model ids; values must be `openai-chat` or `openai-responses`. Built-in registry defaults may select a verified mixed-wire route automatically (the DeepSeek preset sends `deepseek-v4-flash` over native Responses); an explicit entry wins and can opt a model back out. Models the upstream pins to a single wire, and the canonical ChatGPT forward provider, reject overrides. |
 | `reasoningEffortMap?` | `Record<string,string>` | Provider-wide wire aliases for reasoning labels. Use only when the upstream expects a different value. |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | Model-specific wire aliases for reasoning labels. |
 | `noReasoningModels?` | `string[]` | Models that reject a reasoning/thinking param — the adapter drops `reasoning_effort` for them. |

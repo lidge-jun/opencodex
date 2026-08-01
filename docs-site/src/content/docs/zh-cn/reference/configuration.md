@@ -58,6 +58,7 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的成功新 session 绑定数。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次临时上游失败后，让后续新 session failover 到其他合格 pool account。设为 `0` 可禁用失败切换。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存新鲜度窗口（5 分钟）。 |
+| `appOwnedMemoryBudgetMb?` | `number` | `256` | 进程级可驱逐应用保留状态（日志、缓存、Blob 和续接响应负载）上限，单位为 MiB，有效范围为 64–4096。它不是 RSS 或原生运行时内存上限。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 策略：禁用、5 分钟 ephemeral 或 1 小时 extended。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 开启 | 网络搜索 sidecar 选项（见下文）。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 开启 | 视觉 sidecar 选项（见下文）。 |
@@ -138,8 +139,21 @@ ocx start
 x-opencodex-api-key: your-secret-token
 ```
 
-也可以使用 `Authorization: Bearer …` header。启动后，仪表盘生成的 `apiKeys` 可代替环境 token。
-所有候选值均用常量时间（`timingSafeEqual`）比较，避免 timing side-channel。
+接受哪些 header 取决于端点，始终可用的只有 `x-opencodex-api-key`：
+
+| 端点 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | 不接受 | **必需** | 不接受 |
+| `/v1/chat/completions` | 不接受 | **必需** | 不接受 |
+| `/v1/messages` | 可用 | 可用 | 可用 |
+| `/v1/models` | 可用 | 可用 | 可用 |
+
+Responses 和 Chat Completions 只接受专用 header，因为这两条链路上的 `Authorization` 可能属于
+Codex Direct 透传，两个 bearer 域不能混淆。仪表盘的 API 标签页同样从服务端获取并渲染这张表，
+因此不会与代码脱节。
+
+启动后，仪表盘生成的 `apiKeys` 可代替环境 token。所有候选值均用常量时间（`timingSafeEqual`）
+比较，避免 timing side-channel。
 
 :::caution[LAN 暴露]
 绑定到 `0.0.0.0` 会把代理和所有已配置 provider credential 暴露到本地网络。只应在可信网络中
@@ -174,6 +188,7 @@ x-opencodex-api-key: your-secret-token
 | `modelReasoningEfforts?` | `Record<string,string[]>` | 模型级 reasoning label。空数组会隐藏该模型的 effort 控件。 |
 | `modelSupportsReasoningSummaries?` | `Record<string,boolean>` | 模型级 reasoning summary 能力。设为 `false` 时不再声明 summary 支持，并在 `openai-responses` 请求前移除 summary-delivery 字段。 |
 | `modelReasoningSummaryDelivery?` | `Record<string,"sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 模型级 Responses delivery enum。已配置模型保持 summary 能力，适配器只改写现有的 `stream_options.reasoning_summary_delivery`；同一模型不能同时将 summary 能力设为 `false`。 |
+| `modelAdapters?` | `Record<string,string>` | 面向同一 gateway 混合使用不同 wire 的模型级覆盖。键是上游原生模型 id，值只能是 `openai-chat` 或 `openai-responses`。已验证的混合 wire 路由会由 registry 自动提供默认值（DeepSeek preset 会让 `deepseek-v4-flash` 使用原生 Responses）；显式配置优先，也可以把模型切回 Chat。上游固定单一 wire 的模型和 canonical ChatGPT forward provider 不接受覆盖。 |
 | `reasoningEffortMap?` | `Record<string,string>` | provider 级 reasoning label wire alias。只在上游需要不同值时使用。 |
 | `modelReasoningEffortMap?` | `Record<string,Record<string,string>>` | 模型级 reasoning label wire alias。 |
 | `noReasoningModels?` | `string[]` | 拒绝 reasoning/thinking 参数的模型；adapter 会为它们移除 `reasoning_effort`。 |

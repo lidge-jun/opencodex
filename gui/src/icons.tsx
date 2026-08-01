@@ -29,6 +29,7 @@ export const IconInfo = (p: P) => (<svg {...S(p)}><circle cx="12" cy="12" r="10"
 export const IconSearch = (p: P) => (<svg {...S(p)}><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>);
 export const IconArrowUp = (p: P) => (<svg {...S(p)}><path d="M12 19V5M5 12l7-7 7 7"/></svg>);
 export const IconArrowDown = (p: P) => (<svg {...S(p)}><path d="M12 5v14M19 12l-7 7-7-7"/></svg>);
+export const IconDownload = (p: P) => (<svg {...S(p)}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>);
 export const IconChevron = (p: P) => (<svg {...S(p)}><path d="m9 18 6-6-6-6"/></svg>);
 export const IconGithub = (p: P) => (<svg {...S(p)}><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 20 4.8 4.9 4.9 0 0 0 19.9 1S18.7.6 16 2.5a13.4 13.4 0 0 0-7 0C6.3.6 5.1 1 5.1 1A4.9 4.9 0 0 0 5 4.8a5.2 5.2 0 0 0-1.4 3.7c0 5.1 3.1 6.4 6.1 6.7a3.4 3.4 0 0 0-.9 2.5V22"/></svg>);
 export const IconPower = (p: P) => (<svg {...S(p)}><path d="M18.4 5.6a9 9 0 1 1-12.8 0"/><path d="M12 2v10"/></svg>);

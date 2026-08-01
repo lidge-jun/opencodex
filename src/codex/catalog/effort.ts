@@ -109,19 +109,29 @@ export function catalogEntryEfforts(entry: RawEntry): string[] {
 
 export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
 
-export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
+export function applyCatalogModelMetadata(
+  entry: RawEntry,
+  model?: CatalogModel,
+  fallbackDisplayName?: string,
+): void {
   if (!model) return;
   // This marker survives strict catalog normalization and lets sync distinguish a stale
   // bare combo alias from a genuine native model row.
   if (model.provider === COMBO_NAMESPACE) entry.owned_by = model.owned_by ?? COMBO_NAMESPACE;
   // displayName is DISPLAY-ONLY: it relabels the picker row but never touches the routing
-  // slug, alias, or provider. deriveEntry already stamped the slug as display_name; a
-  // configured displayName overrides just the label. The `/` separator is rejected at every
-  // input boundary (CLI `ocx models add`, management API), so the catalog trusts its source.
-  // Combos carry no displayName, and natives never reach here (no CatalogModel), so genuine
-  // upstream marketing names and combo alias labels are preserved untouched.
+  // slug, alias, or provider. A configured displayName wins. Otherwise physical routed rows
+  // use the final segment of their native id, keeping provider/vendor namespaces out of the
+  // narrow picker label. buildCatalogEntries supplies a longer fallback only when that basename
+  // would collide with another visible row. Aliased combos keep their public alias. Natives never
+  // reach here (no CatalogModel), so genuine upstream marketing names are preserved untouched.
   const displayName = typeof model.displayName === "string" ? model.displayName.trim() : "";
   if (displayName) entry.display_name = displayName;
+  else if (!model.alias) {
+    const nativeId = model.id.trim();
+    const finalSegment = nativeId.slice(nativeId.lastIndexOf("/") + 1).trim();
+    const fallback = fallbackDisplayName?.trim() || finalSegment;
+    if (fallback) entry.display_name = fallback;
+  }
   if (typeof model.contextWindow === "number" && model.contextWindow > 0) {
     entry.context_window = model.contextWindow;
     entry.max_context_window = model.contextWindow;

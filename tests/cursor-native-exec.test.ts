@@ -2,8 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import {
+  backgroundShellAdmissionMetrics,
+  resetBackgroundShellStateForTests,
+  setBackgroundShellRuntimeForTests,
+} from "../src/adapters/cursor/native-exec-shell";
 import {
   AgentClientMessageSchema,
   BackgroundShellSpawnArgsSchema,
@@ -43,6 +48,10 @@ function decode(bytes: Uint8Array) {
   expect(message.message.case).toBe("execClientMessage");
   return message.message.value;
 }
+
+afterEach(async () => {
+  await resetBackgroundShellStateForTests();
+});
 
 describe("Cursor native exec bridge", () => {
   test("fails closed if synthetic Responses client tools arrive on native MCP exec channel", async () => {
@@ -351,7 +360,7 @@ describe("Cursor native exec bridge", () => {
     expect(decodedAll.at(-1)?.message.case).toBe("execClientControlMessage");
   });
 
-  test("supports background shell spawn and stdin writes", async () => {
+  test("background shell spawn and stdin receive the same native exec session owner", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-bg-"));
     const spawned = decode((await handleCursorNativeExec(execMessage({
       case: "backgroundShellSpawnArgs",
@@ -360,7 +369,7 @@ describe("Cursor native exec bridge", () => {
         workingDirectory: dir,
         enableWriteShellStdinTool: true,
       }),
-    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    }), { unsafeAllowNativeLocalExec: true, sessionId: "native-exec-session" }))[0]);
     expect(spawned.message.case).toBe("backgroundShellSpawnResult");
     expect(spawned.message.value.result.case).toBe("success");
 
@@ -368,10 +377,36 @@ describe("Cursor native exec bridge", () => {
       const stdin = decode((await handleCursorNativeExec(execMessage({
         case: "writeShellStdinArgs",
         value: create(WriteShellStdinArgsSchema, { shellId: spawned.message.value.result.value.shellId, chars: "hello\n" }),
-      }), { unsafeAllowNativeLocalExec: true }))[0]);
+      }), { unsafeAllowNativeLocalExec: true, sessionId: "native-exec-session" }))[0]);
       expect(stdin.message.case).toBe("writeShellStdinResult");
       expect(stdin.message.value.result.case).toBe("success");
     }
+  });
+
+  test("missing session owner returns typed errors and never spawns or writes", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy must not run");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const before = backgroundShellAdmissionMetrics();
+    const spawnReply = decode((await handleCursorNativeExec(execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "must-not-run" }),
+    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    expect(spawnReply.message.case).toBe("backgroundShellSpawnResult");
+    expect(spawnReply.message.value.result.case).toBe("error");
+    expect(spawnCalls).toBe(0);
+    expect(backgroundShellAdmissionMetrics()).toEqual(before);
+
+    const stdinReply = decode((await handleCursorNativeExec(execMessage({
+      case: "writeShellStdinArgs",
+      value: create(WriteShellStdinArgsSchema, { shellId: 999, chars: "must-not-write" }),
+    }), { unsafeAllowNativeLocalExec: true }))[0]);
+    expect(stdinReply.message.case).toBe("writeShellStdinResult");
+    expect(stdinReply.message.value.result.case).toBe("error");
   });
 
   test("greps temp files with content, file, and count output modes", async () => {

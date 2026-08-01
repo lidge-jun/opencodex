@@ -14,7 +14,8 @@ import Claude from "./pages/Claude";
 import Grok from "./pages/Grok";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { SidebarGithubRow } from "./components/sidebar-github-row";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
 import { Select, Switch } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -280,9 +281,16 @@ export default function App() {
             aria-label={t("dash.stop")} title={t("dash.stop")}>
             <IconPower /> <span className="mode">{stopping ? t("dash.stopping") : t("dash.stop")}</span>
           </button>
-          <a className="sidebar-link" href="https://github.com/lidge-jun/opencodex" target="_blank" rel="noreferrer">
-            <IconGithub /> {t("common.github")}
-          </a>
+          <SidebarGithubRow
+            apiBase={API_BASE}
+            onOpenUpdate={() => {
+              // The update dialog lives on the dashboard maintenance panel. Deep-link to
+              // `#dashboard/update` and let the dashboard own the check/run flow — no
+              // cross-component event bus, and the link survives a refresh.
+              setNavOpen(false);
+              navigateToPage("dashboard", "update");
+            }}
+          />
         </div>
       </aside>
 

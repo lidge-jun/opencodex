@@ -127,7 +127,7 @@ export default function ProviderOverviewDashboard({
               >
                 <ProviderIcon name={item.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
                 <div className="pws-dashboard-row-info">
-                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name)}</span>
+                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name, t)}</span>
                   <span className="pws-dashboard-row-meta muted">{localizeAttentionReason(item.reason)}</span>
                 </div>
                 <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
@@ -155,7 +155,7 @@ export default function ProviderOverviewDashboard({
                 >
                   <ProviderIcon name={item.name} adapter={item.adapter} baseUrl={item.baseUrl} cls="pws-dashboard-row-icon" />
                   <div className="pws-dashboard-row-info">
-                    <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name)}</span>
+                    <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name, t)}</span>
                     <span className="pws-dashboard-row-meta muted">
                       {t("pws.dashboard.checkedAgo", { time: formatRelativeTime(report.updatedAt, timeLabels) })}
                     </span>
@@ -209,7 +209,7 @@ export default function ProviderOverviewDashboard({
                   onClick={() => onSelectProvider(provider.name)}
                 >
                   <ProviderIcon name={provider.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
-                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(provider.name)}</span>
+                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(provider.name, t)}</span>
                   <span className="pws-dashboard-row-count muted">
                     {t("pws.dashboard.requests", { count: formatRequestCount(provider.requests, locale) })}
                   </span>

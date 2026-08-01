@@ -408,10 +408,14 @@ describe("service memory section (#314 WP4)", () => {
     expect(lines.join("\n")).not.toContain("bundled binary");
   });
 
-  test("guidance gating: darwin or fixed runtime prints no override guidance", () => {
+  test("guidance gating: darwin auto-off or fixed Windows runtime prints no override guidance", () => {
     const darwin = formatServiceMemoryLines({
       status: "ok",
-      data: { ...baseData, platform: "darwin", eagerRelay: null },
+      data: {
+        ...baseData,
+        platform: "darwin",
+        eagerRelay: { useEagerRelay: false, reason: "auto-known-bad" },
+      },
     });
     expect(darwin.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
 

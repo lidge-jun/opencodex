@@ -31,9 +31,9 @@ function nativeTemplate(): Record<string, unknown> {
 
 const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
-  "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
+  "deepseek", "cerebras", "deepinfra", "hyperbolic", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
-  "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+  "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
 ];
@@ -252,6 +252,11 @@ describe("provider registry parity", () => {
       label: "Alibaba Coding Plan",
       baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
     });
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba")?.baseUrlChoices).toEqual([
+      { id: "intl", label: "International", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1" },
+      { id: "china", label: "China", baseUrl: "https://coding.dashscope.aliyuncs.com/v1" },
+      { id: "custom", label: "Custom" },
+    ]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"]).toMatchObject({
       label: "Alibaba Token Plan (Beijing)",
       adapter: "openai-chat",
@@ -479,7 +484,7 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }

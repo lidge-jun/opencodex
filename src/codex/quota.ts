@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
+import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 
 export type StoredAccountQuota = {
   weeklyPercent?: number;
@@ -49,8 +50,16 @@ const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
 const MONTHLY_WINDOW_MIN_MINUTES = MONTHLY_WINDOW_MIN_SECONDS / 60;
 
 const accountQuota = new Map<string, StoredAccountQuota>();
+let lastReconciledGeneration = 0;
+let liveAccountIds = new Set<string>();
 
-export const CODEX_UNKNOWN_USAGE_SCORE = 100;
+function mayCommitAccountQuota(accountId: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration || liveAccountIds.has(accountId);
+}
+
+// Valid upstream percentages are normalized to 0..100. Keep "unknown" outside that domain so an
+// actually exhausted account is still eligible for threshold rotation.
+export const CODEX_UNKNOWN_USAGE_SCORE = 101;
 export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
 
 export function isCodexQuotaExhausted(
@@ -125,8 +134,10 @@ function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean
 export function setAccountQuotaFromParsed(
   accountId: string,
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
+  writerGeneration = captureConfigGeneration(),
 ): void {
   if (!quota) return;
+  if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
   const existing = accountQuota.get(accountId);
   const next: StoredAccountQuota = { updatedAt: Date.now() };
   const creditsOnly = quota.resetCredits !== undefined && !snapshotHasUsage(quota);
@@ -214,10 +225,14 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
   return hasKnownQuotaValue(quota) ? quota : null;
 }
 
-export function applyAccountQuotaFromUpstreamHeaders(accountId: string, headers: Headers): void {
+export function applyAccountQuotaFromUpstreamHeaders(
+  accountId: string,
+  headers: Headers,
+  writerGeneration = captureConfigGeneration(),
+): void {
   const quota = parseUpstreamQuotaHeaders(headers);
   if (!quota) return;
-  setAccountQuotaFromParsed(accountId, quota);
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration);
 }
 
 export function updateAccountQuota(
@@ -227,7 +242,9 @@ export function updateAccountQuota(
   monthly?: unknown,
   monthlyResetAt?: unknown,
   resetCredits?: number,
+  writerGeneration = captureConfigGeneration(),
 ): void {
+  if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
   const existing = accountQuota.get(accountId);
   const nextWeekly = normalizeUsagePercent(weekly);
   const nextMonthly = normalizeUsagePercent(monthly);
@@ -323,6 +340,21 @@ export function clearAccountQuota(accountId?: string): void {
   } catch {
     // Best-effort; memory is already cleared.
   }
+}
+
+export function reconcileCodexQuotaAccounts(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  hydrateAccountQuotasFromDisk();
+  let removed = 0;
+  for (const accountId of accountQuota.keys()) {
+    if (context.codexAccountIds.has(accountId)) continue;
+    accountQuota.delete(accountId);
+    removed += 1;
+  }
+  liveAccountIds = new Set(context.codexAccountIds);
+  lastReconciledGeneration = context.generation;
+  if (removed > 0) schedulePersistAccountQuotas();
+  return removed;
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {

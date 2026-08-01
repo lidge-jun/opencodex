@@ -125,6 +125,7 @@ export async function resolveFirstUsableOpenAiSidecar(
             fixedAccount: true,
             probeLeaseId: authContext.probeLeaseId,
             probeQuotaScope: authContext.probeQuotaScope,
+            writerGeneration: authContext.writerGeneration,
           },
         ),
       };
@@ -151,7 +152,10 @@ export async function resolveFirstUsableOpenAiSidecar(
             config,
             authContext.accountId,
             outcome,
-            { probeLeaseId: authContext.probeLeaseId },
+            {
+              probeLeaseId: authContext.probeLeaseId,
+              writerGeneration: authContext.writerGeneration,
+            },
           ),
         }
         : {}),

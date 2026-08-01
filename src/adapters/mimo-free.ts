@@ -5,7 +5,7 @@ import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { OcxProviderConfig, OcxParsedRequest } from "../types";
 import { createOpenAIChatAdapter } from "./openai-chat";
-import type { ProviderAdapter, AdapterRequest } from "./base";
+import type { ProviderAdapter, AdapterRequest, IncomingMeta } from "./base";
 
 const BOOTSTRAP_URL = "https://api.xiaomimimo.com/api/free-ai/bootstrap";
 export const MIMO_CHAT_URL = "https://api.xiaomimimo.com/api/free-ai/openai/chat";
@@ -27,6 +27,8 @@ const USER_AGENTS = [
 const JWT_FALLBACK_TTL_MS = 3_000_000; // 50 min
 const JWT_EXPIRY_BUFFER_MS = 300_000;  // 5 min early refresh
 const BOOTSTRAP_TIMEOUT_MS = 15_000;
+const MIMO_BOOTSTRAP_MAX_BYTES = 128 * 1024;
+const MIMO_JWT_MAX_BYTES = 64 * 1024;
 
 // In-process JWT cache -- survives across requests, reset on restart.
 let cachedJwt: string | null = null;
@@ -107,8 +109,38 @@ async function fetchJwt(signal?: AbortSignal): Promise<string> {
     try { await response.body?.cancel(); } catch { /* already consumed */ }
     throw new Error(`MiMo bootstrap failed: ${response.status}`);
   }
-  const data = await response.json() as { jwt?: string };
+  const announced = Number(response.headers.get("content-length") ?? 0);
+  if (Number.isFinite(announced) && announced > MIMO_BOOTSTRAP_MAX_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("MiMo bootstrap response too large");
+  }
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      bytes += value.byteLength;
+      if (bytes > MIMO_BOOTSTRAP_MAX_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error("MiMo bootstrap response too large");
+      }
+      chunks.push(value);
+    }
+  }
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as { jwt?: string };
   if (!data.jwt) throw new Error("MiMo bootstrap returned no JWT");
+  if (new TextEncoder().encode(data.jwt).byteLength > MIMO_JWT_MAX_BYTES) {
+    throw new Error("MiMo bootstrap response too large");
+  }
   return data.jwt;
 }
 
@@ -170,12 +202,12 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
     ...base,
     name: "mimo-free",
 
-    async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
+    async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): Promise<AdapterRequest> {
       const jwt = await getMimoJwt();
 
       // Let the base adapter build the wire body (handles reasoning, tools, etc.)
       // but override the URL and headers after.
-      const baseReq = base.buildRequest(parsed) as AdapterRequest;
+      const baseReq = base.buildRequest(parsed, incoming) as AdapterRequest;
       const baseBody = JSON.parse(baseReq.body as string) as unknown;
       const markedBody = injectMimoSystemMarker(baseBody);
 

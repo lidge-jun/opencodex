@@ -9,6 +9,8 @@ import {
   clearProviderQuotaCache,
   fetchProviderAccountQuotas,
   fetchProviderQuotaReports,
+  getCachedProviderAccountQuota,
+  reconcileProviderAccountQuotaRows,
   supportsPerAccountQuota,
 } from "../src/providers/quota";
 
@@ -372,5 +374,46 @@ describe("fetchProviderAccountQuotas", () => {
     expect(byId[first!.id]?.quota?.fiveHourPercent).toBe(70);
     expect(byId[second!.id]?.quota?.fiveHourPercent).toBe(3);
     expect(calls).toBe(1);
+  });
+
+  test("provider removal during an Anthropic report probe cannot recreate its account quota row", async () => {
+    await seedTwoAccounts();
+    const { getAccountSet, setActiveAccount } = await import("../src/oauth/store");
+    const first = getAccountSet("anthropic")?.accounts.find(account => account.credential.email === FIRST.email);
+    expect(first).toBeTruthy();
+    await setActiveAccount("anthropic", first!.id);
+
+    let releaseUsage!: () => void;
+    const usageGate = new Promise<void>(resolve => { releaseUsage = resolve; });
+    globalThis.fetch = (async () => {
+      await usageGate;
+      return new Response(usageBody(70, 15), { status: 200 });
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 1455,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          authMode: "oauth",
+          baseUrl: "https://api.anthropic.com/v1",
+        },
+      },
+    };
+    const reportPromise = fetchProviderQuotaReports(config, true);
+    reconcileProviderAccountQuotaRows({
+      generation: 10_000,
+      providerNames: new Set(),
+      comboIds: new Set(),
+      comboTargets: new Set(),
+      codexAccountIds: new Set(),
+      oauthAccountKeys: new Set(),
+      configRoots: new Set(),
+    });
+    releaseUsage();
+    await reportPromise;
+
+    expect(getCachedProviderAccountQuota("anthropic", first!.id)).toBeNull();
   });
 });

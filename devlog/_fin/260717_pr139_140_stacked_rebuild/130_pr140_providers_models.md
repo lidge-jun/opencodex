@@ -1,0 +1,26 @@
+# WP130 — #140 Providers/Models diagnostics atop #139
+
+- Base/branch: ~~WP120 tip -> `codex/wibias-140-03-providers-models-diagnostics`~~ **P-amendment (2026-07-18): commit directly onto dev@e6d6eeb9.**
+- P stale-check (2026-07-18, dev@e6d6eeb9):
+  - **REJECT all backend files** (src/types.ts, src/providers/derive.ts, src/codex/catalog.ts, src/server/management-api.ts): source predates dev's 3-tier openai hardening (wp-020..050), single-provider-option migration (4da9c167/14e57661), freeTier contract (WP010), local auth guard (WP040), and quota race guards (WP020). Source deletions would revert: openaiProviderTierVersion, codexAccountMode, modelMaxInputTokens, freeTier on DerivedProviderPreset, canonical-seed guards, epoch-guarded quota caching, field-mask PATCH, honest connectivity probe. NONE of these are touched.
+  - **TAKE gui/src/pages/Models.tsx** (non-query UI improvements only): import path `../i18n` → `../i18n/shared`; extract helpers (fmtK, collectDisabledNamespaced, activeModelOptions, GROUP_HEAD_TOGGLE_STYLE); native `<dialog>` for V2HelpDialog with useEffect showModal/close pattern; `type="button"` on all buttons; Set-based optimizations (CAP_OPTION_SET, THREAD_OPTION_SET); RefObject typing. **SKIP all useQuery/useMutation** (react-query not installed per WP120 deferral).
+  - **TAKE gui/src/model-display.ts**: remove dead `hasModelIcon` (zero consumers on dev).
+  - **DEFER gui/src/components/QuotaBars.tsx** rewrite: source replaces the entire 287-line file with 78 lines, but QuotaBars has 3 active consumers (Providers.tsx, CodexAccountPool.tsx, ProviderUsage.tsx) relying on the current exports (buildQuotaRows, QuotaBarRow, localizeCustomQuotaLabel). Rewrite risks breaking all 3 and belongs in its own sized/tested sub-child if pursued.
+  - ~~Narrowed scope after rejections: Models.tsx (~200 useful lines after query skip) + model-display.ts (4 lines) ≈ ~204 lines~~ **Superseded by A-audit round 1 — see corrected estimate below.**
+- ~~Interview decision: take ALL Wibias changes for Providers.tsx, Models.tsx, and related files. Rebase onto #139 stack tip. If diff exceeds 500 lines (currently 1348), split into sub-children at P.~~ **Superseded by P stale-check dispositions above — backend REJECTED, QuotaBars DEFERRED, scope narrowed to GUI-only hand-selected improvements.**
+- A-audit round 1 corrections (2026-07-18, Sol reviewer Singer — FAIL, 4 blockers folded):
+  - **Size estimate corrected.** Models.tsx has ZERO react-query hunks (no useQuery/useMutation in the source diff). The full Models.tsx diff is +336/-121 = 457 lines with no query partition. A hand-selected, behavior-preserving UI patch is ~130-180 changed lines; including ProviderGroupCard + dialog extraction raises it to ~280-330. Previous "~204 after query skip" was wrong.
+  - **Explicit hunk whitelist for Models.tsx:**
+    - TAKE: `../i18n/shared` import with TFn/TKey; CAP_OPTION_SET + THREAD_OPTION_SET Set optimizations; collectDisabledNamespaced + activeModelOptions helper extractions; semantic collapse button with `type="button"` on all 4 missing buttons; aria-label on search/thread-count/custom-cap inputs; native `<dialog>` for V2HelpDialog with RefObject typing; collapsed-state persistence moved to effect; TKey replacing inline cast.
+    - ADAPT: ProviderGroupCard — keep existing `provider/model` namespaced label format (source changes to bare `model`, reverting explicit behavior at Models.tsx:557). Native dialog styling — keep existing `.modal-overlay` tinted background and click-away closing, adapt the dialog without `DIALOG_RESET_STYLE`.
+    - SKIP: useModelsPage/ModelsPageContent plumbing split (90 lines of structural churn, no behavioral improvement).
+    - fmtK already extracted on dev (Models.tsx:42) — not a new improvement.
+  - **model-display.ts:** remove hasModelIcon without the source's trailing blank line at EOF.
+  - **Lint gate baseline waiver:** Usage.tsx has 6 pre-existing unused-component lint errors from a concurrent WP141 sub-agent's changes. WP130 does not touch Usage.tsx. Lint gate for WP130 scopes to the changed files only (`eslint gui/src/pages/Models.tsx gui/src/model-display.ts`), not the full project. The Usage.tsx errors are WP141's responsibility.
+  - Revised diff estimate: ~150-200 lines (whitelist-only, no dialog/group extraction) or ~280-330 (with extraction).
+- MODIFY `gui/src/pages/Models.tsx`, `gui/src/model-display.ts`, and only the exact provider-workspace components that own each surviving diagnostic.
+- ~~MODIFY `src/codex/catalog.ts`~~ **REJECTED (P stale-check: backend untouched).**
+- ~~MODIFY `src/providers/derive.ts`, `src/server/management-api.ts`, `src/types.ts`~~ **REJECTED (P stale-check: backend untouched).**
+- Before -> after: broad page rewrite -> selected accessibility/query/render fixes on current owners.
+- Verification: `cd gui && bunx eslint src/pages/Models.tsx src/model-display.ts` (scoped lint — Usage.tsx errors are WP141 ownership, baseline waiver recorded); `bun run typecheck`; `git diff --check`; diff <=500. Run `006_gui_qa_protocol.md` with `WP_ID=130-providers ROUTE='#providers'` and `WP_ID=130-models ROUTE='#models'`; save the named page states under both evidence directories.
+- Rollback: diagnostics revert without rolling back #139 functionality.

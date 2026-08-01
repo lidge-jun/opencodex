@@ -26,6 +26,8 @@ import {
   formatProviderDisplayName,
   isCatalogProviderId,
 } from "../gui/src/provider-icons";
+import { en } from "../gui/src/i18n/en";
+import { interpolate, type TFn } from "../gui/src/i18n/shared";
 import {
   bucketPresets,
   filterPresets,
@@ -33,6 +35,8 @@ import {
   type CatalogPreset,
 } from "../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../gui/src/provider-workspace/kind";
+
+const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 
 /** Base defaults matching a minimal, unconfigured provider value. */
 function prov(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvider {
@@ -438,14 +442,14 @@ describe("usage: count formatting", () => {
 
 describe("provider-icons", () => {
   test("single OpenAI provider display names match the registry", () => {
-    expect(formatProviderDisplayName("openai")).toBe("OpenAI (Codex login)");
-    expect(formatProviderDisplayName("openai-apikey")).toBe("OpenAI API");
-    expect(formatProviderDisplayName("chatgpt")).toBe("ChatGPT");
+    expect(formatProviderDisplayName("openai", englishT)).toBe("OpenAI (Codex login)");
+    expect(formatProviderDisplayName("openai-apikey", englishT)).toBe("OpenAI API");
+    expect(formatProviderDisplayName("chatgpt", englishT)).toBe("ChatGPT");
   });
 
   test("unknown simple ids are title-cased; mixedCase custom names pass through", () => {
-    expect(formatProviderDisplayName("my-proxy")).toBe("My Proxy");
-    expect(formatProviderDisplayName("MyProxy")).toBe("MyProxy");
+    expect(formatProviderDisplayName("my-proxy", englishT)).toBe("My Proxy");
+    expect(formatProviderDisplayName("MyProxy", englishT)).toBe("MyProxy");
   });
 
   test("catalog membership excludes legacy Multi and custom ids", () => {

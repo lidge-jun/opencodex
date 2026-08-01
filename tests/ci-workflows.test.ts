@@ -1974,11 +1974,16 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("group: issue-translation-${{ github.event.issue.number }}");
     expect(workflow).not.toContain("issue-comment-translation-${{ github.event.comment.id }}");
     expect(workflow).toContain("if: github.event_name == 'issue_comment'");
+    // translate/validate skip open-area backfill; backfill job is area-only.
+    expect(workflow).toContain("backfill_open_areas");
+    expect(workflow).toContain("backfill-open-areas:");
+    expect(workflow).toMatch(/inputs\.backfill_open_areas != true/);
+    expect(workflow).toMatch(/inputs\.backfill_open_areas == true/);
     expect(workflow).toMatch(
-      /translate:\s*\n\s*name: Translate non-English issues\s*\n\s*if: github\.event_name == 'issues' \|\| github\.event_name == 'workflow_dispatch'/,
+      /translate:\s*\n\s*name: Translate non-English issues\s*\n\s*if: >\s*\n\s*github\.event_name == 'issues' \|\|\s*\n\s*\(github\.event_name == 'workflow_dispatch' &&\s*\n\s*inputs\.backfill_open_areas != true &&\s*\n\s*inputs\.issue_number != ''\)/,
     );
     expect(workflow).toMatch(
-      /validate:\s*\n\s*if: github\.event_name == 'issues' \|\| github\.event_name == 'workflow_dispatch'/,
+      /validate:\s*\n\s*# Wait for translate[\s\S]*?\n\s*needs: translate\s*\n\s*if: >\s*\n\s*always\(\) &&\s*\n\s*needs\.translate\.result != 'cancelled' &&\s*\n\s*\(github\.event_name == 'issues' \|\|\s*\n\s*\(github\.event_name == 'workflow_dispatch' &&\s*\n\s*inputs\.backfill_open_areas != true &&\s*\n\s*inputs\.issue_number != ''\)\)/,
     );
 
     const commentJob = workflow.split(/\n {2}translate-comment:\n/)[1]!.split(/\n {2}[a-zA-Z]/)[0]!;
@@ -2024,7 +2029,9 @@ describe("GitHub Actions hardening", () => {
     expect(beforeJobs).not.toMatch(/^\s*permissions:/m);
 
     // Non-cancelling per-issue concurrency at workflow and translate-job scope.
-    expect(workflow).toContain("group: issue-quality-${{ github.event.issue.number || inputs.issue_number }}");
+    expect(workflow).toContain(
+      "group: issue-quality-${{ github.event.issue.number || inputs.issue_number || (inputs.backfill_open_areas && 'backfill-open-areas') || 'manual' }}",
+    );
     expect(workflow).toContain("group: issue-translation-${{ github.event.issue.number || inputs.issue_number }}");
     const workflowConcurrency = workflow.split(/jobs:\s*\n/)[0]!;
     expect(workflowConcurrency).toMatch(

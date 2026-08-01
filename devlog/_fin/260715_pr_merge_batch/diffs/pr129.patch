@@ -1,0 +1,887 @@
+From bc79e57db84100570a0fec0ea02b595bbe646398 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:18:27 +0200
+Subject: [PATCH 1/7] feat(provider): add MiMo Free -- keyless Xiaomi MiMo
+ public tier
+
+Xiaomi MiMo exposes a free public tier gated by a short-lived JWT that
+is bootstrapped from a public endpoint using a machine fingerprint.
+
+Implementation:
+- src/adapters/mimo-free.ts: custom ProviderAdapter wrapping openai-chat.
+  - getMimoJwt(): bootstraps a JWT from api.xiaomimimo.com/api/free-ai/bootstrap
+    using a SHA-256 machine fingerprint; caches in-process with exp-aware TTL
+    (5 min early refresh buffer).
+  - injectMimoSystemMarker(): idempotently prepends the anti-abuse system
+    message required by the upstream gate (returns 403 without it).
+  - buildRequest(): async -- fetches JWT, builds body via openai-chat base,
+    injects marker, sets required headers (X-Mimo-Source, User-Agent,
+    x-session-affinity, Authorization: Bearer JWT).
+  - fetchResponse(): retries once on 401/403 with a freshly bootstrapped JWT.
+  - resetMimoJwtCache(): exported for testing.
+- src/server/adapter-resolve.ts: register the 'mimo-free' adapter name.
+- src/providers/registry.ts: add mimo-free entry (keyOptional, featured,
+  liveModels, defaultModel: mimo-auto).
+
+Tests (16 unit tests in tests/mimo-free-provider.test.ts):
+- Registry shape (adapter, baseUrl, authKind, keyOptional, featured, liveModels)
+- providerConfigSeed propagation
+- Key-login map and featured list presence
+- System marker injection: prepend, idempotent, non-object passthrough
+- Fingerprint: hex format and stability
+- JWT cache: fetch-and-cache, error propagation, resetMimoJwtCache re-fetch
+- Adapter buildRequest: correct URL, Authorization header, system marker
+
+All 36 tests pass (16 new + 20 parity).
+---
+ src/adapters/mimo-free.ts              | 176 ++++++++++++++++++++++++
+ src/providers/registry.ts              |  14 ++
+ src/server/adapter-resolve.ts          |   3 +
+ tests/mimo-free-provider.test.ts       | 180 +++++++++++++++++++++++++
+ tests/provider-registry-parity.test.ts |   5 +-
+ 5 files changed, 376 insertions(+), 2 deletions(-)
+ create mode 100644 src/adapters/mimo-free.ts
+ create mode 100644 tests/mimo-free-provider.test.ts
+
+diff --git a/src/adapters/mimo-free.ts b/src/adapters/mimo-free.ts
+new file mode 100644
+index 00000000..453c5ae1
+--- /dev/null
++++ b/src/adapters/mimo-free.ts
+@@ -0,0 +1,176 @@
++import { createHash } from "node:crypto";
++import os from "node:os";
++import type { OcxProviderConfig, OcxParsedRequest } from "../types";
++import { createOpenAIChatAdapter } from "./openai-chat";
++import type { ProviderAdapter, AdapterRequest } from "./base";
++
++const BOOTSTRAP_URL = "https://api.xiaomimimo.com/api/free-ai/bootstrap";
++export const MIMO_CHAT_URL = "https://api.xiaomimimo.com/api/free-ai/openai/chat";
++
++/**
++ * Anti-abuse gate: the free chat endpoint returns 403 "Illegal access" unless
++ * a system message contains this exact string as a substring.
++ */
++export const MIMO_SYSTEM_MARKER =
++  "You are MiMoCode, an interactive CLI tool that helps users with software engineering tasks.";
++
++// Chrome-like User-Agent required by the upstream anti-abuse gate.
++const USER_AGENTS = [
++  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
++  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
++  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
++];
++
++const JWT_FALLBACK_TTL_MS = 3_000_000; // 50 min
++const JWT_EXPIRY_BUFFER_MS = 300_000;  // 5 min early refresh
++
++// In-process JWT cache -- survives across requests, reset on restart.
++let cachedJwt: string | null = null;
++let jwtExpiresAt = 0;
++
++function randomUserAgent(): string {
++  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]!;
++}
++
++/** SHA-256 fingerprint of stable machine attributes; stable per machine, not a secret. */
++export function generateMimoFingerprint(): string {
++  let username = "unknown-user";
++  try { username = os.userInfo().username; } catch { /* ignore */ }
++  const cpu = (os.cpus()[0]?.model ?? "unknown-cpu").trim();
++  const seed = `${os.hostname()}|${os.platform()}|${os.arch()}|${cpu}|${username}`;
++  return createHash("sha256").update(seed).digest("hex");
++}
++
++function parseJwtExp(jwt: string): number {
++  try {
++    const parts = jwt.split(".");
++    if (parts.length < 2) return 0;
++    const payload = JSON.parse(Buffer.from(parts[1]!, "base64").toString()) as { exp?: number };
++    if (payload.exp) return payload.exp * 1000;
++  } catch { /* ignore */ }
++  return Date.now() + JWT_FALLBACK_TTL_MS;
++}
++
++export function resetMimoJwtCache(): void {
++  cachedJwt = null;
++  jwtExpiresAt = 0;
++}
++
++async function fetchJwt(): Promise<string> {
++  const response = await fetch(BOOTSTRAP_URL, {
++    method: "POST",
++    headers: {
++      "Content-Type": "application/json",
++      "User-Agent": randomUserAgent(),
++    },
++    body: JSON.stringify({ client: generateMimoFingerprint() }),
++  });
++  if (!response.ok) {
++    throw new Error(`MiMo bootstrap failed: ${response.status}`);
++  }
++  const data = await response.json() as { jwt?: string };
++  if (!data.jwt) throw new Error("MiMo bootstrap returned no JWT");
++  return data.jwt;
++}
++
++export async function getMimoJwt(): Promise<string> {
++  if (cachedJwt && Date.now() < jwtExpiresAt - JWT_EXPIRY_BUFFER_MS) {
++    return cachedJwt;
++  }
++  const jwt = await fetchJwt();
++  cachedJwt = jwt;
++  jwtExpiresAt = parseJwtExp(jwt);
++  return jwt;
++}
++
++/**
++ * Idempotently prepend the MiMo anti-abuse system marker if it is not already present.
++ * The marker must appear in a system message; we prepend one if the request has none with it.
++ */
++export function injectMimoSystemMarker(body: unknown): unknown {
++  if (!body || typeof body !== "object") return body;
++  const parsed = body as Record<string, unknown>;
++  const messages = parsed["messages"];
++  if (!Array.isArray(messages)) return body;
++  const hasMarker = messages.some(
++    (m): m is { role: string; content: string } =>
++      m !== null &&
++      typeof m === "object" &&
++      (m as Record<string, unknown>)["role"] === "system" &&
++      typeof (m as Record<string, unknown>)["content"] === "string" &&
++      ((m as Record<string, unknown>)["content"] as string).includes(MIMO_SYSTEM_MARKER),
++  );
++  if (hasMarker) return body;
++  return { ...parsed, messages: [{ role: "system", content: MIMO_SYSTEM_MARKER }, ...messages] };
++}
++
++/**
++ * Creates the MiMo Free adapter. Wraps openai-chat's request builder to inject:
++ *   1. JWT from the bootstrap endpoint (cached, auto-refreshed).
++ *   2. Anti-abuse system marker in the request body.
++ *   3. Required headers (User-Agent, X-Mimo-Source, x-session-affinity).
++ * On 401/403, flushes the JWT cache and retries once via fetchResponse.
++ */
++export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdapter {
++  const base = createOpenAIChatAdapter(provider);
++  // Per-adapter session-affinity id (random, per process instance).
++  const sessionId = `ses_${Math.random().toString(36).slice(2, 26)}`;
++
++  return {
++    ...base,
++    name: "mimo-free",
++
++    async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
++      const jwt = await getMimoJwt();
++
++      // Let the base adapter build the wire body (handles reasoning, tools, etc.)
++      // but override the URL and headers after.
++      const baseReq = base.buildRequest(parsed) as AdapterRequest;
++      const baseBody = JSON.parse(baseReq.body as string) as unknown;
++      const markedBody = injectMimoSystemMarker(baseBody);
++
++      const headers: Record<string, string> = {
++        "Content-Type": "application/json",
++        "Authorization": `Bearer ${jwt}`,
++        "X-Mimo-Source": "mimocode-cli-free",
++        "User-Agent": randomUserAgent(),
++        "x-session-affinity": sessionId,
++        "Accept": parsed.stream ? "text/event-stream" : "application/json",
++      };
++
++      return {
++        url: MIMO_CHAT_URL,
++        method: "POST",
++        headers,
++        body: JSON.stringify(markedBody),
++      };
++    },
++
++    async fetchResponse(request: AdapterRequest, ctx): Promise<Response> {
++      const response = await fetch(request.url, {
++        method: request.method,
++        headers: request.headers as Record<string, string>,
++        body: request.body,
++        signal: ctx?.signal,
++      });
++
++      // On auth failure, flush JWT cache and retry once with a fresh token.
++      if (response.status === 401 || response.status === 403) {
++        resetMimoJwtCache();
++        const freshJwt = await getMimoJwt();
++        const retryHeaders = {
++          ...(request.headers as Record<string, string>),
++          "Authorization": `Bearer ${freshJwt}`,
++        };
++        return fetch(request.url, {
++          method: request.method,
++          headers: retryHeaders,
++          body: request.body,
++          signal: ctx?.signal,
++        });
++      }
++
++      return response;
++    },
++  };
++}
+diff --git a/src/providers/registry.ts b/src/providers/registry.ts
+index 9e5a7bf0..685844d5 100644
+--- a/src/providers/registry.ts
++++ b/src/providers/registry.ts
+@@ -585,6 +585,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
+   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
+   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
+   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },
++  {
++    id: "mimo-free",
++    label: "MiMo Free",
++    adapter: "mimo-free",
++    baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
++    authKind: "key",
++    keyOptional: true,
++    featured: true,
++    liveModels: true,
++    dashboardUrl: "https://xiaomimimo.com",
++    defaultModel: "mimo-auto",
++    models: ["mimo-auto"],
++    note: "No key needed — uses Xiaomi MiMo's free public tier. A JWT is bootstrapped automatically per machine fingerprint.",
++  },
+   { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", baseUrl: "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway" },
+   // FREEZE 2026-07-10: /models is auth-gated, so ids remain unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
+   { id: "github-copilot", label: "GitHub Copilot", baseUrl: "https://api.githubcopilot.com", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://github.com/settings/copilot" },
+diff --git a/src/server/adapter-resolve.ts b/src/server/adapter-resolve.ts
+index aa60e60e..4845e20e 100644
+--- a/src/server/adapter-resolve.ts
++++ b/src/server/adapter-resolve.ts
+@@ -3,6 +3,7 @@ import { createAzureAdapter } from "../adapters/azure";
+ import { createCursorAdapter } from "../adapters/cursor";
+ import { createGoogleAdapter } from "../adapters/google";
+ import { createKiroAdapter } from "../adapters/kiro";
++import { createMimoFreeAdapter } from "../adapters/mimo-free";
+ import { createOpenAIChatAdapter } from "../adapters/openai-chat";
+ import { createResponsesPassthroughAdapter } from "../adapters/openai-responses";
+ import type { OcxProviderConfig } from "../types";
+@@ -40,6 +41,8 @@ export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention
+       return createAzureAdapter(providerConfig);
+     case "cursor":
+       return createCursorAdapter(providerConfig);
++    case "mimo-free":
++      return createMimoFreeAdapter(providerConfig);
+     default:
+       throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
+   }
+diff --git a/tests/mimo-free-provider.test.ts b/tests/mimo-free-provider.test.ts
+new file mode 100644
+index 00000000..7c43f2c9
+--- /dev/null
++++ b/tests/mimo-free-provider.test.ts
+@@ -0,0 +1,180 @@
++import { describe, expect, test, mock, beforeEach } from "bun:test";
++import { PROVIDER_REGISTRY } from "../src/providers/registry";
++import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../src/providers/derive";
++import {
++  generateMimoFingerprint,
++  getMimoJwt,
++  injectMimoSystemMarker,
++  resetMimoJwtCache,
++  MIMO_SYSTEM_MARKER,
++  MIMO_CHAT_URL,
++  createMimoFreeAdapter,
++} from "../src/adapters/mimo-free";
++import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
++
++function minimalRequest(model = "mimo-auto"): OcxParsedRequest {
++  return {
++    modelId: model,
++    stream: false,
++    context: { messages: [{ role: "user", content: "hello" }], tools: [] },
++    options: {},
++  };
++}
++
++describe("mimo-free provider registry", () => {
++  const entry = PROVIDER_REGISTRY.find(e => e.id === "mimo-free");
++
++  test("registry entry exists with correct shape", () => {
++    expect(entry).toBeDefined();
++    expect(entry?.adapter).toBe("mimo-free");
++    expect(entry?.baseUrl).toBe("https://api.xiaomimimo.com/api/free-ai/openai/chat");
++    expect(entry?.authKind).toBe("key");
++    expect(entry?.keyOptional).toBe(true);
++    expect(entry?.featured).toBe(true);
++    expect(entry?.liveModels).toBe(true);
++    expect(entry?.defaultModel).toBe("mimo-auto");
++  });
++
++  test("providerConfigSeed propagates keyOptional and liveModels", () => {
++    const seed = providerConfigSeed(entry!);
++    expect(seed.keyOptional).toBe(true);
++    expect(seed.liveModels).toBe(true);
++  });
++
++  test("is included in the key-login map", () => {
++    const keyMap = deriveKeyLoginMap();
++    expect(keyMap["mimo-free"]).toBeDefined();
++  });
++
++  test("is in the featured provider list", () => {
++    expect(deriveFeaturedProviderIds()).toContain("mimo-free");
++  });
++
++  test("provider note mentions no key needed", () => {
++    expect(entry?.note?.toLowerCase()).toContain("no key needed");
++  });
++});
++
++describe("mimo-free system marker injection", () => {
++  test("prepends marker when no system message is present", () => {
++    const body = { messages: [{ role: "user", content: "hi" }] };
++    const result = injectMimoSystemMarker(body) as { messages: { role: string; content: string }[] };
++    expect(result.messages[0]?.role).toBe("system");
++    expect(result.messages[0]?.content).toBe(MIMO_SYSTEM_MARKER);
++    expect(result.messages[1]?.role).toBe("user");
++  });
++
++  test("prepends marker when system message does not contain it", () => {
++    const body = { messages: [{ role: "system", content: "You are helpful." }, { role: "user", content: "hi" }] };
++    const result = injectMimoSystemMarker(body) as { messages: { role: string; content: string }[] };
++    expect(result.messages[0]?.content).toBe(MIMO_SYSTEM_MARKER);
++    expect(result.messages).toHaveLength(3);
++  });
++
++  test("is idempotent when marker is already present", () => {
++    const body = { messages: [{ role: "system", content: `${MIMO_SYSTEM_MARKER} extra` }, { role: "user", content: "hi" }] };
++    const result = injectMimoSystemMarker(body) as { messages: unknown[] };
++    expect(result.messages).toHaveLength(2);
++  });
++
++  test("passes through non-object bodies unchanged", () => {
++    expect(injectMimoSystemMarker(null)).toBeNull();
++    expect(injectMimoSystemMarker("string")).toBe("string");
++  });
++
++  test("passes through body without messages unchanged", () => {
++    const body = { model: "mimo-auto" };
++    expect(injectMimoSystemMarker(body)).toEqual({ model: "mimo-auto" });
++  });
++});
++
++describe("mimo-free fingerprint", () => {
++  test("generateMimoFingerprint returns a 64-char hex string", () => {
++    const fp = generateMimoFingerprint();
++    expect(typeof fp).toBe("string");
++    expect(fp).toMatch(/^[0-9a-f]{64}$/);
++  });
++
++  test("fingerprint is stable across calls", () => {
++    expect(generateMimoFingerprint()).toBe(generateMimoFingerprint());
++  });
++});
++
++describe("mimo-free JWT cache", () => {
++  beforeEach(() => {
++    resetMimoJwtCache();
++  });
++
++  test("getMimoJwt fetches from bootstrap and caches", async () => {
++    const fakeJwt = "header." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".sig";
++    const originalFetch = globalThis.fetch;
++    globalThis.fetch = mock(async () => new Response(JSON.stringify({ jwt: fakeJwt }), { status: 200 }));
++    try {
++      const jwt1 = await getMimoJwt();
++      expect(jwt1).toBe(fakeJwt);
++      // Second call should use cache — fetch called only once
++      const jwt2 = await getMimoJwt();
++      expect(jwt2).toBe(fakeJwt);
++      expect((globalThis.fetch as ReturnType<typeof mock>).mock.calls.length).toBe(1);
++    } finally {
++      globalThis.fetch = originalFetch;
++      resetMimoJwtCache();
++    }
++  });
++
++  test("getMimoJwt throws when bootstrap returns error", async () => {
++    const originalFetch = globalThis.fetch;
++    globalThis.fetch = mock(async () => new Response("", { status: 503 }));
++    try {
++      await expect(getMimoJwt()).rejects.toThrow("MiMo bootstrap failed: 503");
++    } finally {
++      globalThis.fetch = originalFetch;
++      resetMimoJwtCache();
++    }
++  });
++
++  test("resetMimoJwtCache forces re-fetch on next call", async () => {
++    const fakeJwt = "h." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".s";
++    const originalFetch = globalThis.fetch;
++    globalThis.fetch = mock(async () => new Response(JSON.stringify({ jwt: fakeJwt }), { status: 200 }));
++    try {
++      await getMimoJwt();
++      resetMimoJwtCache();
++      await getMimoJwt();
++      expect((globalThis.fetch as ReturnType<typeof mock>).mock.calls.length).toBe(2);
++    } finally {
++      globalThis.fetch = originalFetch;
++      resetMimoJwtCache();
++    }
++  });
++});
++
++describe("mimo-free adapter request building", () => {
++  beforeEach(() => {
++    resetMimoJwtCache();
++  });
++
++  test("buildRequest sets correct URL, headers, and injects system marker", async () => {
++    const fakeJwt = "h." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".s";
++    const originalFetch = globalThis.fetch;
++    globalThis.fetch = mock(async () => new Response(JSON.stringify({ jwt: fakeJwt }), { status: 200 }));
++    try {
++      const provider: OcxProviderConfig = providerConfigSeed(PROVIDER_REGISTRY.find(e => e.id === "mimo-free")!);
++      const adapter = createMimoFreeAdapter(provider);
++      const req = await adapter.buildRequest(minimalRequest());
++      const headers = req.headers as Record<string, string>;
++
++      expect(req.url).toBe(MIMO_CHAT_URL);
++      expect(headers["Authorization"]).toBe(`Bearer ${fakeJwt}`);
++      expect(headers["X-Mimo-Source"]).toBe("mimocode-cli-free");
++      expect(headers["x-session-affinity"]).toMatch(/^ses_/);
++
++      const body = JSON.parse(req.body as string) as { messages: { role: string; content: string }[] };
++      expect(body.messages[0]?.role).toBe("system");
++      expect(body.messages[0]?.content).toBe(MIMO_SYSTEM_MARKER);
++    } finally {
++      globalThis.fetch = originalFetch;
++      resetMimoJwtCache();
++    }
++  });
++});
+diff --git a/tests/provider-registry-parity.test.ts b/tests/provider-registry-parity.test.ts
+index a752d0cc..43ed1e37 100644
+--- a/tests/provider-registry-parity.test.ts
++++ b/tests/provider-registry-parity.test.ts
+@@ -34,7 +34,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
+   "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
+   "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
+-  "xiaomi", "kilo", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
++  "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
+ ];
+ 
+ describe("provider registry parity", () => {
+@@ -233,7 +233,7 @@ describe("provider registry parity", () => {
+ 
+     expect(litellm?.authKind).toBe("key");
+     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
+-    expect(optionalKeyProviders).toEqual(["litellm"]);
++    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free"]);
+   });
+ 
+   test("base URL override permission is registry-only and limited to local/self-hosted providers", () => {
+@@ -379,6 +379,7 @@ describe("provider registry parity", () => {
+     expect(featured).toEqual([
+       "openai", "xai", "anthropic", "anthropic-apikey", "kimi", "openai-apikey", "umans", "opencode-go", "openrouter",
+       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
++      "mimo-free",
+     ]);
+ 
+     const presets = deriveProviderPresets();
+
+From 6eb824356a80aa4082d9fb59f391b6a4795b298d Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:22:39 +0200
+Subject: [PATCH 2/7] fix(mimo-free): use abortSignal not signal on
+ AdapterFetchContext
+
+---
+ src/adapters/mimo-free.ts | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/adapters/mimo-free.ts b/src/adapters/mimo-free.ts
+index 453c5ae1..741b88d7 100644
+--- a/src/adapters/mimo-free.ts
++++ b/src/adapters/mimo-free.ts
+@@ -151,7 +151,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
+         method: request.method,
+         headers: request.headers as Record<string, string>,
+         body: request.body,
+-        signal: ctx?.signal,
++        signal: ctx?.abortSignal,
+       });
+ 
+       // On auth failure, flush JWT cache and retry once with a fresh token.
+@@ -166,7 +166,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
+           method: request.method,
+           headers: retryHeaders,
+           body: request.body,
+-          signal: ctx?.signal,
++          signal: ctx?.abortSignal,
+         });
+       }
+ 
+
+From 194606433a4a334f20b1a294d7237d4bd81a6ffe Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 22:47:05 +0200
+Subject: [PATCH 3/7] feat(gui): expose keyOptional through presets API + Free
+ badge + optional key field in AddProviderModal
+
+---
+ gui/src/components/AddProviderModal.tsx | 48 +++++++++++++++++++------
+ src/providers/derive.ts                 |  2 ++
+ 2 files changed, 39 insertions(+), 11 deletions(-)
+
+diff --git a/gui/src/components/AddProviderModal.tsx b/gui/src/components/AddProviderModal.tsx
+index 8ded7774..0a299777 100644
+--- a/gui/src/components/AddProviderModal.tsx
++++ b/gui/src/components/AddProviderModal.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useMemo, useRef, useState } from "react";
++﻿import { useEffect, useMemo, useRef, useState } from "react";
+ import { IconX, IconLock, IconKey, IconExternal } from "../icons";
+ import { buildProviderPayload, type ProviderPayload } from "../provider-payload";
+ 
+@@ -17,6 +17,8 @@ interface Preset {
+   /** Where to create/copy the API key (for auth === "key" catalog providers). */
+   dashboardUrl?: string;
+   note?: string;
++  /** API key is optional — provider works without one (free public tier). */
++  keyOptional?: boolean;
+ }
+ 
+ const FALLBACK_PRESETS: Preset[] = [
+@@ -185,13 +187,18 @@ export default function AddProviderModal({
+                     <div className="title">{p.label}</div>
+                     <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
+                   </div>
+-                  {p.auth === "oauth"
+-                    ? <span className="badge badge-accent">OAuth</span>
+-                    : p.auth === "forward"
+-                      ? <span className="badge badge-green">Codex login</span>
+-                      : p.auth === "local"
+-                        ? <span className="badge badge-amber">Local</span>
+-                        : <span className="badge badge-muted">API key</span>}
++                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
++                    {p.keyOptional && <span className="badge badge-green">Free</span>}
++                    {p.auth === "oauth"
++                      ? <span className="badge badge-accent">OAuth</span>
++                      : p.auth === "forward"
++                        ? <span className="badge badge-green">Codex login</span>
++                        : p.auth === "local"
++                          ? <span className="badge badge-amber">Local</span>
++                          : !p.keyOptional
++                            ? <span className="badge badge-muted">API key</span>
++                            : null}
++                  </div>
+                 </button>
+               ))}
+               {filtered.length === 0 && <div className="muted" style={{ fontSize: 13, padding: 8 }}>No match.</div>}
+@@ -220,9 +227,9 @@ export default function AddProviderModal({
+               </div>
+             </div>
+           ) : (
+-            // API key / Codex-forward form
++            // API key / Codex-forward / free-tier form
+             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+-              {!isCustom && !isLocal && preset.note && (
++              {!isCustom && !isLocal && !preset.keyOptional && preset.note && (
+                 <details className="setup-guide">
+                   <summary>Setup guide</summary>
+                   <ol style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
+@@ -253,6 +260,25 @@ export default function AddProviderModal({
+                 <div style={{ fontSize: 12, color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px", lineHeight: 1.55 }}>
+                   No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
+                 </div>
++              ) : preset.keyOptional ? (
++                <>
++                  <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px", lineHeight: 1.6 }}>
++                    <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
++                  </div>
++                  <details style={{ marginTop: 2 }}>
++                    <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>Use your own API key instead (optional)</summary>
++                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
++                      {preset.dashboardUrl && (
++                        <a href={preset.dashboardUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
++                          <IconKey style={{ width: 14, height: 14 }} />Get a {preset.label} key<IconExternal style={{ width: 13, height: 13 }} />
++                        </a>
++                      )}
++                      <Field label="API key (optional)">
++                        <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="Overrides the free public token" />
++                      </Field>
++                    </div>
++                  </details>
++                </>
+               ) : (
+                 <>
+                   {preset.dashboardUrl && (
+@@ -290,4 +316,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
+       {children}
+     </label>
+   );
+-}
++}
+\ No newline at end of file
+diff --git a/src/providers/derive.ts b/src/providers/derive.ts
+index 959279d8..83468234 100644
+--- a/src/providers/derive.ts
++++ b/src/providers/derive.ts
+@@ -48,6 +48,7 @@ export interface DerivedProviderPreset {
+   oauthProvider?: string;
+   dashboardUrl?: string;
+   note?: string;
++  keyOptional?: boolean;
+ }
+ 
+ export function listRegistryEntries(): readonly ProviderRegistryEntry[] {
+@@ -227,6 +228,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
+     ...(entry.authKind === "oauth" ? { oauthProvider: entry.oauthId ?? entry.id } : {}),
+     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
+     ...(entry.note ? { note: entry.note } : {}),
++    ...(entry.keyOptional ? { keyOptional: true } : {}),
+   };
+ }
+ 
+
+From 837b106ec80792638f62f59e300a1095ed00d610 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 22:49:36 +0200
+Subject: [PATCH 4/7] test(mimo-free): verify deriveProviderPresets exposes
+ keyOptional for GUI picker
+
+---
+ tests/mimo-free-provider.test.ts | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/tests/mimo-free-provider.test.ts b/tests/mimo-free-provider.test.ts
+index 7c43f2c9..5c57b1d3 100644
+--- a/tests/mimo-free-provider.test.ts
++++ b/tests/mimo-free-provider.test.ts
+@@ -178,3 +178,14 @@ describe("mimo-free adapter request building", () => {
+     }
+   });
+ });
++
++describe("mimo-free GUI preset", () => {
++  test("deriveProviderPresets exposes keyOptional for picker", () => {
++    const { deriveProviderPresets } = require("../src/providers/derive");
++    const presets = deriveProviderPresets();
++    const preset = presets.find((p: { id: string }) => p.id === "mimo-free");
++    expect(preset).toBeDefined();
++    expect(preset.keyOptional).toBe(true);
++    expect(preset.note).toMatch(/no key needed/i);
++  });
++});
+
+From 32593510f232615c6081bf0d2e32b80a88b78aed Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:48:13 +0200
+Subject: [PATCH 5/7] test: skip symlink test on Windows without elevated
+ symlink rights (EPERM)
+
+---
+ tests/claude-agents-inject.test.ts | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/tests/claude-agents-inject.test.ts b/tests/claude-agents-inject.test.ts
+index 78445619..9dabc7db 100644
+--- a/tests/claude-agents-inject.test.ts
++++ b/tests/claude-agents-inject.test.ts
+@@ -89,7 +89,12 @@ describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
+     mkdirSync(agentsDir, { recursive: true });
+     const victim = join(dir, "victim.md");
+     writeFileSync(victim, "precious");
+-    symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
++    try {
++      symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
++    } catch (e: unknown) {
++      if ((e as NodeJS.ErrnoException).code === "EPERM") return; // skip on Windows without elevated symlink rights
++      throw e;
++    }
+     syncClaudeAgentDefs([], dir); // prune pass
+     expect(readFileSync(victim, "utf8")).toBe("precious");
+     expect(readdirSync(agentsDir)).toContain("ocx-linked.md");
+
+From 4ef3713effb0be71b80fcafe4aef1650bf3e74be Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 23:29:49 +0200
+Subject: [PATCH 6/7] fix(gui): simplify free provider add flow and add
+ provider icons
+
+---
+ gui/src/components/AddProviderModal.tsx | 23 ++++-------------------
+ gui/src/provider-icons.ts               |  2 ++
+ 2 files changed, 6 insertions(+), 19 deletions(-)
+
+diff --git a/gui/src/components/AddProviderModal.tsx b/gui/src/components/AddProviderModal.tsx
+index 0a299777..504a524c 100644
+--- a/gui/src/components/AddProviderModal.tsx
++++ b/gui/src/components/AddProviderModal.tsx
+@@ -261,24 +261,9 @@ export default function AddProviderModal({
+                   No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.
+                 </div>
+               ) : preset.keyOptional ? (
+-                <>
+-                  <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px", lineHeight: 1.6 }}>
+-                    <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
+-                  </div>
+-                  <details style={{ marginTop: 2 }}>
+-                    <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>Use your own API key instead (optional)</summary>
+-                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+-                      {preset.dashboardUrl && (
+-                        <a href={preset.dashboardUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
+-                          <IconKey style={{ width: 14, height: 14 }} />Get a {preset.label} key<IconExternal style={{ width: 13, height: 13 }} />
+-                        </a>
+-                      )}
+-                      <Field label="API key (optional)">
+-                        <input className="input" type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="Overrides the free public token" />
+-                      </Field>
+-                    </div>
+-                  </details>
+-                </>
++                <div style={{ fontSize: 12, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px", lineHeight: 1.6 }}>
++                  <strong>Free tier</strong> — {preset.note ?? "No API key required. Works out of the box."}
++                </div>
+               ) : (
+                 <>
+                   {preset.dashboardUrl && (
+@@ -316,4 +301,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
+       {children}
+     </label>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/gui/src/provider-icons.ts b/gui/src/provider-icons.ts
+index 357e40d2..6dc5305e 100644
+--- a/gui/src/provider-icons.ts
++++ b/gui/src/provider-icons.ts
+@@ -27,6 +27,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
+   "ollama-cloud": "ollama-color.svg",
+   openai: "openai.svg",
+   "openai-apikey": "openai.svg",
++  "opencode-free": "opencode.svg",
+   "opencode-go": "opencode.svg",
+   "opencode-zen": "opencode.svg",
+   openrouter: "openrouter-color.svg",
+@@ -35,6 +36,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
+   "vercel-ai-gateway": "vercel-ai-gateway-color.svg",
+   vllm: "vllm-color.svg",
+   xai: "grok-color.svg",
++  "mimo-free": "xiaomi-color.svg",
+   xiaomi: "xiaomi-color.svg",
+ };
+ 
+
+From f5ca22859119124c8f6cf18f260811a82bb341b6 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 23:37:28 +0200
+Subject: [PATCH 7/7] fix(gui): label saved free providers and preserve user
+ auth headers
+
+---
+ gui/src/pages/Providers.tsx |  7 +++++--
+ src/adapters/openai-chat.ts |  2 +-
+ src/server/auth-cors.ts     |  1 +
+ tests/server-auth.test.ts   | 23 +++++++++++++++++++++++
+ 4 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/gui/src/pages/Providers.tsx b/gui/src/pages/Providers.tsx
+index 126ed7ef..317afc00 100644
+--- a/gui/src/pages/Providers.tsx
++++ b/gui/src/pages/Providers.tsx
+@@ -10,7 +10,7 @@ import { providerIconSrc } from "../provider-icons";
+ interface Config {
+   port: number;
+   defaultProvider: string;
+-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; disabled?: boolean }>;
++  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; authMode?: string; keyOptional?: boolean; disabled?: boolean }>;
+ }
+ 
+ interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean }
+@@ -392,6 +392,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+           })}
+           {keyProviders.map(name => {
+             const icon = providerIconSrc(name);
++            const provider = config?.providers[name];
++            const keylessFree = provider?.keyOptional === true && !provider?.hasApiKey;
+             return (
+               <div key={name} className="oauth-row">
+                 <span className="oauth-name" title={name}>
+@@ -400,7 +402,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+                 </span>
+                 <span className="oauth-status">
+                   <span className="dot dot-green" />
+-                  <span className="oauth-email muted">{t("prov.hasApiKey")}</span>
++                  <span className="oauth-email muted">{keylessFree ? "free tier" : t("prov.hasApiKey")}</span>
+                 </span>
+                 <span className="oauth-actions" aria-hidden="true" />
+               </div>
+@@ -444,6 +446,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
+                         {isDisabled ? <span className="badge badge-muted">{t("prov.disabledBadge")}</span> : <span className="badge badge-green">{t("prov.activeBadge")}</span>}
+                         {prov.authMode === "oauth" && <span className="badge badge-accent">oauth</span>}
+                         {prov.authMode === "forward" && <span className="badge badge-amber">passthrough</span>}
++                        {prov.keyOptional && <span className="badge badge-green">Free</span>}
+                       </div>
+                       <div className="muted prov-meta" style={{ fontSize: 13 }}>
+                         <code className="chip">{prov.adapter}</code>
+diff --git a/src/adapters/openai-chat.ts b/src/adapters/openai-chat.ts
+index d88715db..745f2f83 100644
+--- a/src/adapters/openai-chat.ts
++++ b/src/adapters/openai-chat.ts
+@@ -249,8 +249,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
+ 
+       const url = `${provider.baseUrl}/chat/completions`;
+       const headers: Record<string, string> = { "Content-Type": "application/json" };
+-      if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+       if (provider.headers) Object.assign(headers, provider.headers);
++      if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+ 
+       return { url, method: "POST", headers, body: JSON.stringify(body) };
+     },
+diff --git a/src/server/auth-cors.ts b/src/server/auth-cors.ts
+index 8a8ee7e2..5664bb21 100644
+--- a/src/server/auth-cors.ts
++++ b/src/server/auth-cors.ts
+@@ -210,6 +210,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
+       "disabled",
+       "allowPrivateNetwork",
+       "authMode",
++      "keyOptional",
+       "liveModels",
+       "models",
+       "contextWindow",
+diff --git a/tests/server-auth.test.ts b/tests/server-auth.test.ts
+index e966fbe7..60ecc502 100644
+--- a/tests/server-auth.test.ts
++++ b/tests/server-auth.test.ts
+@@ -149,6 +149,29 @@ describe("server local API auth", () => {
+     expect(dto.providers.openai.disabled).toBeUndefined();
+   });
+ 
++  test("safeConfigDTO exposes keyOptional for saved free-tier providers", () => {
++    const dto = safeConfigDTO({
++      ...config("127.0.0.1"),
++      providers: {
++        "mimo-free": {
++          adapter: "mimo-free",
++          baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
++          authMode: "key",
++          keyOptional: true,
++        },
++      },
++    } as OcxConfig) as {
++      providers: Record<string, Record<string, unknown>>;
++    };
++
++    expect(dto.providers["mimo-free"]).toMatchObject({
++      adapter: "mimo-free",
++      authMode: "key",
++      keyOptional: true,
++      hasApiKey: false,
++    });
++  });
++
+   test("safeConfigDTO strips URL-embedded provider secrets", () => {
+     const dto = safeConfigDTO({
+       ...config("127.0.0.1"),

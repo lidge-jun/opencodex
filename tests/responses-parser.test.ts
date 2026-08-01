@@ -2,6 +2,34 @@ import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 
 describe("Responses parser", () => {
+  test("normalizes function tool schemas to an object root without corrupting valid schemas (#745)", () => {
+    const validParameters = {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    const parsed = parseRequest({
+      model: "test-model",
+      input: "test",
+      tools: [
+        { type: "function", name: "missing_parameters" },
+        { type: "function", name: "missing_root_type", parameters: { properties: { query: { type: "string" } } } },
+        { type: "function", name: "valid_schema", parameters: validParameters },
+      ],
+    });
+
+    expect(parsed.context.tools).toEqual([
+      { name: "missing_parameters", description: "", parameters: { type: "object" } },
+      {
+        name: "missing_root_type",
+        description: "",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { name: "valid_schema", description: "", parameters: validParameters },
+    ]);
+  });
+
   test("describes the exact apply_patch freeform envelope", () => {
     const parsed = parseRequest({
       model: "xai/grok-4.5",

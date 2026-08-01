@@ -736,22 +736,65 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(catalogModelSlug(model)).toBe("deepseek/deepseek-v4");
   });
 
-  test("absent displayName leaves display_name as the slug (unchanged behavior)", () => {
+  test("absent displayName uses the native model id without the provider namespace", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "anthropic", id: "claude-sonnet-4-6", owned_by: "anthropic" },
     ]);
     const row = entries.find(e => e.slug === "anthropic/claude-sonnet-4-6");
 
-    expect(row?.display_name).toBe("anthropic/claude-sonnet-4-6");
+    expect(row?.display_name).toBe("claude-sonnet-4-6");
     expect(row?.slug).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  test("empty/whitespace displayName is ignored and falls back to the slug", () => {
+  test("namespaced native ids use only their final segment as the default label", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
-      { provider: "deepseek", id: "deepseek-v4", displayName: "   ", owned_by: "deepseek" },
+      { provider: "openrouter", id: "google/gemini-3.6-flash", displayName: "   ", owned_by: "openrouter" },
     ]);
-    const row = entries.find(e => e.slug === "deepseek/deepseek-v4");
-    expect(row?.display_name).toBe("deepseek/deepseek-v4");
+    const row = entries.find(e => e.slug === "openrouter/google-gemini-3.6-flash");
+    expect(row?.display_name).toBe("gemini-3.6-flash");
+    expect(row?.slug).toBe("openrouter/google-gemini-3.6-flash");
+  });
+
+  test("basename collisions retain only the route context needed to distinguish rows", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "openrouter", id: "reka/reka-edge", owned_by: "openrouter" },
+      { provider: "openrouter", id: "rekaai/reka-edge", owned_by: "openrouter" },
+    ]);
+    const reka = entries.find(e => e.slug === "openrouter/reka-reka-edge");
+    const rekaAi = entries.find(e => e.slug === "openrouter/rekaai-reka-edge");
+
+    expect(reka?.display_name).toBe("reka/reka-edge");
+    expect(rekaAi?.display_name).toBe("rekaai/reka-edge");
+    expect(reka?.description).toContain("openrouter/reka-reka-edge");
+    expect(rekaAi?.description).toContain("openrouter/rekaai-reka-edge");
+  });
+
+  test("the same native id exposed by multiple providers also includes the provider", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "openrouter", id: "moonshotai/kimi-k3", owned_by: "openrouter" },
+      { provider: "nvidia", id: "moonshotai/kimi-k3", owned_by: "nvidia" },
+    ]);
+
+    expect(entries.find(e => e.slug === "openrouter/moonshotai-kimi-k3")?.display_name)
+      .toBe("moonshotai/kimi-k3 (openrouter)");
+    expect(entries.find(e => e.slug === "nvidia/moonshotai-kimi-k3")?.display_name)
+      .toBe("moonshotai/kimi-k3 (nvidia)");
+  });
+
+  test("explicit display names keep precedence when they collide with a default label", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "openrouter", id: "reka/reka-edge", displayName: "reka-edge", owned_by: "openrouter" },
+      { provider: "openrouter", id: "rekaai/reka-edge", owned_by: "openrouter" },
+    ]);
+
+    expect(entries.find(e => e.slug === "openrouter/reka-reka-edge")?.display_name).toBe("reka-edge");
+    expect(entries.find(e => e.slug === "openrouter/rekaai-reka-edge")?.display_name).toBe("rekaai/reka-edge");
+  });
+
+  test("an aliased combo keeps its public alias when no displayName is configured", () => {
+    const withAlias = { provider: "combo", id: "x", alias: "fast-chat", owned_by: "combo" };
+    const entries = buildCatalogEntries(nativeTemplate(), [], [withAlias], undefined, false, "default", new Set(["fast-chat"]));
+    expect(entries.find(e => e.slug === "fast-chat")?.display_name).toBe("fast-chat");
   });
 
   test("displayName never affects the routing slug, alias, or provider", () => {

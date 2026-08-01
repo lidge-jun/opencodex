@@ -21,7 +21,7 @@ import {
   submitManualLoginCode,
   upsertOAuthProvider,
 } from "../oauth";
-import { removeCredential } from "../oauth/store";
+import { OAuthMutationBusyError, removeCredential } from "../oauth/store";
 import { providerDestinationResolvedError } from "../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../oauth/key-providers";
 import { deriveProviderPresets } from "../providers/derive";
@@ -65,9 +65,12 @@ import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
+import { handleSidebarRoutes } from "./management/sidebar-routes";
 import type { ManagementContext } from "./management/context";
 export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
+import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
+import { managementBodyTooLargeResponse } from "./management/body";
 
 // installed npm version instead of a stale hardcode.
 export const VERSION = (() => {
@@ -122,15 +125,32 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     } catch { /* best-effort */ }
   }
   const ctx: ManagementContext = { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort };
-  const routed =
-    (await handleConfigRoutes(ctx))
+  let routed: Response | null;
+  try {
+    routed = (await handleConfigRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
-    ??     (await handleSystemRoutes(ctx));
+    ??     (await handleSystemRoutes(ctx))
+      ?? (await handleSidebarRoutes(ctx));
+  } catch (error) {
+    const tooLarge = managementBodyTooLargeResponse(error, req, config);
+    if (tooLarge) return tooLarge;
+    if (error instanceof OAuthMutationBusyError) {
+      return new Response(JSON.stringify({ error: { type: "server_error", code: "oauth_mutation_busy", message: error.message } }), {
+        status: 503,
+        headers: { "content-type": "application/json", "Retry-After": "1" },
+      });
+    }
+    if (!(error instanceof CatalogGatherBusyError)) throw error;
+    return new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
+      status: 503,
+      headers: { "content-type": "application/json", "Retry-After": "1" },
+    });
+  }
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
@@ -165,7 +185,23 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
 
   if (url.pathname.startsWith("/api/codex-auth/")) {
     const { handleCodexAuthAPI } = await import("../codex/auth-api");
-    return handleCodexAuthAPI(req, url, config);
+    const { ConfigMutationLockError } = await import("../config");
+    const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
+    try {
+      return await handleCodexAuthAPI(req, url, config);
+    } catch (error) {
+      // Credential writers remap ConfigMutationLockError to CodexCredentialRefreshLockTimeoutError;
+      // treat both as the same retryable busy response.
+      if (error instanceof ConfigMutationLockError || error instanceof CodexCredentialRefreshLockTimeoutError) {
+        return jsonResponse(
+          { error: "Configuration is busy; retry shortly", code: "CONFIG_MUTATION_LOCK_UNAVAILABLE" },
+          503,
+          req,
+          config,
+        );
+      }
+      throw error;
+    }
   }
 
   return null;

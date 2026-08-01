@@ -1,0 +1,25 @@
+# WP060 — #139 Codex account pool embedding
+
+- Base/branch: ~~WP050 tip -> `codex/wibias-139-06-codex-account-pool`~~ **P-amendment (2026-07-17): commit directly onto dev@09913a6c.**
+- P stale-check (2026-07-17):
+  - Source extracts CodexAuth.tsx (407 lines on dev) into CodexAccountPool.tsx (535 lines: pool + CodexForwardAuthStatus) and DELETES the page. Dev's CodexAuth has since gained v2 additions the source predates: `codexAccountModeState` banner state from codex-multi-state.ts (single-provider session, 14e57661). Disposition: EXTRACT the pool component (interview: preserve behavior, no redesign) but KEEP the CodexAuth page as a thin wrapper rendering <CodexAccountPool embedded={false}> plus its v2 mode banner — do NOT delete the page or its App.tsx route; deleting is the source's Providers-workspace-era decision that belongs to WP080+ if ever.
+  - The extraction MUST carry over dev's current behaviors verbatim (credits/reset tickets, reauth, auto-switch threshold, add/cancel/remove, quota refresh) — the WP020-deferred repoint lands here: tests/rate-limit-reset-credits.test.ts source-reads flip from pages/CodexAuth.tsx to components/CodexAccountPool.tsx (two hunks deferred at WP020).
+  - AddCodexAccountModal: dev already carries the hardened v2 lifecycle (8088ff5f window.open fix + cancel endpoint wiring possible via WP040) — source's 189-line diff predates it; take NOTHING that regresses host-mediated URL opening. Only adopt deltas that are pure extraction adjustments (import paths).
+  - CodexForwardAuthStatus (source pool export): small status card used by the source's Providers Overview — WP090 consumer. Include it in the extracted component file now (dead-export until WP090) ONLY if trivially carried; otherwise defer to WP090. Decide at B by size.
+  - Providers.tsx wiring: defer embedding to WP080/090 (the workspace shell/detail children own that surface); this child only creates the reusable component + slims the page. Locale keys: only if new ones are consumed (extraction should reuse existing codexAuth.* keys).
+  - styles/provider-accounts.css: only selectors the extracted component actually needs beyond existing styles; may be empty/skipped if extraction reuses current classes (decide at B).
+  - Runtime GUI QA deferred to WP100 (same ruling as WP050). Gates: the three codex tests + gui lint/tsc/build + rate-limit-reset-credits (repointed) + provider-workspace tests untouched.
+- A-audit corrections (2026-07-17, claude-fable-5 — 2 blockers folded):
+  - **accountModeState is a POOL PROP.** It is not banner-only: it drives the switch toast (poolPreparedToast), main/pool card badges (poolPrepared vs nextSession), and the confirm modal copy (preparePoolTitle/prepareForPool). Wrapper fetches /api/config on its existing cadence and passes `accountModeState` down; the pool renders all mode-aware copy from the prop. The source pool's hardcoded v1 strings (switched/setAsNext) must NOT be adopted.
+  - **Dev JSX verbatim.** The extracted non-embedded rendering carries dev's exact JSX (layout, add/EmptyState, IconLock, codexAuth.* keys) — the source's variant strings/layout are rejected.
+  - CodexForwardAuthStatus: likely WP090 deferral (it consumes pws.* keys, contradicting key-reuse); confirm at B.
+  - `embedded` prop lands as a no-op stub now (WP090 owns the embedded branch/styles/keys).
+  - Single fetch ownership: pool owns the accounts/active load; wrapper owns the /api/config fetch feeding the banner + the pool prop.
+- MODIFY `gui/src/components/AddCodexAccountModal.tsx`: preserve account-add lifecycle, cancellation, focus, and host-mediated URL opening; no parallel OAuth state owner.
+- Interview decision: preserve existing behavior. Minimal judgment — keep Wibias's account lifecycle intact, no redesign.
+- REWRITE extracted `gui/src/components/CodexAccountPool.tsx`: account rows, active/reauth state, credits, add/remove/select actions in bounded subcomponents.
+- MODIFY `gui/src/pages/Providers.tsx` only to pass existing account handlers/data into the pool.
+- MODIFY locale files with consumed account keys; NEW `gui/src/styles/provider-accounts.css`.
+- Before -> after: standalone/duplicated account page logic -> reusable pool embedded through one state owner.
+- Verification: `bun test tests/codex-auth-api.test.ts tests/codex-account-store.test.ts tests/codex-account-label.test.ts`; `bun run --cwd gui lint`; `bun run --cwd gui build`; `git diff --check`; diff <=500. Run `006_gui_qa_protocol.md` with `WP_ID=060 ROUTE='#providers'`; record add/cancel/remove/reauth states in `evidence/WP060/{add,cancel,remove,reauth}.md` plus screenshot JSON.
+- Rollback: remove embedding and retain existing Codex Auth page behavior.

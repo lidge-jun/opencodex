@@ -90,3 +90,42 @@ describe("per-model wire override (#404)", () => {
       .toBe("openai-responses");
   });
 });
+
+describe("registry per-model wire defaults", () => {
+  function deepseek(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+    return gateway({
+      baseUrl: "https://api.deepseek.com",
+      authMode: "key",
+      ...overrides,
+    });
+  }
+
+  test("routes only the official Flash API id through Responses", () => {
+    expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-flash", deepseek()).adapter)
+      .toBe("openai-responses");
+    expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-pro", deepseek()).adapter)
+      .toBe("openai-chat");
+    // The dated release label is not the API model id and must not be silently rewritten.
+    expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-flash-0731", deepseek()).adapter)
+      .toBe("openai-chat");
+  });
+
+  test("an explicit Chat override opts Flash back out of the default", () => {
+    const provider = deepseek({ modelAdapters: { "deepseek-v4-flash": "openai-chat" } });
+    expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-flash", provider).adapter)
+      .toBe("openai-chat");
+  });
+
+  test("defaults do not apply when the provider is already on another wire", () => {
+    expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-flash", deepseek({ adapter: "anthropic" })).adapter)
+      .toBe("anthropic");
+  });
+
+  test("keeps provider credentials and destination untouched", () => {
+    const provider = deepseek({ apiKey: "test-key" });
+    const resolved = resolveWireProtocolOverride("deepseek", "deepseek-v4-flash", provider);
+    expect(provider.adapter).toBe("openai-chat");
+    expect(resolved.apiKey).toBe("test-key");
+    expect(resolved.baseUrl).toBe("https://api.deepseek.com");
+  });
+});

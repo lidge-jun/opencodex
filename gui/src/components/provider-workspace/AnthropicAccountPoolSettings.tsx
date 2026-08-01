@@ -39,42 +39,46 @@ export default function AnthropicAccountPoolSettings({
   useEffect(() => {
     let cancelled = false;
     const ac = new AbortController();
-    const load = async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/oauth/accounts/pool?provider=anthropic`, {
-          signal: ac.signal,
-        });
+    // Promise chain rather than async/await: every setter then lives in a `.then`
+    // callback guarded by the same `cancelled` flag, which is the shape static analysis
+    // (react-doctor no-set-state-after-await-in-effect) can actually verify. The
+    // behaviour is unchanged — the guard and the abort controller were already here.
+    //
+    // Deferred by a microtask, not a timer: a timer had to be cancelled in cleanup, so a
+    // mount-then-unmount dropped the request entirely. The abort controller already covers
+    // in-flight cancellation, which is the part that actually needs to be cancellable.
+    void Promise.resolve()
+      .then(() => fetch(`${apiBase}/api/oauth/accounts/pool?provider=anthropic`, { signal: ac.signal }))
+      .then(res => {
         if (!res.ok) throw new Error("load");
-        const json = await res.json() as {
+        return res.json() as Promise<{
           enabled?: boolean;
           autoSwitchThreshold?: number;
           strategy?: unknown;
           stickyLimit?: unknown;
-        };
+        }>;
+      })
+      .then(json => {
         if (cancelled) return;
-        const nextEnabled = json.enabled === true;
         const nextThreshold = typeof json.autoSwitchThreshold === "number" ? json.autoSwitchThreshold : 80;
-        const nextStrategy = normalizeAccountPoolStrategy(json.strategy);
         const nextSticky = normalizeAccountPoolStickyLimit(json.stickyLimit);
         setState({
-          enabled: nextEnabled,
+          enabled: json.enabled === true,
           threshold: nextThreshold,
-          strategy: nextStrategy,
+          strategy: normalizeAccountPoolStrategy(json.strategy),
           stickyLimit: nextSticky,
         });
         setDraft(String(nextThreshold));
         setStickyDraft(String(nextSticky));
         setLoadError(false);
-      } catch {
+      })
+      .catch(() => {
         if (cancelled || ac.signal.aborted) return;
         setLoadError(true);
-      }
-    };
-    const timer = window.setTimeout(() => { void load(); }, 0);
+      });
     return () => {
       cancelled = true;
       ac.abort();
-      window.clearTimeout(timer);
     };
   }, [apiBase]);
 

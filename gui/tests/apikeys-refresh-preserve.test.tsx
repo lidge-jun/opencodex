@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import ApiKeys from "../src/pages/ApiKeys";
 
 const originalFetch = globalThis.fetch;
@@ -10,6 +11,7 @@ let restoreGlobals: (() => void) | undefined;
 let previousLanguageDescriptor: PropertyDescriptor | undefined;
 
 beforeEach(() => {
+  clearClientResourceStoresForTests();
   previousLanguageDescriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, "language");
   Object.defineProperty(globalThis.navigator, "language", { configurable: true, value: "en-US" });
   const previous = {
@@ -38,18 +40,29 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearClientResourceStoresForTests();
   restoreGlobals?.();
 });
+
+const AUTH_MATRIX = [
+  { endpoint: "/v1/responses", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
+  { endpoint: "/v1/chat/completions", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
+  { endpoint: "/v1/messages", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  { endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+];
 
 const EXISTING_KEY = {
   id: "key-1",
   name: "existing-key",
-  prefix: "ocx_exist",
+  prefix: "ocx_data_12345678...",
   createdAt: "2026-01-15T12:00:00.000Z",
+  usage: { requests7d: 3, totalRequests: 8, lastUsedAt: "2026-07-30T12:00:00.000Z" },
 };
 
 const KEYS_OK = {
   keys: [EXISTING_KEY],
+  attributionSince: "2026-07-20T00:00:00.000Z",
+  authMatrix: AUTH_MATRIX,
   baseUrl: "http://127.0.0.1:10100/v1",
   endpoint: "http://127.0.0.1:10100/v1/responses",
   responsesEndpoint: "http://127.0.0.1:10100/v1/responses",
@@ -104,7 +117,7 @@ test("successful key create keeps last-good keys visible when follow-up refresh 
     });
 
     expect(container.textContent).toContain("existing-key");
-    expect(container.textContent).toContain("ocx_exist");
+    expect(container.textContent).toContain("existing-key");
     expect(container.textContent).toContain("http://127.0.0.1:10100/v1");
     expect(container.textContent).not.toContain("Could not load API keys.");
 
@@ -124,7 +137,7 @@ test("successful key create keeps last-good keys visible when follow-up refresh 
 
     expect(keysGets).toBeGreaterThanOrEqual(2);
     expect(container.textContent).toContain("existing-key");
-    expect(container.textContent).toContain("ocx_exist");
+    expect(container.textContent).toContain("existing-key");
     expect(container.textContent).toContain("http://127.0.0.1:10100/v1");
     expect(container.textContent).toContain("Could not load API keys.");
     expect(container.textContent).not.toContain("No API keys yet.");
@@ -212,7 +225,7 @@ test("successful key delete keeps last-good keys visible when follow-up refresh 
 
     expect(keysGets).toBeGreaterThanOrEqual(2);
     expect(container.textContent).toContain("existing-key");
-    expect(container.textContent).toContain("ocx_exist");
+    expect(container.textContent).toContain("existing-key");
     expect(container.textContent).toContain("Could not load API keys.");
   } finally {
     await act(async () => root.unmount());

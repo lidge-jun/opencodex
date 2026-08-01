@@ -35,6 +35,7 @@ import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgen
 import type { CatalogModel, MultiAgentMode, RawEntry } from "./parsing";
 import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, shouldUpgradeToUpstreamEntry, upstreamNativeEntry } from "./metadata";
 import { loadCatalogForSync, resetBundledCatalogCacheForTests } from "./bundled";
+import { isMultiAgentV2Enabled } from "../features";
 import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
 import { clearGatherRoutedModelsInflight, filterCatalogVisibleModels, gatherRoutedModels, lastDropWarnSignature } from "./provider-fetch";
 import { clearLastComboCatalogOmissions, comboCatalogWarningSignatures, comboMasqueradeCollisionWarnings, exactComboCatalogSlugs, openAiApiCollisionWarnings, resolveSlugAliasCollisions, slugAliasCollisionWarnings, warnComboMasqueradeCollisionOnce } from "./aggregation";
@@ -49,6 +50,26 @@ export type SubagentRosterExclusionReason =
   | "picker_hidden"
   | "surface_incompatible"
   | "outside_display_limit";
+
+/**
+ * Whether a catalog entry may be offered as a V2 subagent model.
+ *
+ * Upstream (codex-rs 92938d880) requires `multi_agent_version === "v2"` exactly,
+ * because upstream assumes a single backend serves every model. opencodex routes
+ * many providers, so that equality would reject the cross-provider spawns this
+ * proxy exists to enable.
+ *
+ * Decision (option B, devlog 260730_codex_rs_upstream_v2_live_handoff/060): any
+ * model opencodex actually routes is eligible. An entry pinned to a DIFFERENT
+ * multi-agent backend (`v1`) stays excluded, because that pin is a real capability
+ * statement rather than an absence of information. An unpinned entry (null or
+ * absent) is a routed or unpinned-native model and is allowed. The three-way
+ * distinction is the substance; do not flatten it into a truthiness check.
+ */
+export function isEligibleV2SubagentEntry(entry: RawEntry): boolean {
+  const pinned = entry.multi_agent_version;
+  return pinned === "v2" || pinned === null || pinned === undefined;
+}
 
 export interface EffectiveSubagentModel {
   model: string;
@@ -86,7 +107,7 @@ export function effectiveSubagentRoster(
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => typeof entry.slug === "string")
     .filter(({ entry }) => entry.visibility === "list")
-    .filter(({ entry }) => surface !== "v2" || entry.multi_agent_version === "v2")
+    .filter(({ entry }) => surface !== "v2" || isEligibleV2SubagentEntry(entry))
     .sort((left, right) => {
       const leftPriority = typeof left.entry.priority === "number" && Number.isFinite(left.entry.priority)
         ? left.entry.priority : Number.MAX_SAFE_INTEGER;
@@ -110,7 +131,7 @@ export function effectiveSubagentRoster(
     if (entry.visibility !== "list") {
       return [{ configured: model, catalogModel, reason: "picker_hidden" }];
     }
-    if (surface === "v2" && entry.multi_agent_version !== "v2") {
+    if (surface === "v2" && !isEligibleV2SubagentEntry(entry)) {
       return [{ configured: model, catalogModel, reason: "surface_incompatible" }];
     }
     if (!candidates.some(candidate => candidate.model === catalogModel)) {
@@ -145,6 +166,7 @@ export function deriveEntry(
   priority: number,
   model?: CatalogModel,
   exactComboSlugs: ReadonlySet<string> = new Set(),
+  fallbackDisplayName?: string,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
   const isRouted = model !== undefined;
@@ -181,7 +203,7 @@ export function deriveEntry(
       applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
       if (model) applyJawcodeCatalogMetadata(e, model.provider, model.id, model.contextCap);
-      applyCatalogModelMetadata(e, model);
+      applyCatalogModelMetadata(e, model, fallbackDisplayName);
     } else {
       applyNativeOpenAiContextOverride(e);
       if (isGpt56NativeSlug(slug)) ensureGpt56ReasoningLevels(e);
@@ -218,12 +240,56 @@ export function deriveEntry(
     if (isGpt56NativeSlug(slug)) ensureGpt56ReasoningLevels(entry);
   }
   if (model && isRouted) applyJawcodeCatalogMetadata(entry, model.provider, model.id, model.contextCap);
-  applyCatalogModelMetadata(entry, model);
+  applyCatalogModelMetadata(entry, model, fallbackDisplayName);
   if (!isRouted) applyNativeOpenAiContextOverride(entry);
   return ensureStrictCatalogFields(normalizeServiceTiers(entry), {
     preserveExactInputModalities: preserveExact,
     isRouted,
   });
+}
+
+function configuredDisplayName(model: CatalogModel): string {
+  return typeof model.displayName === "string" ? model.displayName.trim() : "";
+}
+
+function defaultPickerLabel(model: CatalogModel): string {
+  const nativeId = model.id.trim();
+  return nativeId.slice(nativeId.lastIndexOf("/") + 1).trim();
+}
+
+/**
+ * Keep the common picker path compact, but retain only as much route context as needed when two
+ * emitted rows would otherwise have the same label. Explicit display names and combo aliases are
+ * author-owned and never rewritten. If distinct native ids share a basename, the native id is
+ * enough; if the same native id is exposed by multiple providers, append the provider as well.
+ */
+function routedFallbackDisplayNames(models: readonly CatalogModel[]): Map<CatalogModel, string> {
+  const intendedLabel = (model: CatalogModel): string =>
+    configuredDisplayName(model) || model.alias?.trim() || defaultPickerLabel(model);
+  const labelCounts = new Map<string, number>();
+  const nativeIdCounts = new Map<string, number>();
+  for (const model of models) {
+    const label = intendedLabel(model);
+    if (!label) continue;
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+    const nativeKey = `${label}\u0000${model.id.trim()}`;
+    nativeIdCounts.set(nativeKey, (nativeIdCounts.get(nativeKey) ?? 0) + 1);
+  }
+
+  const out = new Map<CatalogModel, string>();
+  for (const model of models) {
+    if (configuredDisplayName(model) || model.alias) continue;
+    const label = defaultPickerLabel(model);
+    if (!label) continue;
+    if ((labelCounts.get(label) ?? 0) <= 1) {
+      out.set(model, label);
+      continue;
+    }
+    const nativeId = model.id.trim();
+    const sameNativeIdCount = nativeIdCounts.get(`${label}\u0000${nativeId}`) ?? 0;
+    out.set(model, sameNativeIdCount > 1 ? `${nativeId} (${model.provider})` : nativeId);
+  }
+  return out;
 }
 
 export function buildCatalogEntries(
@@ -250,22 +316,28 @@ export function buildCatalogEntries(
     if (rank.has(slug)) e.priority = rank.get(slug)!;
     out.push(e);
   }
-  for (const m of goModels) {
-    if (collisionSkipped.has(m)) continue;
+  const routedModels = goModels.filter(m => {
+    if (collisionSkipped.has(m)) return false;
     const slug = catalogModelSlug(m);
     if (m.provider !== COMBO_NAMESPACE && comboPublicSlugs.has(slug)) {
       warnComboMasqueradeCollisionOnce(slug);
-      continue;
+      return false;
     }
+    return true;
+  });
+  const fallbackDisplayNames = routedFallbackDisplayNames(routedModels);
+  for (const m of routedModels) {
+    const slug = catalogModelSlug(m);
     // Provider rows use the one-slash slug codec; combo aliases intentionally override that
     // public slug and may be bare.
     const e = deriveEntry(
       template,
       slug,
-      `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`,
+      `Routed via opencodex → ${slug} (${m.owned_by ?? m.provider}).`,
       5,
       m,
       exactComboSlugs,
+      fallbackDisplayNames.get(m),
     );
     // Featured picks may be stored raw (legacy) or encoded — honor both.
     const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
@@ -284,7 +356,7 @@ export function buildCatalogEntries(
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode);
+  return applyMultiAgentMode(out, multiAgentMode, isMultiAgentV2Enabled());
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -458,7 +530,7 @@ export function mergeCatalogEntriesForSync(
   });
   // Native enable/disable (single choke point: bare slugs in `disabledModels`). Runs as the
   // LAST pass so the upstream-upgrade branch above can never clobber a hide flag back to list.
-  return applyMultiAgentMode(applyNativeVisibility(mergedEntries, disabledNative), multiAgentMode);
+  return applyMultiAgentMode(applyNativeVisibility(mergedEntries, disabledNative), multiAgentMode, isMultiAgentV2Enabled());
 }
 
 export async function syncCatalogModels(config: OcxConfig): Promise<{
@@ -470,6 +542,12 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   const catalogPath = readCodexCatalogPath();
   const catalog = loadCatalogForSync(catalogPath);
   if (!catalog) return { added: 0, path: catalogPath, catalogWritten: false, comboOmissions: [] };
+
+  // The bundled catalog is a reliable native template on the default path, but it is not the
+  // merge source. Preservation must inspect the file that this sync is about to overwrite;
+  // otherwise an empty/partial provider gather cannot see routed or user-native rows on disk.
+  const onDiskCatalog = readCatalog(catalogPath);
+  const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
 
   const template = findNativeTemplate(catalog);
 
@@ -513,7 +591,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   // bare gpt-* rows that hard-404 via NoEnabledOpenAiProviderError. Keep natives when no
   // providers are configured yet (fresh install / catalog bootstrap tests).
   const includeNativeOpenAi = enabledProviders.length === 0 || hasCanonicalOpenai;
-  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi);
+  catalog.models = mergeCatalogEntriesForSync(catalogModelsForMerge, goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi);
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");

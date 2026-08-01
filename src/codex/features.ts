@@ -1,6 +1,19 @@
 /**
  * features.ts — codex feature-flag view for $CODEX_HOME/config.toml.
  *
+ * Scope boundary: this module mirrors ONLY `multi_agent_v2`, because opencodex has
+ * to migrate its concurrency value across the v1/v2 boundary and expose the
+ * multi-agent config surface. Every other upstream feature flag is delegated to
+ * the native `codex features` command (see src/cli/v2.ts) and must not be
+ * hardcoded here.
+ *
+ * Upstream reshapes flags freely: in the 1f0566d3f..5a1097ed2 range alone,
+ * `code_mode_host` changed from a boolean to a table (it is Stage::Stable and
+ * default-enabled upstream), `enable_fanout` and `item_ids` were retired to
+ * Stage::Removed ("useless but kept for backward compatibility"), and several
+ * under-development flags were added. Delegation is what keeps opencodex out of
+ * that churn.
+ *
  * Used by the catalog v2-gated-ultra policy (devlog/260709_v2_gated_ultra) and the
  * `ocx v2` toggle surface. The FLAG itself is never written here — toggling goes
  * through the official `codex features enable|disable` CLI (format-preserving).
@@ -141,6 +154,40 @@ export function getAgentsMaxThreads(configPath?: string): number | null {
 }
 
 /**
+ * Current `[agents] enabled`. Upstream defaults this to true and lets an enabled
+ * `features.multi_agent_v2` override it entirely (codex-rs core/src/config/mod.rs
+ * multi_agent_version_override returns V2 first at :1521-1523; `enabled = false`
+ * only takes effect with V2 off), so `null` means "unset, upstream default applies"
+ * and is NOT the same as `true`.
+ */
+export function getAgentsEnabled(configPath?: string): boolean | null {
+  const content = readConfigText(configPath);
+  if (content === null) return null;
+  const agents = tomlTableBody(content, "agents");
+  if (agents === null) return null;
+  const m = agents.match(/^\s*enabled\s*=\s*(true|false)\s*(?:#.*)?$/m);
+  return m ? m[1] === "true" : null;
+}
+
+/**
+ * Current `[agents] max_depth`. Upstream applies this to V1 agent threads only and
+ * ignores it under V2 (config_toml.rs: "Maximum nesting depth for V1 agent threads.
+ * Ignored by V2."). The upstream type is `Option<i32>` with no minimum, so a
+ * negative value is valid config that effectively disables V1 child spawning —
+ * do not "correct" it, and do not present this as an effective V2 limit.
+ */
+export function getAgentsMaxDepth(configPath?: string): number | null {
+  const content = readConfigText(configPath);
+  if (content === null) return null;
+  const agents = tomlTableBody(content, "agents");
+  if (agents === null) return null;
+  const m = agents.match(/^\s*max_depth\s*=\s*(-?\d+)\s*(?:#.*)?$/m);
+  if (!m) return null;
+  const value = Number(m[1]);
+  return Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647 ? value : null;
+}
+
+/**
  * Current `features.multi_agent_v2.max_concurrent_threads_per_session`, from
  * either the dedicated or inline-table form; null means the Codex default.
  */
@@ -155,6 +202,47 @@ export function getMaxConcurrentThreads(configPath?: string): number | null {
   if (!m) return null;
   const value = Number(m[1]);
   return Number.isFinite(value) && value >= 1 ? value : null;
+}
+
+/** Largest V1 child limit we translate. Well below Number.MAX_SAFE_INTEGER and far
+ *  above any real concurrency setting; upstream's usize saturates, ours would silently
+ *  lose precision. */
+const MAX_TRANSLATABLE_V1_CHILD_LIMIT = 1_000_000;
+/** The V2 side is one larger by construction: it counts the root agent's own slot, so
+ *  the image of the maximum V1 value must itself be translatable back. */
+const MAX_TRANSLATABLE_V2_TOTAL_LIMIT = MAX_TRANSLATABLE_V1_CHILD_LIMIT + 1;
+
+export function isTranslatableV1ChildLimit(limit: number): boolean {
+  return Number.isInteger(limit) && limit >= 1 && limit <= MAX_TRANSLATABLE_V1_CHILD_LIMIT;
+}
+
+export function isTranslatableV2TotalLimit(limit: number): boolean {
+  return Number.isInteger(limit) && limit >= 1 && limit <= MAX_TRANSLATABLE_V2_TOTAL_LIMIT;
+}
+
+/**
+ * Upstream counts the root agent inside the V2 thread limit but not inside the legacy
+ * `[agents]` limit (codex-rs core/src/config/mod.rs resolve_multi_agent_v2_config applies
+ * saturating_add(1) to the [agents] value; the inverse saturating_sub(1) appears at
+ * mod.rs:1555). These helpers keep our migrations on the same side of that boundary.
+ */
+export function v1ChildLimitToV2TotalLimit(childLimit: number): number {
+  if (!isTranslatableV1ChildLimit(childLimit)) {
+    throw new RangeError(`v1 child limit out of translatable range: ${childLimit}`);
+  }
+  return childLimit + 1;
+}
+
+/**
+ * Inverse of `v1ChildLimitToV2TotalLimit`. A V2 total of 1 means "root only, no
+ * children", which has no representable legacy child count >= 1, so it clamps to 1
+ * rather than writing 0 and tripping upstream's `>= 1` validation.
+ */
+export function v2TotalLimitToV1ChildLimit(totalLimit: number): number {
+  if (!isTranslatableV2TotalLimit(totalLimit)) {
+    throw new RangeError(`v2 total limit out of translatable range: ${totalLimit}`);
+  }
+  return Math.max(1, totalLimit - 1);
 }
 
 /**
@@ -223,6 +311,378 @@ export function setMaxConcurrentThreads(value: number, configPath?: string, migr
 }
 
 type ConfigEditResult = { ok: true; changed: boolean } | { ok: false; error: string };
+
+/**
+ * Encode a string as a TOML single-line basic string.
+ *
+ * Character-by-character on purpose. A chained-replace implementation
+ * (`.replace(/\\/g, "\\\\").replace(/\t/g, "\\t")`) corrupts input: the backslash
+ * pass runs first, then later passes insert NEW backslashes the first pass can no
+ * longer protect. Single-line basic strings handle every case including embedded
+ * `"""`, which a multi-line `"""..."""` form cannot.
+ */
+function encodeTomlBasicString(value: string): string {
+  let out = '"';
+  for (const ch of value) {
+    switch (ch) {
+      case "\\": out += "\\\\"; break;
+      case '"': out += '\\"'; break;
+      case "\n": out += "\\n"; break;
+      case "\r": out += "\\r"; break;
+      case "\t": out += "\\t"; break;
+      case "\b": out += "\\b"; break;
+      case "\f": out += "\\f"; break;
+      default: {
+        const code = ch.codePointAt(0)!;
+        out += code < 0x20 || code === 0x7f
+          ? `\\u${code.toString(16).padStart(4, "0")}`
+          : ch;
+      }
+    }
+  }
+  return out + '"';
+}
+
+/**
+ * Decode one TOML string token INCLUDING its quotes. Basic strings (`"..."`)
+ * unescape; literal strings (`'...'`) are verbatim — a backslash is not special
+ * there. Returns null for anything that is not a string token.
+ */
+function decodeTomlStringToken(token: string): string | null {
+  if (token.length < 2) return null;
+  if (token.startsWith("'")) {
+    return token.endsWith("'") ? token.slice(1, -1) : null;
+  }
+  if (!token.startsWith('"') || !token.endsWith('"')) return null;
+  const body = token.slice(1, -1);
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch !== "\\") { out += ch; continue; }
+    const esc = body[++i];
+    switch (esc) {
+      case "\\": out += "\\"; break;
+      case '"': out += '"'; break;
+      case "n": out += "\n"; break;
+      case "r": out += "\r"; break;
+      case "t": out += "\t"; break;
+      case "b": out += "\b"; break;
+      case "f": out += "\f"; break;
+      case "u": {
+        const code = parseInt(body.slice(i + 1, i + 5), 16);
+        if (Number.isNaN(code)) return null;
+        out += String.fromCodePoint(code);
+        i += 4;
+        break;
+      }
+      case "U": {
+        const code = parseInt(body.slice(i + 1, i + 9), 16);
+        if (Number.isNaN(code)) return null;
+        out += String.fromCodePoint(code);
+        i += 8;
+        break;
+      }
+      default: return null;
+    }
+  }
+  return out;
+}
+
+/**
+ * End index (exclusive) of the TOML value starting at or after `start` in `text`.
+ * String-aware: basic strings honor backslash escapes, literal strings do not.
+ * Inline tables and arrays nest and are scanned with the same awareness.
+ */
+function scanTomlValueEnd(text: string, start: number): number {
+  let i = start;
+  while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+  const first = text[i];
+  if (first === '"') {
+    i++;
+    while (i < text.length) {
+      if (text[i] === "\\") { i += 2; continue; }
+      if (text[i] === '"') return i + 1;
+      i++;
+    }
+    return text.length;
+  }
+  if (first === "'") {
+    const close = text.indexOf("'", i + 1);
+    return close === -1 ? text.length : close + 1;
+  }
+  if (first === "{") {
+    const close = findInlineTableEnd(text, i);
+    return close === -1 ? text.length : close + 1;
+  }
+  if (first === "[") {
+    let depth = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '"' || c === "'") { i = scanTomlValueEnd(text, i); continue; }
+      if (c === "[") depth++;
+      else if (c === "]") { depth--; if (depth === 0) return i + 1; }
+      i++;
+    }
+    return text.length;
+  }
+  while (i < text.length && !/[\s,}\]#]/.test(text[i])) i++;
+  return i;
+}
+
+/** Index of the `}` matching the `{` at `openIdx`, string-aware, or -1. */
+function findInlineTableEnd(text: string, openIdx: number): number {
+  let depth = 0;
+  let i = openIdx;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"' || c === "'") { i = scanTomlValueEnd(text, i); continue; }
+    if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return i; }
+    i++;
+  }
+  return -1;
+}
+
+interface InlineEntry { keyStart: number; valueStart: number; valueEnd: number }
+
+/**
+ * Locate `key = value` inside the inline-table body spanning [bodyStart, bodyEnd)
+ * (exclusive of the braces), string-aware on both keys and values, or null.
+ */
+function findInlineEntry(text: string, bodyStart: number, bodyEnd: number, key: string): InlineEntry | null {
+  let i = bodyStart;
+  while (i < bodyEnd) {
+    while (i < bodyEnd && /[\s,]/.test(text[i])) i++;
+    if (i >= bodyEnd) break;
+    const entryStart = i;
+    let keyText: string;
+    if (text[i] === '"' || text[i] === "'") {
+      const keyEnd = scanTomlValueEnd(text, i);
+      keyText = decodeTomlStringToken(text.slice(i, keyEnd)) ?? "";
+      i = keyEnd;
+    } else {
+      const m = /^[A-Za-z0-9_-]+/.exec(text.slice(i, bodyEnd));
+      if (!m) break;
+      keyText = m[0];
+      i += m[0].length;
+    }
+    while (i < bodyEnd && /\s/.test(text[i])) i++;
+    if (text[i] !== "=") { i = entryStart + 1; continue; }
+    i++;
+    while (i < bodyEnd && /\s/.test(text[i])) i++;
+    const valueStart = i;
+    const valueEnd = Math.min(scanTomlValueEnd(text, valueStart), bodyEnd);
+    if (keyText === key) return { keyStart: entryStart, valueStart, valueEnd };
+    i = valueEnd;
+  }
+  return null;
+}
+
+/**
+ * Set or remove one scalar key inside a top-level TOML table, preserving every
+ * other line byte-for-byte — including the existing value's trailing comment,
+ * which is kept verbatim. `encoded` is the already-serialized RHS
+ * (`encodeTomlBasicString` for strings, `String(n)` for numbers, `"true"`/`"false"`
+ * for booleans); null removes the key. Creates the table when absent. Returns the
+ * new content; returning the input unchanged means no-op.
+ */
+function editScalarInTable(content: string, table: string, key: string, encoded: string | null): string {
+  const eol = dominantEol(content);
+  const lines = content.split(/\r?\n/);
+  const headerRe = new RegExp(`^\\s*\\[${table.replace(/\./g, "\\.")}\\]\\s*(?:#.*)?$`);
+  const headerIdx = lines.findIndex(l => headerRe.test(l));
+  if (headerIdx === -1) {
+    if (encoded === null) return content;
+    const separator = lines.length > 0 && lines[lines.length - 1] !== "" ? [""] : [];
+    lines.push(...separator, `[${table}]`, `${key} = ${encoded}`);
+    return applyEol(lines.join("\n"), eol);
+  }
+  let end = lines.length;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    if (/^\s*\[/.test(lines[i])) { end = i; break; }
+  }
+  const keyRe = new RegExp(`^(\\s*)${key}\\s*=\\s*`);
+  for (let i = headerIdx + 1; i < end; i++) {
+    const m = lines[i].match(keyRe);
+    if (!m) continue;
+    // The existing value may itself contain '#', so scan the value token
+    // string-aware instead of splitting on '#'.
+    const line = lines[i];
+    const valueStart = m[0].length;
+    const valueEnd = scanTomlValueEnd(line, valueStart);
+    const trailing = line.slice(valueEnd);
+    if (encoded === null) {
+      lines.splice(i, 1);
+      return applyEol(lines.join("\n"), eol);
+    }
+    if (line.slice(valueStart, valueEnd).trim() === encoded) return content;
+    lines[i] = `${m[1]}${key} = ${encoded}${trailing}`;
+    return applyEol(lines.join("\n"), eol);
+  }
+  if (encoded === null) return content;
+  lines.splice(headerIdx + 1, 0, `${key} = ${encoded}`);
+  return applyEol(lines.join("\n"), eol);
+}
+
+/** Persist `[agents] enabled = value`, or remove the key when `value` is null. */
+export function setAgentsEnabled(value: boolean | null, configPath?: string): ConfigEditResult {
+  const path = configPath ?? activeCodexConfigPath();
+  const content = readConfigText(path);
+  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
+  const next = editScalarInTable(content, "agents", "enabled", value === null ? null : String(value));
+  if (next === content) return { ok: true, changed: false };
+  atomicWriteFile(path, next);
+  return { ok: true, changed: true };
+}
+
+/**
+ * Persist `[agents] max_depth = value`, or remove the key when `value` is null.
+ * Validation is exactly the upstream contract: `Option<i32>` with no minimum, so
+ * any integer in signed-i32 range is accepted — writing anything wider would
+ * produce a config upstream cannot deserialize, a hard parse failure for the
+ * user's Codex.
+ */
+export function setAgentsMaxDepth(value: number | null, configPath?: string): ConfigEditResult {
+  if (value !== null && (!Number.isInteger(value) || value < -2_147_483_648 || value > 2_147_483_647)) {
+    return { ok: false, error: "max_depth must be an integer within signed i32 range" };
+  }
+  const path = configPath ?? activeCodexConfigPath();
+  const content = readConfigText(path);
+  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
+  const next = editScalarInTable(content, "agents", "max_depth", value === null ? null : String(value));
+  if (next === content) return { ok: true, changed: false };
+  atomicWriteFile(path, next);
+  return { ok: true, changed: true };
+}
+
+/**
+ * Current `features.multi_agent_v2.subagent_developer_instructions`.
+ *
+ * Upstream tri-state (codex-rs core/src/config/mod.rs resolve_multi_agent_v2_config):
+ *   unset        -> the child inherits the parent's developer instructions
+ *   non-empty    -> replaces the inherited parent fragment
+ *   empty string -> clears the inherited fragment
+ *
+ * So `null` and `""` are DIFFERENT values and both must round-trip. Upstream
+ * `.trim()`s the configured text, so whitespace-only values are effectively `""`.
+ * Reads both the dedicated-table and inline forms; dedicated wins, mirroring
+ * `getMaxConcurrentThreads` precedence.
+ */
+export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+  const content = readConfigText(configPath);
+  if (content === null) return null;
+  const table = tomlTableBody(content, "features.multi_agent_v2");
+  if (table !== null) {
+    const m = table.match(/^\s*subagent_developer_instructions\s*=\s*/m);
+    if (m) {
+      const valueStart = m.index! + m[0].length;
+      const token = table.slice(valueStart, scanTomlValueEnd(table, valueStart)).trim();
+      return decodeTomlStringToken(token);
+    }
+    return null;
+  }
+  const features = tomlTableBody(content, "features");
+  if (features === null) return null;
+  const m = features.match(/multi_agent_v2\s*=\s*\{/);
+  if (!m) return null;
+  const openIdx = m.index! + m[0].length - 1;
+  const closeIdx = findInlineTableEnd(features, openIdx);
+  if (closeIdx === -1) return null;
+  const entry = findInlineEntry(features, openIdx + 1, closeIdx, "subagent_developer_instructions");
+  if (!entry) return null;
+  return decodeTomlStringToken(features.slice(entry.valueStart, entry.valueEnd).trim());
+}
+
+/**
+ * Persist `features.multi_agent_v2.subagent_developer_instructions`, or remove the
+ * key when `value` is null. Handles all three existing encodings: the dedicated
+ * table (scalar edit), the inline table (string-aware edit inside the braces — a
+ * regex over `[^}]*` would corrupt any value containing `}`), and the bare boolean
+ * form (upgraded in place to an inline table, mirroring `setMaxConcurrentThreads`).
+ * With no existing v2 config, creates the dedicated table carrying only this key.
+ * The key name must match upstream character-for-character: the upstream struct
+ * carries `#[serde(deny_unknown_fields)]`, so a misspelling is not ignored — it is
+ * a hard config-parse failure for the user's Codex.
+ */
+export function setSubagentDeveloperInstructions(value: string | null, configPath?: string): ConfigEditResult {
+  const path = configPath ?? activeCodexConfigPath();
+  const content = readConfigText(path);
+  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
+  const encoded = value === null ? null : encodeTomlBasicString(value);
+
+  if (tomlTableBody(content, "features.multi_agent_v2") !== null) {
+    const next = editScalarInTable(content, "features.multi_agent_v2", "subagent_developer_instructions", encoded);
+    if (next === content) return { ok: true, changed: false };
+    atomicWriteFile(path, next);
+    return { ok: true, changed: true };
+  }
+
+  const eol = dominantEol(content);
+  const lines = content.split(/\r?\n/);
+  const featuresHeader = lines.findIndex(l => /^\s*\[features\]\s*(?:#.*)?$/.test(l));
+  if (featuresHeader !== -1) {
+    let featuresEnd = lines.length;
+    for (let i = featuresHeader + 1; i < lines.length; i++) {
+      if (/^\s*\[/.test(lines[i])) { featuresEnd = i; break; }
+    }
+    for (let i = featuresHeader + 1; i < featuresEnd; i++) {
+      const line = lines[i];
+      const inlineMatch = line.match(/^(\s*)multi_agent_v2\s*=\s*\{/);
+      if (inlineMatch) {
+        const openIdx = inlineMatch[0].length - 1;
+        const closeIdx = findInlineTableEnd(line, openIdx);
+        if (closeIdx === -1) return { ok: false, error: "malformed multi_agent_v2 inline table" };
+        const entry = findInlineEntry(line, openIdx + 1, closeIdx, "subagent_developer_instructions");
+        if (encoded === null) {
+          if (!entry) return { ok: true, changed: false };
+          let start = entry.keyStart;
+          let stop = entry.valueEnd;
+          let j = stop;
+          while (j < closeIdx && line[j] === " ") j++;
+          if (line[j] === ",") {
+            stop = j + 1;
+            while (stop < closeIdx && line[stop] === " ") stop++;
+          } else {
+            let k = start;
+            while (k > openIdx + 1 && line[k - 1] === " ") k--;
+            if (line[k - 1] === ",") start = k - 1;
+          }
+          lines[i] = line.slice(0, start) + line.slice(stop);
+          atomicWriteFile(path, applyEol(lines.join("\n"), eol));
+          return { ok: true, changed: true };
+        }
+        if (entry) {
+          if (line.slice(entry.valueStart, entry.valueEnd).trim() === encoded) return { ok: true, changed: false };
+          lines[i] = line.slice(0, entry.valueStart) + encoded + line.slice(entry.valueEnd);
+        } else {
+          let insertPos = closeIdx;
+          while (insertPos > openIdx + 1 && line[insertPos - 1] === " ") insertPos--;
+          const hasEntries = line.slice(openIdx + 1, insertPos).trim().length > 0;
+          const insertion = hasEntries
+            ? `, subagent_developer_instructions = ${encoded} `
+            : ` subagent_developer_instructions = ${encoded} `;
+          lines[i] = line.slice(0, insertPos) + insertion + line.slice(closeIdx);
+        }
+        atomicWriteFile(path, applyEol(lines.join("\n"), eol));
+        return { ok: true, changed: true };
+      }
+      const boolMatch = line.match(/^(\s*)multi_agent_v2\s*=\s*(true|false)(\s*(?:#.*)?)$/);
+      if (boolMatch) {
+        if (encoded === null) return { ok: true, changed: false };
+        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, subagent_developer_instructions = ${encoded} }${boolMatch[3]}`;
+        atomicWriteFile(path, applyEol(lines.join("\n"), eol));
+        return { ok: true, changed: true };
+      }
+    }
+  }
+
+  if (encoded === null) return { ok: true, changed: false };
+  const suffix = content.endsWith("\n") || content.length === 0 ? "" : eol;
+  const separator = content.length > 0 && !content.endsWith(`${eol}${eol}`) ? eol : "";
+  const tableText = `[features.multi_agent_v2]${eol}subagent_developer_instructions = ${encoded}${eol}`;
+  atomicWriteFile(path, `${content}${suffix}${separator}${tableText}`);
+  return { ok: true, changed: true };
+}
 
 function editAgentsMaxThreads(value: number | null, configPath?: string, migratedComment?: string): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
@@ -313,11 +773,51 @@ function ensureDisabledV2Config(value: number | null, configPath?: string, migra
   return { ok: true, changed: true };
 }
 
-/** Active logical concurrency value, falling back to the inactive storage. */
+/**
+ * The effective concurrency limit expressed in the units of the currently ACTIVE
+ * backend: under V2 the total-thread limit upstream enforces, under V1 the child
+ * limit. The active backend's own key wins; the other backend's key is translated
+ * across the root-agent slot. Display path only — never throws: a stored value
+ * outside the translatable range is returned raw (at that magnitude the ±1 root
+ * slot is already below float precision, and crashing `ocx v2 status` or
+ * `GET /api/v2` is not a price worth paying for a translation that means nothing).
+ * Migration code uses `discoverStoredThreadLimit` instead, which keeps provenance.
+ */
 export function getLogicalMaxThreads(configPath?: string): number | null {
-  return isMultiAgentV2Enabled(configPath)
-    ? getMaxConcurrentThreads(configPath) ?? getAgentsMaxThreads(configPath)
-    : getAgentsMaxThreads(configPath) ?? getMaxConcurrentThreads(configPath);
+  if (isMultiAgentV2Enabled(configPath)) {
+    const v2 = getMaxConcurrentThreads(configPath);
+    if (v2 !== null) return v2;
+    const legacy = getAgentsMaxThreads(configPath);
+    if (legacy === null) return null;
+    return isTranslatableV1ChildLimit(legacy) ? v1ChildLimitToV2TotalLimit(legacy) : legacy;
+  }
+  const legacy = getAgentsMaxThreads(configPath);
+  if (legacy !== null) return legacy;
+  const v2 = getMaxConcurrentThreads(configPath);
+  if (v2 === null) return null;
+  return isTranslatableV2TotalLimit(v2) ? v2TotalLimitToV1ChildLimit(v2) : v2;
+}
+
+type ThreadLimitUnits = "v1-child" | "v2-total";
+
+/**
+ * Which storage the active limit lives in, in that storage's native units. The
+ * active backend's own key wins; the other backend's key is the fallback and keeps
+ * ITS units. Never translates and never throws. This is the migration-side sibling
+ * of `getLogicalMaxThreads`: a migration needs to know exactly which storage the
+ * value came from, and a display function's raw fallback would lose that.
+ */
+function discoverStoredThreadLimit(configPath?: string): { value: number; units: ThreadLimitUnits } | null {
+  if (isMultiAgentV2Enabled(configPath)) {
+    const v2 = getMaxConcurrentThreads(configPath);
+    if (v2 !== null) return { value: v2, units: "v2-total" };
+    const legacy = getAgentsMaxThreads(configPath);
+    return legacy === null ? null : { value: legacy, units: "v1-child" };
+  }
+  const legacy = getAgentsMaxThreads(configPath);
+  if (legacy !== null) return { value: legacy, units: "v1-child" };
+  const v2 = getMaxConcurrentThreads(configPath);
+  return v2 === null ? null : { value: v2, units: "v2-total" };
 }
 
 function activeThreadComment(content: string, v2Enabled: boolean): string | undefined {
@@ -403,7 +903,26 @@ export function transitionMultiAgentV2(
   const preflightError = transitionConfigError(original);
   if (preflightError) return { ok: false, error: preflightError };
   const beforeEnabled = isMultiAgentV2Enabled(path);
-  const threadLimit = options.threadLimit ?? getLogicalMaxThreads(path);
+  // A caller-supplied limit is already in the DESTINATION backend's units and is
+  // never translated. A discovered limit carries the units of the storage it was
+  // read from and crosses the root-slot boundary only when those units differ
+  // from the destination's — which covers both backend flips and same-state
+  // storage migrations (legacy-only under V2, V2-only under V1). The range
+  // check runs only when a translation is actually needed, and before the try
+  // block so an out-of-range stored value is a normal error result rather than
+  // a RangeError escaping the rollback contract.
+  const discovered = discoverStoredThreadLimit(path);
+  const destinationUnits: ThreadLimitUnits = enabled ? "v2-total" : "v1-child";
+  let threadLimit = options.threadLimit ?? discovered?.value ?? null;
+  if (options.threadLimit === undefined && discovered !== null && discovered.units !== destinationUnits) {
+    const translatable = discovered.units === "v1-child" ? isTranslatableV1ChildLimit : isTranslatableV2TotalLimit;
+    if (!translatable(discovered.value)) {
+      return { ok: false, error: `stored thread limit out of translatable range: ${discovered.value}` };
+    }
+    threadLimit = discovered.units === "v1-child"
+      ? v1ChildLimitToV2TotalLimit(discovered.value)
+      : v2TotalLimitToV1ChildLimit(discovered.value);
+  }
   const migratedComment = activeThreadComment(original, beforeEnabled);
   try {
     if (enabled) {

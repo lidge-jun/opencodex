@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
 import { IconChevron, IconBoxes, IconInfo, IconShuffle } from "../icons";
 import { useT } from "../i18n/shared";
@@ -7,6 +7,9 @@ import { modelLabel } from "../model-display";
 import { type ComboItem, parseComboList } from "../combo-workspace-data";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { setClientResourceData } from "../client-resource";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
 import {
   buildProviderModelGroups,
   type ConfiguredProviderSummary,
@@ -42,6 +45,7 @@ import {
   type V2Status,
 } from "./models-shared";
 import { EmptyProviderHint } from "./models-provider-hints";
+import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -55,8 +59,7 @@ type CachedModelsPage = {
 export default function Models({ apiBase }: { apiBase: string }) {
   const t: TFn = useT();
   const cacheKey = `ocx.models.catalog.v1:${apiBase}`;
-  const cached = readSessionListCache<CachedModelsPage>(cacheKey);
-  const hasCacheRef = useRef(Boolean(cached));
+  const cached = useMemo(() => readSessionListCache<CachedModelsPage>(cacheKey), [cacheKey]);
   const [models, setModels] = useState<ModelRow[]>(() => cached?.models ?? []);
   const [providers, setProviders] = useState<ConfiguredProviderSummary[]>(() => cached?.providers ?? []);
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set(cached?.disabled ?? []));
@@ -72,7 +75,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const needsDefaultCollapseRef = useRef(initialCollapsed === null);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [loading, setLoading] = useState(() => !cached);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const loadGenerationRef = useRef(0);
@@ -170,68 +172,98 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase]);
 
+  const fetchCatalog = useCallback(async (signal: AbortSignal): Promise<CachedModelsPage> => {
+    const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
+      fetch(`${apiBase}/api/models`),
+      fetch(`${apiBase}/api/provider-context-caps`),
+      fetch(`${apiBase}/api/providers`),
+      fetchSelectedModels(apiBase),
+    ]);
+    const [data, capsData, providerData] = await Promise.all([
+      readJsonOrThrow<ModelRow[]>(modelsRes),
+      readJsonOrThrow<ProviderContextCapsResponse>(capsRes),
+      readJsonOrThrow<ConfiguredProviderSummary[]>(providersRes),
+    ]);
+    if (data === undefined || capsData === undefined || providerData === undefined) {
+      throw new Error("models payload missing");
+    }
+    if (signal.aborted) throw new Error("models request aborted");
+    const nextDisabled = collectDisabledNamespaced(data);
+    const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
+      ? capsData.value
+      : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
+    const nextCapValue = value !== undefined ? value : 350_000;
+    const next = {
+      models: data,
+      providers: providerData,
+      selectedModels: selectionData,
+      disabled: [...nextDisabled],
+      contextCaps: capsData.caps ?? {},
+      contextCapValue: nextCapValue,
+    } satisfies CachedModelsPage;
+    writeSessionListCache(cacheKey, next);
+    return next;
+  }, [apiBase, cacheKey]);
+
+  const applyCatalog = useCallback((next: CachedModelsPage) => {
+    const nextGroups = buildProviderModelGroups(next.models, next.providers);
+    setSelectedProvider(prev => (
+      prev !== null && !nextGroups.some(group => group.provider === prev)
+        ? null
+        : prev
+    ));
+    setModels(next.models);
+    setProviders(next.providers);
+    setDisabled(new Set(next.disabled));
+    setSelectedModels(next.selectedModels);
+    setContextCapValue(next.contextCapValue);
+    setContextCaps(next.contextCaps);
+  }, []);
+
+  const catalogResource = useDataSurface<CachedModelsPage>(
+    cacheKey,
+    [apiBase],
+    async (signal) => {
+      const next = await fetchCatalog(signal);
+      // A manual mutation refresh may have invalidated this request while its JSON was decoding.
+      // Do not let the aborted catalog repaint controls after the newer result is applied.
+      if (signal.aborted) throw new Error("models request aborted");
+      applyCatalog(next);
+      return next;
+    },
+    { isEmpty: () => false, pollMs: 10_000 },
+  );
+  const catalogState = catalogResource.state;
+  const catalogRefresh = catalogResource.refresh;
+
+  useLayoutEffect(() => {
+    if (!cached) return;
+    // Seed before the subscription's first visible paint, then immediately revalidate. This keeps
+    // a failed first refresh in the stale-data branch instead of replacing the catalog as cold.
+    setClientResourceData(cacheKey, cached);
+    catalogRefresh();
+  }, [cacheKey, cached, catalogRefresh]);
+
   const load = useCallback(async (force = false): Promise<boolean> => {
     if (loadPendingRef.current && !force) return false;
     loadPendingRef.current = true;
     const generation = ++loadGenerationRef.current;
-    // Soft refresh: keep last-good catalog painted while revalidating.
-    if (!hasCacheRef.current) setLoading(true);
     try {
-      const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
-        fetch(`${apiBase}/api/models`),
-        fetch(`${apiBase}/api/provider-context-caps`),
-        fetch(`${apiBase}/api/providers`),
-        fetchSelectedModels(apiBase),
-      ]);
-      const [data, capsData, providerData] = await Promise.all([
-        readJsonOrThrow<ModelRow[]>(modelsRes),
-        readJsonOrThrow<ProviderContextCapsResponse>(capsRes),
-        readJsonOrThrow<ConfiguredProviderSummary[]>(providersRes),
-      ]);
-      if (data === undefined || capsData === undefined || providerData === undefined) {
-        throw new Error("models payload missing");
-      }
+      const next = await fetchCatalog(new AbortController().signal);
       if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
-      const nextGroups = buildProviderModelGroups(data, providerData);
-      setSelectedProvider(prev => (
-        prev !== null && !nextGroups.some(group => group.provider === prev)
-          ? null
-          : prev
-      ));
-      const nextDisabled = collectDisabledNamespaced(data);
-      const value = typeof capsData.value === "number" && Number.isFinite(capsData.value) && capsData.value > 0
-        ? capsData.value
-        : (typeof capsData.cap === "number" && Number.isFinite(capsData.cap) && capsData.cap > 0 ? capsData.cap : undefined);
-      const nextCapValue = value !== undefined ? value : 350_000;
-      const nextCaps = capsData.caps ?? {};
-      setModels(data);
-      setProviders(providerData);
-      setDisabled(nextDisabled);
-      setSelectedModels(selectionData);
-      if (value !== undefined) setContextCapValue(value);
-      setContextCaps(nextCaps);
-      hasCacheRef.current = true;
-      writeSessionListCache(cacheKey, {
-        models: data,
-        providers: providerData,
-        selectedModels: selectionData,
-        disabled: [...nextDisabled],
-        contextCaps: nextCaps,
-        contextCapValue: nextCapValue,
-      } satisfies CachedModelsPage);
+      applyCatalog(next);
+      // Follow-up mutation refreshes retain their existing awaitable contract while publishing
+      // the result through the same shared store used by the initial catalog subscription.
+      setClientResourceData(cacheKey, next);
       return true;
     } catch {
-      if (shouldApplyLoadGeneration(generation, loadGenerationRef.current) && !hasCacheRef.current) {
-        setOk(false); setStatus(t("models.loadFail"));
-      }
       return false;
     } finally {
       if (shouldApplyLoadGeneration(generation, loadGenerationRef.current)) {
         loadPendingRef.current = false;
-        setLoading(false);
       }
     }
-  }, [apiBase, cacheKey, t]);
+  }, [applyCatalog, cacheKey, fetchCatalog]);
 
   // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
   useEffect(() => {
@@ -247,24 +279,6 @@ export default function Models({ apiBase }: { apiBase: string }) {
       window.clearInterval(timer);
     };
   }, [loadShadowCall, loadV2]);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      void load();
-    }, 0);
-    // Provider models resolve lazily (live /models + OAuth tokens), so a provider that wasn't ready
-    // on first load (e.g. anthropic right after login) would otherwise stay missing until a manual
-    // remove/re-add. Re-poll to pick it up; skip while a toggle PUT is in flight to avoid clobbering.
-    const timer = window.setInterval(() => {
-      if (!busyRef.current) {
-        void load();
-      }
-    }, 10000);
-    return () => {
-      window.clearTimeout(timeout);
-      window.clearInterval(timer);
-    };
-  }, [load]);
 
   const groups = useMemo(
     () => buildProviderModelGroups(models, providers),
@@ -619,28 +633,26 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
-  // Cold start only: with a session seed the workspace paints immediately and revalidates quietly.
-  if (loading && !selectedModels) {
+  const catalog = catalogState.data ?? cached;
+
+  // A session seed keeps the workspace usable during the first shared-resource revalidation.
+  // Without a catalog, the skeleton owns the only live region for this transition.
+  if (catalogState.showSkeleton && !catalog) {
+    return (
+      <DataSurfaceSkeleton label={t("models.loading")} rows={5} />
+    );
+  }
+  if (catalogState.kind === "failed-cold") {
+    const reason = catalogState.error instanceof Error ? catalogState.error.message : t("models.loadFail");
     return (
       <>
-        <div className="models-control-top-row">
-          <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
-            <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
-            <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
-            <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-            <div className="models-shadow-model-slot">
-              <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-            </div>
-          </div>
-        </div>
-        <div className="row muted"><span className="spin" /> {t("models.loading")}</div>
+        <Notice tone="err">{reason}</Notice>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => catalogResource.refresh()}>{t("common.retry")}</button>
       </>
     );
   }
-  if (!selectedModels) {
-    return <Notice tone="err">{t("models.loadFail")}</Notice>;
-  }
 
+  const selectedModelMap = selectedModels ?? {};
 
   const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
     const { provider, rows, native, liveModels, discovery } = group;
@@ -649,7 +661,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
     // switches disagree with what the picker actually offers.
     const isVisible = (model: ModelRow) => modelVisible(
-      selectedModels,
+      selectedModelMap,
       provider,
       model.id,
       model.native === true,
@@ -878,8 +890,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
     <>
       <div className="models-control-top-row">
         <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
-          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint")}>ⓘ</span></Tooltip></span>
-          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal")}</code>
+          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
+          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
           <div className="models-shadow-model-slot">
             <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
@@ -1286,7 +1298,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
       </div>
       <p className="page-sub">{t("models.subtitle")}</p>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
-      <div className="models-workspace-root">
+      {/* Keep the last-good catalog interactive but make a failed revalidation explicit. */}
+      {catalogState.showError && <Notice tone="err">{t("models.loadFail")}</Notice>}
+      {catalogState.refreshing && (
+        <DataSurfaceStatus live={!catalogState.showError}>{t("models.loading")}</DataSurfaceStatus>
+      )}
+      <div className="models-workspace-root" aria-busy={catalogState.refreshing || undefined}>
         <aside className="models-workspace-rail" aria-label={t("nav.models")}>
           <div className="models-workspace-rail-header">
             <span className="models-workspace-rail-title">{t("models.workspace.providers")}</span>
@@ -1306,7 +1323,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
               const { provider, rows } = group;
               // Same final-visibility rule as the provider card, so the rail never disagrees with it.
               const activeCount = rows.filter(m => modelVisible(
-                selectedModels,
+                selectedModelMap,
                 provider,
                 m.id,
                 m.native === true,

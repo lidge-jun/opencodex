@@ -5,9 +5,11 @@
 import { useT } from "../../i18n/shared";
 
 export function RemoveConfirmDialog({
-  providerName, onConfirm, onCancel,
+  providerName, defaultProviderName, onConfirm, onCancel,
 }: {
   providerName: string;
+  /** The automatic replacement when deleting the current default provider. */
+  defaultProviderName: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -16,7 +18,9 @@ export function RemoveConfirmDialog({
     <div className="dialog-backdrop" onClick={onCancel}>
       <div className="dialog" role="alertdialog" aria-label={t("pws.removeConfirmTitle")} onClick={e => e.stopPropagation()}>
         <h3>{t("pws.removeConfirmTitle")}</h3>
-        <p>{t("pws.removeConfirmBody", { name: providerName })}</p>
+        <p>{defaultProviderName
+          ? t("pws.removeDefaultConfirmBody", { name: providerName, defaultProvider: defaultProviderName })
+          : t("pws.removeConfirmBody", { name: providerName })}</p>
         <div className="dialog-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>{t("common.cancel")}</button>
           <button type="button" className="btn btn-danger" onClick={onConfirm}>{t("pws.removeConfirm")}</button>

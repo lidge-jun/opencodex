@@ -59,6 +59,7 @@ namespaced selected id を bare id に変えます。
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する成功的新セッション bind 数。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 一時的な上流失敗が連続して起きたのち、以降の新しいセッションを別の適合 pool アカウントに failover する回数。`0` なら失敗ベースの failover をオフにします。 |
 | `modelCacheTtlMs?` | `number` | `300000` | プロバイダー別 `/models` キャッシュの有効期間（5 分）。 |
+| `appOwnedMemoryBudgetMb?` | `number` | `256` | 退避可能なアプリ所有の保持状態（ログ、キャッシュ、Blob、継続応答ペイロード）に対するプロセス全体の上限（MiB）です。有効範囲は 64〜4096 で、RSS やネイティブランタイムメモリの上限ではありません。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt cache ポリシー。オフ、5 分 ephemeral、1 時間 extended のいずれか。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on | ウェブ検索サイドカーオプション（下記参照）。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on | ビジョンサイドカーオプション（下記参照）。 |
@@ -140,9 +141,21 @@ token を入れる必要があります。
 x-opencodex-api-key: your-secret-token
 ```
 
-`Authorization: Bearer …` ヘッダーも許可します。起動後はダッシュボードで生成した `apiKeys` を環境変数
-token の代わりに使えます。すべての候補は timing side channel を防ぐため定数時間
-（`timingSafeEqual`）で比較します。
+受け付けるヘッダーはエンドポイントごとに異なります。常に使えるのは `x-opencodex-api-key` です:
+
+| エンドポイント | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
+|---|---|---|---|
+| `/v1/responses` | 不可 | **必須** | 不可 |
+| `/v1/chat/completions` | 不可 | **必須** | 不可 |
+| `/v1/messages` | 可 | 可 | 可 |
+| `/v1/models` | 可 | 可 | 可 |
+
+Responses と Chat Completions が専用ヘッダーのみを受け付けるのは、その 2 経路の `Authorization` が
+Codex Direct パススルーのものである可能性があり、2 つの bearer ドメインを混同できないためです。
+ダッシュボードの API タブもこの表をサーバーから受け取って描画するため、コードとずれません。
+
+起動後はダッシュボードで生成した `apiKeys` を環境変数 token の代わりに使えます。すべての候補は
+timing side channel を防ぐため定数時間（`timingSafeEqual`）で比較します。
 
 :::caution[LAN 公開]
 `0.0.0.0` にバインドするとプロキシと設定されたすべてのプロバイダー認証情報がローカルネットワークにさらされます。

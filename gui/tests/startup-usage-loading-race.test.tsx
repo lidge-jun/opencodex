@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Startup from "../src/pages/Startup";
 import Usage from "../src/pages/Usage";
 
@@ -19,6 +20,9 @@ const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
+  // These pages read through the shared resource layer, whose cache is module-level. Without a
+  // reset, a sibling case's payload satisfies the mount and the race under test never starts.
+  clearClientResourceStoresForTests();
   testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -31,6 +35,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearClientResourceStoresForTests();
   testWindow.close();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });

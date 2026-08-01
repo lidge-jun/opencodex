@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 50 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 62 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.

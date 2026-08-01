@@ -229,6 +229,47 @@ provider and `--json` returns model metadata. `live` reads the running catalog; 
 control visibility; `selected` controls a provider allowlist; `context` controls provider context
 caps; and `shadow` manages background shadow-call interception.
 
+Every per-model operation the dashboard offers is available here, so a headless install never
+needs the GUI to manage a catalog. `add`, `remove`, and `list-custom` work against the config file
+and apply to a running proxy through a catalog sync; the rest talk to the live management API and
+require the proxy to be running (`ocx start`, or an installed service).
+
+| Subcommand | Supported flags | Action |
+| --- | --- | --- |
+| `list` (default) | `--provider <name>`, `--json` | List models seeded in configured providers. |
+| `live` | `--provider <name>`, `--json` | Read the running catalog, including models discovered at runtime. Rows are flagged `native`/`routed`, `custom`, and `enabled`/`disabled`. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Register a model the provider catalog does not advertise. |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Edit a custom model. `-` clears a field; `0` clears the context window. |
+| `remove <custom-id\|provider/modelId>` | `--yes` | Delete a custom model. Requires `--yes` when stdin is not an interactive terminal. |
+| `list-custom` | `--json` | Show all custom models with the `custom-id` the other subcommands take. |
+| `enable <provider/model\|native-model>` | `--native`, `--json` | Make one model visible to Codex. |
+| `disable <provider/model\|native-model>` | `--native`, `--json` | Hide one model from Codex. |
+| `provider <name> <on\|off>` | `--json` | Enable or disable every model of one provider in a single write. |
+| `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
+| `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default `gpt-5.4-mini` and `gpt-5.6-luna`, which Codex 0.145.0 switched to). |
+
+```bash
+ocx models live --json                                  # what Codex can actually see right now
+ocx models disable anthropic/claude-haiku-4             # hide one routed model
+ocx models enable gpt-5.6-sol                          # no slash, so it is treated as native
+ocx models provider zenmux off                          # hide a noisy provider wholesale
+ocx models selected anthropic --set claude-opus-5,claude-fable-5
+ocx models selected anthropic --clear                   # drop the allowlist again
+ocx models add deepseek deepseek-v4 --display-name 'DeepSeek V4' --context-window 128000 --modalities text,image
+ocx models list-custom --json                           # read the custom-id for edit/remove
+ocx models remove deepseek/deepseek-v4 --yes
+```
+
+A model selector with a slash is routed (`anthropic/claude-opus-5`); a bare id is treated as a
+native OpenAI model, so `--native` is only needed to force that reading for an id that would
+otherwise look routed.
+
+`--modalities` accepts only `text`, `image`, and `audio`. Codex parses that field as a closed enum
+and rejects an entire catalog containing any other value, so `add`, `edit`, and the management API
+all refuse the bad value rather than storing something the catalog writer would have to strip
+later (#759).
+
 ### `ocx provider <subcommand>`
 
 Non-interactive provider management. Registry entries are seeded by name; a custom name requires
@@ -440,6 +481,10 @@ ocx service status
 ocx service repair
 ocx service uninstall
 ```
+
+On Windows, `ocx service status` reports Task Scheduler registration separately from
+identity-verified OpenCodex proxy reachability. It does not print the localized `schtasks` table,
+so the summary remains readable across Windows code pages.
 
 On Windows, creating the Task Scheduler entry requires elevation. Recognized localized
 access-denied text keeps the existing guidance path. If that text is unreadable, the fallback

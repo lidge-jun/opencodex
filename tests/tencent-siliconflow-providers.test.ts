@@ -4,7 +4,11 @@ import { deriveProviderPresets } from "../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
+import { en } from "../gui/src/i18n/en";
+import { interpolate, type TFn } from "../gui/src/i18n/shared";
 import { formatProviderDisplayName, isCatalogProviderId } from "../gui/src/provider-icons";
+
+const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 
 describe("Tencent Cloud Coding Plan provider", () => {
   test("publishes the coding-only OpenAI-compatible contract", () => {
@@ -83,8 +87,8 @@ describe("SiliconFlow provider", () => {
   });
 
   test("registers canonical GUI display names for both providers", () => {
-    expect(formatProviderDisplayName("siliconflow")).toBe("SiliconFlow");
-    expect(formatProviderDisplayName("tencent-coding-plan")).toBe("Tencent Cloud Coding Plan");
+    expect(formatProviderDisplayName("siliconflow", englishT)).toBe("SiliconFlow");
+    expect(formatProviderDisplayName("tencent-coding-plan", englishT)).toBe("Tencent Cloud Coding Plan");
     expect(isCatalogProviderId("siliconflow")).toBe(true);
     expect(isCatalogProviderId("tencent-coding-plan")).toBe(true);
   });

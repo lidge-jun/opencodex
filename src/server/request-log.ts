@@ -12,6 +12,8 @@ import type { AdapterRequest } from "../adapters/base";
 import { redactSecretString } from "../lib/redact";
 import {
   appendUsageEntry,
+  isKnownAdmissionKind,
+  isKnownInboundProtocol,
   isKnownUsageSurface,
   readRecentUsageEntries,
   usageForFinalLog,
@@ -30,6 +32,7 @@ import {
   type UsageDebugBodyKind,
 } from "../usage/debug";
 import { matchesLogConversationId } from "./request-log-conversation";
+import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
 export interface RequestLogContext {
   model: string;
@@ -39,6 +42,16 @@ export interface RequestLogContext {
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
   conversationId?: string;
   surface?: "claude" | "claude-desktop" | "grok";
+  /** The matched configured key's id. Set ONLY for admissionKind "configured" —
+   *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
+   *  cannot absorb unrelated traffic. */
+  apiKeyId?: string;
+  /** Which kind of admission opened this request. Carries no secret. */
+  admissionKind?: "configured" | "environment" | "loopback";
+  /** Which inbound wire was used. Orthogonal to `surface`, which names the client
+   *  product: widening that enum would merge Responses and Chat Completions,
+   *  since both leave it undefined. */
+  inboundProtocol?: "responses" | "chat" | "messages";
   requestedModel?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
@@ -92,6 +105,16 @@ export interface RequestLogEntry {
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   surface?: "claude" | "claude-desktop" | "grok";
+  /** The matched configured key's id. Set ONLY for admissionKind "configured" —
+   *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
+   *  cannot absorb unrelated traffic. */
+  apiKeyId?: string;
+  /** Which kind of admission opened this request. Carries no secret. */
+  admissionKind?: "configured" | "environment" | "loopback";
+  /** Which inbound wire was used. Orthogonal to `surface`, which names the client
+   *  product: widening that enum would merge Responses and Chat Completions,
+   *  since both leave it undefined. */
+  inboundProtocol?: "responses" | "chat" | "messages";
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   requestedModel?: string;
@@ -126,10 +149,48 @@ export interface RequestLogEntry {
 }
 
 const requestLog: RequestLogEntry[] = [];
-const MAX_LOG_SIZE = 200;
+const MAX_LOG_SIZE = 2000;
+const requestLogEntryBytes = new WeakMap<RequestLogEntry, number>();
+let requestLogBytes = 0;
 let requestLogSeq = 0;
 /** True after hydrateRequestLogsFromDisk ran once in this process. */
 let requestLogsHydratedFromDisk = false;
+
+function retainedRequestLogBytes(entry: RequestLogEntry): number {
+  return Buffer.byteLength(JSON.stringify(entry), "utf8");
+}
+
+function removeOldestRequestLogEntry(): number {
+  const entry = requestLog.shift();
+  if (!entry) return 0;
+  const bytes = requestLogEntryBytes.get(entry) ?? retainedRequestLogBytes(entry);
+  requestLogEntryBytes.delete(entry);
+  requestLogBytes = Math.max(0, requestLogBytes - bytes);
+  return bytes;
+}
+
+function retainRequestLogEntry(entry: RequestLogEntry): void {
+  const bytes = retainedRequestLogBytes(entry);
+  requestLog.push(entry);
+  requestLogEntryBytes.set(entry, bytes);
+  requestLogBytes += bytes;
+  while (requestLog.length > MAX_LOG_SIZE) removeOldestRequestLogEntry();
+  enforceAppOwnedMemoryBudget();
+}
+
+export function requestLogRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  return {
+    count: requestLog.length,
+    bytes: requestLogBytes,
+    evictableBytes: requestLogBytes,
+    pinnedBytes: 0,
+    oldestAt: requestLog[0]?.timestamp ?? null,
+  };
+}
+
+export function evictOldestRequestLogForBudget(): number {
+  return removeOldestRequestLogEntry();
+}
 
 function asTerminalStatus(value: string | undefined): ResponsesTerminalStatus | undefined {
   if (value === "completed" || value === "failed" || value === "incomplete") return value;
@@ -208,7 +269,7 @@ export function hydrateRequestLogsFromDisk(
     const slice = persisted.length > MAX_LOG_SIZE
       ? persisted.slice(persisted.length - MAX_LOG_SIZE)
       : persisted;
-    for (const entry of slice) requestLog.push(requestLogEntryFromPersistedUsage(entry));
+    for (const entry of slice) retainRequestLogEntry(requestLogEntryFromPersistedUsage(entry));
     return slice.length;
   } catch (err) {
     requestLogsHydratedFromDisk = true;
@@ -220,8 +281,7 @@ export function hydrateRequestLogsFromDisk(
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
-  requestLog.push(entry);
-  if (requestLog.length > MAX_LOG_SIZE) requestLog.shift();
+  retainRequestLogEntry(entry);
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
     // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
@@ -240,6 +300,12 @@ export function addRequestLog(entry: RequestLogEntry) {
       provider: entry.provider,
       model: entry.model,
       ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+      // This function REBUILDS the persisted row field by field rather than
+      // spreading it, so a field missing here reaches /api/logs and never
+      // reaches usage.jsonl — which is where the per-key rollup reads from.
+      ...(entry.apiKeyId ? { apiKeyId: entry.apiKeyId } : {}),
+      ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
+      ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
@@ -506,14 +572,26 @@ export function inspectResponseLogJson(logCtx: RequestLogContext, text: string):
 
 export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload: string | null): void {
   if (!payload || payload.trim() === "[DONE]") return;
-  const debugEnabled = isUsageDebugEnabled();
-  const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
+  let parsed: unknown | undefined;
   try {
-    applyResponseLogMetadata(logCtx, JSON.parse(payload));
+    parsed = JSON.parse(payload);
   } catch {
     /* SSE block payload may not be JSON; metadata inspection is best-effort */
   }
-  captureUpstreamError(logCtx, payload);
+  inspectResponseLogSsePayloadParsed(logCtx, payload, parsed);
+}
+
+/** Inspect an SSE payload using the caller's single best-effort JSON parse. */
+export function inspectResponseLogSsePayloadParsed(
+  logCtx: RequestLogContext,
+  payload: string | null,
+  parsed: unknown | undefined,
+): void {
+  if (!payload || payload.trim() === "[DONE]") return;
+  const debugEnabled = isUsageDebugEnabled();
+  const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
+  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
+  captureUpstreamErrorParsed(logCtx, payload, parsed);
   if (debugEnabled) {
     if (!sseAlreadyMarked) {
       logCtx.usageDebugBodyKind = "sse";
@@ -535,8 +613,22 @@ export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload:
  */
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
   if (!text) return;
+  let parsed: unknown | undefined;
   try {
-    const json = JSON.parse(text) as {
+    parsed = JSON.parse(text);
+  } catch {
+    /* retain the raw malformed payload for the bounded fallback below */
+  }
+  captureUpstreamErrorParsed(logCtx, text, parsed);
+}
+
+function captureUpstreamErrorParsed(
+  logCtx: RequestLogContext,
+  text: string,
+  parsed: unknown | undefined,
+): void {
+  if (parsed !== undefined && parsed !== null) {
+    const json = parsed as {
       type?: unknown;
       error?: { message?: unknown };
       last_error?: { message?: unknown };
@@ -568,12 +660,12 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
     if (typeof reason === "string" && reason.trim()) {
       logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
     }
-  } catch {
-    if (logCtx.upstreamError) return;
-    const trimmed = text.trim();
-    if (trimmed) {
-      logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
-    }
+    return;
+  }
+  if (logCtx.upstreamError) return;
+  const trimmed = text.trim();
+  if (trimmed) {
+    logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
   }
 }
 
@@ -695,6 +787,9 @@ export function addFinalRequestLog(
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
+    ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
+    ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),
+    ...(logCtx.inboundProtocol ? { inboundProtocol: logCtx.inboundProtocol } : {}),
     ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
@@ -760,7 +855,30 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
     const tail = Number.parseInt(tailRaw, 10);
     if (Number.isFinite(tail) && tail > 0) filtered = filtered.slice(-Math.min(tail, MAX_LOG_SIZE));
   }
+  const offsetRaw = params.get("offset")?.trim();
+  const limitRaw = params.get("limit")?.trim();
+  if (limitRaw) {
+    const limit = Number.parseInt(limitRaw, 10);
+    const offset = offsetRaw ? Number.parseInt(offsetRaw, 10) : 0;
+    if (Number.isFinite(limit) && limit > 0) {
+      const capped = Math.min(limit, MAX_LOG_SIZE);
+      const startOffset = Number.isFinite(offset) && offset > 0 ? offset : 0;
+      const end = filtered.length - startOffset;
+      if (end <= 0) filtered = [];
+      else {
+        const begin = Math.max(0, end - capped);
+        filtered = filtered.slice(begin, end);
+      }
+    }
+  }
   return filtered;
+}
+
+export function filteredRequestLogCount(logs: RequestLogEntry[], params: URLSearchParams): number {
+  const withoutPagination = new URLSearchParams(params);
+  withoutPagination.delete("limit");
+  withoutPagination.delete("offset");
+  return filterRequestLogs(logs, withoutPagination).length;
 }
 
 interface FinalizedUsageResult {
@@ -922,6 +1040,7 @@ export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
 /** Test-only process-state reset for isolated integration harnesses. */
 export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
+  requestLogBytes = 0;
   requestLogSeq = 0;
   requestLogsHydratedFromDisk = false;
 }

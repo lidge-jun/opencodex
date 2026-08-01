@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gatherRoutedModels } from "../src/codex/catalog";
 import { catalogHintsFromModelsApiItem } from "../src/codex/catalog/provider-fetch";
-import { clearModelCache } from "../src/codex/model-cache";
+import { clearModelCache, getFreshCached, setCached } from "../src/codex/model-cache";
 import { buildModelsRequest } from "../src/oauth";
 import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../src/oauth/key-providers";
 import { deriveKeyLoginMap, providerConfigSeed } from "../src/providers/derive";
@@ -17,6 +17,7 @@ import { PROVIDER_REGISTRY, type ProviderModelDiscoverySpec } from "../src/provi
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
+import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
 
 const FIXTURE = readFileSync(join(import.meta.dir, "fixtures/provider-model-discovery.json"), "utf8");
 const originalFetch = globalThis.fetch;
@@ -36,37 +37,7 @@ async function withTogetherDiscovery<T>(
   spec: ProviderModelDiscoverySpec,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  const entry = togetherEntry();
-  const original = entry.modelDiscovery;
-  const originalPreserveCustomDestination = entry.preserveCustomDestination;
-  entry.modelDiscovery = spec;
-  entry.preserveCustomDestination = true;
-  try {
-    return await run();
-  } finally {
-    if (original === undefined) delete entry.modelDiscovery;
-    else entry.modelDiscovery = original;
-    if (originalPreserveCustomDestination === undefined) delete entry.preserveCustomDestination;
-    else entry.preserveCustomDestination = originalPreserveCustomDestination;
-    clearModelCache("together");
-  }
-}
-
-async function withRegistryDiscovery<T>(
-  providerId: string,
-  spec: ProviderModelDiscoverySpec,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const entry = PROVIDER_REGISTRY.find(row => row.id === providerId);
-  if (!entry) throw new Error(`missing ${providerId} registry entry`);
-  const original = entry.modelDiscovery;
-  entry.modelDiscovery = spec;
-  try {
-    return await run();
-  } finally {
-    if (original === undefined) delete entry.modelDiscovery;
-    else entry.modelDiscovery = original;
-  }
+  return withRegistryDiscovery("together", spec, run, { preserveCustomDestination: true });
 }
 
 function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
@@ -96,11 +67,32 @@ describe("registry-owned provider model discovery", () => {
       .toContain("https");
     expect(providerModelDiscoverySpecError({ path: "models?unbounded=true" }))
       .toContain("query-free");
+    for (const path of [
+      "../../internal/models",
+      "models/../internal",
+      "models/%2e%2e/internal",
+      "models/.%2E/internal",
+      "models/%2e./internal",
+    ]) {
+      expect(providerModelDiscoverySpecError({ path })).toContain("parent-directory");
+    }
+    expect(providerModelDiscoverySpecError({ path: String.raw`models\..\internal` }))
+      .toContain("forward slashes");
+    expect(providerModelDiscoverySpecError({ path: "models/model..variant" })).toBeNull();
     expect(providerModelDiscoverySpecError({
       url: "https://api.example.test/models",
       path: "models",
     } as unknown as ProviderModelDiscoverySpec)).toContain("mutually exclusive");
     expect(providerModelDiscoverySpecError({ maxModels: 25 })).toBeNull();
+  });
+
+  test("clears cached rows before applying a temporary registry discovery policy", async () => {
+    setCached("together", []);
+    expect(getFreshCached("together", 60_000)).toEqual([]);
+
+    await withTogetherDiscovery({ maxModels: 25 }, () => {
+      expect(getFreshCached("together", 60_000)).toBeNull();
+    });
   });
 
   test("limits collision preservation to fixed API-key destinations", () => {

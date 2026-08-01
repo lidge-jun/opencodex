@@ -1,5 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+
+/**
+ * Codex parses a catalog entry's `input_modalities` as a closed enum, and one out-of-enum
+ * value makes it reject the ENTIRE catalog file — plugins, apps and MCP servers all stop
+ * loading over one model's metadata (#759).
+ *
+ * The catalog writer normalizes on the way out, but a rejected value stored here would still
+ * be handed back to the GUI and CLI as if it were real, and the offline `ocx models add` path
+ * already refuses it. Validate at ingress so all three paths agree.
+ */
+const ALLOWED_INPUT_MODALITIES = new Set(["text", "image", "audio"]);
+
+function readInputModalities(raw: unknown): { values?: string[]; error?: string } {
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) return { error: "inputModalities must be an array" };
+  // Reject non-strings rather than filtering them out. Dropping them silently accepted a
+  // malformed POST and, worse, let a PUT of `[42]` clear the stored modalities while
+  // answering 200 — the opposite of the contract this validator exists to state. An empty
+  // array stays valid: that is how `ocx models edit --modalities -` clears the field.
+  const rejected: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") return { error: "inputModalities must contain only strings" };
+    if (!ALLOWED_INPUT_MODALITIES.has(value)) rejected.push(value);
+  }
+  if (rejected.length > 0) {
+    return { error: `unsupported input modality: ${rejected.join(", ")} (allowed: text, image, audio)` };
+  }
+  return { values: raw as string[] };
+}
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
@@ -54,15 +83,35 @@ import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO, corsHeaders } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
+import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  // A handler persists the exact config object passed in. Production defaults to
+  // the real store; tests that pass an in-memory fixture inject a no-op/spy. Do not
+  // bypass this seam with a dynamic config import — doing so replaced a user's
+  // ~/.opencodex/config.json with the `existing-uuid` test fixture.
+  const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+
+  if (url.pathname === "/api/catalog" && req.method === "GET") {
+    const { readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
+    const catalog = readCatalog(readCodexCatalogPath());
+    if (!catalog) return jsonResponse({ error: "catalog not found" }, 404, req, config);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...corsHeaders(req, config),
+    };
+    const { loadPersistedCodexRuntime } = await import("../../codex/runtime");
+    const version = loadPersistedCodexRuntime()?.selectedVersion;
+    if (version) headers["x-opencodex-codex-version"] = version;
+    return new Response(JSON.stringify(catalog), { status: 200, headers });
+  }
 
   if (url.pathname === "/api/models" && req.method === "GET") {
     const models = await fetchAllModels(config);
@@ -120,11 +169,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // /v1/models and invalidates Codex's 5-min models cache so it applies on the next turn.
   if (url.pathname === "/api/disabled-models" && req.method === "PUT") {
     let body: { models?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const disabled = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
     config.disabledModels = disabled;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    persistConfig(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, disabled });
   }
@@ -134,7 +182,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // state. Native rows only use the blocklist; routed/custom rows also join a non-empty allowlist.
   if (url.pathname === "/api/model-visibility" && req.method === "PUT") {
     let parsedBody: unknown;
-    try { parsedBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { parsedBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(parsedBody)) return jsonResponse({ error: "invalid model visibility request" }, 400);
     const body = parsedBody;
     const scope = body.scope === "models" || body.scope === "provider" ? body.scope : null;
@@ -223,7 +271,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
 
     config.disabledModels = disabled;
-    saveConfigPreservingClaudeCode(config);
+    persistConfig(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled });
   }
@@ -234,7 +282,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   if (url.pathname === "/api/custom-models" && req.method === "POST") {
     let body: { provider?: unknown; modelId?: unknown; displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const provider = typeof body.provider === "string" ? body.provider.trim() : "";
     const modelId = typeof body.modelId === "string" ? body.modelId.trim() : "";
     if (!provider || !modelId) return jsonResponse({ error: "provider and modelId are required" }, 400);
@@ -244,7 +292,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim() : undefined;
     if (displayName?.includes("/")) return jsonResponse({ error: "displayName must not contain /" }, 400);
     const contextWindow = typeof body.contextWindow === "number" && body.contextWindow > 0 ? Math.floor(body.contextWindow) : undefined;
-    const inputModalities = Array.isArray(body.inputModalities) ? body.inputModalities.filter((m): m is string => typeof m === "string") : undefined;
+    const modalities = readInputModalities(body.inputModalities);
+    if (modalities.error) return jsonResponse({ error: modalities.error }, 400);
+    const inputModalities = modalities.values;
     const existing = config.customModels ?? [];
     const newSlug = routedSlug(provider, modelId);
     if (existing.some(cm => routedSlug(cm.provider, cm.modelId) === newSlug)) {
@@ -260,8 +310,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       addedAt: new Date().toISOString(),
     };
     config.customModels = [...existing, entry];
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    persistConfig(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse(entry, 201);
   }
@@ -271,7 +320,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     let id: string;
     try { id = decodeURIComponent(customPutMatch[1]); } catch { return jsonResponse({ error: "invalid id encoding" }, 400); }
     let body: { displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; modelId?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const list = config.customModels ?? [];
     const idx = list.findIndex(cm => cm.id === id);
     if (idx === -1) return jsonResponse({ error: "not found" }, 404);
@@ -289,7 +338,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       cm.contextWindow = typeof body.contextWindow === "number" && body.contextWindow > 0 ? Math.floor(body.contextWindow) : undefined;
     }
     if (body.inputModalities !== undefined) {
-      cm.inputModalities = Array.isArray(body.inputModalities) ? body.inputModalities.filter((m): m is string => typeof m === "string") : undefined;
+      const edited = readInputModalities(body.inputModalities);
+      if (edited.error) return jsonResponse({ error: edited.error }, 400);
+      cm.inputModalities = edited.values && edited.values.length > 0 ? edited.values : undefined;
     }
     const updatedSlug = routedSlug(cm.provider, cm.modelId);
     if (list.some((other, i) => i !== idx && routedSlug(other.provider, other.modelId) === updatedSlug)) {
@@ -297,8 +348,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     list[idx] = cm;
     config.customModels = list;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    persistConfig(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse(cm);
   }
@@ -312,8 +362,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (idx === -1) return jsonResponse({ error: "not found" }, 404);
     list.splice(idx, 1);
     config.customModels = list.length > 0 ? list : undefined;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    persistConfig(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true });
   }
@@ -338,7 +387,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   }
   if (url.pathname === "/api/selected-models" && req.method === "PUT") {
     let body: { provider?: unknown; models?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const provider = typeof body.provider === "string" ? body.provider : "";
     if (!provider || !hasOwnProvider(config.providers, provider)) {
       return jsonResponse({ error: "unknown provider" }, provider ? 404 : 400);
@@ -349,8 +398,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // Empty list clears the allowlist (provider reverts to exposing all models).
     if (models.length > 0) config.providers[provider].selectedModels = models;
     else delete config.providers[provider].selectedModels;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    persistConfig(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, provider, selected: models });
   }

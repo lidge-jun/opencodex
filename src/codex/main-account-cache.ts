@@ -1,4 +1,7 @@
 import type { StoredAccountQuota } from "./quota";
+import { truncateRetainedUtf8 } from "../lib/admission";
+
+const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 
 export interface MainAccountInfo {
   email: string | null;
@@ -17,7 +20,11 @@ export function getMainAccountInfoCache(): CachedMainAccountInfo | null {
 }
 
 export function setMainAccountInfoCache(value: CachedMainAccountInfo): void {
-  cachedMainAccountInfo = value;
+  cachedMainAccountInfo = {
+    ...value,
+    email: value.email === null ? null : truncateRetainedUtf8(value.email, MAX_DIAGNOSTIC_VALUE_BYTES),
+    plan: value.plan === null ? null : truncateRetainedUtf8(value.plan, MAX_DIAGNOSTIC_VALUE_BYTES),
+  };
 }
 
 export function clearMainAccountInfoCache(): void {

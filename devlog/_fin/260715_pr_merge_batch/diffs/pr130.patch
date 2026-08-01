@@ -1,0 +1,151 @@
+From 21c459b480a670df955889ff0ec5f5d30821fb74 Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:32:32 +0200
+Subject: [PATCH 1/2] tooling: add pre-push hook matching the CI gate
+
+Adds a one-time setup command that installs a .git/hooks/pre-push hook
+running the same two checks as the CI matrix (ubuntu/macos/windows):
+
+  bun run typecheck   -- tsc --noEmit, catches type errors before push
+  bun run test        -- full unit suite under tests/
+
+Usage (run once after cloning):
+  bun run setup:hooks
+
+Skip in an emergency: git push --no-verify
+
+Files:
+- scripts/pre-push.sh       POSIX sh hook shim (works on all platforms)
+- scripts/setup-hooks.ts    cross-platform installer (bun script)
+- package.json              adds prepush and setup:hooks script entries
+- CONTRIBUTING.md           documents the one-liner for new contributors
+---
+ CONTRIBUTING.md        | 12 ++++++++++++
+ package.json           |  4 +++-
+ scripts/pre-push.sh    |  6 ++++++
+ scripts/setup-hooks.ts | 37 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 58 insertions(+), 1 deletion(-)
+ create mode 100644 scripts/pre-push.sh
+ create mode 100644 scripts/setup-hooks.ts
+
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 8498aa0a..61842c74 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -9,3 +9,15 @@ Thanks for helping with opencodex.
+ 
+ For local development commands, architecture notes, and release workflow details, use the hosted
+ contributing guide above instead of duplicating instructions here.
++
++## Pre-push hook
++
++After cloning, run once to install a local pre-push hook that mirrors the CI gate:
++
++```sh
++bun run setup:hooks
++```
++
++This installs `.git/hooks/pre-push`, which runs `bun run typecheck && bun run test` before every
++`git push`. The same two checks run on ubuntu-latest, macos-latest, and windows-latest in CI.
++Skip in an emergency with `git push --no-verify`.
+diff --git a/package.json b/package.json
+index fd880c43..4902ffbb 100644
+--- a/package.json
++++ b/package.json
+@@ -45,7 +45,9 @@
+     "prepack": "bun run prepare:package",
+     "prepublishOnly": "bun run typecheck && bun run build:gui",
+     "release": "bun scripts/release.ts",
+-    "release:watch": "bun scripts/release.ts watch"
++    "release:watch": "bun scripts/release.ts watch",
++    "prepush": "bun run typecheck && bun run test",
++    "setup:hooks": "bun scripts/setup-hooks.ts"
+   },
+   "dependencies": {
+     "@bufbuild/protobuf": "^2.12.0",
+diff --git a/scripts/pre-push.sh b/scripts/pre-push.sh
+new file mode 100644
+index 00000000..63688357
+--- /dev/null
++++ b/scripts/pre-push.sh
+@@ -0,0 +1,6 @@
++#!/usr/bin/env sh
++# Pre-push hook: typecheck then test.
++# Installed by: bun run setup:hooks
++set -e
++bun run typecheck
++bun run test
+\ No newline at end of file
+diff --git a/scripts/setup-hooks.ts b/scripts/setup-hooks.ts
+new file mode 100644
+index 00000000..b2cc0e69
+--- /dev/null
++++ b/scripts/setup-hooks.ts
+@@ -0,0 +1,37 @@
++﻿/**
++ * Sets up the .git/hooks/pre-push hook for local development.
++ * Run once after cloning: bun run setup:hooks
++ *
++ * The hook runs `bun run typecheck && bun run test` before every push,
++ * matching the same gate the CI runs on ubuntu/macos/windows.
++ *
++ * To skip in an emergency: git push --no-verify
++ */
++import { existsSync, copyFileSync, mkdirSync, chmodSync } from "node:fs";
++import { join, resolve } from "node:path";
++
++const repoRoot = resolve(import.meta.dirname, "..");
++const hooksDir = join(repoRoot, ".git", "hooks");
++const src = join(repoRoot, "scripts", "pre-push.sh");
++const dest = join(hooksDir, "pre-push");
++
++if (!existsSync(join(repoRoot, ".git"))) {
++  console.error("setup-hooks: must be run from inside a git repository.");
++  process.exit(1);
++}
++
++if (!existsSync(hooksDir)) {
++  mkdirSync(hooksDir);
++}
++
++copyFileSync(src, dest);
++
++// chmod +x -- no-op on Windows but harmless
++try {
++  chmodSync(dest, 0o755);
++} catch {
++  // Windows: Git for Windows calls sh.exe directly, executable bit not required.
++}
++
++console.log("pre-push hook installed. Runs typecheck + tests before every push.");
++console.log("Skip in an emergency with: git push --no-verify");
+\ No newline at end of file
+
+From 1f55000b3a3b3b8b18b7c374d650fe094d633d5d Mon Sep 17 00:00:00 2001
+From: Wibias <37517432+Wibias@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 20:48:13 +0200
+Subject: [PATCH 2/2] test: skip symlink test on Windows without elevated
+ symlink rights (EPERM)
+
+---
+ tests/claude-agents-inject.test.ts | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/tests/claude-agents-inject.test.ts b/tests/claude-agents-inject.test.ts
+index 78445619..9dabc7db 100644
+--- a/tests/claude-agents-inject.test.ts
++++ b/tests/claude-agents-inject.test.ts
+@@ -89,7 +89,12 @@ describe("syncClaudeAgentDefs ownership contract (audit 071 #2/#3)", () => {
+     mkdirSync(agentsDir, { recursive: true });
+     const victim = join(dir, "victim.md");
+     writeFileSync(victim, "precious");
+-    symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
++    try {
++      symlinkSync(victim, join(agentsDir, "ocx-linked.md"));
++    } catch (e: unknown) {
++      if ((e as NodeJS.ErrnoException).code === "EPERM") return; // skip on Windows without elevated symlink rights
++      throw e;
++    }
+     syncClaudeAgentDefs([], dir); // prune pass
+     expect(readFileSync(victim, "utf8")).toBe("precious");
+     expect(readdirSync(agentsDir)).toContain("ocx-linked.md");

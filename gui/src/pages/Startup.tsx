@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconRefresh } from "../icons";
 import { type TFn, useI18n } from "../i18n/shared";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
-import { EmptyState } from "../ui";
+import { Notice } from "../ui";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
 import {
   StartupDetailsSection,
   StartupHeroSection,
@@ -72,9 +74,6 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const cacheKey = `${STARTUP_PAGE_CACHE_PREFIX}${apiBase}`;
   const cached = useMemo(() => readSessionListCache<StartupPageCache>(cacheKey), [cacheKey]);
 
-  const [data, setData] = useState<StartupHealthData | null>(() => cached?.data ?? null);
-  const [loading, setLoading] = useState(() => !cached?.data);
-  const [failed, setFailed] = useState(() => Boolean(cached?.data?.diagnosticStale));
   const [copied, setCopied] = useState<string | null>(null);
   const [tray, setTray] = useState<TrayStatusData | null>(() => cached?.tray ?? null);
   const [trayLoading, setTrayLoading] = useState(() => !cached?.data);
@@ -86,13 +85,10 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(() => cached?.fix ?? null);
   /** True while settings (runtime notice) are still in flight — reserves notice slot height. */
   const [runtimeNoticePending, setRuntimeNoticePending] = useState(() => !cached?.data);
-  const loadGenerationRef = useRef(0);
   const paintedRef = useRef(Boolean(cached?.data));
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    const generation = ++loadGenerationRef.current;
+  const fetchStartup = useCallback(async (signal: AbortSignal): Promise<StartupHealthData> => {
     const keepSecondary = paintedRef.current;
-    setLoading(true);
     // Keep prior notice/tray visible on revalidation; only reserve empty slots on first paint.
     if (!keepSecondary) {
       setTrayLoading(true);
@@ -110,13 +106,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/startup-health`, { signal });
       if (!res.ok) throw new Error("fetch failed");
       const next = await res.json() as StartupHealthData;
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-
-      // Paint hero/details/recovery as soon as health arrives.
-      setData(next);
       paintedRef.current = true;
-      setFailed(next.diagnosticStale);
-      setLoading(false);
 
       const trayPromise = next.platform === "win32"
         ? fetch(`${apiBase}/api/windows-tray`, { signal })
@@ -129,31 +119,34 @@ export default function Startup({ apiBase }: { apiBase: string }) {
           .catch(() => ({ tray: null, error: true as const }))
         : Promise.resolve({ tray: null, error: false as const });
 
-      const [settings, trayResult] = await Promise.all([settingsPromise, trayPromise]);
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
+      // Health drives the main page, so publish it before the lower-priority settings/tray
+      // requests finish. Their result updates the existing reserved slots independently.
+      void Promise.all([settingsPromise, trayPromise]).then(([settings, trayResult]) => {
+        if (signal.aborted) return;
+        const nextTray = next.platform === "win32" ? trayResult.tray : null;
+        if (next.platform === "win32") {
+          setTray(nextTray);
+          setTrayError(trayResult.error);
+        } else {
+          setTray(null);
+          setTrayError(false);
+        }
+        setTrayLoading(false);
+        setRuntimeNoticePending(false);
 
-      const nextTray = next.platform === "win32" ? trayResult.tray : null;
-      if (next.platform === "win32") {
-        setTray(nextTray);
-        setTrayError(trayResult.error);
-      } else {
-        setTray(null);
-        setTrayError(false);
-      }
-      setTrayLoading(false);
-      setRuntimeNoticePending(false);
+        if (settings) {
+          const notice = deriveCodexRuntimeNotice(settings.codexRuntime, t, next.platform);
+          setCodexRuntimeWarning(notice.warning);
+          setCodexRuntimeFix(notice.fix);
+          writeSessionListCache(cacheKey, {
+            data: next,
+            warning: notice.warning,
+            fix: notice.fix,
+            tray: nextTray,
+          } satisfies StartupPageCache);
+          return;
+        }
 
-      if (settings) {
-        const notice = deriveCodexRuntimeNotice(settings.codexRuntime, t, next.platform);
-        setCodexRuntimeWarning(notice.warning);
-        setCodexRuntimeFix(notice.fix);
-        writeSessionListCache(cacheKey, {
-          data: next,
-          warning: notice.warning,
-          fix: notice.fix,
-          tray: nextTray,
-        } satisfies StartupPageCache);
-      } else {
         // Settings fetch failure: keep the last-good runtime notice in UI + cache.
         const prev = readSessionListCache<StartupPageCache>(cacheKey);
         writeSessionListCache(cacheKey, {
@@ -162,10 +155,10 @@ export default function Startup({ apiBase }: { apiBase: string }) {
           fix: prev?.fix ?? null,
           tray: nextTray,
         } satisfies StartupPageCache);
-      }
-    } catch {
-      if (signal?.aborted || generation !== loadGenerationRef.current) return;
-      setFailed(true);
+      });
+      return next;
+    } catch (error) {
+      if (signal.aborted) throw error;
       if (!keepSecondary) {
         setTray(null);
         setTrayError(true);
@@ -174,25 +167,25 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       }
       setRuntimeNoticePending(false);
       setTrayLoading(false);
-      setLoading(false);
+      throw error;
     }
   }, [apiBase, cacheKey, t]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => { void refresh(controller.signal); }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      // Invalidate before abort so a superseded request's finally cannot clear
-      // loading in the gap before the deferred replacement increments generation.
-      loadGenerationRef.current += 1;
-      controller.abort();
-    };
-  }, [refresh]);
+  const startupResource = useDataSurface<StartupHealthData>(
+    `startup-page:${apiBase}`,
+    [apiBase],
+    fetchStartup,
+    { isEmpty: () => false },
+  );
+  const loadState = startupResource.state;
+  const refresh = startupResource.refresh;
+  const data = loadState.data ?? cached?.data ?? null;
+  const loading = loadState.refreshing;
+  const failed = Boolean(data?.diagnosticStale) || loadState.showError;
 
   useEffect(() => {
     if (!data?.diagnosticStale) return;
-    const timer = window.setTimeout(() => { void refresh(); }, 2000);
+    const timer = window.setTimeout(refresh, 2000);
     return () => window.clearTimeout(timer);
   }, [data, refresh]);
 
@@ -242,7 +235,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
         throw new Error(typeof body?.error === "string" ? body.error : "installation failed");
       }
       setInstallResult({ kind: "success", action, repair: opts?.repair === true });
-      await refresh();
+      refresh();
     } catch (error) {
       setInstallResult({ kind: "error", action, repair: opts?.repair === true, detail: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -259,18 +252,25 @@ export default function Startup({ apiBase }: { apiBase: string }) {
         </div>
         <div className="startup-page-head-actions">
           <a className="btn btn-ghost btn-sm" href="#dashboard">{t("startup.backToDashboard")}</a>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refresh()} disabled={loading}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => refresh()} disabled={loading}>
             <IconRefresh /> {t("startup.refresh")}
           </button>
         </div>
       </div>
 
-      {loading && !data ? (
-        <EmptyState title={t("startup.loading")} />
-      ) : failed && !data ? (
-        <EmptyState title={t("startup.error")} />
+      {loadState.showSkeleton && !data ? (
+        <DataSurfaceSkeleton label={t("startup.loading")} rows={5} />
+      ) : loadState.kind === "failed-cold" ? (
+        <div className="startup-page-notice">
+          <Notice tone="err">{loadState.error instanceof Error ? loadState.error.message : t("startup.error")}</Notice>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => refresh()}>{t("common.retry")}</button>
+        </div>
       ) : data ? (
         <>
+          {loadState.showError && <Notice tone="err">{t("startup.error")}</Notice>}
+          {loadState.refreshing && (
+            <DataSurfaceStatus live={!loadState.showError}>{t("startup.loading")}</DataSurfaceStatus>
+          )}
           {failed && (
             <div className="notice notice-warn startup-page-notice" role="alert">
               {t("startup.staleData")}

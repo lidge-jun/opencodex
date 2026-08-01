@@ -32,7 +32,7 @@ bun run dev:gui
 | **起動安全性** | 注入された Codex ルーティングが再起動後も機能するか、サービスと launcher shim の状態、正確な修復コマンドと共に表示します。 |
 | **Windows トレイ** | ユーザーのログイントレイを導入し、プロキシ開始・停止・再起動・ダッシュボード・状態をクリックで操作します。トレイは再起動サービスではありません。 |
 | **Codex 自動起動** | インストール済み Codex launcher shim に `ocx ensure` の実行を許可します。このトグルは shim やバックグラウンドサービスをインストールしません。 |
-| **プロバイダー** | プロバイダーを追加、編集、有効化/無効化、削除し、対応する OAuth アカウントプールと API キープールを管理します。Claude（Anthropic）OAuth プールでは、ログイン済みの各アカウントに独自の 5 時間・週間レート制限バーが表示され（利用量は資格情報単位）、取得失敗時は直近の値を保持して一時利用不可と表示します。 |
+| **プロバイダー** | プロバイダーを追加、編集、既定に設定（有効なプロバイダーのみ）、有効化/無効化、削除し、対応する OAuth アカウントプールと API キープールを管理します。現在の既定を削除すると、残っている最初の有効なプロバイダーに切り替わります（存在する場合）。なければ削除は拒否され、現在の既定は保持されます。Claude（Anthropic）OAuth プールでは、ログイン済みの各アカウントに独自の 5 時間・週間レート制限バーが表示され（利用量は資格情報単位）、取得失敗時は直近の値を保持して一時利用不可と表示します。 |
 | **プロバイダー追加** | レジストリベースのプリセットからアカウントログイン、API キーサービス、ローカルサーバー、custom エンドポイントを検索します。 |
 | **Codex 認証** | ChatGPT/Codex プールアカウントを追加し、次回セッションアカウントを選び、5 時間 / 週間 / 30 日クォータを更新し、クォータ自動切り替えのオン/オフと 1～100% のしきい値、一時的失敗フェイルオーバーを設定します。 |
 | **サブエージェント** | `spawn_agent` オーバーライド一覧にネイティブまたはルーティングモデルを最大 5 つまで優先公開します。 |
@@ -105,7 +105,7 @@ GUI はプロキシの JSON 管理 API を使うシンクライアントです�
 | `GET` / `PUT /api/sidecar-settings` | 検索/ビジョンサイドカーモデル設定を読むか変えます。 |
 | `GET` / `PUT /api/injection-model` | 委任ガイダンスのモデル/effort、ガイダンストグル、Codex ネイティブサブエージェント既定値の同期トグルを読み取りまたは変更します。 |
 | `GET` / `PUT /api/v2` | サーフェスモード、Codex 機能フラグ、v2 スレッド上限を読むか変えます。 |
-| `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | プロバイダー一覧の参照、追加/差替、有効化/無効化、削除。 |
+| `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | プロバイダー一覧の参照、追加/差替、有効化/無効化、既定設定、削除。`PATCH` は有効なプロバイダーに対して `{ "setDefault": true }` のみ。`POST` は作成/差替時に `setDefault` を含められ、こちらも有効なプロバイダーのみ。現在の既定を削除すると、残っている最初の有効なプロバイダーに再割当てします（存在する場合）。なければ `409`（`code: "last_provider"`）を返し、現在の既定を保持します。 |
 | `GET /api/models` · `PUT /api/disabled-models` | ネイティブ/ルーティングモデル行を参照し共有 disabled model 一覧を更新します。 |
 | `GET /api/selected-models` · `PUT /api/model-visibility` | プロバイダー allowlist を読み取り、モデルまたはプロバイダーグループの最終表示状態を原子的に変更します。 |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | API キーおよび OAuth プロバイダーカタログを読みます。 |
@@ -113,7 +113,7 @@ GUI はプロキシの JSON 管理 API を使うシンクライアントです�
 | `GET /api/codex-auth/accounts?refresh=1` | メインおよびプールアカウントを参照しクォータを強制更新し、メインの `hasCredential` / terminal `needsReauth` 状態を返します。 |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 次のリクエストで使うアカウントとプールルーティングポリシーを設定します。 |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | ブラウザログインでプールアカウントを追加します。 |
-| `GET /api/logs?tail=50&provider=...&status=5xx` | tail、プロバイダー、正確な状態コードまたは状態等級で最近のリクエストメタデータを参照します。 |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | tail、プロバイダー、正確な状態コードまたは状態等級で最近のリクエストメタデータを参照します。`limit`/`offset` は最新行から過去方向にページングします（`offset=0` が最新ページ）。応答は `{ timeZone, total, logs }` で、`total` はページング前の一致件数です。 |
 | `GET` / `PUT /api/subagent-models` | `spawn_agent` に優先公開するモデル 5 つを読むか設定します。 |
 | `POST /api/stop` | プロキシ/サービスを停止しネイティブ Codex を復元した後終了します。 |
 

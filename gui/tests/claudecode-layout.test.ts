@@ -13,7 +13,9 @@ test("ClaudeCode renders the denser workspace rail layout", async () => {
   expect(page).toContain("claude.workspace.settings");
 
   expect(app).toContain("<Claude apiBase={API_BASE} />");
-  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} />");
+  // Both children stay mounted so drafts survive a tab switch; `active` is what keeps the hidden
+  // one from fetching, so the two panels must be wired symmetrically.
+  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={tab === \"code\"} />");
   expect(claude).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={tab === \"desktop\"} />");
 });
 

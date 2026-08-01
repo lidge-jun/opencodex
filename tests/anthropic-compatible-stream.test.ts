@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { bridgeToResponsesSSE } from "../src/bridge";
-import { responsesSseToAnthropicSse } from "../src/claude/outbound";
+import { responsesSseToAnthropicSse as responsesSseToAnthropicSseProduction } from "../src/claude/outbound";
 import type { AdapterEvent, OcxProviderConfig } from "../src/types";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
+
+function responsesSseToAnthropicSse(
+  upstream: ReadableStream<Uint8Array>,
+  model: string,
+  opts: { pingIntervalMs?: number } = {},
+) {
+  return responsesSseToAnthropicSseProduction(upstream, model, {
+    ...opts,
+    translatorBudget: createTestTranslatorBudget(),
+  });
+}
 
 const provider = {
   adapter: "anthropic",

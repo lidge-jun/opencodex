@@ -4,6 +4,7 @@ import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderRegis
 export interface DerivedKeyLoginProvider {
   label: string;
   baseUrl: string;
+  responsesPath?: string;
   adapter: string;
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   dashboardUrl: string;
@@ -53,6 +54,7 @@ export interface DerivedProviderPreset {
   label: string;
   adapter: string;
   baseUrl: string;
+  responsesPath?: string;
   defaultModel?: string;
   auth: "oauth" | "forward" | "key" | "local";
   codexAccountMode?: CodexAccountMode;
@@ -105,6 +107,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
+    ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
     authMode: entry.authKind === "local" ? undefined : entry.authKind,
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
@@ -132,6 +135,8 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
     ...(entry.parallelToolCalls !== undefined ? { parallelToolCalls: entry.parallelToolCalls } : {}),
     ...(entry.promptCacheKey !== undefined ? { promptCacheKey: entry.promptCacheKey } : {}),
+    ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
+    ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
     ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
@@ -152,6 +157,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
     out[entry.id] = {
       label: entry.label,
       baseUrl: entry.baseUrl,
+      ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
       adapter: entry.adapter,
       ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
       dashboardUrl: entry.dashboardUrl,
@@ -227,6 +233,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   const seed = providerConfigSeed(entry);
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
+  if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
   if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;
   if (!prov.models && seed.models) prov.models = [...seed.models];
@@ -248,6 +255,10 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.noPenaltyModels && seed.noPenaltyModels) prov.noPenaltyModels = [...seed.noPenaltyModels];
   if (prov.parallelToolCalls === undefined && seed.parallelToolCalls !== undefined) prov.parallelToolCalls = seed.parallelToolCalls;
   if (prov.promptCacheKey === undefined && seed.promptCacheKey !== undefined) prov.promptCacheKey = seed.promptCacheKey;
+  // Fill-only: a hand-edited path must survive, and a config saved before the registry
+  // learned this route still gets backfilled.
+  if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
+  if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];
@@ -287,6 +298,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     label: entry.label,
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
+    ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
     auth: entry.authKind === "forward" ? "forward" : entry.authKind === "oauth" ? "oauth" : entry.authKind === "local" ? "local" : "key",
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.codexAccountMode ? { provider: providerConfigSeed(entry) } : {}),

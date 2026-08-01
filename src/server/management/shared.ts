@@ -214,14 +214,14 @@ export function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProvid
 
 /** Shared Desktop profile DTO builder for the management API and CLI. */
 export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxClaudeDesktopProfile) {
-  const { filterCatalogVisibleModels, nativeOpenAiContextWindow, visibleNativeSlugs } = await import("../../codex/catalog");
+  const { filterCatalogVisibleModels, nativeOpenAiContextWindow, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
   const { DESKTOP_SUPPORTS_1M_THRESHOLD } = await import("../../claude/desktop-3p");
   const { reconcileDesktopProfile, renderDesktopProfile } = await import("../../claude/desktop-profile");
   const routed = filterCatalogVisibleModels(await fetchAllModels(config), config);
   const profileModels: DesktopProfileModel[] = [
     // Native rows carry their real context window from the same accessor the Grok sync
     // uses — otherwise Sol's 372k and gpt-5.5's 272k render as blank on Desktop.
-    ...visibleNativeSlugs(config).map(id => {
+    ...desktopVisibleNativeSlugs(config).map(id => {
       const contextWindow = nativeOpenAiContextWindow(id);
       return { route: `native/${id}`, label: `${id} (native)`,
         ...(contextWindow !== undefined ? { contextWindow } : {}) };
@@ -233,6 +233,19 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
     })),
   ];
   const profile = reconcileDesktopProfile(stored ?? config.claudeCode?.desktopProfile, profileModels);
+  if (config.claudeCode?.desktopNativeModels === false) {
+    for (const route of Object.keys(profile.assignments)) {
+      if (route.startsWith("native/")) delete profile.assignments[route];
+    }
+    for (const family of ["opus", "fable", "sonnet", "haiku"] as const) {
+      const current = profile.defaults[family];
+      if (current?.startsWith("native/")) {
+        profile.defaults[family] = Object.keys(profile.assignments)
+          .filter(route => profile.assignments[route]?.family === family)
+          .sort()[0] ?? null;
+      }
+    }
+  }
   const available = new Set(profileModels.map(model => model.route));
   const modelByRoute = new Map(profileModels.map(model => [model.route, model]));
   // Effort support: routed models with a non-empty reasoningEfforts ladder support effort;
@@ -241,7 +254,7 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
   for (const m of routed) {
     effortByRoute.set(`${m.provider}/${m.id}`, Array.isArray(m.reasoningEfforts) && m.reasoningEfforts.length > 0);
   }
-  for (const id of visibleNativeSlugs(config)) {
+  for (const id of desktopVisibleNativeSlugs(config)) {
     effortByRoute.set(`native/${id}`, true);
   }
   const models = Object.keys(profile.assignments).sort().map(route => ({

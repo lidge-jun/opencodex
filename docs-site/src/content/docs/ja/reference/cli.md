@@ -168,12 +168,22 @@ ocx v2 threads 16
 既存の `config.toml` をそのまま復元します。
 変更は新しい Codex セッションから適用され、実行中のセッションは固定された surface を維持します。
 
-### `ocx models [--provider <name>] [--json]`
+### `ocx models [subcommand]`
 
-設定されたプロバイダーに静的に seed されたモデルを一覧します。`--provider` は 1 つのプロバイダーだけを選び、
-`--json` はモデルメタデータとともに `liveModels` がランタイム専用項目を追加できる旨の案内を
-返します。リアルタイムカタログを取得するコマンドではありません。その作業には `ocx sync` やダッシュボードを
-使ってください。
+サブコマンドなしでは、設定されたプロバイダーに静的に seed されたモデルを一覧します。`--provider` は
+1 つのプロバイダーだけを選び、`--json` はモデルメタデータを返します。実行中のカタログは
+`ocx models live` で読み取ります。
+
+ダッシュボードが提供するモデル単位の操作はすべて CLI にあります。`add`、`remove`、`list-custom` は
+設定ファイルを対象とし、実行中のプロキシにはカタログ同期で反映されます。それ以外は実行中の管理 API を
+使うため、プロキシが起動している必要があります（`ocx start` またはインストール済みサービス）。
+
+サブコマンド: `list`、`live`、`add`、`edit`、`remove`、`list-custom`、`enable`、`disable`、
+`provider <name> <on|off>`、`selected <provider>`、`context`、`shadow`。フラグと例の完全な一覧は
+英語版リファレンスを参照してください。
+
+`--modalities` は `text`、`image`、`audio` のみを受け付けます。Codex はこのフィールドを閉じた enum
+として解析し、それ以外の値が 1 つでもあると**カタログ全体を拒否**します（#759）。
 
 ### `ocx provider <subcommand>`
 
@@ -359,6 +369,10 @@ ocx service install
 ocx service status
 ocx service uninstall
 ```
+
+Windows では、`ocx service status` はタスク スケジューラの登録状態と、ID を確認済みの
+OpenCodex プロキシへの到達性を別々に報告します。ローカライズされた `schtasks` の表は出力
+しないため、Windows のコード ページに関係なく概要を読めます。
 
 Windows でタスク スケジューラのエントリを作成するには昇格が必要です。認識できるローカライズ
 済みのアクセス拒否テキストは、既存の案内経路をそのまま使用します。そのテキストが読めない場合、

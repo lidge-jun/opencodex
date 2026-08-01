@@ -14,6 +14,7 @@ import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import {
   resetStorageCleanupPolicyJobForTests,
+  resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
 } from "../src/storage/policy-job";
 import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
@@ -62,9 +63,9 @@ beforeEach(() => {
   resetStorageCleanupPolicyJobForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   stopStorageCleanupScheduler();
-  resetStorageCleanupPolicyJobForTests();
+  await resetStorageCleanupPolicyJobForTestsAsync();
   setStorageCleanupPolicyJobTestHooks(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -140,7 +141,7 @@ describe("storage cleanup policy job responsiveness", () => {
     } finally {
       await server.stop(true);
       stopStorageCleanupScheduler();
-      resetStorageCleanupPolicyJobForTests();
+      await resetStorageCleanupPolicyJobForTestsAsync();
     }
   }, { timeout: 30_000 });
 });

@@ -4,6 +4,7 @@ import http2 from "node:http2";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 import Models from "../src/pages/Models";
 import { EmptyProviderHint } from "../src/pages/models-provider-hints";
@@ -30,6 +31,7 @@ const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
   gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
 
 beforeEach(() => {
+  clearClientResourceStoresForTests();
   previousLanguage = (globalThis.navigator as { language?: unknown } | undefined)?.language;
   Object.defineProperty(globalThis.navigator, "language", {
     configurable: true,
@@ -38,6 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearClientResourceStoresForTests();
   globalThis.fetch = originalFetch;
   clearModelCache();
   Object.defineProperty(globalThis.navigator, "language", {
@@ -79,7 +82,7 @@ async function providerDto(
 }
 
 test("Models page combines final visibility, atomic actions, discovery status, and serialized polling", async () => {
-  const domGlobals = ["document", "window", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const domGlobals = ["document", "window", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT", "setInterval", "clearInterval"] as const;
   const previousDescriptors = Object.fromEntries(
     domGlobals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
   ) as Record<(typeof domGlobals)[number], PropertyDescriptor | undefined>;
@@ -87,17 +90,25 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   const container = testWindow.document.createElement("div");
   testWindow.document.body.append(container);
   let root: Root | undefined;
-  let poll: (() => void) | undefined;
+  const polls: Array<() => void> = [];
+  const recordPoll = (handler: () => void) => {
+    polls.push(handler);
+    return polls.length;
+  };
+  const poll = () => { for (const handler of polls) handler(); };
   Object.defineProperty(testWindow, "setInterval", {
     configurable: true,
-    value: (handler: () => void) => { poll = handler; return 1; },
+    value: recordPoll,
   });
 
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    sessionStorage: { configurable: true, value: testWindow.sessionStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+    setInterval: { configurable: true, value: recordPoll },
+    clearInterval: { configurable: true, value: () => {} },
   });
   testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
   const provider = "fallback-provider";
@@ -106,14 +117,24 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   const disabled = new Set(["gpt-oss"]);
   const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
   let failNext = false;
+  let failCatalog = false;
   let modelFetches = 0;
   let resolveModels!: (response: Response) => void;
   const firstModels = new Promise<Response>(resolve => { resolveModels = resolve; });
   const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: disabled.has(id) }));
+  testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
+    models: rows(),
+    providers: [{ name: provider, liveModels: true, models: ids }],
+    selectedModels: { [provider]: selected },
+    disabled: [...disabled],
+    contextCaps: {},
+    contextCapValue: 350_000,
+  }));
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.endsWith("/api/models")) {
       modelFetches += 1;
+      if (failCatalog) return Response.json({ error: "offline" }, { status: 503 });
       return modelFetches === 1 ? firstModels : Response.json(rows());
     }
     if (url.endsWith("/api/providers")) {
@@ -158,7 +179,8 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       await new Promise(resolve => testWindow.setTimeout(resolve, 0));
       await Promise.resolve();
     });
-    poll?.();
+    expect(container.textContent).toContain("fallback-provider");
+    poll();
     expect(modelFetches).toBe(1);
     await act(async () => {
       resolveModels(Response.json(rows()));
@@ -196,6 +218,12 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     await act(async () => { buttonText("All off").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: false });
     expect(container.textContent).toContain("0/5 visible");
+
+    // A failed poll must keep the catalog on screen but make the stale state visible.
+    failCatalog = true;
+    await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(container.textContent).toContain("fallback-provider");
+    expect(container.textContent).toContain("Failed to load models");
   } finally {
     if (root) {
       await act(async () => root?.unmount());
@@ -491,22 +519,33 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
     document: Object.getOwnPropertyDescriptor(globalThis, "document"),
     window: Object.getOwnPropertyDescriptor(globalThis, "window"),
     localStorage: Object.getOwnPropertyDescriptor(globalThis, "localStorage"),
+    sessionStorage: Object.getOwnPropertyDescriptor(globalThis, "sessionStorage"),
     actEnv: Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT"),
+    setInterval: Object.getOwnPropertyDescriptor(globalThis, "setInterval"),
+    clearInterval: Object.getOwnPropertyDescriptor(globalThis, "clearInterval"),
   };
   const testWindow = new Window({ url: "http://localhost/" });
   const container = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(container);
   let root: Root | undefined;
-  let poll: (() => void) | undefined;
+  const polls: Array<() => void> = [];
+  const recordPoll = (handler: () => void) => {
+    polls.push(handler);
+    return polls.length;
+  };
+  const poll = () => { for (const handler of polls) handler(); };
   Object.defineProperty(testWindow, "setInterval", {
     configurable: true,
-    value: (handler: () => void) => { poll = handler; return 1; },
+    value: recordPoll,
   });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    sessionStorage: { configurable: true, value: testWindow.sessionStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+    setInterval: { configurable: true, value: recordPoll },
+    clearInterval: { configurable: true, value: () => {} },
   });
   testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
 
@@ -555,7 +594,7 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
     expect(container.textContent).toContain("stale-a");
 
     // Start the poll and leave its /api/models response pending.
-    await act(async () => { poll?.(); await Promise.resolve(); });
+    await act(async () => { poll(); await Promise.resolve(); });
     expect(modelFetches).toBe(2);
 
     // A forced refresh finishes while that poll is still in flight and brings the newer catalog.
@@ -578,7 +617,10 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
       ["document", priorGlobals.document],
       ["window", priorGlobals.window],
       ["localStorage", priorGlobals.localStorage],
+      ["sessionStorage", priorGlobals.sessionStorage],
       ["IS_REACT_ACT_ENVIRONMENT", priorGlobals.actEnv],
+      ["setInterval", priorGlobals.setInterval],
+      ["clearInterval", priorGlobals.clearInterval],
     ] as const) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else delete (globalThis as Record<string, unknown>)[key];

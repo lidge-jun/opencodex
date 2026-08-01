@@ -86,6 +86,8 @@ export interface ProviderAuthHandlers {
 }
 
 export type ProviderUpdatePatch = {
+  /** A standalone routing change; the management API rejects combinations with edits. */
+  setDefault?: true;
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;

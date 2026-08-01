@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
+import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
 import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErrorMessage } from "./cursor/cursor-errors";
 import { isCursorExternalWireModel } from "./cursor/discovery";
@@ -78,7 +79,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       }
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
-        const kv = deps.kv ?? createCursorKvStore();
+        const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
         // Namespace thread→conversation derivation by the authenticated Cursor credential so
         // shared-proxy tenants with different Cursor accounts cannot collide on a parent thread id.
@@ -118,6 +119,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             {
               provider,
               headers: incoming.headers,
+              translatorBudget: incoming.translatorBudget,
               requestDeclaresFullAccess: cursorRequestDeclaresFullAccess(activeRequest),
             },
             activeRequest,
@@ -178,7 +180,16 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       } catch (err) {
         if (isCursorBenignCancelError(err)) return;
         const partialUsage = (err as { partialUsage?: import("../types").OcxUsage }).partialUsage;
-        emit({ type: "error", message: safeCursorTransportError(err), ...(partialUsage ? { usage: partialUsage } : {}) });
+        emit({
+          type: "error",
+          message: isTranslatorBudgetExceededError(err)
+            ? "upstream translation buffer exceeded the safe limit"
+            : safeCursorTransportError(err),
+          ...(isTranslatorBudgetExceededError(err)
+            ? { status: 502, errorType: "upstream_error", code: "translation_buffer_limit" }
+            : {}),
+          ...(partialUsage ? { usage: partialUsage } : {}),
+        });
       }
     },
   };

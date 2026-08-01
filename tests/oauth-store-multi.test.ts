@@ -2,11 +2,21 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  resetHardenedStateForTests,
+  setIcaclsRunnerForTests,
+} from "../src/lib/windows-secret-acl";
+import {
   getAccountCredential,
   getAccountSet,
   getCredential,
+  credentialGeneration,
   listAccounts,
   markAccountNeedsReauth,
+  markAccountNeedsReauthIfGeneration,
+  mutateStore,
+  OAuthMutationBusyError,
+  oauthMutationTailSnapshot,
+  reconcileOAuthReauthState,
   removeAccount,
   removeCredential,
   saveAccountCredential,
@@ -32,9 +42,18 @@ describe("multi-account auth store", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
+    resetHardenedStateForTests();
+    setIcaclsRunnerForTests(() => ({
+      success: true,
+      exitCode: 0,
+      timedOut: false,
+      stdout: "",
+    }));
   });
 
   afterEach(() => {
+    setIcaclsRunnerForTests(null);
+    resetHardenedStateForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
@@ -211,5 +230,90 @@ describe("multi-account auth store", () => {
     const set = getAccountSet("xai")!;
     expect(set.accounts.length).toBe(1);
     expect(set.activeAccountId).toBe("ok"); // dangling active healed
+  });
+
+  test("queued generation-checked reauth mutation rechecks liveness after reconciliation", async () => {
+    await saveCredential("xai", cred({ email: "race@example.com", accountId: "race-account" }));
+    const accountId = getAccountSet("xai")!.activeAccountId;
+    const generation = credentialGeneration(getAccountCredential("xai", accountId)!);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+    const blocker = mutateStore(async () => {
+      entered();
+      await gate;
+    });
+    await enteredGate;
+
+    const pending = markAccountNeedsReauthIfGeneration("xai", accountId, generation, 0);
+    reconcileOAuthReauthState({
+      generation: 1,
+      providerNames: new Set(),
+      comboIds: new Set(),
+      comboTargets: new Set(),
+      codexAccountIds: new Set(),
+      oauthAccountKeys: new Set(),
+      configRoots: new Set(),
+    });
+    release();
+    await blocker;
+
+    expect(await pending).toBe(false);
+    expect(getAccountSet("xai")!.accounts[0]?.needsReauth).toBeUndefined();
+  });
+
+  test("OAuth mutation 129 rejects before enqueue while every accepted mutation executes once", async () => {
+    let releaseFirst!: () => void;
+    let firstStarted!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const started = new Promise<void>(resolve => { firstStarted = resolve; });
+    let executions = 0;
+    const accepted = [mutateStore(async () => {
+      executions++;
+      firstStarted();
+      await firstGate;
+    }, ["provider", "account"] )];
+    await started;
+    for (let i = 1; i < 128; i++) {
+      accepted.push(mutateStore(() => { executions++; }, ["provider", `account-${i}`]));
+    }
+    expect(oauthMutationTailSnapshot().active).toBe(128);
+    await expect(mutateStore(() => { executions++; }, ["rejected"])).rejects.toBeInstanceOf(OAuthMutationBusyError);
+    expect(oauthMutationTailSnapshot().active).toBe(128);
+    releaseFirst();
+    await Promise.all(accepted);
+    expect(executions).toBe(128);
+    expect(oauthMutationTailSnapshot().active).toBe(0);
+  });
+
+  test("OAuth 30 second wait timeout releases an unstarted lease and never enters the chain", async () => {
+    let releaseFirst!: () => void;
+    let firstStarted!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const started = new Promise<void>(resolve => { firstStarted = resolve; });
+    const blocker = mutateStore(async () => {
+      firstStarted();
+      await firstGate;
+    }, ["provider", "running-account"]);
+    await started;
+    let entered = false;
+    const timedOut = mutateStore(() => { entered = true; }, ["provider", "waiting-account"], { waitMs: 10 });
+    // Bun 1.3.14 on Windows does not service the production-unref'ed queue timer
+    // when the test is otherwise waiting only on promises. Keep a test-owned
+    // ref'ed timer active, and release the blocker if the assertion itself fails.
+    const timerWakeup = setInterval(() => {}, 5);
+    const cleanupFallback = setTimeout(releaseFirst, 1_000);
+    try {
+      await expect(timedOut).rejects.toBeInstanceOf(OAuthMutationBusyError);
+      expect(entered).toBe(false);
+      expect(oauthMutationTailSnapshot().active).toBe(1);
+    } finally {
+      clearInterval(timerWakeup);
+      clearTimeout(cleanupFallback);
+      releaseFirst();
+      await blocker;
+    }
+    expect(oauthMutationTailSnapshot().active).toBe(0);
   });
 });

@@ -671,4 +671,37 @@ describe("summarizeUsage", () => {
     expect(sum.models[0]?.resolvedModel).toBeUndefined();
   });
 
+  test("caps top-level and per-day model breakdowns with a lossless other bucket", () => {
+    const entries = Array.from({ length: 260 }, (_, index) => entry({
+      ts: FIXED_NOW - index,
+      requestId: index >= 255 ? "shared-overflow-request" : `request-${index}`,
+      provider: `provider-${index}`,
+      model: `model-${index}`,
+      usageStatus: "reported",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      totalTokens: 2,
+    }));
+    const sum = summarizeUsage(entries, "30d", FIXED_NOW);
+    expect(sum.models).toHaveLength(256);
+    expect(sum.days.find(day => day.requests > 0)?.models).toHaveLength(256);
+    expect(sum.models.at(-1)).toMatchObject({
+      provider: "other",
+      model: "other",
+      requests: 1,
+      attemptCount: 5,
+      measuredRequests: 1,
+      reportedRequests: 1,
+      inputTokens: 5,
+      outputTokens: 5,
+      totalTokens: 10,
+    });
+    expect(sum.days.find(day => day.requests > 0)?.models.at(-1)).toMatchObject({
+      provider: "other",
+      model: "other",
+      requests: 1,
+      attemptCount: 5,
+      totalTokens: 10,
+    });
+  });
+
 });

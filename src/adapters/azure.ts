@@ -1,4 +1,4 @@
-import type { ProviderAdapter } from "./base";
+import type { IncomingMeta, ProviderAdapter } from "./base";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 
@@ -12,7 +12,7 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
     ...inner,
     name: "azure-openai",
 
-    async buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       if (provider.authMode === "forward") {
         throw new Error("azure-openai does not support forward auth mode");
       }
@@ -20,7 +20,7 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
         throw new Error("azure-openai requires a non-empty apiKey");
       }
 
-      const request = await inner.buildRequest(parsed);
+      const request = await inner.buildRequest(parsed, incoming);
       const unresolvedPlaceholder = request.url.match(/\{[^}]*\}/)?.[0] ?? request.url.match(/[{}]/)?.[0];
       if (unresolvedPlaceholder) {
         throw new Error(`azure-openai baseUrl contains unresolved ${unresolvedPlaceholder} — set your real resource URL`);

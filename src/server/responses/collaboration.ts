@@ -97,9 +97,10 @@ import {
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import type { TranslatorBudget } from "../../lib/translator-budget";
 
 
-export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
+export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: TranslatorBudget): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
   freeformToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
@@ -108,9 +109,19 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
   for (const t of parsed.context.tools ?? []) {
-    if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
-    if (t.freeform) freeformToolNames.add(t.name);
-    if (t.toolSearch) toolSearchToolNames.add(t.name);
+    if (t.namespace) {
+      const wireName = namespacedToolName(t.namespace, t.name);
+      budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+      toolNsMap.set(wireName, { namespace: t.namespace, name: t.name });
+    }
+    if (t.freeform) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      freeformToolNames.add(t.name);
+    }
+    if (t.toolSearch) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      toolSearchToolNames.add(t.name);
+    }
   }
   return { toolNsMap, freeformToolNames, toolSearchToolNames };
 }

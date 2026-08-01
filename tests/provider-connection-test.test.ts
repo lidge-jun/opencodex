@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
-import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
+import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
 
 const TEST_DIR = join(tmpdir(), "ocx-conn-test");
 const previousHome = process.env.OPENCODEX_HOME;
@@ -178,13 +178,9 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
   });
 
   test("reports only eligible deduplicated models from a registry discovery contract", async () => {
-    const entry = PROVIDER_REGISTRY.find(row => row.id === "together");
-    if (!entry) throw new Error("missing together registry entry");
-    const original = entry.modelDiscovery;
-    entry.modelDiscovery = {
+    await withRegistryDiscovery("together", {
       filter: { anyOf: [{ path: ["type"], equalsAny: ["chat"] }] },
-    };
-    try {
+    }, async () => {
       globalThis.fetch = (async () => Response.json({
         data: [
           { id: "chat-model", type: "chat" },
@@ -202,10 +198,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
       const { body } = await probe(config, "together");
       expect(body.ok).toBe(true);
       expect(body.models).toBe(1);
-    } finally {
-      if (original === undefined) delete entry.modelDiscovery;
-      else entry.modelDiscovery = original;
-    }
+    });
   });
 
   test("Google's models-array response shape is accepted (x-goog-api-key path)", async () => {
