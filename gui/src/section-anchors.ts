@@ -19,3 +19,6 @@ export function sectionAnchorId(scope: string, id: string): string {
 export function sectionAnchorPrefix(scope: string): string {
   return [scope, SECTION_PART, ""].join("-");
 }
+
+/** Ignore scroll-spy updates briefly after a tab click while smooth scroll is in flight. */
+export const SECTION_TAB_SCROLL_LOCK_MS = 1200;

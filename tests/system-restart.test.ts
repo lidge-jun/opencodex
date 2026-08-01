@@ -84,6 +84,61 @@ describe("acceptSystemRestart", () => {
     expect(calls).toEqual(["drain", "exit:1"]);
   });
 
+  test("OCX_SERVICE with non-viable Background Service uses detached start", async () => {
+    const calls: string[] = [];
+    let scheduled: (() => void | Promise<void>) | null = null;
+    const prev = process.env.OCX_SERVICE;
+    process.env.OCX_SERVICE = "1";
+
+    try {
+      acceptSystemRestart({
+        isDraining: () => false,
+        getActiveTurnCount: () => 0,
+        // Installed-but-stale assets must NOT count as supervised recovery.
+        isServiceViable: () => false,
+        listenPort: () => 10123,
+        schedule: (fn) => { scheduled = fn; },
+        setDraining: () => {},
+        drainAndShutdown: async () => { calls.push("drain"); },
+        spawnStart: (port) => { calls.push(`start:${port}`); },
+        markRecycling: () => { calls.push("recycle"); },
+        exitProcess: (code) => { calls.push(`exit:${code}`); },
+      });
+
+      await scheduled!();
+      expect(calls).toEqual(["drain", "start:10123", "recycle", "exit:0"]);
+    } finally {
+      if (prev === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prev;
+    }
+  });
+
+  test("OCX_SERVICE with viable Background Service exits 1 for supervisor respawn", async () => {
+    const calls: string[] = [];
+    let scheduled: (() => void | Promise<void>) | null = null;
+    const prev = process.env.OCX_SERVICE;
+    process.env.OCX_SERVICE = "1";
+
+    try {
+      acceptSystemRestart({
+        isDraining: () => false,
+        getActiveTurnCount: () => 0,
+        isServiceViable: () => true,
+        schedule: (fn) => { scheduled = fn; },
+        drainAndShutdown: async () => { calls.push("drain"); },
+        spawnStart: () => { calls.push("start"); },
+        markRecycling: () => { calls.push("recycle"); },
+        exitProcess: (code) => { calls.push(`exit:${code}`); },
+      });
+
+      await scheduled!();
+      expect(calls).toEqual(["drain", "exit:1"]);
+    } finally {
+      if (prev === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prev;
+    }
+  });
+
   test("spawn sync throw exits 1 without marking recycle", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;

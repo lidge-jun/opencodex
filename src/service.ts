@@ -1862,6 +1862,15 @@ export function isServiceInstalled(): boolean {
   return diagnoseService().installed;
 }
 
+/**
+ * True when an installed background service can actually supervise the proxy.
+ * Presence alone is not enough: stale/missing assets, conflicts, and disabled
+ * registrations report `installed` but will not bring the proxy back after exit.
+ */
+export function isServiceViable(): boolean {
+  return diagnoseService().viable;
+}
+
 export interface ServiceDiagnostic {
   supported: boolean;
   installed: boolean;

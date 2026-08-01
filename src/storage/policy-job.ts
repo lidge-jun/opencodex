@@ -131,8 +131,16 @@ function disownActiveRun(): void {
   cancel?.();
 }
 
+/**
+ * Fire-and-forget reset. Prefer {@link resetStorageCleanupPolicyJobForTestsAsync}
+ * from test beforeEach/afterEach — sync terminate races Windows
+ * `bun test --isolate` reclaim when the next case spawns immediately.
+ */
 export function resetStorageCleanupPolicyJobForTests(): void {
   disownActiveRun();
+  // Invalidate spawnGate callbacks that have not created a Worker yet — otherwise
+  // they can still spawn after this sync path releases the mutation slot.
+  cancelQueuedStorageWorkerSpawns();
   if (activeWorker) {
     void terminateStorageWorker(activeWorker);
     activeWorker = null;
@@ -176,6 +184,7 @@ export async function resetStorageCleanupPolicyJobForTestsAsync(): Promise<void>
 /** Terminate an in-flight worker during process shutdown. */
 export function abortStorageCleanupPolicyJob(): void {
   disownActiveRun();
+  cancelQueuedStorageWorkerSpawns();
   if (activeWorker) {
     void terminateStorageWorker(activeWorker);
     activeWorker = null;

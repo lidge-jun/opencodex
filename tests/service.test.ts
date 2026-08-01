@@ -746,6 +746,15 @@ describe("service diagnostics", () => {
     expect(deriveWindowsServiceDiagnostic({ ...base, ...installedEnabled, nativeStatus: "started" })).toMatchObject({ viable: false, conflict: true });
     expect(deriveWindowsServiceDiagnostic({ ...base, nativeStatus: "stopped" })).toMatchObject({ installed: true, viable: false, startable: false, stale: true, running: false });
     expect(deriveWindowsServiceDiagnostic({ ...base, nativeRepairAssetsOnly: true })).toMatchObject({ installed: false, viable: false, stale: true });
+    // Missing on-disk assets while the task remains registered — the post-update status line.
+    const missingAssets = deriveWindowsServiceDiagnostic({
+      ...base,
+      ...installedEnabled,
+      recordedBackend: "scheduler",
+      schedulerAssetsPresent: false,
+    });
+    expect(missingAssets).toMatchObject({ installed: true, viable: false, stale: true, startable: false });
+    expect(missingAssets.summary).toContain("stale or missing service assets");
   });
 
   test("a stopped healthy WinSW service remains startable from the tray", () => {

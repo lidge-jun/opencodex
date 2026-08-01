@@ -47,6 +47,20 @@
   gap: var(--space-4);
 }
 
+/* Sub-agent delegation + Sync models share one row (same auto-fit rhythm as sidecars). */
+.dash-overview-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.dash-overview-tools > .panel {
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+
 /* Sidecar settings: two panels side by side, gap matches --space-4.
    auto-fit collapses to one column before two columns get too narrow for the
    title + model select row (~21rem per card), so the select never overlaps or

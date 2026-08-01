@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,10 @@ import {
 } from "../src/oauth";
 import type { OAuthCredentials } from "../src/oauth/types";
 import { getAccountCredential, getAccountSet, saveCredential } from "../src/oauth/store";
+
+// Gate/CAS refresh races can exceed the 5s default under windows-latest contention
+// (same flake class as kiro-oauth / oauth queue budgets).
+setDefaultTimeout(30_000);
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;

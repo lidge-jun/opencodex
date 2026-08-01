@@ -39,6 +39,8 @@ export interface ApiKeysWorkspaceProps {
   copied: boolean;
   filteredModels: ExternalModelRow[];
   modelsLoading: boolean;
+  /** Quiet revalidation / retry over rows already on screen — not a skeleton. */
+  modelsRefreshing?: boolean;
   modelsLoadFailed: boolean;
   modelCount: number;
   hasModelData: boolean;
@@ -76,6 +78,7 @@ export default function ApiKeysWorkspace({
   copied,
   filteredModels,
   modelsLoading,
+  modelsRefreshing = false,
   modelsLoadFailed,
   modelCount,
   hasModelData,
@@ -420,6 +423,7 @@ export default function ApiKeysWorkspace({
                 <ApiKeysModelsPanel
                   filteredModels={filteredModels}
                   modelsLoading={modelsLoading}
+                  modelsRefreshing={modelsRefreshing}
                   modelsLoadFailed={modelsLoadFailed}
                   modelCount={modelCount}
                   hasModelData={hasModelData}

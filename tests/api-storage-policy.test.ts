@@ -7,7 +7,7 @@ import {
   fetch,
   installPolicyApiHarness,
   startServer,
-  stopStorageCleanupScheduler,
+  stopPolicyServer,
   uninstallPolicyApiHarness,
   type PolicyApiHarness,
   resetStorageCleanupPolicyJobForTestsAsync,
@@ -15,8 +15,8 @@ import {
 
 let harness: PolicyApiHarness;
 
-beforeEach(() => {
-  harness = installPolicyApiHarness("ocx-api-storage-policy");
+beforeEach(async () => {
+  harness = await installPolicyApiHarness("ocx-api-storage-policy");
 });
 
 afterEach(async () => {
@@ -36,8 +36,7 @@ describe("storage cleanup policy API", () => {
       expect(body.trigger.archivedBytesOver).toBeGreaterThan(0);
       expect(body.job.status).toBe("idle");
     } finally {
-      await server.stop(true);
-      stopStorageCleanupScheduler();
+      await stopPolicyServer(server);
       await resetStorageCleanupPolicyJobForTestsAsync();
     }
   });
@@ -68,8 +67,7 @@ describe("storage cleanup policy API", () => {
       expect(again.enabled).toBe(false);
       expect(again.trigger.archivedBytesOver).toBe(1024);
     } finally {
-      await server.stop(true);
-      stopStorageCleanupScheduler();
+      await stopPolicyServer(server);
       await resetStorageCleanupPolicyJobForTestsAsync();
     }
   });
@@ -89,8 +87,7 @@ describe("storage cleanup policy API", () => {
       const body = await res.json();
       expect(body.error).toContain("target");
     } finally {
-      await server.stop(true);
-      stopStorageCleanupScheduler();
+      await stopPolicyServer(server);
       await resetStorageCleanupPolicyJobForTestsAsync();
     }
   });

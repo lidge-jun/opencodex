@@ -10,6 +10,7 @@ import {
   translatorObservedBufferSnapshot,
 } from "../src/lib/translator-budget";
 import type { AdapterEvent } from "../src/types";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 async function textWithin(stream: ReadableStream<Uint8Array>, timeoutMs = 2_000): Promise<string> {
   return await Promise.race([
@@ -253,4 +254,4 @@ test("production adapter contract rejects omitted translator budgets at typechec
   expect(invalid.stdout.toString() + invalid.stderr.toString()).toContain("TS2554");
   const valid = Bun.spawnSync(["bun", ...base, "tests/fixtures/translator-budget-required.valid.ts"]);
   expect(valid.exitCode).toBe(0);
-});
+}, SPAWN_BUDGET_MS); // two real tsc child processes ARE the assertion; windows runner measured ~5.5s against Bun's 5s default.

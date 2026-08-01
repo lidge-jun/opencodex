@@ -13,8 +13,10 @@ export function DashboardOverviewPanels(props: Dash) {
   return (
     <>
       <DashboardEffortCapPanel apiBase={props.apiBase} d={props} />
-      <DashboardInjectionPanel apiBase={props.apiBase} d={props} />
-      <DashboardMaintenancePanel d={props} />
+      <div className="dash-overview-tools">
+        <DashboardInjectionPanel apiBase={props.apiBase} d={props} />
+        <DashboardMaintenancePanel d={props} />
+      </div>
       <DashboardSidecarPanels d={props} />
       <MemoryObservabilityCard apiBase={props.apiBase} />
     </>

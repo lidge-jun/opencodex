@@ -30,15 +30,19 @@ function count(text: string, fragment: string): number {
 describe("GitHub Actions hardening", () => {
   test("cross-platform CI keeps bounded jobs and immutable action references", async () => {
     const workflow = await readText(".github/workflows/ci.yml");
+    const ci = Bun.YAML.parse(workflow) as {
+      jobs?: Record<string, { "timeout-minutes"?: number } | undefined>;
+    };
 
-    // The cross-platform `test` job sits at 20 minutes: a green Windows run measured
-    // 11.8 min against 4.6 on Linux, and the previous 12-minute ceiling left ~12s of
-    // margin, so runner variance rather than the code decided the verdict (#717).
-    // `npm-global-smoke` stays at 8; it finishes in 1-2 minutes.
-    expect(count(workflow, "timeout-minutes: 20")).toBe(1);
-    expect(count(workflow, "timeout-minutes: 8")).toBe(1);
-    // Both jobs must stay bounded — an unbounded job can hang a queue for hours.
-    expect(count(workflow, "timeout-minutes:")).toBe(2);
+    // Job-scoped: a global count still passes if values are swapped between jobs.
+    // Pin ownership explicitly. `test` is 30m for Windows isolate margin on #827
+    // after state-store admission — do not raise again; fix hung tests instead
+    // (unref'd oauth waitMs / shell kill-grace). Selector stays at 2; smoke at 8.
+    expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
+    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
+    // Every job must stay bounded — an unbounded job can hang a queue for hours.
+    expect(count(workflow, "timeout-minutes:")).toBe(3);
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");

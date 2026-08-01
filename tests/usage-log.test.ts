@@ -84,7 +84,7 @@ describe("usage log", () => {
     const snapshot = await readUsageSnapshotForManagement();
     expect(snapshot.truncatedPrefixBytes).toBeGreaterThan(0);
     expect(snapshot.entries.map(entry => entry.requestId)).toEqual(["tail"]);
-  });
+  }, STORE_BUDGET_MS); // sparse >64 MiB fixture IO is intrinsic; Windows self-hosted measured 7.193s against Bun's 5s default.
 
   test("usage tail exact row boundary keeps the complete newest row", async () => {
     const newest = Buffer.from(`${persistedLine("newest")}\n`);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { INTERNAL_DEADLINE_MS, STORE_BUDGET_MS } from "./helpers/test-budget";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -263,6 +264,9 @@ describe("multi-account auth store", () => {
     expect(getAccountSet("xai")!.accounts[0]?.needsReauth).toBeUndefined();
   });
 
+  // Filling the 128-slot admission queue then draining it exceeds the default
+  // 5s case budget on a loaded Windows isolate runner; an early timeout also
+  // leaves the gate closed and hangs the file realm until the job ceiling.
   test("OAuth mutation 129 rejects before enqueue while every accepted mutation executes once", async () => {
     let releaseFirst!: () => void;
     let firstStarted!: () => void;
@@ -274,18 +278,23 @@ describe("multi-account auth store", () => {
       firstStarted();
       await firstGate;
     }, ["provider", "account"] )];
-    await started;
-    for (let i = 1; i < 128; i++) {
-      accepted.push(mutateStore(() => { executions++; }, ["provider", `account-${i}`]));
+    try {
+      await started;
+      for (let i = 1; i < 128; i++) {
+        accepted.push(mutateStore(() => { executions++; }, ["provider", `account-${i}`]));
+      }
+      expect(oauthMutationTailSnapshot().active).toBe(128);
+      await expect(mutateStore(() => { executions++; }, ["rejected"])).rejects.toBeInstanceOf(OAuthMutationBusyError);
+      expect(oauthMutationTailSnapshot().active).toBe(128);
+      releaseFirst();
+      await Promise.all(accepted);
+      expect(executions).toBe(128);
+      expect(oauthMutationTailSnapshot().active).toBe(0);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled(accepted);
     }
-    expect(oauthMutationTailSnapshot().active).toBe(128);
-    await expect(mutateStore(() => { executions++; }, ["rejected"])).rejects.toBeInstanceOf(OAuthMutationBusyError);
-    expect(oauthMutationTailSnapshot().active).toBe(128);
-    releaseFirst();
-    await Promise.all(accepted);
-    expect(executions).toBe(128);
-    expect(oauthMutationTailSnapshot().active).toBe(0);
-  });
+  }, { timeout: STORE_BUDGET_MS }); // 128 serialized load-modify-persist store mutations; windows-latest measured ~7.3s against Bun's 5s default.
 
   test("OAuth 30 second wait timeout releases an unstarted lease and never enters the chain", async () => {
     let releaseFirst!: () => void;
@@ -296,24 +305,43 @@ describe("multi-account auth store", () => {
       firstStarted();
       await firstGate;
     }, ["provider", "running-account"]);
-    await started;
-    let entered = false;
-    const timedOut = mutateStore(() => { entered = true; }, ["provider", "waiting-account"], { waitMs: 10 });
-    // Bun 1.3.14 on Windows does not service the production-unref'ed queue timer
-    // when the test is otherwise waiting only on promises. Keep a test-owned
-    // ref'ed timer active, and release the blocker if the assertion itself fails.
-    const timerWakeup = setInterval(() => {}, 5);
-    const cleanupFallback = setTimeout(releaseFirst, 1_000);
+    let timedOut: Promise<unknown> | undefined;
     try {
-      await expect(timedOut).rejects.toBeInstanceOf(OAuthMutationBusyError);
+      await started;
+      let entered = false;
+      timedOut = mutateStore(() => { entered = true; }, ["provider", "waiting-account"], { waitMs: 10 });
+      // Belt-and-suspenders with the ref'd wait timer in store.ts: if reject still
+      // never fires under isolate load, fail the case instead of hanging the job.
+      // Use a clearable setTimeout (not Bun.sleep) so a settled race cannot keep
+      // the isolate alive for the remainder of INTERNAL_DEADLINE_MS.
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          timedOut.then(
+            () => {
+              throw new Error("expected OAuthMutationBusyError from waitMs timeout");
+            },
+            (error: unknown) => {
+              expect(error).toBeInstanceOf(OAuthMutationBusyError);
+            },
+          ),
+          new Promise<never>((_, reject) => {
+            deadlineTimer = setTimeout(() => {
+              reject(new Error(`OAuth mutation waitMs reject did not fire within ${INTERNAL_DEADLINE_MS}ms`));
+            }, INTERNAL_DEADLINE_MS);
+          }),
+        ]);
+      } finally {
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      }
       expect(entered).toBe(false);
       expect(oauthMutationTailSnapshot().active).toBe(1);
-    } finally {
-      clearInterval(timerWakeup);
-      clearTimeout(cleanupFallback);
       releaseFirst();
       await blocker;
+      expect(oauthMutationTailSnapshot().active).toBe(0);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled([blocker, ...(timedOut ? [timedOut] : [])]);
     }
-    expect(oauthMutationTailSnapshot().active).toBe(0);
-  });
+  }, { timeout: STORE_BUDGET_MS });
 });

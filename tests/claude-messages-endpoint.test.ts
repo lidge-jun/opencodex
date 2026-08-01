@@ -17,6 +17,7 @@ import {
 } from "../src/server/claude-messages";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 let testDir = "";
@@ -142,7 +143,7 @@ test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", 
     server.stop(true);
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("non-streaming /v1/messages returns an Anthropic message JSON", async () => {
   const upstream = mockChatUpstream();

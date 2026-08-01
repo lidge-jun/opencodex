@@ -416,7 +416,11 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
     release();
     rejectResult(new OAuthMutationBusyError("OAuth mutation queue wait timed out"));
   }, waitMs);
-  entry.timeout.unref?.();
+  // Only unref the long default wait. Short waitMs (tests) must stay ref'd:
+  // on Windows Bun under `bun test --isolate`, an unref'd timer can fail to
+  // fire while the head mutation holds an unresolved Promise, hanging the
+  // waiter forever (#827 / full admission queue hang on windows-latest).
+  if (waitMs >= OAUTH_MUTATION_WAIT_MS) entry.timeout.unref?.();
   mutationWaiters.push(entry);
   drainOAuthMutations();
   return result;

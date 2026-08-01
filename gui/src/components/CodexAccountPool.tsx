@@ -11,7 +11,6 @@ import CodexPoolStrategySetting from "./CodexPoolStrategySetting";
 import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
-import { DataSurfaceStatus } from "./data-surface";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
 import { CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
@@ -57,10 +56,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
   const { accounts, activeId, loadState, switchingId, pauseUpdatingId, pausingExhausted, load } = controller;
-  // The controller owns the visible progress signal. A forced quota refresh keeps rows on screen
-  // and can take ~1s (longer when the server has to refill per-account quota), so without this the
-  // wait is invisible; `refreshingQuota` below stays local because it only guards its own button.
-  const { refreshing } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -276,12 +271,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         accountsCount={accounts.length}
         onRetry={() => { void load(); }}
       />
-
-      {/* Revalidation over existing rows. The cold branch above already owns a live region, so
-          this only renders once rows are on screen, keeping one announcement per transition. */}
-      {refreshing && accounts.length > 0 && (
-        <DataSurfaceStatus live={loadState !== "error"}>{t("common.loading")}</DataSurfaceStatus>
-      )}
 
       {!(loadState === "loading" && accounts.length === 0) && (
         <>

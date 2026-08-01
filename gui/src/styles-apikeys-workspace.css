@@ -9,9 +9,11 @@
    `contain` scrollers it needed kept the wheel from ever reaching the document.
    ============================================================================ */
 
+/* Match Storage / other workspace pages (1200). `.api-page` covers cold skeleton before the shell mounts. */
+.main-inner:has(.api-page),
 .main-inner:has(.apikeys-workspace-shell) {
-  max-width: 1280px;
-  padding: 16px 28px 32px;
+  max-width: 1200px;
+  /* Inherit .main-inner padding (incl. the mobile shrink) so the heading inset matches every other tab. */
   box-sizing: border-box;
 }
 
@@ -583,9 +585,6 @@
 }
 
 @media (max-width: 768px) {
-  .main-inner:has(.apikeys-workspace-shell) {
-    padding: 16px 18px 32px;
-  }
   .apikeys-workspace-root {
     grid-template-columns: minmax(0, 1fr);
   }

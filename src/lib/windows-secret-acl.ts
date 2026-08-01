@@ -182,6 +182,11 @@ function effectivePlatform(): string {
   return platformOverride ?? platform;
 }
 
+/** Test-aware platform predicate for callers that must avoid even a no-op ACL call. */
+export function windowsSecretAclApplies(): boolean {
+  return (platformOverride ?? process.platform) === "win32";
+}
+
 /** Error carrying an honest code: ETIMEDOUT only for real timeouts, EICACLS otherwise. */
 function icaclsError(step: string, result: IcaclsResult): NodeJS.ErrnoException {
   const err = new Error(
