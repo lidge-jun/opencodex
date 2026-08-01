@@ -664,6 +664,8 @@ type FinalizeHooks = {
     deleteArgs: string[],
   ) => Promise<ElevatedSchtasksCreateAndRunResult>;
   verify?: () => WindowsSchedulerInstallVerification;
+  /** Test-only replacement for the bounded post-registration settle delay. */
+  settleDelay?: (milliseconds: number) => Promise<void>;
   writeInstallState?: () => void;
   /** Preferred tri-state probe for security-sensitive reconciliation. */
   probeTask?: () => WindowsSchedulerTaskProbe;
@@ -736,6 +738,36 @@ function attemptStillOwned(options: ApplyElevatedOptions): boolean {
   return !check || check(options.attemptId);
 }
 
+const WINDOWS_SCHEDULER_VERIFICATION_SETTLE_DELAYS_MS = [50, 150, 300, 600] as const;
+
+function schedulerVerificationMaySettle(
+  verification: WindowsSchedulerInstallVerification,
+): boolean {
+  return verification.assetsHealthy
+    && verification.nativeServiceAbsent
+    && !verification.nativeStatusUnknown
+    && !verification.conflict
+    && (!verification.taskInstalled || !verification.registrationHealthy);
+}
+
+async function verifyWindowsSchedulerInstallAfterSettle(
+  options: ApplyElevatedOptions,
+): Promise<WindowsSchedulerInstallVerification | null> {
+  const verify = finalizeHooks?.verify ?? verifyWindowsSchedulerInstall;
+  const delay = finalizeHooks?.settleDelay
+    ?? ((milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds)));
+  if (!attemptStillOwned(options)) return null;
+  let verification = verify();
+  for (const milliseconds of WINDOWS_SCHEDULER_VERIFICATION_SETTLE_DELAYS_MS) {
+    if (verification.ok || !schedulerVerificationMaySettle(verification)) break;
+    if (!attemptStillOwned(options)) return null;
+    await delay(milliseconds);
+    if (!attemptStillOwned(options)) return null;
+    verification = verify();
+  }
+  return attemptStillOwned(options) ? verification : null;
+}
+
 async function applyElevatedSchedulerResult(
   result: ElevatedSchtasksCreateAndRunResult,
   options: ApplyElevatedOptions,
@@ -765,7 +797,11 @@ async function applyElevatedSchedulerResult(
     await reconcileUnknownElevatedOutcome(result.exitCode);
   }
 
-  const verification = (finalizeHooks?.verify ?? verifyWindowsSchedulerInstall)();
+  // Task Scheduler can acknowledge elevated creation before the non-elevated
+  // query/XML view is coherent. Settle only that narrow visibility window;
+  // conflicts, missing assets, and unknown SCM state still fail immediately.
+  const verification = await verifyWindowsSchedulerInstallAfterSettle(options);
+  if (!verification) return;
   if (!verification.ok) {
     // Preserve a healthy elevated task when WinSW absence cannot be proven (unknown SCM status).
     // Unknown is not a confirmed dual-backend conflict; install state is still withheld.
@@ -782,6 +818,7 @@ async function applyElevatedSchedulerResult(
         "Installation state was not written.",
       ]);
     }
+    if (!attemptStillOwned(options)) return;
     const rollbackError = await rollbackElevatedSchedulerTask();
     const parts = [
       "Elevated Task Scheduler registration did not produce a conflict-free install.",

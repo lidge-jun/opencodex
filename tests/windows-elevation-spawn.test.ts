@@ -319,6 +319,156 @@ describe("finalizeWindowsSchedulerServiceRegistration", () => {
     expect(parentRollbackLaunches).toBe(0);
   });
 
+  test("settles a transient post-create registration view before writing install state", async () => {
+    let verifies = 0;
+    const delays: number[] = [];
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: async () => ({
+        outcome: "success",
+        exitCode: OCX_ELEVATED_SUCCESS,
+        stdout: "",
+        stderr: "",
+      }),
+      verify: () => {
+        verifies += 1;
+        if (verifies < 3) {
+          return {
+            taskInstalled: verifies === 2,
+            registrationHealthy: false,
+            assetsHealthy: true,
+            nativeServiceAbsent: true,
+            nativeStatusUnknown: false,
+            conflict: false,
+            ok: false,
+            detail: verifies === 1
+              ? "Task Scheduler task is not installed."
+              : "Task Scheduler registration is present but unhealthy.",
+          };
+        }
+        return okVerify();
+      },
+      settleDelay: async milliseconds => { delays.push(milliseconds); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).resolves.toEqual({ kind: "done" });
+    expect(verifies).toBe(3);
+    expect(delays).toEqual([50, 150]);
+    expect(writeCount).toBe(1);
+    expect(parentRollbackLaunches).toBe(0);
+  });
+
+  test("does not settle a confirmed scheduler conflict", async () => {
+    let verifies = 0;
+    let delays = 0;
+    mockParentRollbackSpawn();
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: async () => ({
+        outcome: "success",
+        exitCode: OCX_ELEVATED_SUCCESS,
+        stdout: "",
+        stderr: "",
+      }),
+      verify: () => {
+        verifies += 1;
+        return {
+          taskInstalled: true,
+          registrationHealthy: true,
+          assetsHealthy: true,
+          nativeServiceAbsent: false,
+          nativeStatusUnknown: false,
+          conflict: true,
+          ok: false,
+          detail: "CONFLICT: Task Scheduler and native WinSW are both present.",
+        };
+      },
+      settleDelay: async () => { delays += 1; },
+      writeInstallState: () => { writeCount += 1; },
+      taskInstalled: () => false,
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/CONFLICT/);
+    expect(verifies).toBe(1);
+    expect(delays).toBe(0);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("bounds settling when the registration remains unhealthy", async () => {
+    let verifies = 0;
+    const delays: number[] = [];
+    mockParentRollbackSpawn();
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: async () => ({
+        outcome: "success",
+        exitCode: OCX_ELEVATED_SUCCESS,
+        stdout: "",
+        stderr: "",
+      }),
+      verify: () => {
+        verifies += 1;
+        return {
+          taskInstalled: true,
+          registrationHealthy: false,
+          assetsHealthy: true,
+          nativeServiceAbsent: true,
+          nativeStatusUnknown: false,
+          conflict: false,
+          ok: false,
+          detail: "Task Scheduler registration is present but unhealthy.",
+        };
+      },
+      settleDelay: async milliseconds => { delays.push(milliseconds); },
+      writeInstallState: () => { writeCount += 1; },
+      taskInstalled: () => false,
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/present but unhealthy/);
+    expect(verifies).toBe(5);
+    expect(delays).toEqual([50, 150, 300, 600]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("stops settling without rollback or state write after attempt ownership is lost", async () => {
+    let verifies = 0;
+    let owned = true;
+    const delays: number[] = [];
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: async () => ({
+        outcome: "success",
+        exitCode: OCX_ELEVATED_SUCCESS,
+        stdout: "",
+        stderr: "",
+      }),
+      verify: () => {
+        verifies += 1;
+        return {
+          taskInstalled: false,
+          registrationHealthy: false,
+          assetsHealthy: true,
+          nativeServiceAbsent: true,
+          nativeStatusUnknown: false,
+          conflict: false,
+          ok: false,
+          detail: "Task Scheduler task is not installed.",
+        };
+      },
+      settleDelay: async milliseconds => {
+        delays.push(milliseconds);
+        owned = false;
+      },
+      stillOwnsAttempt: () => owned,
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).resolves.toEqual({ kind: "done" });
+    expect(verifies).toBe(1);
+    expect(delays).toEqual([50]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(0);
+  });
+
   test("create failure does not write install state or parent-rollback", async () => {
     setFinalizeWindowsSchedulerHooksForTests({
       elevateCreateAndRun: async () => {
