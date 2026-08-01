@@ -183,6 +183,8 @@ async function startPoolRetryHarness(
     accountMode?: "direct" | "pool";
     activeAccountId?: string;
     accountNamespaces?: Record<string, string>;
+    noVisionModels?: string[];
+    visionSidecarModel?: string;
     websockets?: boolean;
     forwardApiKey?: string;
   } = {},
@@ -224,6 +226,7 @@ async function startPoolRetryHarness(
       openai: {
         ...canonicalDirect,
         codexAccountMode: options.accountMode ?? "pool",
+        ...(options.noVisionModels ? { noVisionModels: options.noVisionModels } : {}),
         ...(options.forwardApiKey ? { apiKey: options.forwardApiKey } : {}),
       },
     },
@@ -236,6 +239,7 @@ async function startPoolRetryHarness(
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
+    ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
   } as OcxConfig;
@@ -1821,6 +1825,111 @@ describe("server local API auth", () => {
       for (const privateValue of ["pool-a", "acct-pool-a", "pool-a-token", "pool-a-refresh"]) {
         expect(serialized).not.toContain(privateValue);
       }
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("inline vision sidecar preserves an exact account binding", async () => {
+    const caption = "caption from the exact account";
+    const imageBytes = "ZXhhY3QtYWNjb3VudC1pbWFnZQ==";
+    const upstreamBodies: string[] = [];
+    const authorizationHeaders: Array<string | null> = [];
+    const harness = await startPoolRetryHarness(async (_accountId, request) => {
+      authorizationHeaders.push(request.headers.get("authorization"));
+      upstreamBodies.push(await request.text());
+      if (upstreamBodies.length === 1) {
+        return new Response([
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: caption })}`,
+          "",
+          "data: [DONE]",
+          "",
+          "",
+        ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({ id: "exact-vision", status: "completed", output: [] });
+    }, {
+      activeAccountId: "pool-b",
+      accountNamespaces: { side: "pool-a" },
+      noVisionModels: [POOL_RETRY_MODEL],
+    });
+    try {
+      const response = await originalGlobalFetch(new URL("/v1/responses", harness.server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: `side/${POOL_RETRY_MODEL}`,
+          stream: false,
+          input: [{
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: `data:image/png;base64,${imageBytes}` }],
+          }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+      expect(authorizationHeaders).toEqual(["Bearer pool-a-token", "Bearer pool-a-token"]);
+      expect(upstreamBodies).toHaveLength(2);
+      expect(upstreamBodies[0]).toContain(imageBytes);
+      expect(JSON.parse(upstreamBodies[0]) as { model?: string }).not.toMatchObject({ model: POOL_RETRY_MODEL });
+      expect(JSON.parse(upstreamBodies[1]) as { model?: string }).toMatchObject({ model: POOL_RETRY_MODEL });
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("inline vision sidecar checks exact-account cooldown using the helper model", async () => {
+    const sidecarModel = "gpt-5.3-codex-spark";
+    const upstreamModels: string[] = [];
+    const harness = await startPoolRetryHarness(async (_accountId, request) => {
+      const body = await request.json() as { model?: string };
+      upstreamModels.push(body.model ?? "missing");
+      if (body.model === sidecarModel) {
+        return new Response([
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "unexpected sidecar dispatch" })}`,
+          "",
+          "data: [DONE]",
+          "",
+          "",
+        ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({ id: "exact-vision-cooldown", status: "completed", output: [] });
+    }, {
+      activeAccountId: "pool-b",
+      accountNamespaces: { side: "pool-a" },
+      noVisionModels: [POOL_RETRY_MODEL],
+      visionSidecarModel: sidecarModel,
+    });
+    try {
+      const now = Date.now();
+      recordCodexUpstreamOutcome(harness.config, "pool-a", 429, {
+        now,
+        resetAt: now + 60_000,
+        modelId: sidecarModel,
+        fixedAccount: true,
+      });
+
+      const response = await originalGlobalFetch(new URL("/v1/responses", harness.server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: `side/${POOL_RETRY_MODEL}`,
+          stream: false,
+          input: [{
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: "data:image/png;base64,Y29vbGRvd24=" }],
+          }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(upstreamModels).toEqual([POOL_RETRY_MODEL]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
     } finally {
       await stopPoolRetryHarness(harness);
     }

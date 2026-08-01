@@ -31,9 +31,10 @@ export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandid
 }
 
 /**
- * Server-resolved exact account selection for a standalone ChatGPT sidecar call.
- * Callers must derive this from a validated account-qualified model route; request
- * headers are never trusted as account ids.
+ * Server-resolved exact account selection for a ChatGPT sidecar call.
+ * `accountId` must come from a validated account-qualified route; request headers
+ * are never trusted as account ids. `modelId` is the sidecar's actual upstream
+ * model so cooldown admission and outcome recording use the correct quota scope.
  */
 export interface ExactOpenAiSidecarAccount {
   accountId: string;

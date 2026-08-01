@@ -184,6 +184,11 @@ export function resolveVisionBackend(
   return anthropicSidecar ? "anthropic" : "openai";
 }
 
+/** Native model used by the OpenAI vision helper, including its bounded default. */
+export function resolveOpenAiVisionModel(config: Pick<OcxConfig, "visionSidecar">): string {
+  return config.visionSidecar?.model ?? DEFAULT_VISION_MODEL;
+}
+
 /** A user/developer/toolResult message can carry images (toolResult: e.g. Codex view_image output). */
 function carriesImages(role: string): boolean {
   return role === "user" || role === "developer" || role === "toolResult";
@@ -249,7 +254,7 @@ export function planVisionSidecar(
   return {
     backend,
     forwardSidecar: openAiSidecar,
-    settings: { model: cfg.model ?? DEFAULT_VISION_MODEL, timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+    settings: { model: resolveOpenAiVisionModel(config), timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
     maxDescriptionsPerTurn,
   };
 }

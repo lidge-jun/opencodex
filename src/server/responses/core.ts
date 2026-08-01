@@ -59,7 +59,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
-import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
+import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
@@ -1486,6 +1486,11 @@ async function handleResponsesInner(
         listOpenAiForwardSidecarCandidates(config),
         req.headers,
         config,
+        // Account-qualified native routes are passthrough, so their in-turn helper is vision.
+        // Scope its cooldown and outcome to the helper model, not the routed text model.
+        route.codexAccountId !== undefined
+          ? { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(config) }
+          : undefined,
       );
     } catch (err) {
       // Sidecars are optional helpers for an otherwise independent routed turn.
