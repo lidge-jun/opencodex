@@ -36,8 +36,13 @@ runtime the leak itself remains an upstream problem:
   Windows working-set/RSS counters can under-report committed external
   retention.
 - **`ocx doctor`** — a "Memory / runtime" section shows the *service*
-  process's Bun version, RSS, external/ArrayBuffers counters, JS-heap context,
-  and stream-mode decision. On the bundled Bun 1.3.14 runtime, `heapUsed` /
+  process's Bun version/revision, launcher-reported runtime source, RSS,
+  external/ArrayBuffers counters, JS-heap context, and stream-mode decision.
+  Source is allowlisted as `override`, `bundled`, or `process`; an older service
+  or invalid/missing marker is shown as unknown instead of being guessed from
+  the current shell. An active override remains unvalidated and keeps the
+  conservative runtime gate, but doctor no longer repeats the already-completed
+  `OPENCODEX_BUN_PATH` setup step. On the bundled Bun 1.3.14 runtime, `heapUsed` /
   `jscHeap` alone are not a leak discriminator; compare observed memory with
   `responseState` and repeated samples before assigning an app-level leak.
 - **`GET /api/system/memory`** — the same data over the authenticated

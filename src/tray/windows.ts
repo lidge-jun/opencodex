@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync,
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
-import { durableBunPath } from "../lib/bun-runtime";
+import { BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type BunRuntimeSource } from "../lib/bun-runtime";
 import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 
@@ -20,6 +20,7 @@ const TRAY_ICON_FILES = [
 
 export interface WindowsTrayEntry {
   bun: string;
+  bunRuntimeSource?: BunRuntimeSource;
   cli: string;
   script: string;
   codexHome: string;
@@ -81,8 +82,10 @@ function currentCodexHome(): string {
 }
 
 function currentEntry(): WindowsTrayEntry {
+  const bunRuntime = durableBunRuntime();
   return {
-    bun: durableBunPath(),
+    bun: bunRuntime.path,
+    bunRuntimeSource: bunRuntime.source,
     cli: join(import.meta.dir, "..", "cli", "index.ts"),
     script: installedTrayScriptPath(),
     codexHome: currentCodexHome(),
@@ -522,7 +525,25 @@ function parseTrayHostEntry(): WindowsTrayEntry {
     if (typeof value[key] !== "string") throw new Error(`Invalid tray host field: ${key}`);
     safePath(value[key]);
   }
+  if (
+    value.bunRuntimeSource !== undefined
+    && value.bunRuntimeSource !== "override"
+    && value.bunRuntimeSource !== "bundled"
+    && value.bunRuntimeSource !== "process"
+  ) {
+    throw new Error("Invalid tray host field: bunRuntimeSource");
+  }
   return value as WindowsTrayEntry;
+}
+
+export function windowsTrayHostEnvironment(
+  entry: Pick<WindowsTrayEntry, "bunRuntimeSource">,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const childEnv = { ...env };
+  if (entry.bunRuntimeSource) childEnv[BUN_RUNTIME_SOURCE_ENV] = entry.bunRuntimeSource;
+  else delete childEnv[BUN_RUNTIME_SOURCE_ENV];
+  return childEnv;
 }
 
 /** Detached Bun host keeps the attached WinForms PowerShell process alive. */
@@ -535,7 +556,7 @@ export async function runWindowsTrayHost(): Promise<void> {
   const child = spawn(windowsPowerShellPath(), windowsTrayProcessArgs(entry, "Run", process.pid), {
     stdio: "ignore",
     windowsHide: true,
-    env: process.env,
+    env: windowsTrayHostEnvironment(entry),
   });
   await new Promise<void>((resolvePromise, rejectPromise) => {
     child.once("error", rejectPromise);

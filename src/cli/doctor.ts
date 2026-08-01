@@ -673,6 +673,7 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
     if (d.bunRuntimeSource === "override") {
       lines.push("         OPENCODEX_BUN_PATH is already active, but this runtime remains unvalidated for automatic eager relay.");
       lines.push("         The conservative auto-known-bad decision remains in effect; bunRevision is informational only.");
+      lines.push("         You can still opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
       return lines;
     }
     if (d.bunRuntimeSource === undefined) {

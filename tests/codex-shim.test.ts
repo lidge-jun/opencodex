@@ -58,6 +58,7 @@ describe("Codex autostart shim", () => {
     expect(script).not.toContain("sync-cache");
     expect(script).toContain("exec '/usr/local/bin/codex-real' \"$@\"");
     expect(script).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(script).toContain("OCX_BUN_RUNTIME_SOURCE='process'");
   });
 
   test("builds a Windows shim that starts ocx before running Codex", () => {
@@ -68,6 +69,7 @@ describe("Codex autostart shim", () => {
     expect(script).not.toContain("sync-cache");
     expect(script).toContain('set "OCX_REAL_CODEX=C:\\Tools\\codex-real.exe"');
     expect(script).toContain('set "OCX_API_TOKEN_FILE=');
+    expect(script).toContain('set "OCX_BUN_RUNTIME_SOURCE=process"');
     expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
     expect(script).toContain('"%OCX_REAL_CODEX%" %*');
   });
@@ -115,7 +117,7 @@ describe("Codex autostart shim", () => {
   test("PowerShell shim is written with a UTF-8 BOM (Windows PowerShell 5.1 decodes BOM-less ps1 as ANSI)", async () => {
     const source = readFileSync(join(import.meta.dir, "..", "src", "codex", "shim.ts"), "utf8");
 
-    expect(source).toContain("`\\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli)}`");
+    expect(source).toContain("`\\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`");
   });
 
   test("Windows target discovery includes the extensionless Git-Bash launcher and writeShim emits a forward-slash sh shim for it", () => {
@@ -123,7 +125,8 @@ describe("Codex autostart shim", () => {
 
     expect(source).toContain('const gitBashLauncher = join(dir, "codex");');
     expect(source).toContain("for (const path of [cmd, ps1, gitBashLauncher])");
-    expect(source).toContain("buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), gitBashPath(serviceApiTokenFilePath()))");
+    expect(source).toContain("gitBashPath(serviceApiTokenFilePath()),");
+    expect(source).toContain("bunRuntimeSource,");
   });
 
   test("Unix shim accepts an injected token-file path (Git-Bash shims need forward slashes everywhere)", () => {
@@ -177,6 +180,7 @@ describe("Codex autostart shim", () => {
     expect(script).toContain("OCX_SHIM_BYPASS");
     expect(script).toContain("Test-Path -LiteralPath");
     expect(script).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(script).toContain("$env:OCX_BUN_RUNTIME_SOURCE = 'process'");
     expect(script).toContain("& 'C:\\codex-real.ps1' @args");
   });
 

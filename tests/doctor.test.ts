@@ -430,6 +430,7 @@ describe("service memory section (#314 WP4)", () => {
     expect(text).toContain("OPENCODEX_BUN_PATH is already active");
     expect(text).not.toContain("set OPENCODEX_BUN_PATH");
     expect(text).toContain("auto-known-bad");
+    expect(text).toContain('streamMode "eager-relay"');
   });
 
   test("legacy payload keeps runtime source unknown without circular override advice", async () => {

@@ -7,7 +7,11 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const entry = { bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\Open Codex\\cli & co\\index.ts" };
+const entry = {
+  bun: "C:\\OpenCodex\\bun.exe",
+  bunRuntimeSource: "override" as const,
+  cli: "C:\\Open Codex\\cli & co\\index.ts",
+};
 
 function winswEnvValue(xml: string, name: string): string | null {
   const match = xml.match(new RegExp(`<env name="${name}" value="([^"]*)"/>`));
@@ -39,7 +43,7 @@ describe("winsw xml", () => {
     const xml = buildWinswXml(entry, env);
 
     expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
-    expect(xml).toMatch(/<env name="OCX_BUN_RUNTIME_SOURCE" value="(override|bundled|process)"\/>/);
+    expect(xml).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="override"/>');
     expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
     expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
