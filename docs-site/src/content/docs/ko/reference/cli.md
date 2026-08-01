@@ -368,6 +368,56 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 `--json`은 `{ ok: true, id: string | null, label?: string }`을 반환하며 key를 포함하지 않습니다.
 
+### `ocx export --client <opencode|pi>`
+
+실행 중인 프록시에 연결된 클라이언트 설정을 출력합니다. opencode와 Pi는 환경 변수가 아니라 각자의
+JSON 설정 파일에서 프로바이더를 읽으므로, 이 명령은 `opencodex` 프로바이더 블록(base URL, 모델
+목록, 클라이언트가 해석하는 환경 변수 참조)을 직렬화해 줍니다. 사용자가 직접 자신의 파일에 병합
+합니다.
+
+프록시가 실행 중이어야 합니다. 명령이 실행 중인 포트를 찾아 `/api/models`를 읽고, 지금 Codex가
+볼 수 있는 모델만 내보냅니다.
+
+| 플래그 | 동작 |
+| --- | --- |
+| `--client <opencode\|pi>` | 필수. 클라이언트 방언을 고릅니다. opencode는 key 기반 `provider` 객체, Pi는 `providers` 배열입니다. |
+| `--json` | stdout에 설정 JSON만 출력하므로 리다이렉트해도 바이트가 정확합니다. `--out` 기록 알림을 포함한 모든 진단 메시지는 stderr로 갑니다. |
+| `--out <path>` | 설정을 `<path>`에 씁니다. 이미 있는 파일은 덮어쓰지 않고 거부합니다. |
+| `--force` | `--out`이 기존 파일을 덮어쓰도록 허용합니다. |
+
+```bash
+ocx export --client opencode                     # 설정과 함께 대상 경로, 병합 경고, 개수 출력
+ocx export --client pi --json > pi-models.json   # 파이프나 diff에 쓸 바이트 정확한 JSON
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+
+`--json` 없이 실행하면 JSON이 먼저 나오고, 이어서 표준 대상 경로, 병합 경고, 환경 변수 export
+줄, 모델 개수와 컨텍스트 한도가 없는 행 수(해당 모델은 클라이언트 기본값을 씁니다)가 출력됩니다.
+
+| 클라이언트 | 표준 대상 경로 | 다운로드 파일명 | 환경 변수 |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME`이 설정되면 그쪽이 우선) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+
+두 환경 변수 이름은 서로 다르며, 각 클라이언트는 자기 것만 해석합니다. opencode는
+`{env:OPENCODEX_OPENCODE_API_KEY}`를, Pi는 `$OPENCODEX_API_KEY`를 읽습니다.
+
+:::caution[교체가 아니라 병합]
+`ocx export`는 실제 클라이언트 설정 파일을 절대 쓰지 않습니다. 대상 경로는 직접 병합하라고
+출력하는 것이며, `--out`도 `--force` 없이는 기존 파일을 덮어쓰지 않습니다. 설정 파일을 통째로
+교체하면 그 안에 있던 다른 프로바이더, 에이전트, MCP 항목이 사라지기 때문입니다.
+:::
+
+key는 절대 직렬화되지 않습니다. 설정에는 클라이언트의 환경 변수 참조만 들어가고 secret은 환경에
+남습니다. 루프백 프록시(기본값 `127.0.0.1`)는 admission key 자체가 필요 없으며, 참조는 그냥 쓰이지
+않습니다. 프록시가 루프백 밖으로 바인딩될 때만 변수를 설정하세요. admission key 발급 방법은
+[원격 접근](/ko/reference/configuration/#원격-접근)을 참고하세요. 상위 프로바이더의 key는 완전히
+별개이며 [프로바이더](/ko/guides/providers/)에서 설정합니다. Pi 가이드는 영어로만 제공됩니다:
+[Pi](/guides/pi/).
+
+같은 페이로드를 `GET /api/client-config`가 제공하고 대시보드 API 탭이 렌더링하므로, CLI와 API,
+GUI가 서로 다른 바이트를 보여줄 수 없습니다.
+
 ## 인증
 
 ### `ocx login <provider>`

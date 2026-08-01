@@ -198,6 +198,7 @@ routes, validation, live configuration, and catalog refresh side effects as the 
 | Agent policy | `ocx agent injection|effort|subagents|fallback|sidecar ...` |
 | Observability | `ocx observe logs|usage|storage|memory|debug ...` |
 | API admission | `ocx access key|endpoints|models|test ...` |
+| Client configs | `ocx export --client <opencode\|pi> ...` |
 | Claude Code | `ocx claude config status|set ...` |
 | Grok Build | `ocx grok status|exclude|include|set|clear|apply ...` |
 | Runtime control | `ocx system status|settings|startup|diagnostics|sync|update ...` |
@@ -215,6 +216,7 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ocx observe usage --range 30d --json
 ocx access key create deployment
+ocx export --client opencode
 ocx system settings --stream-mode eager-relay
 ```
 
@@ -424,6 +426,57 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json` returns `{ ok: true, id: string | null, label?: string }` and never includes the key.
+
+### `ocx export --client <opencode|pi>`
+
+Print a client config wired to the running proxy. opencode and [Pi](/guides/pi/) read providers
+from their own JSON config rather than environment variables, so this command serializes the
+`opencodex` provider block — base URL, model list, and the client's env reference — for you to
+merge into that file.
+
+The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
+models Codex can currently see.
+
+| Flag | Action |
+| --- | --- |
+| `--client <opencode\|pi>` | Required. Selects the client dialect: opencode's keyed `provider` object or Pi's `providers` array. |
+| `--json` | Print only the config JSON on stdout, so a redirect captures byte-exact output. Every diagnostic, including the `--out` write note, goes to stderr. |
+| `--out <path>` | Write the config to `<path>`. Refuses to replace an existing file. |
+| `--force` | Allow `--out` to replace an existing file. |
+
+```bash
+ocx export --client opencode                     # config plus destination, merge warning, and counts
+ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+
+Without `--json` the JSON leads, then the canonical destination path, the merge warning, the env
+export line, and a model count with how many rows omit context limits (the client applies its own
+defaults for those).
+
+| Client | Canonical destination | Download filename | Env var |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+
+The two env var names are different, and each client only interpolates its own. opencode reads
+`{env:OPENCODEX_OPENCODE_API_KEY}`; Pi reads `$OPENCODEX_API_KEY`.
+
+:::caution[Merge, never replace]
+`ocx export` never writes your real client config. The destination is printed for you to merge by
+hand, and `--out` refuses to overwrite an existing file without `--force`, because replacing a
+config destroys the other providers, agents, and MCP entries already in it.
+:::
+
+No key is ever serialized. The config carries only the client's env reference, so the secret stays
+in your environment. A loopback proxy (`127.0.0.1`, the default) requires no admission key at all —
+the reference is simply unused. Set the variable only when the proxy binds beyond loopback; see
+[Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
+the upstream providers themselves are a separate thing entirely, configured per
+[Providers](/guides/providers/).
+
+The same payload is served by `GET /api/client-config` and rendered on the dashboard's API tab, so
+the CLI, the API, and the GUI can never show different bytes.
 
 ## Authentication
 
