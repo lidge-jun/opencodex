@@ -15,7 +15,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
-import { resolveAutoContext, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
+import { stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
@@ -55,6 +55,15 @@ function pickerDefaultModel(configDir: string): string | null {
   }
 }
 
+/**
+ * Generated subagents cannot rely on parent auto-context compaction before
+ * routed requests reach the real model limit.
+ */
+function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
+  const bare = stripOneMillionMarker(selector);
+  return withOneMillionMarker(bare, windows) ?? bare;
+}
+
 /** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".
  * Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash id first
  * so the alias joins the raw-native context-window map (context-windows.ts). */
@@ -72,7 +81,6 @@ function entryParts(entry: string, config: OcxConfig): { alias: string; id: stri
 }
 
 export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, number>, configDir = claudeConfigDir()): ClaudeAgentDef[] {
-  const auto = resolveAutoContext(config.claudeCode);
   const blockedSkills = effectiveBlockedSkillNames(config.claudeCode);
   const blockedSkillsFor = (model: string): readonly string[] => {
     const unmarked = stripOneMillionMarker(model);
@@ -87,8 +95,7 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   const coveredModels = new Set<string>();
 
   const push = (name: string, alias: string, description: string) => {
-    // Effective model value: [1m] marking follows the same predicate as env slots.
-    const model = withOneMillionMarker(alias, windows, auto) ?? alias;
+    const model = withSubagentContextMarker(alias, windows);
     const bare = alias.toLowerCase();
     if (coveredModels.has(bare)) return;
     coveredModels.add(bare);
@@ -120,7 +127,7 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   // the next launch sync — documented limit. No resolvable default -> no self def.
   const selfModel = pickerDefaultModel(configDir) ?? (config.claudeCode?.model?.trim() || null);
   if (selfModel) {
-    const marked = withOneMillionMarker(selfModel, windows, auto) ?? selfModel;
+    const marked = withSubagentContextMarker(selfModel, windows);
     defs.push({
       file: `${OWNED_PREFIX}self.md`,
       name: `${OWNED_PREFIX}self`,

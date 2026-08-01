@@ -24,19 +24,19 @@ function generatedBodies(config: OcxConfig, dir: string): string[] {
 }
 
 describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
-  test("roster + pinned self from settings.json; [1m] marking; name collision suffix", () => {
+  test("roster + pinned self mark only authoritative 1M windows; name collision suffix", () => {
     const windows = { "claude-ocx-native--gpt-5.6-sol": 372_000, "claude-ocx-cursor--gpt-5.6-sol": 1_000_000 };
     const dir = tempDir();
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol[1m]" }));
     const defs = buildClaudeAgentDefs(cfg({
       subagentModels: ["gpt-5.6-sol", "cursor/gpt-5.6-sol"],
-      claudeCode: {},
+      claudeCode: { autoContext: true },
     }), windows, dir);
     const byName = Object.fromEntries(defs.map(d => [d.name, d]));
-    expect(byName["ocx-gpt-5-6-sol"]!.model).toBe("claude-ocx-native--gpt-5.6-sol[1m]"); // 372k >= 350k default
+    expect(byName["ocx-gpt-5-6-sol"]!.model).toBe("claude-ocx-native--gpt-5.6-sol");
     expect(byName["ocx-gpt-5-6-sol-2"]!.model).toBe("claude-ocx-cursor--gpt-5.6-sol[1m]"); // collision suffix
-    // Self pins the picker-saved default (inherit disproven live — devlog 072).
-    expect(byName["ocx-self"]!.model).toBe("claude-ocx-native--gpt-5.6-sol[1m]");
+    // Self pins the picker-saved default but cannot inherit an unsafe auto-context marker.
+    expect(byName["ocx-self"]!.model).toBe("claude-ocx-native--gpt-5.6-sol");
     expect(defs).toHaveLength(3);
     // Dispatcher directive (live repro: model:"fable" override broke inherit).
     for (const d of defs) expect(d.description).toContain("`model` argument is ignored");
