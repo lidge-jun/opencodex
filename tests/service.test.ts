@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import type { ServiceDiagnostic } from "../src/service";
+import { buildWinswXml } from "../src/lib/winsw";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import type { OcxConfig } from "../src/types";
 
@@ -661,7 +663,7 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain('verifyPidIdentity');
     expect(service).toContain("removeRuntimePort(pid);");
     expect(service).toContain('import { isProcessAlive, stopProxy } from "./lib/process-control";');
-    expect(service).toContain('import { findLiveProxy, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";');
+    expect(service).toContain('import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
     expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("...SERVICE_STOP_LIVENESS");
@@ -904,5 +906,435 @@ describe("service repair", () => {
       repairSystemd: () => { calls.push("systemd"); },
     });
     expect(calls).toEqual(["native", "native-state"]);
+  });
+});
+
+/**
+ * `launchctl load` reports failure on stderr and exits 0 for an already-bootstrapped
+ * job, so `sh()` (execSync — throws only on a non-zero exit) treated a load that did
+ * nothing as success. launchd then kept running the PREVIOUS plist while a freshly
+ * written one sat unused, which is the 2026-08-02 report: `ocx service` prints a
+ * checkmark, `launchctl list` shows the job, and the port answers nothing.
+ *
+ * Measured on macOS 27.0:
+ *   $ launchctl load -w ~/Library/LaunchAgents/com.opencodex.proxy.plist
+ *   Load failed: 5: Input/output error
+ *   $ echo $?
+ *   0
+ */
+describe("launchctl load verification", () => {
+  describe("launchctlLoadFailed", () => {
+    test("detects the legacy load failure that exits 0", () => {
+      expect(launchctlLoadFailed(
+        "Load failed: 5: Input/output error\nTry running `launchctl bootstrap` as root for richer errors.",
+      )).toBe(true);
+    });
+
+    test("detects a bootstrap failure", () => {
+      expect(launchctlLoadFailed("Bootstrap failed: 37: Operation already in progress")).toBe(true);
+    });
+
+    test("stays false for clean output", () => {
+      expect(launchctlLoadFailed("")).toBe(false);
+    });
+  });
+
+  describe("runLaunchctl", () => {
+    test("reports ok with trimmed stdout on a clean run", () => {
+      const out = runLaunchctl(["print", "gui/501/x"], {
+        run: (() => ({ status: 0, stdout: "  ok  ", stderr: "" })) as never,
+      });
+      expect(out).toEqual({ ok: true, stdout: "ok", stderr: "" });
+    });
+
+    /**
+     * The regression guard. `execFileSync` discards stderr when the child exits 0,
+     * so a runner built on it returns stderr:"" here and the whole fix silently
+     * no-ops on a real machine while its unit tests stay green.
+     */
+    test("surfaces stderr even when the child exits 0", () => {
+      const out = runLaunchctl(["load", "-w", "/x.plist"], {
+        run: (() => ({
+          status: 0,
+          stdout: "",
+          stderr: "Load failed: 5: Input/output error\nTry running `launchctl bootstrap` as root...",
+        })) as never,
+      });
+      expect(out.ok).toBe(true);
+      expect(launchctlLoadFailed(out.stderr)).toBe(true);
+    });
+
+    test("reports not-ok on a real non-zero exit (bootstrap)", () => {
+      const out = runLaunchctl(["bootstrap", "gui/501", "/x.plist"], {
+        run: (() => ({ status: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" })) as never,
+      });
+      expect(out.ok).toBe(false);
+      expect(launchctlLoadFailed(out.stderr)).toBe(true);
+    });
+
+    test("treats a spawn failure as not-ok rather than success", () => {
+      const out = runLaunchctl(["load", "-w", "/x.plist"], {
+        run: (() => ({ error: new Error("spawn /bin/launchctl ENOENT"), status: null, stdout: null, stderr: null })) as never,
+      });
+      expect(out.ok).toBe(false);
+      expect(out.stderr).toContain("ENOENT");
+    });
+  });
+
+  describe("launchdJobMatchesPlist", () => {
+    // Shape captured from a real `launchctl print gui/$(id -u)/com.opencodex.proxy`
+    // run on macOS 27.0: the arguments block is tab-indented one level, entries two.
+    const cmd = "exec '/pkg/bun' '/pkg/src/cli/index.ts' start --port 10100";
+    const printed = (command: string) => [
+      "\targuments = {",
+      "\t\t/bin/sh",
+      "\t\t-lc",
+      `\t\tif [ -f '/h/.opencodex/service-api-token' ]; then OPENCODEX_API_AUTH_TOKEN="$(cat '/h/.opencodex/service-api-token')"; export OPENCODEX_API_AUTH_TOKEN; fi; ${command}`,
+      "\t}",
+    ].join("\n");
+
+    test("reports matching when print shows the current arguments", () => {
+      expect(launchdJobMatchesPlist(cmd, {
+        run: () => ({ ok: true, stdout: printed(cmd), stderr: "" }),
+      })).toEqual({ loaded: true, matchesPlist: true });
+    });
+
+    test("reports loaded-but-stale when print shows different arguments", () => {
+      const old = "exec '/old/pkg/bun' '/old/pkg/src/cli/index.ts' start --port 10100";
+      expect(launchdJobMatchesPlist(cmd, {
+        run: () => ({ ok: true, stdout: printed(old), stderr: "" }),
+      })).toEqual({ loaded: true, matchesPlist: false });
+    });
+
+    test("reports not loaded when print fails", () => {
+      expect(launchdJobMatchesPlist(cmd, {
+        run: () => ({ ok: false, stdout: "", stderr: "Could not find service" }),
+      })).toEqual({ loaded: false, matchesPlist: false });
+    });
+  });
+
+  describe("startLaunchd", () => {
+    // A runLaunchctl RESULT, not a spawnSync result.
+    const failedLoad = () => ({ ok: true, stdout: "", stderr: "Load failed: 5: Input/output error" });
+    const cleanLoad = () => ({ ok: true, stdout: "", stderr: "" });
+
+    test("returns without consulting launchd when the load is clean", () => {
+      expect(() => startLaunchd({
+        launchctl: cleanLoad,
+        matches: () => { throw new Error("must not be consulted on a clean load"); },
+      })).not.toThrow();
+    });
+
+    /**
+     * launchctl emits `Load failed` for EVERY already-bootstrapped job, including a
+     * correct one, so `ocx service start` on a healthy service hits it every time.
+     * An unconditional throw would break the most common benign invocation.
+     */
+    test("treats an already-loaded matching job as a no-op", () => {
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect(() => startLaunchd({
+          launchctl: failedLoad,
+          matches: () => ({ loaded: true, matchesPlist: true }),
+        })).not.toThrow();
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    // not.toThrow() alone would still pass if the guard regressed; assert the branch.
+    test("says so when the job was already loaded from the current plist", () => {
+      const lines: string[] = [];
+      const log = spyOn(console, "log").mockImplementation(m => { lines.push(String(m)); });
+      try {
+        startLaunchd({ launchctl: failedLoad, matches: () => ({ loaded: true, matchesPlist: true }) });
+      } finally {
+        log.mockRestore();
+      }
+      expect(lines.join("\n")).toContain("already loaded");
+    });
+
+    test("throws with the bootout hint when the loaded job is stale", () => {
+      expect(() => startLaunchd({
+        launchctl: failedLoad,
+        matches: () => ({ loaded: true, matchesPlist: false }),
+      })).toThrow(/bootout/);
+    });
+
+    test("throws with the install hint when no job is loaded", () => {
+      expect(() => startLaunchd({
+        launchctl: failedLoad,
+        matches: () => ({ loaded: false, matchesPlist: false }),
+      })).toThrow(/service install/);
+    });
+  });
+});
+
+/**
+ * Registration is not service. `launchctl load` succeeding (or `systemctl enable`,
+ * or `schtasks /run`) proves the manager accepted the job, not that the proxy bound
+ * a port — so `install`/`start` printed a green checkmark for a service that never
+ * served. These helpers answer the second question.
+ */
+describe("service serving confirmation", () => {
+  describe("launchdListenPort", () => {
+    test("reads the port baked into the plist, not the current config", () => {
+      expect(launchdListenPort({
+        readPlist: () => "<string>exec '/b' '/c' start --port 18222</string>",
+      })).toBe(18222);
+    });
+
+    // The command's own Bun/CLI paths precede the argument; a path containing the
+    // literal must not shadow it.
+    test("prefers the argument tail over a path that looks like one", () => {
+      expect(launchdListenPort({
+        readPlist: () => "<string>exec '/opt/start --port 9999/bun' '/c' start --port 18222</string>",
+      })).toBe(18222);
+    });
+
+    test("returns null when there is no port to read", () => {
+      expect(launchdListenPort({ readPlist: () => "<string>no port here</string>" })).toBeNull();
+    });
+
+    test("rejects out-of-range ports rather than probing them", () => {
+      expect(launchdListenPort({ readPlist: () => "<string>start --port 0</string>" })).toBeNull();
+      expect(launchdListenPort({ readPlist: () => "<string>start --port 70000</string>" })).toBeNull();
+    });
+
+    // Linux/Windows hit this on every call: plistPath() has nothing to read.
+    test("returns null when the plist cannot be read", () => {
+      expect(launchdListenPort({ readPlist: () => { throw new Error("ENOENT"); } })).toBeNull();
+    });
+  });
+
+  describe("systemdListenPort", () => {
+    test("reads the port out of the unit's ExecStart line", () => {
+      expect(systemdListenPort({
+        readUnit: () => 'ExecStart="/bin/sh" -lc "exec \'/b\' \'/c\' start --port 18222"\n',
+      })).toBe(18222);
+    });
+
+    test("returns null when the unit cannot be read", () => {
+      expect(systemdListenPort({ readUnit: () => { throw new Error("ENOENT"); } })).toBeNull();
+    });
+
+    test("rejects out-of-range ports", () => {
+      expect(systemdListenPort({ readUnit: () => "ExecStart=... start --port 0\n" })).toBeNull();
+    });
+  });
+
+  describe("confirmServiceServing", () => {
+    test("returns the baked port once the proxy answers", async () => {
+      let calls = 0;
+      const out = await confirmServiceServing({
+        port: 10100,
+        hostname: "127.0.0.1",
+        probe: async () => ++calls >= 2,
+        sleep: async () => {},
+        now: () => 0,
+        timeoutMs: 5_000,
+      });
+      expect(out).toEqual({ ok: true, port: 10100 });
+    });
+
+    test("gives up at the deadline instead of hanging", async () => {
+      let now = 0;
+      const out = await confirmServiceServing({
+        port: 10100,
+        probe: async () => false,
+        sleep: async ms => { now += ms; },
+        now: () => now,
+        timeoutMs: 2_000,
+      });
+      expect(out).toEqual({ ok: false, port: 10100 });
+    });
+
+    test("probes at least once even with a zero budget", async () => {
+      let probes = 0;
+      await confirmServiceServing({
+        port: 10100,
+        probe: async () => { probes += 1; return false; },
+        sleep: async () => {},
+        now: () => 0,
+        timeoutMs: 0,
+      });
+      expect(probes).toBe(1);
+    });
+
+    // A service reinstall invalidates the pidfile, so resolving the target through
+    // it (findLiveProxy) would report a serving service as dead. Ask the baked port.
+    test("probes the port it was given rather than resolving one", async () => {
+      const seen: number[] = [];
+      await confirmServiceServing({
+        port: 18999,
+        probe: async p => { seen.push(p); return true; },
+        sleep: async () => {},
+        now: () => 0,
+      });
+      expect(seen).toEqual([18999]);
+    });
+  });
+
+  /**
+   * `ocx service status` printed raw `launchctl list` output, which reports a
+   * registered job identically whether it is serving, bound to nothing, or running
+   * an older plist. The reporter hit exactly that: a checkmark next to a dead port.
+   */
+  describe("serviceStatusReport", () => {
+    const installedDiag = (): ServiceDiagnostic => ({
+      supported: true,
+      installed: true,
+      enabled: true,
+      running: true,
+      viable: true,
+      startable: true,
+      stale: false,
+      conflict: false,
+      backend: "launchd",
+      summary: "installed and loaded (launchd)",
+    });
+
+    test("reports the serving port when a proxy answers", async () => {
+      const out = await serviceStatusReport({
+        diagnose: installedDiag,
+        serving: async () => ({ ok: true, port: 10100 }),
+      });
+      expect(out).toContain("Serving on port 10100");
+    });
+
+    test("names the log path and the repair command when nothing answers", async () => {
+      const out = await serviceStatusReport({
+        diagnose: installedDiag,
+        serving: async () => ({ ok: false, port: 10100 }),
+        matchesPlist: () => ({ loaded: true, matchesPlist: true }),
+      });
+      expect(out).toContain("no proxy is answering on port 10100");
+      expect(out).toContain("ocx service install");
+      expect(out).toContain("ocx start");
+    });
+
+    // The injected seam must win on every platform: the default is darwin-gated,
+    // the dep is not, so this case has to run on Linux and Windows CI too.
+    test("adds the bootout hint when launchd runs an older plist", async () => {
+      const out = await serviceStatusReport({
+        diagnose: installedDiag,
+        serving: async () => ({ ok: false, port: 10100 }),
+        matchesPlist: () => ({ loaded: true, matchesPlist: false }),
+      });
+      expect(out).toContain("OLDER plist");
+      expect(out).toContain("bootout");
+    });
+
+    test("reports not-installed without probing", async () => {
+      let probed = false;
+      const out = await serviceStatusReport({
+        diagnose: () => ({ ...installedDiag(), installed: false, summary: "not installed" }),
+        serving: async () => { probed = true; return { ok: false, port: 0 }; },
+      });
+      expect(out).toContain("not installed");
+      expect(probed).toBe(false);
+    });
+  });
+
+  /**
+   * systemd's analogue of the macOS stale-plist case: writing the unit file does not
+   * change the definition systemd has loaded until `daemon-reload`, so `ocx service
+   * start` would run the PREVIOUS ExecStart.
+   */
+  describe("systemdNeedsDaemonReload", () => {
+    test("detects a unit changed on disk", () => {
+      expect(systemdNeedsDaemonReload({ show: () => "NeedDaemonReload=yes" })).toBe(true);
+    });
+
+    test("is false when systemd is already in sync", () => {
+      expect(systemdNeedsDaemonReload({ show: () => "NeedDaemonReload=no" })).toBe(false);
+    });
+
+    // No user bus, or not installed: never block a start we cannot judge.
+    test("is false when the query fails", () => {
+      expect(systemdNeedsDaemonReload({ show: () => { throw new Error("no bus"); } })).toBe(false);
+    });
+  });
+
+  test("systemdListenPort reads the port out of a real generated unit", () => {
+    expect(systemdListenPort({ readUnit: () => buildUnit() })).toBe(resolveServiceListenPort());
+  });
+
+  /**
+   * The defect is an ORDERING property of startSystemd, and this host is macOS so the
+   * systemd path cannot be executed. Pin the order in source instead — the same
+   * instrument this file already uses for the adjacent install-ordering invariant.
+   */
+  test("service start reloads and restarts systemd for a changed unit", async () => {
+    const service = await readText("src/service.ts");
+    const startSystemd = service.slice(
+      service.indexOf("function startSystemd()"),
+      service.indexOf("function stopSystemd()"),
+    );
+
+    const needsReloadAt = startSystemd.indexOf("systemdNeedsDaemonReload()");
+    const reloadAt = startSystemd.indexOf("systemctl --user daemon-reload");
+    const restartAt = startSystemd.indexOf("systemctl --user restart");
+    const startAt = startSystemd.indexOf("systemctl --user start");
+
+    expect(needsReloadAt).toBeGreaterThan(-1);
+    expect(needsReloadAt).toBeLessThan(reloadAt);
+    expect(reloadAt).toBeLessThan(restartAt);
+    // A changed unit must be RESTARTED, not started: `start` is a no-op on an active
+    // unit and would leave the stale process running the old ExecStart.
+    expect(restartAt).toBeLessThan(startAt);
+  });
+
+  /**
+   * Windows bakes the port into two different artifacts depending on backend: the
+   * scheduler wrapper (`opencodex-service.cmd`) and the WinSW XML. Both must be
+   * readable or `start` probes a port the service was never told to use.
+   */
+  describe("windowsListenPort", () => {
+    test("reads the port baked into the scheduler wrapper", () => {
+      expect(windowsListenPort({
+        readScript: () => '"%OCX_BUN%" "%OCX_CLI%" start --port 18222 >>"%LOG%" 2>&1',
+      })).toBe(18222);
+    });
+
+    // Every `set "…"` line precedes the exec line, so a decoy in a path must lose.
+    test("prefers the argument tail over a path that looks like one", () => {
+      expect(windowsListenPort({
+        readScript: () => 'set "OCX_BUN=C:\\start --port 9999\\bun.exe"\r\n"%OCX_BUN%" "%OCX_CLI%" start --port 18222\r\n',
+      })).toBe(18222);
+    });
+
+    test("returns null when the wrapper cannot be read", () => {
+      expect(windowsListenPort({ readScript: () => { throw new Error("ENOENT"); } })).toBeNull();
+    });
+
+    test("rejects out-of-range ports", () => {
+      expect(windowsListenPort({ readScript: () => "start --port 0 " })).toBeNull();
+      expect(windowsListenPort({ readScript: () => "start --port 70000 " })).toBeNull();
+    });
+
+    // The generated wrapper is the real contract; assert against it, not a sketch.
+    test("reads the port out of a real generated wrapper", () => {
+      expect(windowsListenPort({ readScript: () => buildWindowsServiceScript() }))
+        .toBe(resolveServiceListenPort());
+    });
+  });
+
+  describe("winswListenPort", () => {
+    test("reads the port out of the WinSW <arguments> element", () => {
+      expect(winswListenPort({
+        readXml: () => "  <arguments>&quot;C:\\pkg\\cli.ts&quot; start --port 18222</arguments>",
+      })).toBe(18222);
+    });
+
+    // Scheduler install, or any non-Windows host: the XML is simply absent.
+    test("returns null when the XML cannot be read", () => {
+      expect(winswListenPort({ readXml: () => { throw new Error("ENOENT"); } })).toBeNull();
+    });
+
+    test("reads the port out of a real generated WinSW XML", () => {
+      const xml = buildWinswXml({ bun: "C:\\pkg\\bun.exe", cli: "C:\\pkg\\src\\cli\\index.ts" });
+      expect(winswListenPort({ readXml: () => xml })).toBe(resolveServiceListenPort());
+    });
   });
 });
