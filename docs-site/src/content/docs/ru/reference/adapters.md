@@ -135,7 +135,7 @@ authorization.
   инструментов обратно в Codex, обнаруживает актуальные модели Cursor через protobuf RPC
   `GetUsableModels` и повторяет попытки только до того, как run-запрос зафиксирован на wire.
 - Сохраняет `cursor/grok-4.5-fast` доступной для выбора, но отправляет Cursor каноническую модель
-  `grok-4.5` с отдельными параметрами `effort` и `fast=true`.
+  `grok-4.5`, помещая отдельные значения `effort` и `fast=true` в `requested_model.parameters`.
 - Нативное для Cursor локальное выполнение операций с файловой системой/shell/сетью по умолчанию
   запрещено. Явные интеграции `mcpServers` и `desktopExecutor` включаются отдельно;
   `unsafeAllowNativeLocalExec` включает более широкий встроенный executor и обходит семантику

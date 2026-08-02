@@ -123,8 +123,8 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 - content-addressed blob으로 대화 상태를 재생하고 서버 툴 호출을 Codex에 다시 매핑합니다. protobuf
   `GetUsableModels` RPC로 실시간 Cursor 모델을 찾으며, run 요청이 wire에 commit되기 전까지만
   재시도합니다.
-- `cursor/grok-4.5-fast`는 선택 가능한 모델로 유지하되, Cursor에는 정식 `grok-4.5` 모델과 별도의
-  `effort`, `fast=true` 파라미터를 전송합니다.
+- `cursor/grok-4.5-fast`는 선택 가능한 모델로 유지하되, Cursor에는 정식 `grok-4.5` 모델을 보내고
+  별도의 `effort`, `fast=true` 값은 `requested_model.parameters`에 담습니다.
 - Cursor 네이티브 로컬 파일시스템/shell/network 실행은 기본적으로 거부합니다. 명시적인
   `mcpServers`와 `desktopExecutor` 통합은 각각 별도 opt-in입니다. `unsafeAllowNativeLocalExec`은
   더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다.
