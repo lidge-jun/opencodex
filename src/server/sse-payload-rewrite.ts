@@ -8,7 +8,11 @@ import type { TranslatorBudget } from "../lib/translator-budget";
  */
 
 export type SsePayloadRewrite = ((payload: string) => string) & {
-  /** Release state retained across events when the stream ends or is cancelled. */
+  /**
+   * Release state retained across events when the stream ends or is cancelled. Implementations
+   * are idempotent. A composed rewrite attempts every child and then throws the first child error,
+   * so callers on stream-teardown paths must guard this call.
+   */
   dispose?: () => void;
 };
 

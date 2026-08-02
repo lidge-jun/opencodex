@@ -5,7 +5,7 @@ import {
 } from "../src/server/responses-snapshot-repair";
 import { handleResponses } from "../src/server/responses";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
-import { isEagerRelaySseResponse } from "../src/server/relay";
+import { isEagerRelaySseResponse, MAX_COMPLETED_OUTPUT_ITEMS } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 
 function parsedSseEvents(text: string): Array<Record<string, unknown>> {
@@ -112,7 +112,7 @@ describe("Responses passthrough sparse-snapshot repair", () => {
 
   test("repairs output-item status and nested reasoning summary parts", () => {
     const rewrite = createResponsesSnapshotPayloadRewrite();
-    for (const invalidStatus of [undefined, null, 42]) {
+    for (const invalidStatus of [undefined, null, 42, ""]) {
       const added = JSON.parse(rewrite(JSON.stringify({
         type: "response.output_item.added",
         output_index: 0,
@@ -166,7 +166,7 @@ describe("Responses passthrough sparse-snapshot repair", () => {
   });
 
   test("replaces structurally invalid response statuses with the event status", () => {
-    for (const invalidStatus of [null, 42]) {
+    for (const invalidStatus of [null, 42, ""]) {
       const rewrite = createResponsesSnapshotPayloadRewrite();
       const event = JSON.parse(rewrite(JSON.stringify({
         type: "response.completed",
@@ -192,6 +192,16 @@ describe("Responses passthrough sparse-snapshot repair", () => {
 
     expect(event.response.output[0]?.status).toBe("completed");
     expect(event.response.output[1]?.status).toBeUndefined();
+  });
+
+  test("repairs non-assistant output message roles to the canonical Responses role", () => {
+    const rewrite = createResponsesSnapshotPayloadRewrite();
+    const event = JSON.parse(rewrite(JSON.stringify({
+      type: "response.output_item.added",
+      item: { id: "msg_role", type: "message", role: "user", content: [] },
+    }))) as { item: Record<string, unknown> };
+
+    expect(event.item.role).toBe("assistant");
   });
 
   test("reconstructs a sparse completed output from prior done items", () => {
@@ -309,7 +319,7 @@ describe("Responses passthrough sparse-snapshot repair", () => {
 
   test("does not reconstruct a partial terminal after the retained-item cap is exceeded", () => {
     const rewrite = createResponsesSnapshotPayloadRewrite();
-    for (let outputIndex = 0; outputIndex <= 256; outputIndex += 1) {
+    for (let outputIndex = 0; outputIndex <= MAX_COMPLETED_OUTPUT_ITEMS; outputIndex += 1) {
       rewrite(JSON.stringify({
         type: "response.output_item.done",
         output_index: outputIndex,

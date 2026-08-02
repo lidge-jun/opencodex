@@ -82,12 +82,13 @@ tail loses reset semantics for opted-in clients). 110 is the terminal gate.
   queue. Suppress when `sawTerminal()` is true. Do not feed the tail through
   the inspector.
 
-## Design decisions locked for 100 (from 052 risk table)
+## Design decisions locked for 100 (from 052 risk table; rewrite scope superseded by 100)
 
-- Gate change only: `(win32 || darwin) && !needsClientRewrite`, and darwin
-  additionally requires the EXPLICIT `streamMode: "eager-relay"` decision
-  (`reason: "config-eager"`). `auto` on darwin stays tee while
-  `MIN_FIXED_BUN_VERSION` is null. No rewrite-path widening.
+- Windows keeps its existing routing policy. Darwin requires the EXPLICIT
+  `streamMode: "eager-relay"` decision (`reason: "config-eager"`) for both
+  no-rewrite and client-rewrite traffic; rewrites run inline after the eager
+  single reader. `auto` on darwin stays tee while `MIN_FIXED_BUN_VERSION` is
+  null. See `100_darwin_eager_optin.md` for the superseding gate matrix.
 - Bun#32111 posture per 052: eager avoids the known reproducer shape but is
   unproven on 1.3.14 — opt-in only, never default.
 
@@ -95,6 +96,6 @@ tail loses reset semantics for opted-in clients). 110 is the terminal gate.
 
 - Allocator residual (053): documented NOOP until a stable Bun ships the
   allocator train. No forced GC, no FFI purge, no restart-as-fix.
-- Rewrite-traffic eager migration (052 steps 4–6): future unit.
+- Default eager migration beyond the explicit Darwin opt-in: future unit.
 - `auto` default flip: blocked on a released Bun carrying #32120 (UNSAFE
   boundary per goalplan).

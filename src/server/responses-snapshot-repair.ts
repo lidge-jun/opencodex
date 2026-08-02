@@ -84,12 +84,13 @@ function repairOutputItem(
       : [];
     changed = !Array.isArray(rawContent)
       || content.some((part, index) => part !== rawContent[index]);
-    const role = item.role === "assistant" ? item.role : "assistant";
+    // Responses output-message roles are the literal "assistant"; input roles are not valid here.
+    const role = "assistant";
     changed = changed || role !== item.role;
     if (changed) repaired = { ...repaired, content, role };
   }
 
-  if (inferredStatus && typeof repaired.status !== "string") {
+  if (inferredStatus && (typeof repaired.status !== "string" || repaired.status.trim().length === 0)) {
     repaired = { ...repaired, status: inferredStatus };
   }
   return repaired;
@@ -132,7 +133,7 @@ function repairResponseSnapshot(
     repaired.tools = defaults.tools;
     changed = true;
   }
-  if (typeof repaired.status !== "string") {
+  if (typeof repaired.status !== "string" || repaired.status.trim().length === 0) {
     repaired.status = defaultStatus;
     changed = true;
   }
