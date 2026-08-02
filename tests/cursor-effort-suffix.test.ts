@@ -13,6 +13,17 @@ function modelIdFor(modelId: string, reasoning?: string): string {
   return createCursorRequest(parsed).modelId;
 }
 
+function selectionFor(modelId: string, reasoning?: string) {
+  const parsed: OcxParsedRequest = {
+    modelId,
+    context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+    stream: false,
+    options: reasoning ? { reasoning } : {},
+  };
+  const request = createCursorRequest(parsed);
+  return { modelId: request.modelId, parameters: request.requestedModelParameters };
+}
+
 describe("Cursor per-model reasoning-effort suffix", () => {
   test("literal requested efforts pass through when the model supports that tier", () => {
     expect(modelIdFor("cursor/claude-4.6-opus", "high")).toBe("claude-4.6-opus-high");
@@ -60,18 +71,37 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/glm-5.2", "max")).toBe("glm-5.2-max");
   });
 
-  test("grok-4.5 uses current low/medium/high tiers and trailing Fast wire ids", () => {
+  test("grok-4.5 uses current tiers and sends Fast as a separate model parameter", () => {
     expect(modelIdFor("cursor/grok-4.5", "low")).toBe("grok-4.5-low");
     expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("grok-4.5-medium");
     expect(modelIdFor("cursor/grok-4.5", "high")).toBe("grok-4.5-high");
     expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("grok-4.5-high");
     expect(modelIdFor("cursor/grok-4.5")).toBe("grok-4.5-high");
-    expect(modelIdFor("cursor/grok-4.5-fast", "low")).toBe("grok-4.5-low-fast");
-    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-medium-fast");
-    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-high-fast");
+    expect(selectionFor("cursor/grok-4.5", "high")).toEqual({
+      modelId: "grok-4.5-high",
+      parameters: undefined,
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "low")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "low" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "medium")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "medium" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "high")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
     // Codex-only upper tiers and an omitted effort clamp to Cursor's current top tier.
-    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-high-fast");
-    expect(modelIdFor("cursor/grok-4.5-fast")).toBe("grok-4.5-high-fast");
+    expect(selectionFor("cursor/grok-4.5-fast", "xhigh")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.5-fast")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
     expect(cursorModelEffortLadder("grok-4.5")).toEqual(["low", "medium", "high"]);
     expect(cursorModelEffortLadder("grok-4.5-fast")).toEqual(["low", "medium", "high"]);
   });

@@ -116,8 +116,9 @@ export function cursorModelHasEffortTiers(baseModelId: string): boolean {
 }
 
 /**
- * Compose a Cursor wire id from a Codex-facing base id and effort tier.
- * Fast variants put the mode after the effort; other models use the ordinary `{base}-{effort}` form.
+ * Compose Cursor's flattened model id from a Codex-facing base id and effort tier. Discovery uses
+ * this for the ids returned by GetUsableModels. Parameterized Grok Fast requests bypass the flat id
+ * and send the base model plus requested_model parameters instead.
  */
 export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
   if (baseModelId.endsWith("-fast")) {

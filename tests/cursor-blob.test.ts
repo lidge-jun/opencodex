@@ -356,6 +356,31 @@ describe("Cursor blob handshake", () => {
     expect(run?.requestedModel).toBeUndefined();
   });
 
+  test("encodes Grok Fast through requested_model parameters without legacy model_details", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      requestedModelParameters: [
+        { id: "effort", value: "high" },
+        { id: "fast", value: "true" },
+      ],
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+
+    expect(run?.modelDetails).toBeUndefined();
+    expect(run?.requestedModel).toMatchObject({
+      modelId: "grok-4.5",
+      maxMode: false,
+      parameters: [
+        { id: "effort", value: "high" },
+        { id: "fast", value: "true" },
+      ],
+    });
+  });
+
   test("adds Cursor exact-tool guidance to system prompt blobs when tools are advertised", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "claude-4.6-sonnet",

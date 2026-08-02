@@ -8,7 +8,7 @@ import type {
   OcxToolResultMessage,
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
-import type { CursorRequestMessage, CursorRunRequest } from "./types";
+import type { CursorRequestMessage, CursorRequestedModelParameter, CursorRunRequest } from "./types";
 import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorEffortSuffix, cursorWireModelIdWithEffort } from "./effort-map";
 import {
@@ -117,16 +117,29 @@ function catalogLimitNote(kept: readonly OcxTool[], omitted: readonly OcxTool[])
 }
 
 /**
- * Resolve a `cursor/<model>` selection + Codex reasoning effort to the actual Cursor model id. Cursor
-* encodes the effort as a per-model suffix (`claude-4.6-opus-high`); `cursorEffortSuffix` picks the
- * right tier for that specific model (literal pass-through, with rank clamp fallback) or
-* `undefined` for non-reasoning models like `composer-2.5`. A fully-qualified id (one that isn't a
-* known effort base) passes through unchanged.
+ * Resolve a `cursor/<model>` selection + Codex reasoning effort to Cursor's requested model shape.
+ * Most models encode effort in a flat id (`claude-4.6-opus-high`). Grok 4.5 Fast is parameterized
+ * instead: current Cursor clients send the `grok-4.5` base id plus `effort` and `fast` parameters.
+ * A fully-qualified id (one that is not a known effort base) passes through unchanged.
  */
-function normalizeCursorModelId(modelId: string, reasoning?: string): { modelId: string; routingLevel?: CursorRoutingLevel } {
+function normalizeCursorModelId(modelId: string, reasoning?: string): {
+  modelId: string;
+  requestedModelParameters?: readonly CursorRequestedModelParameter[];
+  routingLevel?: CursorRoutingLevel;
+} {
   const selection = cursorWireModelSelection(modelId);
   const id = selection.modelId;
   const suffix = cursorEffortSuffix(id, reasoning);
+  if (id === "grok-4.5-fast" && suffix) {
+    return {
+      ...selection,
+      modelId: "grok-4.5",
+      requestedModelParameters: [
+        { id: "effort", value: suffix },
+        { id: "fast", value: "true" },
+      ],
+    };
+  }
   return { ...selection, modelId: suffix ? cursorWireModelIdWithEffort(id, suffix) : id };
 }
 
@@ -241,6 +254,7 @@ export function createCursorRequest(
   const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning);
   return {
     modelId: model.modelId,
+    ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
     conversationId: resolveCursorConversationId(parsed, model.modelId, options),
     system: [...(parsed.context.systemPrompt ?? []), ...(limitNote ? [limitNote] : [])],
