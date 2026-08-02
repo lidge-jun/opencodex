@@ -43,7 +43,7 @@ const TASK = "opencodex-proxy";
 
 export type ServiceBackend = "scheduler" | "native";
 
-function cliEntry(bunRuntime: DurableBunRuntime, cli = join(import.meta.dir, "cli", "index.ts")): { bun: string; cli: string } {
+function cliEntry(bunRuntime: DurableBunRuntime = durableBunRuntime(), cli = join(import.meta.dir, "cli", "index.ts")): { bun: string; cli: string } {
   // Bake the bundled Bun (npm global prefix, survives `ocx update`) rather than
   // a transient system Bun, so launchd/systemd/schtasks keep resolving even if a
   // standalone Bun is later removed. The CLI entry lives at src/cli/index.ts.
