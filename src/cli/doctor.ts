@@ -523,6 +523,8 @@ export async function probeWham(fetchImpl: typeof fetch = fetch): Promise<WhamPr
 export type ServiceMemoryData = {
   pid: number;
   bunVersion: string;
+  bunRevision?: string;
+  runtime?: { source: string };
   platform: string;
   rss: number;
   heapUsed: number;
@@ -579,6 +581,8 @@ export async function fetchServiceMemory(
       data: {
         pid: body.pid,
         bunVersion: body.bunVersion,
+        bunRevision: typeof body.bunRevision === "string" ? body.bunRevision : undefined,
+        runtime: body.runtime && typeof body.runtime.source === "string" ? { source: body.runtime.source } : undefined,
         platform: typeof body.platform === "string" ? body.platform : "unknown",
         rss: body.rss,
         heapUsed: typeof body.heapUsed === "number" ? body.heapUsed : 0,
@@ -625,7 +629,9 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
     return lines;
   }
   const d = report.data;
-  lines.push(`  ok     service pid ${d.pid}: Bun ${d.bunVersion} on ${d.platform}`);
+  const revision = d.bunRevision ? ` (rev ${d.bunRevision.slice(0, 8)})` : "";
+  const source = d.runtime?.source === "override" ? " (runtime source: override via OPENCODEX_BUN_PATH)" : "";
+  lines.push(`  ok     service pid ${d.pid}: Bun ${d.bunVersion}${revision} on ${d.platform}${source}`);
   const observed = observedMemory(d);
   const observedBytes = d.observedBytes ?? d.watchdog?.observedBytes ?? observed.bytes;
   const observedMetric = d.observedMetric ?? d.watchdog?.observedMetric ?? observed.metric;
@@ -652,12 +658,18 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   } else {
     lines.push("  !!     high RSS, indeterminate split — capture two doctor runs over time to see the trend");
   }
-  // Version-claiming (never binary-claiming): the endpoint cannot distinguish
-  // the bundled binary from an OPENCODEX_BUN_PATH override of the same version.
+  // Version-claiming (never binary-claiming). The endpoint now reports the
+  // service process's own runtime source, so an active override is identified
+  // instead of being told to set the same override again.
   if (d.platform === "win32" && d.eagerRelay?.reason === "auto-known-bad") {
     lines.push(`         service is running Bun ${d.bunVersion} on Windows — a version affected by the upstream Bun memory issue.`);
-    lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
-    lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    if (d.runtime?.source === "override") {
+      lines.push("         An OPENCODEX_BUN_PATH override is already active; it stays unvalidated for automatic eager relay (own risk).");
+      lines.push("         Options: replace the override with a trusted runtime, or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    } else {
+      lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
+      lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    }
   }
   return lines;
 }

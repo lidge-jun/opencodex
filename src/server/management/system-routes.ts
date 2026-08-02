@@ -22,6 +22,7 @@
  * dashboard drain-and-restart confirm UX — never request bodies or IDs.
  */
 import { selectEagerPath } from "../../lib/bun-stream-caps";
+import { durableBunRuntime } from "../../lib/bun-runtime";
 import { getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
 import { responseStateMetrics } from "../../responses/state";
@@ -79,6 +80,9 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       bunVersion: Bun.version,
       bunRevision: Bun.revision,
       platform: process.platform,
+      // Scalar enum only, never the runtime path: lets diagnostics tell a
+      // bundled runtime from an OPENCODEX_BUN_PATH override (#848).
+      runtime: { source: durableBunRuntime().source },
       uptimeSeconds: process.uptime(),
       rss: usage.rss,
       heapUsed: usage.heapUsed,

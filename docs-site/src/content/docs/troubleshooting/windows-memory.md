@@ -37,7 +37,10 @@ runtime the leak itself remains an upstream problem:
   retention.
 - **`ocx doctor`** — a "Memory / runtime" section shows the *service*
   process's Bun version, RSS, external/ArrayBuffers counters, JS-heap context,
-  and stream-mode decision. On the bundled Bun 1.3.14 runtime, `heapUsed` /
+  stream-mode decision, the Bun revision, and whether the runtime is bundled
+  or an `OPENCODEX_BUN_PATH` override. An active override is identified as
+  such instead of being told to set the same override again. On the bundled
+  Bun 1.3.14 runtime, `heapUsed` /
   `jscHeap` alone are not a leak discriminator; compare observed memory with
   `responseState` and repeated samples before assigning an app-level leak.
 - **`GET /api/system/memory`** — the same data over the authenticated

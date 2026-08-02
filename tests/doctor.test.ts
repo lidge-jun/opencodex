@@ -408,6 +408,27 @@ describe("service memory section (#314 WP4)", () => {
     expect(lines.join("\n")).not.toContain("bundled binary");
   });
 
+  test("guidance gating: active override is identified, not re-suggested (#848)", () => {
+    const revision = "0d9b296af33f2b851fcbf4df3e9ec89751734ba4";
+    const overrideLines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, bunRevision: revision, runtime: { source: "override" } },
+    });
+    const rendered = overrideLines.join("\n");
+    expect(rendered).toContain("OPENCODEX_BUN_PATH override is already active");
+    expect(rendered).toContain("(rev 0d9b296a)");
+    expect(rendered).toContain("(runtime source: override via OPENCODEX_BUN_PATH)");
+    expect(rendered).not.toContain("set OPENCODEX_BUN_PATH");
+    expect(rendered).not.toContain("wait for a bundled runtime update");
+
+    // Same reported version on the bundled runtime still offers the override step.
+    const bundledLines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, bunRevision: revision, runtime: { source: "bundled" } },
+    });
+    expect(bundledLines.some(l => l.includes("set OPENCODEX_BUN_PATH"))).toBe(true);
+  });
+
   test("guidance gating: darwin auto-off or fixed Windows runtime prints no override guidance", () => {
     const darwin = formatServiceMemoryLines({
       status: "ok",

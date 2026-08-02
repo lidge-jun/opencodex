@@ -34,7 +34,9 @@ opencodex поставляет рантайм Bun (сейчас это **1.3.14*
   RSS, `external` и `arrayBuffers` (а не их сумма), потому что счётчики working set/RSS на Windows
   могут занижать коммит удерживаемой external-памяти.
 - **`ocx doctor`** — раздел "Memory / runtime" показывает версию Bun у *service*-процесса, RSS,
-  счётчики external/ArrayBuffers, контекст JS-heap и выбранный stream mode. На комплектном Bun
+  счётчики external/ArrayBuffers, контекст JS-heap, выбранный stream mode, ревизию Bun и источник
+  рантайма (комплектный или через `OPENCODEX_BUN_PATH`); активный оверрайд идентифицируется как
+  таковой, и инструкция по его установке не повторяется. На комплектном Bun
   1.3.14 одних только `heapUsed` / `jscHeap` недостаточно, чтобы отличить утечку; сравнивайте
   наблюдаемую память с `responseState` и повторными сэмплами, прежде чем записывать это на
   app-level leak.

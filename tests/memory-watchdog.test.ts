@@ -198,11 +198,13 @@ describe("GET /api/system/memory", () => {
 	        itemCapEvictions: number; postCancelDrainStops: number;
 	      };
 	      streamMode: string; eagerRelay: unknown;
+	      runtime: { source: string };
 	      watchdog: { samples: unknown[]; warnThresholdBytes: number; observedBytes: number; observedMetric: string } | null;
 	      activeTurnCount: number; isDraining: boolean;
 	    };
     expect(body.pid).toBe(process.pid);
     expect(body.bunVersion).toBe(Bun.version);
+    expect(["bundled", "override", "process"]).toContain(body.runtime.source);
 	    expect(body.rss).toBeGreaterThan(0);
 	    expect(body.heapUsed).toBeGreaterThan(0);
 	    expect(body.external).toBeGreaterThanOrEqual(0);
@@ -252,6 +254,21 @@ describe("GET /api/system/memory", () => {
 	    expect(body.activeTurnCount).toBeGreaterThanOrEqual(0);
 	    expect(typeof body.isDraining).toBe("boolean");
 	  });
+
+  test("GET system memory reports an active OPENCODEX_BUN_PATH override (#848)", async () => {
+    const previousOverride = process.env.OPENCODEX_BUN_PATH;
+    process.env.OPENCODEX_BUN_PATH = process.execPath;
+    try {
+      const req = new Request("http://127.0.0.1:10100/api/system/memory");
+      const body = await (await handleManagementAPI(req, new URL(req.url), config()))!.json() as {
+        runtime: { source: string };
+      };
+      expect(body.runtime.source).toBe("override");
+    } finally {
+      if (previousOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = previousOverride;
+    }
+  });
 
   test("watchdog null when no instance is running", async () => {
     getActiveMemoryWatchdog()?.stop();
