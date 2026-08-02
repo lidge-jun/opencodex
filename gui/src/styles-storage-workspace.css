@@ -33,15 +33,6 @@
   padding-bottom: var(--space-3);
   min-width: 0;
   min-height: 0;
-  /*
-    Pinned bucket selector: the page scrolls through the overview and the cleanup card below,
-    and the buckets stay reachable instead of scrolling away at the top.
-  */
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--bg);
-  padding-top: 6px;
 }
 
 .storage-workspace-rail-header {
@@ -70,16 +61,13 @@
   flex-direction: column;
   gap: 2px;
   min-height: 0;
-  /*
-    The one place an inner scroller belongs: this list is pinned, so it must not grow tall
-    enough to cover the content it is pinned over. `overscroll-behavior: auto` lets the wheel
-    continue to the page once the list reaches its end, which is what made the old fixed-height
-    shell feel stuck.
-  */
-  max-height: min(11rem, 30vh);
+  /* Soft cap so a long bucket list does not bury the overview; page scroll owns the rest. */
+  max-height: min(14rem, 40vh);
   overflow-y: auto;
   overscroll-behavior: auto;
   scrollbar-gutter: stable;
+  /* Keep size labels ("GB") clear of the scrollbar track. */
+  padding-right: 10px;
 }
 
 .storage-workspace-rail-row {
@@ -142,6 +130,7 @@
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  padding-right: 2px;
 }
 
 .storage-workspace-rail-meta {
@@ -182,19 +171,45 @@
   padding-top: 14px;
 }
 
-.storage-workspace-main .usage-cards {
+.storage-workspace-main .stw-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-3);
   margin-bottom: 16px;
-  align-items: stretch;
 }
 
-.storage-workspace-main .usage-cards .stat {
-  min-height: 5.5rem;
+.stw-summary-card {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
+.stw-summary-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+}
+
+.stw-summary-value {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stw-summary-value.mono,
 .stw-home-path {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

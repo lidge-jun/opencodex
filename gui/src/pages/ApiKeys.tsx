@@ -11,7 +11,7 @@ import {
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { createBoundedFetch } from "../bounded-fetch";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import ApiKeysWorkspace from "../components/apikeys-workspace/ApiKeysWorkspace";
 import {
   DEFAULT_ENDPOINTS,
@@ -92,6 +92,8 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   // turn stale client state into an apparently authoritative empty auth table.
   const keysCacheKey = `ocx.apikeys.list.v2:${apiBase}`;
   const modelsCacheKey = `ocx.apikeys.models.v1:${apiBase}`;
+  const keysResourceKey = `api-keys:${apiBase}`;
+  const modelsResourceKey = `api-models:${apiBase}`;
   // A cache entry is arbitrary parsed JSON. Trusting it would reintroduce exactly
   // what the network path refuses: an empty matrix rendering as an authoritative
   // "no rules" table, or a row without `usage` throwing on first render.
@@ -164,16 +166,16 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   // Keys and models intentionally remain independent resources: a slow catalog must never
   // block endpoint/key management, and each cache key retains its own session seed.
   const keysResource = useDataSurface<CachedKeysShape>(
-    `api-keys:${apiBase}`,
+    keysResourceKey,
     [apiBase],
     fetchKeys,
-    { isEmpty: data => data.keys.length === 0 },
+    { isEmpty: data => data.keys.length === 0, initialData: cachedKeys ?? undefined },
   );
   const modelsResource = useDataSurface<ExternalModelRow[]>(
-    `api-models:${apiBase}`,
+    modelsResourceKey,
     [apiBase],
     fetchModels,
-    { isEmpty: models => models.length === 0 },
+    { isEmpty: models => models.length === 0, initialData: cachedModels ?? undefined },
   );
   const keysState = keysResource.state;
   const modelsState = modelsResource.state;
@@ -374,7 +376,10 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
   const subtitleParts = t("api.subtitle").split("{authHeader}");
 
   return (
-    <section className="api-page">
+    <section
+      className="api-page"
+      aria-busy={keysState.refreshing || modelsState.refreshing || undefined}
+    >
       <div className="page-head">
         <h2>{t("api.title")}</h2>
       </div>
@@ -399,22 +404,9 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         </>
       ) : (
         <>
-          {/* Keys and models revalidate independently and can be in flight together. Only one
-              region may announce per transition, so keys take precedence and models steps down to
-              visual-only while keys is speaking. */}
-          {keysState.refreshing && keysData && (
-            <DataSurfaceStatus live={!keysState.showError}>{t("api.activeKeysLoading")}</DataSurfaceStatus>
-          )}
-          {/* `modelsState.data` alone misses the session-cached case: after a
-              failure the rows on screen come from `cachedModels`, and a retry
-              then ran with no visible progress at all. */}
-          {modelsState.refreshing && (modelsState.data !== undefined || cachedModels !== null) && (
-            <DataSurfaceStatus live={!modelsState.showError && !(keysState.refreshing && keysData)}>
-              {t("api.modelsLoading")}
-            </DataSurfaceStatus>
-          )}
           <ApiKeysWorkspace
         keys={keys}
+        apiBase={apiBase}
         attributionSince={attributionSince}
         historyTruncated={historyTruncated}
         authMatrix={authMatrix}
@@ -429,6 +421,8 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
         copied={copied}
         filteredModels={filteredModels}
         modelsLoading={modelsState.showSkeleton && !modelsState.data && !cachedModels}
+        // Only announce progress on a retry after failure — quiet warm revisits stay silent.
+        modelsRefreshing={modelsState.refreshing && modelsState.showError && (modelsState.data !== undefined || cachedModels !== null)}
         modelsLoadFailed={modelsState.showError}
         modelCount={models.length}
         // `readSessionListCache` answers `null`, not `undefined`, when it has

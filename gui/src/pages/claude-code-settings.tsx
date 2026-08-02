@@ -83,9 +83,9 @@ export function SmallFastModelSetting({
 }) {
   const t = useT();
   const effectiveHelperModel = tierHaikuModel ?? value;
+  // Title lives in ClaudeCode's shared ccw-main-head when mounted in the workspace rail.
   return (
     <>
-      <div className="h-section">{t("claude.smallFastModel")}</div>
       <p className="muted text-label" style={{ margin: "0 0 8px" }}>
         {t("claude.smallFastModelAccurateHint")}
       </p>

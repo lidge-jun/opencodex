@@ -1530,7 +1530,10 @@ function configMutationDatabasePath(): string {
   }
   if (windowsSecretAclApplies()) {
     try {
-      hardenSecretDir(dir, { required: true });
+      // Distinct timeout memo from management-token directory harden: a required
+      // management-dir timeout must not poison config mutation on the same home
+      // (windows-latest server-management-auth cases).
+      hardenSecretDir(dir, { required: true, timeoutMemoKey: `${dir}::config-mutation` });
     } catch (error) {
       if (!warnedConfigMutationDirectoryAcl) {
         warnedConfigMutationDirectoryAcl = true;
@@ -2173,9 +2176,13 @@ export function parsePidFile(raw: string): number | null {
 export function isOcxStartCommandLine(commandLine: string): boolean {
   const normalized = commandLine.toLowerCase().replace(/\\/g, "/");
   // "src/cli.ts" matches pre-restructure installs still running; "src/cli/index.ts" is current.
+  // `@bitkyc08/.opencodex-*` is npm's in-place rename of the global package during
+  // `npm install -g` — a Windows service wrapper can respawn from that temp tree
+  // mid-update, and must still count as ocx for port reclaim.
   const hasOcxEntrypoint = normalized.includes("src/cli.ts")
     || normalized.includes("src/cli/index.ts")
     || normalized.includes("@bitkyc08/opencodex")
+    || /@bitkyc08\/\.opencodex-/.test(normalized)
     || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd)?(?:$|[\s"'])/.test(normalized);
   return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
 }

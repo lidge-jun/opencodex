@@ -181,6 +181,8 @@
   min-width: 0;
   flex-wrap: nowrap;
   justify-self: end;
+  /* Keep the Sub-agent chip row on the same cap-height as Shadow Call controls. */
+  min-height: 28px;
 }
 
 .models-v2-detail-row {
@@ -267,19 +269,25 @@
   margin-top: var(--space-2);
 }
 
+/* Match Usage/Dashboard segmented chips + .btn-sm — the old space-1-5 padding made
+   v1/base/v2 taller than the Shadow Call switch/select and shoved the control row. */
 .models-segmented {
   display: inline-flex;
+  border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  background: var(--surface-soft, var(--raised));
-  padding: var(--space-1);
-  gap: var(--space-1);
+  background: var(--surface);
+  padding: 2px;
+  gap: 2px;
 }
 
 .models-segmented .btn {
   border-radius: var(--radius-pill);
-  min-width: 64px;
-  padding: var(--space-1-5) var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 12px;
   border: none;
+  font-size: var(--text-label);
+  line-height: inherit;
 }
 
 .models-cap-row {

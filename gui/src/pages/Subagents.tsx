@@ -5,7 +5,7 @@ import { useT } from "../i18n/shared";
 import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-workspace/SubagentsWorkspace";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useSubagentDelegation } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[] };
@@ -47,7 +47,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     cacheKey,
     [apiBase],
     loadSubagents,
-    { isEmpty: () => false },
+    { isEmpty: () => false, initialData: cached ?? undefined },
   );
   const { state } = resource;
   const load = resource.refresh;
@@ -118,7 +118,6 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       </div>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
-      {state.refreshing && <DataSurfaceStatus live={!state.showError}>{t("sub.loading")}</DataSurfaceStatus>}
       <SubagentsWorkspace
         available={available}
         chosen={chosen}

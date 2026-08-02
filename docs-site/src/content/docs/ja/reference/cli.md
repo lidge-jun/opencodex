@@ -223,7 +223,7 @@ refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 remove <provider> <id> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-Codex pool switches apply to new sessions; running threads keep their account.
+Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
 すべてのサブコマンドはプロキシが実行中である必要があり、CLI が記録されたランタイムポートを自動的に探します。成功は
@@ -268,9 +268,12 @@ API エラーは終了コード 1 です。認証情報フィールドは manage
 #### `ocx account use <provider> <account-or-key-id|main> [--json]`
 
 既存の Codex アカウント、OAuth アカウント、または API key を選びます。`openai` で `main` は Codex App ログインを
-選択します。Codex の選択は **新しいセッション** から適用され、既存の thread は現在のアカウントを維持します。auto-switch
-threshold がオンなら後で手動 pin を上書きできます。不明なプロバイダーや id は終了
-コード 1 です。`--json` は次を返します。
+選択します。Codex Pool の選択は process-local affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。プロキシ再起動や affinity eviction 後もタスクは未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も OpenCodex は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
+不明なプロバイダーや id は終了コード 1 です。`--json` は次を返します。
+**401/403** では、そのアカウントへのプロセスローカルな affinity を解除し、再認証を要求します。
+**429** では `Retry-After` を尊重してアカウントの cooldown を開始し、affinity を解除したうえで、
+別の適格な Pool アカウントへリクエストを切り替えることがあります。これらの障害回復は
+`autoSwitchThreshold: 0` でも有効であり、`0` が無効にするのは使用量に基づく予防的な切り替えだけです。
 
 ```text
 { ok: true, provider, type, activeId }
@@ -320,6 +323,56 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json` は `{ ok: true, id: string | null, label?: string }` を返し key を含みません。
+
+### `ocx export --client <opencode|pi>`
+
+実行中のプロキシに接続されたクライアント設定を出力します。opencode と Pi は環境変数ではなく自分の
+JSON 設定ファイルからプロバイダーを読むため、このコマンドが `opencodex` プロバイダーブロック
+(base URL、モデル一覧、クライアントが解釈する環境変数参照) を直列化します。自分のファイルへの
+マージはユーザーが行います。
+
+プロキシが動いている必要があります。実行中のポートを解決して `/api/models` を読み、今 Codex から
+見えるモデルだけを出力します。
+
+| フラグ | 動作 |
+| --- | --- |
+| `--client <opencode\|pi>` | 必須。クライアント方言を選びます。opencode は key 付き `provider` オブジェクト、Pi は `providers` 配列です。 |
+| `--json` | stdout に設定 JSON だけを出力するので、リダイレクトしてもバイト単位で正確です。`--out` の書き込み通知を含むすべての診断は stderr に出ます。 |
+| `--out <path>` | 設定を `<path>` に書きます。既存ファイルの置き換えは拒否します。 |
+| `--force` | `--out` が既存ファイルを置き換えることを許可します。 |
+
+```bash
+ocx export --client opencode                     # 設定に加えて宛先パス、マージ警告、件数
+ocx export --client pi --json > pi-models.json   # パイプや diff 用のバイト正確な JSON
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+
+`--json` なしでは JSON が先に出て、続いて正規の宛先パス、マージ警告、環境変数の export 行、モデル
+件数とコンテキスト上限を持たない行数 (それらはクライアント側の既定値が使われます) が出力されます。
+
+| クライアント | 正規の宛先 | ダウンロードファイル名 | 環境変数 |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` が設定されていればそちら) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+
+2 つの環境変数名は異なり、各クライアントは自分のものだけを解釈します。opencode は
+`{env:OPENCODEX_OPENCODE_API_KEY}`、Pi は `$OPENCODEX_API_KEY` を読みます。
+
+:::caution[置き換えではなくマージ]
+`ocx export` が実際のクライアント設定ファイルを書くことはありません。宛先パスは手動でマージする
+ために表示され、`--out` も `--force` なしでは既存ファイルを上書きしません。設定ファイルを丸ごと
+置き換えると、そこにあった他のプロバイダー、エージェント、MCP エントリが失われるからです。
+:::
+
+key が直列化されることはありません。設定にはクライアントの環境変数参照だけが入り、secret は環境に
+残ります。ループバックのプロキシ (既定の `127.0.0.1`) では admission key 自体が不要で、参照は使わ
+れません。プロキシをループバック外にバインドするときだけ変数を設定してください。admission key の
+発行方法は [リモートアクセス](/ja/reference/configuration/#リモートアクセス) を参照してください。
+上流プロバイダーの key はまったく別物で、[プロバイダー](/ja/guides/providers/) で設定します。Pi
+ガイドは英語のみです: [Pi](/guides/pi/)。
+
+同じペイロードを `GET /api/client-config` が返し、ダッシュボードの API タブが描画するので、CLI と
+API と GUI が異なるバイトを見せることはありません。
 
 ## 認証
 

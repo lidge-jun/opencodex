@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { drainAndShutdown } from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
 import { endStorageMutation, getActiveStorageMutation, tryBeginStorageMutation } from "../src/storage/storage-mutation-coordinator";
 import {
@@ -25,12 +26,11 @@ import {
   setArchivedCleanupJobTestHooks,
 } from "../src/storage/cleanup-job";
 import {
-  resetStorageCleanupPolicyJobForTests,
   resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
 } from "../src/storage/policy-job";
+import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
 import {
-  resetRestoreTrashJobForTests,
   resetRestoreTrashJobForTestsAsync,
   runRestoreTrashEntryJob,
   setRestoreTrashJobTestHooks,
@@ -38,6 +38,10 @@ import {
 import {
   resetStorageMutationCoordinatorForTests,
 } from "../src/storage/storage-mutation-coordinator";
+import {
+  cancelQueuedStorageWorkerSpawns,
+  drainStorageWorkers,
+} from "../src/storage/worker-lifecycle";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
@@ -159,22 +163,34 @@ function removeTree(path: string): void {
   throw lastError;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
+  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME —
+  // same order as installPolicyApiHarness (startServer also arms the unref'd
+  // policy scheduler; bare server.stop does not clear it).
+  stopStorageCleanupScheduler();
+  cancelQueuedStorageWorkerSpawns();
+  await resetRestoreTrashJobForTestsAsync();
+  await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
+  // Clear shared coordination only after workers have joined — same ordering
+  // as resetRestoreTrashJobForTestsAsync / policy-job's mutation-slot finally.
+  resetArchivedCleanupJobForTests();
+  resetStorageMutationCoordinatorForTests();
   isolatedCodexHome = installIsolatedCodexHome("ocx-storage-mutation-race-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-storage-mutation-race-"));
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(baseConfig());
-  resetRestoreTrashJobForTests();
-  resetArchivedCleanupJobForTests();
-  resetStorageCleanupPolicyJobForTests();
-  resetStorageMutationCoordinatorForTests();
+  stopStorageCleanupScheduler();
 });
 
 afterEach(async () => {
+  stopStorageCleanupScheduler();
+  cancelQueuedStorageWorkerSpawns();
   await resetRestoreTrashJobForTestsAsync();
-  resetArchivedCleanupJobForTests();
   await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
+  resetArchivedCleanupJobForTests();
   resetStorageMutationCoordinatorForTests();
   setRestoreTrashJobTestHooks(null);
   setArchivedCleanupJobTestHooks(null);
@@ -186,6 +202,11 @@ afterEach(async () => {
   if (testDir) removeTree(testDir);
   testDir = "";
 });
+
+async function stopRaceServer(server: ReturnType<typeof startServer>): Promise<void> {
+  // Joins storage Workers + clears the scheduler; Bun.serve.stop alone does not.
+  await drainAndShutdown(server, 5_000);
+}
 
 describe("storage mutation coordinator", () => {
   test("cleanup restore and policy retain their exact mutation lease through worker join", () => {
@@ -224,7 +245,7 @@ describe("storage mutation coordinator", () => {
       const restoreResult = await restorePromise;
       expect(restoreResult.ok).toBe(true);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -251,7 +272,7 @@ describe("storage mutation coordinator", () => {
       const cleanupRes = await cleanupPromise;
       expect(cleanupRes.status).toBe(200);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -286,7 +307,7 @@ describe("storage mutation coordinator", () => {
       // Windows holding OPENCODEX_HOME (SQLite/job handles) and afterEach rmSync fails EBUSY.
       await waitForPolicyJob(server.url, startedAt);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -365,7 +386,7 @@ describe("storage mutation coordinator", () => {
       expect(threadCount(home)).toBe(2);
       expect(readFileSync(restoredPath, "utf8")).toBe("o".repeat(100));
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 45_000 });
 
@@ -406,7 +427,7 @@ describe("storage mutation coordinator", () => {
       expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(true);
       expect(threadCount(home)).toBe(1);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -443,7 +464,7 @@ describe("storage mutation coordinator", () => {
       const firstRes = await first;
       expect(firstRes.status).toBe(200);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 });

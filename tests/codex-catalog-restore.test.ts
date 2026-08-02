@@ -38,6 +38,8 @@ describe("Codex catalog restore", () => {
     if (existsSync(opencodexHome)) rmSync(opencodexHome, { recursive: true, force: true });
   });
 
+  // spawnSync(bun --eval) under `bun test --isolate` on Windows can exceed the
+  // default 5s case budget when the runner is under load (seen at ~5.4s on GHA).
   test("drops routed entries without overwriting user-added native entries", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
@@ -59,7 +61,7 @@ describe("Codex catalog restore", () => {
     expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 2 });
     const slugs = JSON.parse(readFileSync(catalogPath, "utf8")).models.map((m: { slug: string }) => m.slug);
     expect(slugs).toEqual(["gpt-5.5", "user-native"]);
-  });
+  }, { timeout: 15_000 });
 
   test("uses pristine backup while preserving native entries added after sync", () => {
     const catalogPath = join(codexHome, "catalog.json");
@@ -94,7 +96,7 @@ describe("Codex catalog restore", () => {
       { slug: "codex-mini", priority: 60 },
       { slug: "user-native", priority: 10 },
     ]);
-  });
+  }, { timeout: 15_000 });
 
   test("does not apply generic legacy backup to a custom catalog path", () => {
     const catalogPath = join(codexHome, "custom-catalog.json");
@@ -120,7 +122,7 @@ describe("Codex catalog restore", () => {
     expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 2 });
     const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(restored.map(m => m.slug)).toEqual(["gpt-5.5", "user-native"]);
-  });
+  }, { timeout: 15_000 });
 
   test("sync applies native-only subagent priority selections", () => {
     const catalogPath = join(codexHome, "catalog.json");
@@ -150,7 +152,7 @@ describe("Codex catalog restore", () => {
     const synced = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(synced.find(m => m.slug === "gpt-5.5")?.priority).toBe(0);
     expect(synced.find(m => m.slug === "gpt-5.4")?.priority).toBeGreaterThan(100);
-  });
+  }, { timeout: 15_000 });
 
   test("sync advertises documented Codex-native additions omitted by the bundled catalog", () => {
     const catalogPath = join(codexHome, "catalog.json");
@@ -196,5 +198,5 @@ describe("Codex catalog restore", () => {
     expect(synced.map(m => m.slug)).toContain("gpt-5.6-terra");
     expect(synced.map(m => m.slug)).toContain("gpt-5.6-luna");
     expect(synced.find(m => m.slug === "gpt-5.4")?.max_context_window).toBe(1_000_000);
-  });
+  }, { timeout: 15_000 });
 });

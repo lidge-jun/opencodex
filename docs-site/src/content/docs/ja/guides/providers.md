@@ -119,7 +119,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 65 個含まれています。キー方式 54、OAuth 7、ローカル 3、
+opencodex には組み込みプリセットが 66 個含まれています。キー方式 55、OAuth 7、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します。主な項目は以下のとおりです:
 
@@ -138,6 +138,7 @@ opencodex には組み込みプリセットが 65 個含まれています。キ
 | Cerebras | `https://api.cerebras.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -179,6 +180,12 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 ネイティブモデル ID を保持し、live discovery を 256 KiB と raw 256 行に制限します。serverless text /
 vision-language chat のみを対象とし、別系統の image、audio、GPU endpoint は対象外です。キーは
 [Hyperbolic](https://app.hyperbolic.ai) で作成します。
+
+> **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
+> のみを対象とします。ローカル利用では個人の [API キー](https://docs.baseten.co/organization/api-keys)を、
+> 共有/本番利用では **Call Model APIs** 権限を持つチームキーを使用してください。専用 Truss `predict`
+> エンドポイントはホストとスキーマが異なるため、このプリセットではルーティングされません。
+> このプリセットのライブディスカバリーは、レスポンス 1 MiB、モデルの生行 256 件が上限です。
 
 > **Tencent Cloud Coding Plan の利用制限:** Tencent はこのサブスクリプションを対話型
 > コーディングツール専用としています。一般的な API 自動化、カスタムアプリのバックエンド、

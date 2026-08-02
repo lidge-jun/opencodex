@@ -6,7 +6,7 @@ import { readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { setClientResourceData } from "../client-resource";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { grokGroupView, type GrokCandidate } from "./grok-groups";
 
@@ -88,7 +88,7 @@ export default function Grok({ apiBase }: { apiBase: string }) {
     resourceKey,
     [apiBase],
     fetchStatus,
-    { isEmpty: () => false },
+    { isEmpty: () => false, initialData: cached ?? undefined },
   );
   const { state } = resource;
   const load = resource.refresh;
@@ -210,7 +210,7 @@ export default function Grok({ apiBase }: { apiBase: string }) {
   }
 
   return (
-    <section className="grok-page">
+    <section className="grok-page" aria-busy={state.refreshing || undefined}>
       <h2 className="page-title">{t("grok.title")}</h2>
       <p className="page-sub">{t("grok.subtitle")}</p>
 
@@ -220,9 +220,6 @@ export default function Grok({ apiBase }: { apiBase: string }) {
       {/* A refresh that fails while cached data is on screen must say so instead of leaving the
           page looking settled; the notice then owns the live region for this transition. */}
       {state.showError && <Notice tone="err">{t("grok.loadFail")}</Notice>}
-      {state.refreshing && (
-        <DataSurfaceStatus live={!state.showError}>{t("grok.loading")}</DataSurfaceStatus>
-      )}
 
       {status && status.candidates.length > 0 && (
         <div className="claude-profile-bar">

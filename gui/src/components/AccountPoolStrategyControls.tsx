@@ -13,6 +13,12 @@ const STRATEGY_LABEL_KEYS = {
   "fill-first": "accountPool.strategyFillFirst",
 } as const;
 
+const STRATEGY_HINT_KEYS = {
+  quota: "accountPool.strategyHintQuota",
+  "round-robin": "accountPool.strategyHintRoundRobin",
+  "fill-first": "accountPool.strategyHintFillFirst",
+} as const;
+
 export interface AccountPoolStrategyControlsProps {
   strategy: AccountPoolStrategy;
   stickyDraft: string;
@@ -64,7 +70,8 @@ export default function AccountPoolStrategyControls({
         <div className="setting-label">
           <span className="title" id={`${strategySelectId}-label`}>{t("accountPool.strategy")}</span>
           <span className="desc">{t("accountPool.strategyDesc")}</span>
-          <span className="desc">{t("accountPool.strategyHint")}</span>
+          <span className="desc">{t(STRATEGY_HINT_KEYS[strategy])}</span>
+          <span className="desc">{t("accountPool.unboundDefinition")}</span>
         </div>
         <div className="setting-controls">
           <Select

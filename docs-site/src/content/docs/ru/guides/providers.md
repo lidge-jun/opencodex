@@ -126,7 +126,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 65 встроенными пресетами: 54 на основе ключей, семь OAuth, три локальных и
+opencodex поставляется с 66 встроенными пресетами: 55 на основе ключей, семь OAuth, три локальных и
 пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его. Наиболее заметные записи:
 
@@ -145,6 +145,7 @@ opencodex поставляется с 65 встроенными пресетам
 | Cerebras | `https://api.cerebras.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -188,6 +189,12 @@ Volcengine Agent Plan использует нативную конечную т�
 нативные id моделей со знаком `/` и ограничивает live discovery размером 256 KiB и 256 исходными
 строками. Он охватывает только serverless text и vision-language chat; отдельные image, audio и GPU
 endpoint в него не входят. Ключи создаются в [Hyperbolic](https://app.hyperbolic.ai).
+
+> **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
+> Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),
+> а для общего/промышленного использования — командный ключ с правом **Call Model APIs**. Выделенные конечные точки Truss `predict` используют другие хосты и
+> схемы и этим пресетом не маршрутизируются.
+> Для этого пресета live discovery ограничен ответом размером 1 MiB и 256 исходными строками моделей.
 
 > **Ограничение Tencent Cloud Coding Plan:** Tencent разрешает использовать эту подписку только
 > в интерактивных инструментах программирования. Автоматизация общего API, серверы пользовательских

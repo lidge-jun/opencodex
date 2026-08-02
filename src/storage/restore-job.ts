@@ -75,7 +75,12 @@ export function setRestoreTrashJobTestHooks(hooks: RestoreJobTestHooks | null): 
   setStorageMutationCoordinatorTestHooks(hooks);
 }
 
+/**
+ * Fire-and-forget reset. Prefer {@link resetRestoreTrashJobForTestsAsync} from
+ * test beforeEach/afterEach under `bun test --isolate` on Windows.
+ */
 export function resetRestoreTrashJobForTests(): void {
+  cancelQueuedStorageWorkerSpawns();
   if (activeWorker) {
     void terminateStorageWorker(activeWorker);
     activeWorker = null;
@@ -98,13 +103,19 @@ export async function resetRestoreTrashJobForTestsAsync(): Promise<void> {
   cancelActiveRun?.();
   cancelActiveRun = null;
   testHooks = null;
-  resetStorageMutationCoordinatorForTests();
-  if (worker) await terminateStorageWorker(worker);
-  await drainStorageWorkers();
+  // Join the worker before clearing the mutation coordinator so a concurrent
+  // run cannot acquire CODEX_HOME while the aborted thread is still mutating.
+  try {
+    if (worker) await terminateStorageWorker(worker);
+    await drainStorageWorkers();
+  } finally {
+    resetStorageMutationCoordinatorForTests();
+  }
 }
 
 /** Terminate an in-flight worker during process shutdown. */
 export function abortRestoreTrashJob(): void {
+  cancelQueuedStorageWorkerSpawns();
   if (activeWorker) {
     void terminateStorageWorker(activeWorker);
     activeWorker = null;

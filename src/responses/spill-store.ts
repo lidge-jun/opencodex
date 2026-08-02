@@ -59,6 +59,12 @@ export interface ResponseSpillCleanupResult {
 export interface ResponseSpillIoForTest {
   write?: (fd: number, bytes: Uint8Array) => void;
   fsync?: (fd: number) => void;
+  /** Directory-handle fsync seam for `fsyncDirectoryBestEffort` only. */
+  fsyncDir?: (fd: number) => void;
+  /** Directory-handle open seam for `fsyncDirectoryBestEffort` only. */
+  openDir?: (dir: string) => number;
+  /** Directory-handle close seam for `fsyncDirectoryBestEffort` only. */
+  closeDir?: (fd: number) => void;
   link?: (tempPath: string, destinationPath: string) => void;
   copyFileExcl?: (tempPath: string, destinationPath: string) => void;
   unlink?: (path: string) => void;
@@ -86,14 +92,22 @@ function fsyncDirectoryBestEffort(dir: string): void {
   // open/fsync directory handles this way, but callers still cross this seam.
   record("dir-fsync");
   try {
-    fd = openSync(dir, "r");
-    if (spillIoForTest?.fsync) spillIoForTest.fsync(fd);
-    else fsyncSync(fd);
+    fd = spillIoForTest?.openDir ? spillIoForTest.openDir(dir) : openSync(dir, "r");
+    try {
+      if (spillIoForTest?.fsyncDir) spillIoForTest.fsyncDir(fd);
+      else if (spillIoForTest?.fsync) spillIoForTest.fsync(fd);
+      else fsyncSync(fd);
+    } catch {
+      // Windows and some filesystems do not support fsync on directory handles.
+    }
   } catch {
-    // Windows and some filesystems do not support fsync on directory handles.
+    // Directory missing or unreadable — nothing further to sync.
   } finally {
     if (fd !== null) {
-      try { closeSync(fd); } catch { /* best effort */ }
+      try {
+        if (spillIoForTest?.closeDir) spillIoForTest.closeDir(fd);
+        else closeSync(fd);
+      } catch { /* best effort */ }
     }
   }
 }

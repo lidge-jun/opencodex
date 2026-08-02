@@ -190,7 +190,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 65 built-in presets: 54 key-based, seven OAuth, three local, and the default
+opencodex ships 66 built-in presets: 55 key-based, seven OAuth, three local, and the default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it. Notable entries:
 
@@ -209,6 +209,7 @@ validates the key, and stores it. Notable entries:
 | Cerebras | `https://api.cerebras.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -256,6 +257,12 @@ rows. Create keys in [DeepInfra's dashboard](https://deepinfra.com/dash/api_keys
 slash-containing native model ids, and caps live discovery at 256 KiB and 256 raw rows. It covers
 serverless text and vision-language chat only; Hyperbolic's separate image, audio, and GPU endpoints
 are out of scope. Create keys at [Hyperbolic](https://app.hyperbolic.ai).
+
+> **Baseten scope:** The preset covers Baseten's shared [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
+> only. Use a personal [API key](https://docs.baseten.co/organization/api-keys) for local use, or a team key
+> with **Call Model APIs** access for shared/production use. Dedicated Truss `predict` endpoints use different
+> hosts and schemas and are not routed by this preset.
+> Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
 
 > **Tencent Cloud Coding Plan usage restriction:** Tencent documents this subscription for
 > interactive coding tools only. General API automation, custom application backends, and

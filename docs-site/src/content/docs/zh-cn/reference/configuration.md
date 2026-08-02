@@ -53,9 +53,9 @@ no-replace 方式创建 `config.json.pre-openai-tiers-v2.bak`，并把已知旧 
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 在 Codex Auth 中恢复前，不参与任何后续 Pool 选择的账号 ID。暂停主账号时也包含 `__main__`。 |
 | `codexAccountNamespaces?` | `Record<string,string>` | — | 可选的公开 model selector namespace 到已保存 Codex account target 的映射。`<selector>/<native OpenAI model>` 只会路由到映射账号；此设置本身不会添加 model picker row。 |
 | `activeCodexAccountId?` | `string` | — | 手动选择的 pool account。选择时清除已有 thread affinity，并从下一次请求开始生效；进行中的请求保留原账号。 |
-| `autoSwitchThreshold?` | `number` | `80` | 新 session 自动切换的 usage 百分比 threshold。分数取已知 5 小时、周或 30 天 quota window 中最高的一项。设为 `0` 可禁用 quota 自动切换。`quota` 策略和 `fill-first` 的耗尽 threshold 都会用到。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool 的新 session 轮换策略。仅适用于**新 session**；已有 thread id 保留 affinity。`quota`（默认）：活跃账号超过 `autoSwitchThreshold` 时选已知 usage 最低者。`round-robin`：在合格账号间平滑加权均分。`fill-first`：持续使用活跃账号，直到 cooldown、不可用或（如已设置）超过 `autoSwitchThreshold`（未知 usage 不会强制切换），再按稳定排序进入下一个合格账号。 |
-| `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的成功新 session 绑定数。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
+| `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。 |
+| `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次临时上游失败后，让后续新 session failover 到其他合格 pool account。设为 `0` 可禁用失败切换。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个 provider 的 `/models` 缓存新鲜度窗口（5 分钟）。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 进程级可驱逐应用保留状态（日志、缓存、Blob 和续接响应负载）上限，单位为 MiB，有效范围为 64–4096。它不是 RSS 或原生运行时内存上限。 |
@@ -84,18 +84,25 @@ Pool / Direct routing。此映射本身不会创建 model picker entry。
 
 :::note[Codex 账号池]
 请在仪表盘 **Codex Auth** 页面添加 pool account 并刷新 quota。配置只保存非 secret account
-metadata；access/refresh token 存放在加固的 Codex account credential store 中。已有 thread id 会
-保留 account affinity；新 session 按 `accountPoolStrategy`、quota、cooldown 和 health 自动路由。
+metadata；access/refresh token 存放在加固的 Codex account credential store 中。Pool routing
+分为新建/未绑定任务分配、基于用量的主动切换和故障恢复。已绑定任务通常保持 affinity，但 `quota`
+可在超过阈值后的下一次请求中重新绑定；暂停、cooldown、重新认证和故障处理也能独立清除或改变
+routing。未绑定请求没有 live 账号绑定，也可能是代理重启或 affinity 重置后的已有任务。输出前的
+**429/402** 即使在关闭基于用量的主动切换时，也可在同一请求中对合格替代账号重试一次。
+账号变化后会保留并重放对话上下文，但账号间的 provider prompt cache 不保证复用，可能需要重新预热。
 暂停后仍会显示账号及其 quota metadata，但不会参与自动切换、重试/failover 选择、cooldown 恢复探测或手动激活。
 暂停还会清除该账号的 thread affinity map：进行中的请求保留已捕获的 credential，但后续 turn 会重新路由，无法再使用已暂停账号。
 暂停状态会跨重启保留；如果所有账号均已暂停，Pool 路由会明确失败，而不会暗中选择某个账号。
 **暂停已达上限账号** 会先刷新有 credential 的合格账号，只暂停相关 quota window 本次明确返回 100% 的账号；无 credential、未知额度或刷新失败的账号保持不变。
+遇到 **401/403** 时，App 登录会清除该账户的进程内 affinity 并要求重新认证。
+遇到 **429** 时，它会遵循 `Retry-After`、启动账户 cooldown、清除 affinity，
+并可将请求切换到另一个符合条件的 Pool 账户。即使 `autoSwitchThreshold: 0`，
+这些故障恢复流程仍然有效；`0` 只会禁用基于用量的主动切换。
 
-**轮换策略**（仅新 session；已绑定 thread 不变）：`quota`（默认）— 活跃账号 usage 超过
-`autoSwitchThreshold` 时选最低者；`round-robin` — 均分，`accountPoolStickyLimit`（默认 `1`，
-1–100）控制一次选择保留多少成功绑定；`fill-first` — 耗尽活跃账号（cooldown、需重新认证或
-threshold；未知 usage 不强制切换）后按稳定排序进入下一个。轮换不能规避 provider enforcement —
-多账号使用可能违反服务条款。
+**分配与主动切换策略：** `quota`（默认）在没有活跃账号时选择 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求，用量
+阈值不会改变正常轮换。`accountPoolStickyLimit`（默认 `1`，1–100）统计分配/绑定，而不是成功响应。
+`fill-first` 在 cooldown、重新认证或耗尽阈值前把未绑定请求分配给活跃账号；健康的已绑定任务保持
+affinity。这些策略不能规避 provider enforcement。
 :::
 
 ### 受管 record 形状

@@ -54,9 +54,9 @@ namespaced selected id を bare id に変えます。
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Codex Auth で再開するまで、今後のすべての Pool 選択から除外するアカウント ID。メインを一時停止した場合は `__main__` も含みます。 |
 | `codexAccountNamespaces?` | `Record<string,string>` | — | 公開 model selector namespace から保存済み Codex アカウント target への任意 map。`<selector>/<native OpenAI model>` は対応するアカウントだけに routing され、この設定自体は model picker row を追加しません。 |
 | `activeCodexAccountId?` | `string` | — | 手動選択した pool アカウント。既存 thread affinity を消去して次のリクエストから適用し、処理中のリクエストは現在のアカウントを維持します。 |
-| `autoSwitchThreshold?` | `number` | `80` | 新しいセッション自動切替用の使用量百分率 threshold。既知の 5 時間、週次、30 日 quota window のうち最も高いスコアを使います。`0` なら quota 自動切替をオフにします。`quota` 戦略と `fill-first` の drain threshold にも使います。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Codex pool の新しいセッション rotation 戦略。**新しいセッションのみ**に適用され、既存 thread id は affinity を維持します。`quota`（既定）— アクティブアカウントが `autoSwitchThreshold` を超えたら既知 usage 最小を選択。`round-robin` — 適格アカウント間を smooth weighted で均等分散。`fill-first` — cooldown、使用不可、または（設定時）`autoSwitchThreshold` までアクティブアカウントを使い切り（未知 usage は強制切替しない）、安定ソート順で次へ。 |
-| `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する成功的新セッション bind 数。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
+| `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は紐付け済み/未紐付けタスクの次のリクエストを再評価でき、`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は、未紐付けリクエストまたは紐付け済みタスクの次のリクエストを usage の低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。 |
+| `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 一時的な上流失敗が連続して起きたのち、以降の新しいセッションを別の適合 pool アカウントに failover する回数。`0` なら失敗ベースの failover をオフにします。 |
 | `modelCacheTtlMs?` | `number` | `300000` | プロバイダー別 `/models` キャッシュの有効期間（5 分）。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 退避可能なアプリ所有の保持状態（ログ、キャッシュ、Blob、継続応答ペイロード）に対するプロセス全体の上限（MiB）です。有効範囲は 64〜4096 で、RSS やネイティブランタイムメモリの上限ではありません。 |
@@ -88,14 +88,26 @@ active Pool account も変更しません。bare native model は通常の Pool 
 :::note[Codex アカウントプール]
 pool アカウントの追加と quota 更新はダッシュボードの **Codex Auth** ページで処理してください。設定には secret で
 ないアカウント metadata だけを保存し、access/refresh token は強化された Codex アカウント credential store に別途
-保管します。既存 thread id はアカウント affinity を維持し、新しいセッションは `accountPoolStrategy`、quota、cooldown、health に
-応じて自動ルーティングされます。
+保管します。Pool routing は新規/未紐付け割り当て、使用量ベースのプロアクティブ切り替え、障害回復に分かれます。
+紐付け済みタスクは通常 affinity を維持しますが、`quota` はしきい値超過後の次のリクエストで再紐付けでき、
+pause、cooldown、再認証、障害処理も独立して routing を消去または変更できます。未紐付けリクエストには
+プロキシ再起動や affinity リセット後の既存タスクも含まれます。出力前の **429/402** は使用量ベースの
+切り替えがオフでも同じリクエストで適格な代替アカウントへ 1 回再試行できます。アカウント変更後も会話
+コンテキストは保持・再生されますが、アカウント間の provider prompt cache 再利用は保証されません。
 一時停止したアカウントと quota metadata は表示されたままですが、自動切り替え、再試行/failover 選択、cooldown 復旧プローブ、手動有効化の対象外です。
 一時停止するとそのアカウントの thread affinity map も消去されます。処理中のリクエストは取得済み credential を維持しますが、以降のターンは再ルーティングされ、一時停止中のアカウントは再利用できません。
 状態は再起動後も保持され、すべてのアカウントが一時停止中なら Pool ルーティングは別のアカウントを暗黙に選ばず失敗します。
 **上限到達を一括停止** は credential がある適格アカウントだけを先に更新し、関連する quota window が今回 100% と確認できたアカウントだけを停止します。credential がないアカウントや、quota が不明、または更新に失敗したアカウントは変更しません。
+**401/403** では、そのアカウントへのプロセスローカルな affinity を解除し、再認証を要求します。
+**429** では `Retry-After` を尊重してアカウントの cooldown を開始し、affinity を解除したうえで、
+別の適格な Pool アカウントへリクエストを切り替えることがあります。これらの障害回復は
+`autoSwitchThreshold: 0` でも有効であり、`0` が無効にするのは使用量に基づく予防的な切り替えだけです。
 
-**rotation 戦略**（新しいセッションのみ；bound thread は不変）：`quota`（既定）— `autoSwitchThreshold` 超過時に最小 usage を選択；`round-robin` — 均等分散、`accountPoolStickyLimit`（既定 `1`、1–100）で 1 選択あたりの成功 bind 数；`fill-first` — アクティブアカウントを cooldown、再認証、または threshold まで使い切り（未知 usage は強制切替しない）後、安定ソート順で次へ。rotation は provider enforcement を回避しません — 複数アカウント利用は ToS 違反の可能性があります。
+**割り当てとプロアクティブ切り替え戦略：** `quota`（既定）はアクティブアカウントがない場合に最小 usage の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。`autoSwitchThreshold` 超過後は紐付け済みタスクの次のリクエストも再紐付けできます。`round-robin` は
+未紐付けリクエストを均等分散し、しきい値は通常の rotation を変えません。`accountPoolStickyLimit`
+（既定 `1`、1–100）は成功応答ではなく割り当て/紐付け数を数えます。`fill-first` は未紐付けリクエストを
+cooldown、再認証、または drain threshold までアクティブアカウントへ割り当て、正常な紐付け済みタスクは
+affinity を維持します。これらの戦略は provider enforcement を回避しません。
 :::
 
 ### 管理型レコード形式

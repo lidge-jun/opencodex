@@ -40,6 +40,7 @@ on:
 permissions:
   contents: read
 
+# Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
 concurrency:
   group: cross-platform-ci-${{ github.ref }}
   cancel-in-progress: true
@@ -120,11 +121,13 @@ jobs:
     # the result rather than the code under review — #711's rerun finished at
     # 11.8min and passed while #653's was killed at 12.0min (issue #717).
     # A cancelled job renders as `fail` in `gh pr checks`, so that flakiness
-    # reads as a broken PR. 20 minutes keeps a green Windows run green with
-    # real margin; it is not a licence for the suite to grow into it. If
-    # Windows approaches this ceiling too, fix the 2.5x platform gap instead
-    # of raising the number again.
-    timeout-minutes: 20
+    # reads as a broken PR. After the 2026-08-01 state-store admission merge,
+    # Windows under `bun test --isolate` on #827 hit the 20-minute kill while
+    # still green mid-suite (~19m of tests). 30 minutes is the margin for that
+    # tip — not a licence to absorb hung tests (see oauth mutation waitMs
+    # unref fix). Shrink the suite / close the platform gap rather than raising
+    # this again for ordinary variance.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { drainAndShutdown } from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./isolated-codex-home";
 import {
@@ -17,11 +18,11 @@ import {
   setArchivedCleanupJobTestHooks,
 } from "../../src/storage/cleanup-job";
 import {
-  resetStorageCleanupPolicyJobForTests,
   resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
 } from "../../src/storage/policy-job";
 import { stopStorageCleanupScheduler } from "../../src/storage/policy-scheduler";
+import { drainStorageWorkers } from "../../src/storage/worker-lifecycle";
 
 export function baseConfig(): OcxConfig {
   return {
@@ -110,28 +111,60 @@ export type PolicyApiHarness = {
   previousHome: string | undefined;
 };
 
-export function installPolicyApiHarness(prefix: string): PolicyApiHarness {
+export async function installPolicyApiHarness(prefix: string): Promise<PolicyApiHarness> {
   const previousHome = process.env.OPENCODEX_HOME;
-  const isolatedCodexHome = installIsolatedCodexHome(`${prefix}-codex-`);
-  const testDir = mkdtempSync(join(tmpdir(), `${prefix}-`));
-  process.env.OPENCODEX_HOME = testDir;
-  saveConfig(baseConfig());
+  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME.
+  // Sync reset used to fire-and-forget terminate and race the next spawn under
+  // `bun test --isolate`; a rejected reset after env mutation would also leak.
   stopStorageCleanupScheduler();
-  resetStorageCleanupPolicyJobForTests();
+  await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
   resetArchivedCleanupJobForTests();
-  return { testDir, isolatedCodexHome, previousHome };
+
+  let isolatedCodexHome: IsolatedCodexHome | undefined;
+  let testDir: string | undefined;
+  try {
+    isolatedCodexHome = installIsolatedCodexHome(`${prefix}-codex-`);
+    testDir = mkdtempSync(join(tmpdir(), `${prefix}-`));
+    process.env.OPENCODEX_HOME = testDir;
+    saveConfig(baseConfig());
+    stopStorageCleanupScheduler();
+    return { testDir, isolatedCodexHome, previousHome };
+  } catch (error) {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    isolatedCodexHome?.restore();
+    if (testDir) rmSync(testDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export async function uninstallPolicyApiHarness(h: PolicyApiHarness): Promise<void> {
-  stopStorageCleanupScheduler();
-  await resetStorageCleanupPolicyJobForTestsAsync();
-  setStorageCleanupPolicyJobTestHooks(null);
-  resetArchivedCleanupJobForTests();
-  setArchivedCleanupJobTestHooks(null);
-  if (h.previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = h.previousHome;
-  h.isolatedCodexHome.restore();
-  if (h.testDir) rmSync(h.testDir, { recursive: true, force: true });
+  try {
+    stopStorageCleanupScheduler();
+    await resetStorageCleanupPolicyJobForTestsAsync();
+    setStorageCleanupPolicyJobTestHooks(null);
+    setArchivedCleanupJobTestHooks(null);
+    await drainStorageWorkers();
+    resetArchivedCleanupJobForTests();
+  } finally {
+    if (h.previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = h.previousHome;
+    h.isolatedCodexHome.restore();
+    if (h.testDir) rmSync(h.testDir, { recursive: true, force: true });
+  }
 }
 
-export { fetch, startServer, setStorageCleanupPolicyJobTestHooks, setArchivedCleanupJobTestHooks, stopStorageCleanupScheduler, resetStorageCleanupPolicyJobForTestsAsync };
+/** Prefer over Bun.serve.stop — joins Workers and clears the policy scheduler. */
+export async function stopPolicyServer(server: ReturnType<typeof startServer>): Promise<void> {
+  await drainAndShutdown(server, 5_000);
+}
+
+export {
+  fetch,
+  startServer,
+  setStorageCleanupPolicyJobTestHooks,
+  setArchivedCleanupJobTestHooks,
+  stopStorageCleanupScheduler,
+  resetStorageCleanupPolicyJobForTestsAsync,
+};

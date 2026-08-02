@@ -118,6 +118,8 @@ describe("background shell shutdown drain", () => {
   test("shell drain rejection or unresolved termination still calls server.stop", async () => {
     const unresolvedChild = installShutdownShell();
     setBackgroundShellRuntimeForTests({
+      // Collapse grace waits to next tick; keep the timer ref'd so isolate does
+      // not starve the waiter the way an unref'd setTimeout can.
       setTimer(callback) {
         // Keep this fixture timer REF'D: Bun on Windows can stop servicing
         // unref'd timers while the test's only pending work is a promise,

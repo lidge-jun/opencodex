@@ -1,19 +1,43 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import ClaudeCode from "./ClaudeCode";
 import ClaudeDesktop from "./ClaudeDesktop";
 import { useT } from "../i18n/shared";
+import { readSessionListCache } from "../session-list-cache";
 
 type ClaudeTab = "code" | "desktop";
+
+function readCachedDesktopPort(apiBase: string): number | null {
+  const cached = readSessionListCache<{ data?: { port?: number } }>(`ocx.claude-desktop.v1:${apiBase}`);
+  return typeof cached?.data?.port === "number" ? cached.data.port : null;
+}
 
 export default function Claude({ apiBase }: { apiBase: string }) {
   const [tab, setTab] = useState<ClaudeTab>("code");
   const t = useT();
   const codeTabRef = useRef<HTMLButtonElement>(null);
   const desktopTabRef = useRef<HTMLButtonElement>(null);
+  // Seed Desktop's port subtitle from session cache so the intro above the Code/Desktop
+  // strip does not wait on the first status paint after a tab hop. Live updates from
+  // Desktop win while they match the current apiBase; a base change falls back to cache.
+  const seededDesktopPort = readCachedDesktopPort(apiBase);
+  const [liveDesktopPort, setLiveDesktopPort] = useState<{ base: string; port: number | null } | null>(null);
+  const desktopPort = liveDesktopPort?.base === apiBase ? liveDesktopPort.port : seededDesktopPort;
+  const desktopSettled = liveDesktopPort?.base === apiBase;
+  // Skip no-op writes: an unstable callback + always-new object would loop with Desktop's effect.
+  const setDesktopPort = useCallback((port: number | null) => {
+    setLiveDesktopPort((prev) => {
+      if (prev?.base === apiBase && prev.port === port) return prev;
+      return { base: apiBase, port };
+    });
+  }, [apiBase]);
 
   const selectTab = (next: ClaudeTab) => {
     setTab(next);
-    window.requestAnimationFrame(() => (next === "code" ? codeTabRef : desktopTabRef).current?.focus());
+    // preventScroll: focusing the tab must not scroll the page — otherwise the
+    // Code/Desktop panels' different header heights make the tab strip jump.
+    window.requestAnimationFrame(() => {
+      (next === "code" ? codeTabRef : desktopTabRef).current?.focus({ preventScroll: true });
+    });
   };
 
   const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -31,6 +55,24 @@ export default function Claude({ apiBase }: { apiBase: string }) {
 
   return (
     <section className="claude-page">
+      {/* Title/subtitle sit above the Code/Desktop strip so the page reads title → selector → body. */}
+      <div className="claude-page-intro">
+        <div className="page-head">
+          <h2>{tab === "code" ? t("claude.pageTitle") : t("claudeDesktop.title")}</h2>
+        </div>
+        {tab === "code" ? (
+          <p className="page-sub">{t("claude.subtitle")}</p>
+        ) : (
+          <p className="page-sub">
+            {desktopPort != null
+              ? t("claudeDesktop.subtitle", { port: desktopPort })
+              : desktopSettled
+                ? t("claudeDesktop.loadFail")
+                : t("claudeDesktop.loading")}
+          </p>
+        )}
+      </div>
+
       <div className="claude-tabs" role="tablist" aria-label={t("claude.tabsLabel")}>
         <button
           type="button"
@@ -79,7 +121,12 @@ export default function Claude({ apiBase }: { apiBase: string }) {
         aria-labelledby="claude-desktop-tab"
         hidden={tab !== "desktop"}
       >
-        <ClaudeDesktop key={apiBase} apiBase={apiBase} active={tab === "desktop"} />
+        <ClaudeDesktop
+          key={apiBase}
+          apiBase={apiBase}
+          active={tab === "desktop"}
+          onPortChange={setDesktopPort}
+        />
       </div>
     </section>
   );

@@ -210,7 +210,7 @@ refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 remove <provider> <id> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-Codex pool switches apply to new sessions; running threads keep their account.
+Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
 所有子命令都要求代理正在运行；CLI 会自动解析已记录的运行时端口。成功时退出码为 0。用法错误、
@@ -259,8 +259,11 @@ Kiro 账号时，输出会说明它只有一个登录 slot，再次登录会替�
 #### `ocx account use <provider> <account-or-key-id|main> [--json]`
 
 选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
-Codex 选择只对**新 session**生效；已有 thread 保持其账号。启用的 auto-switch threshold 之后可能
-覆盖手动 pin。未知 provider 或 id 返回退出码 1。`--json` 返回：
+Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
+遇到 **401/403** 时，App 登录会清除该账户的进程内 affinity 并要求重新认证。
+遇到 **429** 时，它会遵循 `Retry-After`、启动账户 cooldown、清除 affinity，
+并可将请求切换到另一个符合条件的 Pool 账户。即使 `autoSwitchThreshold: 0`，
+这些故障恢复流程仍然有效；`0` 只会禁用基于用量的主动切换。
 
 ```text
 { ok: true, provider, type, activeId }
@@ -313,6 +316,51 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json` 返回 `{ ok: true, id: string | null, label?: string }`，且绝不包含 key。
+
+### `ocx export --client <opencode|pi>`
+
+打印一份连接到正在运行的代理的客户端配置。opencode 和 Pi 从各自的 JSON 配置文件而不是环境变量读取
+provider，因此该命令会序列化 `opencodex` provider 块（base URL、模型列表以及客户端解析的环境变量
+引用），由你自己合并进配置文件。
+
+代理必须处于运行状态。命令会解析其运行端口、读取 `/api/models`，只导出 Codex 当前可见的模型。
+
+| 参数 | 作用 |
+| --- | --- |
+| `--client <opencode\|pi>` | 必填。选择客户端方言：opencode 的键控 `provider` 对象或 Pi 的 `providers` 数组。 |
+| `--json` | 仅在 stdout 打印配置 JSON，因此重定向得到的字节完全一致。包括 `--out` 写入提示在内的所有诊断信息都走 stderr。 |
+| `--out <path>` | 把配置写入 `<path>`，拒绝替换已存在的文件。 |
+| `--force` | 允许 `--out` 替换已存在的文件。 |
+
+```bash
+ocx export --client opencode                     # 配置外加目标路径、合并警告和计数
+ocx export --client pi --json > pi-models.json   # 供管道或 diff 使用的精确 JSON
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+
+不带 `--json` 时先输出 JSON，然后是标准目标路径、合并警告、环境变量 export 行，以及模型数量和其中
+缺少上下文上限的行数（这些模型会使用客户端自己的默认值）。
+
+| 客户端 | 标准目标路径 | 下载文件名 | 环境变量 |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json`（设置了 `XDG_CONFIG_HOME` 时以它为准） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+
+两个环境变量名并不相同，且每个客户端只解析自己的那一个。opencode 读取
+`{env:OPENCODEX_OPENCODE_API_KEY}`，Pi 读取 `$OPENCODEX_API_KEY`。
+
+:::caution[合并，而不是替换]
+`ocx export` 绝不会写入你真正的客户端配置文件。目标路径只是打印出来供你手动合并，`--out` 在没有
+`--force` 时也不会覆盖已有文件——因为整体替换配置会销毁其中已有的其他 provider、agent 和 MCP 条目。
+:::
+
+配置中绝不会序列化任何 key，只包含客户端的环境变量引用，密钥始终留在环境里。回环代理（默认的
+`127.0.0.1`）完全不需要准入密钥，该引用不会被用到。只有当代理绑定到回环之外时才需要设置这个变量；
+准入密钥的签发方式见[远程访问](/zh-cn/reference/configuration/#远程访问)。上游 provider 自己的密钥
+是完全不同的东西，按[提供商](/zh-cn/guides/providers/)配置。Pi 指南仅提供英文版：[Pi](/guides/pi/)。
+
+同一份负载由 `GET /api/client-config` 提供并由控制台的 API 标签页渲染，因此 CLI、API 和 GUI 不可能
+显示不同的字节。
 
 ## 认证
 

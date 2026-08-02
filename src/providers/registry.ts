@@ -507,6 +507,43 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
   "kimi-k2.6", "kimi-k2.7-code",
   "qwen3.5-397b", "qwen3.6-35b",
 ];
+
+// 260728 Baseten Model APIs: `/v1/models` owns the live lineup, while these hints
+// describe only capabilities that Baseten documents per slug. Unlisted live models
+// intentionally inherit the empty provider ladder instead of being advertised with
+// opencodex's generic reasoning defaults. Audio is omitted because the current proxy
+// request model does not carry OpenAI `audio_url` parts.
+// Evidence: https://docs.baseten.co/inference/model-apis/reasoning
+//           https://docs.baseten.co/inference/model-apis/vision
+const BASETEN_FULL_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const BASETEN_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
+  "deepseek-ai/DeepSeek-V4-Pro": BASETEN_FULL_REASONING_EFFORTS,
+  "thinkingmachines/inkling": BASETEN_FULL_REASONING_EFFORTS,
+  "openai/gpt-oss-120b": BASETEN_FULL_REASONING_EFFORTS,
+  "moonshotai/Kimi-K3": ["low", "high", "max"],
+  "zai-org/GLM-5.2": ["high", "max"],
+  "zai-org/GLM-5.2-Fast": ["high", "max"],
+};
+const BASETEN_MODEL_REASONING_EFFORT_MAP: Record<string, Record<string, string>> = {
+  "deepseek-ai/DeepSeek-V4-Pro": { none: "none", minimal: "minimal" },
+  "thinkingmachines/inkling": { none: "none", minimal: "minimal" },
+  "openai/gpt-oss-120b": { none: "none", minimal: "minimal" },
+  "moonshotai/Kimi-K3": { none: "none" },
+  "zai-org/GLM-5.2": { none: "none" },
+  "zai-org/GLM-5.2-Fast": { none: "none" },
+};
+const BASETEN_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, string> = {
+  "deepseek-ai/DeepSeek-V4-Pro": "medium",
+  "thinkingmachines/inkling": "high",
+  "openai/gpt-oss-120b": "medium",
+  "moonshotai/Kimi-K3": "max",
+};
+const BASETEN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "thinkingmachines/inkling": ["text", "image"],
+  "moonshotai/Kimi-K2.6": ["text", "image"],
+  "moonshotai/Kimi-K2.7-Code": ["text", "image"],
+  "moonshotai/Kimi-K3": ["text", "image"],
+};
 const UMANS_MODELS = [
   "umans-coder",
   "umans-kimi-k2.7",
@@ -982,6 +1019,31 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       maxModels: 256,
     },
     note: "Serverless text and vision-language chat models only; Hyperbolic's separate image, audio, and GPU endpoints are out of scope.",
+  },
+  {
+    id: "baseten",
+    label: "Baseten Model APIs",
+    baseUrl: "https://inference.baseten.co/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://app.baseten.co/settings/api_keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    // Baseten's Chat Completions contract documents parallel_tool_calls as default-on.
+    parallelToolCalls: true,
+    // Baseten says models outside its reasoning table do not support reasoning. Keep
+    // unknown/new live slugs conservative until an official-docs registry refresh proves it.
+    reasoningEfforts: [],
+    modelReasoningEfforts: BASETEN_MODEL_REASONING_EFFORTS,
+    modelReasoningEffortMap: BASETEN_MODEL_REASONING_EFFORT_MAP,
+    modelDefaultReasoningEfforts: BASETEN_MODEL_DEFAULT_REASONING_EFFORTS,
+    modelInputModalities: BASETEN_MODEL_INPUT_MODALITIES,
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 1_048_576,
+      maxModels: 256,
+    },
+    note: "Shared Model APIs only (personal API key, or team key with Call Model APIs access); dedicated Truss predict endpoints are outside this preset.",
   },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },

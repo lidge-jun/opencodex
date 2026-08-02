@@ -149,13 +149,14 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
 
   return (
     <div className="panel maintenance-panel">
-      <div className="spread maintenance-head">
-        <div>
+      {/* Same one-row chrome as Sub-agent delegation: copy left, action right. */}
+      <div className="dash-sync-summary">
+        <div className="dash-sync-copy">
           <div className="font-semibold">{t("dash.syncModels")}</div>
-          <div className="muted text-control" style={{ marginTop: 3 }}>{t("dash.syncModelsHint")}</div>
+          <div className="muted text-control dash-sync-hint">{t("dash.syncModelsHint")}</div>
         </div>
         <div className="maintenance-actions">
-          <button type="button" className="btn btn-ghost" onClick={runSync} disabled={syncing}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={runSync} disabled={syncing}>
             <IconRefresh /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
           </button>
           {/*

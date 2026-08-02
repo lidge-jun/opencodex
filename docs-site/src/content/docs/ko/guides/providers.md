@@ -119,7 +119,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 65개 들어 있습니다. 키 방식 54개, OAuth 7개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 66개 들어 있습니다. 키 방식 55개, OAuth 7개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다. 주요 항목은 다음과 같습니다:
 
@@ -138,6 +138,7 @@ opencodex에는 빌트인 프리셋이 65개 들어 있습니다. 키 방식 54�
 | Cerebras | `https://api.cerebras.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -178,6 +179,12 @@ Bearer API 키를 사용합니다. registry가 소유하는 DeepInfra 모델 목
 보존하며 live discovery를 256 KiB와 raw 행 256개로 제한합니다. serverless text 및 vision-language chat만
 대상으로 하며 별도 image, audio, GPU 엔드포인트는 범위에서 제외합니다. 키는
 [Hyperbolic](https://app.hyperbolic.ai)에서 생성합니다.
+
+> **Baseten 범위:** 이 프리셋은 Baseten의 공유 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)만
+> 지원합니다. 로컬 사용에는 개인 [API 키](https://docs.baseten.co/organization/api-keys)를, 공유/프로덕션
+> 사용에는 **Call Model APIs** 권한이 있는 팀 키를 사용하세요. 전용 Truss `predict` 엔드포인트는
+> 호스트와 스키마가 다르므로 이 프리셋으로 라우팅되지 않습니다.
+> 이 프리셋의 실시간 검색은 응답 1 MiB와 원시 모델 행 256개로 제한됩니다.
 
 > **Tencent Cloud Coding Plan 사용 제한:** Tencent는 이 구독을 대화형 코딩 도구 전용으로
 > 안내합니다. 일반 API 자동화, 사용자 애플리케이션 백엔드 및 비대화형 일괄 호출은 금지되며

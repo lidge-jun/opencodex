@@ -60,9 +60,9 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from every future Pool selection until resumed in Codex Auth. Includes the main `__main__` account when paused. |
 | `codexAccountNamespaces?` | `Record<string,string>` | — | Optional public model-selector namespace → stored Codex account target map. `<selector>/<native-openai-model>` routes using exactly the mapped account; this setting does not add model-picker rows. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account. Selection clears existing thread affinity and applies to the next request; in-flight requests keep their captured account. |
-| `autoSwitchThreshold?` | `number` | `80` | Usage percent threshold for new-session auto-switching. The score uses the hottest known 5h, weekly, or 30d quota window. Set `0` to disable quota auto-switching. Used by the `quota` strategy and as the drain threshold for `fill-first`. |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session rotation strategy for the Codex pool. Applies to **new sessions only**; existing thread ids keep affinity. `quota` — today's default: pick the lowest known usage when the active account crosses `autoSwitchThreshold`. `round-robin` — even spread across eligible accounts via smooth weighted selection. `fill-first` — keep the active account until it cools down, becomes unusable, or crosses `autoSwitchThreshold` when set (unknown usage does not force a switch), then advance to the next eligible account in stable sorted order. |
-| `accountPoolStickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection before advancing. Range 1–100; only applies when `accountPoolStrategy` is `round-robin`. |
+| `autoSwitchThreshold?` | `number` | `80` | Usage threshold for proactive switching. `quota` can re-evaluate both bound and unbound tasks on their next request; `fill-first` uses it only as the drain point for unbound assignment; normal `round-robin` selection does not use it. The score uses the hottest known 5h, weekly, or 30d quota window. `0` disables usage-based proactive switching only, not unbound assignment or failure recovery. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Assignment strategy for new/unbound Codex requests. A request is unbound when it has no live `(parent thread id, quota scope)` affinity; a visible existing task can become unbound after proxy restart or affinity reset. `quota` picks the lowest-usage eligible account when no active account exists, keeps an eligible active account below `autoSwitchThreshold`, and after the threshold may move an unbound request or proactively rebind a bound task to a lower-usage eligible account. `round-robin` distributes unbound requests evenly; `fill-first` keeps assigning unbound requests to the active account until cooldown, unavailability, or the configured drain threshold. |
+| `accountPoolStickyLimit?` | `number` | `1` | Number of new/unbound task assignments retained on one round-robin selection before advancing. The counter advances when a task is bound, not after an upstream success. Range 1–100; only applies when `accountPoolStrategy` is `round-robin`. |
 | `upstreamFailoverThreshold?` | `number` | `3` | Consecutive transient upstream failures before future new sessions fail over to another eligible pool account. Set `0` to disable failure failover. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache (5 min). |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Process-wide cap in MiB for evictable app-owned retained state (logs, caches, blobs, and continuation payloads), valid from 64 to 4096. This does not cap RSS or native runtime memory. |
@@ -143,10 +143,15 @@ also force the same native-provider recovery with `ocx recover-history --legacy-
 :::note[Codex account pool]
 Use the dashboard's **Codex Auth** page to add pool accounts and refresh quotas. The config stores
 non-secret account metadata only; access and refresh tokens are kept in the hardened Codex account
-credential store. Existing thread ids keep account affinity, while new sessions auto-route based on
-`accountPoolStrategy`, quota, cooldown, and health. A pre-stream upstream **429**/**402** on one pool
-account is retried once on an eligible alternate account in the same request (so Codex CLI does not
-stall on a depleted primary while another account still has quota).
+credential store. Pool routing separates new/unbound assignment, usage-based proactive switching,
+and failure recovery. A bound task normally keeps affinity, but `quota` may rebind it on its next
+request after the usage threshold is crossed, while pause, cooldown, reauthentication, and failure
+handling can clear or move routing independently. An unbound request has no live account binding;
+this can include an existing visible task after proxy restart or affinity reset. A pre-stream
+upstream **429/402** on one pool account is retried once on an eligible alternate account in the
+same request, even when usage-based proactive switching is off.
+Account changes preserve and replay the conversation context, but provider-side prompt-cache reuse
+across accounts is not guaranteed and the cache may need to warm again.
 Pause keeps an account and its quota metadata visible, but excludes it from automatic switching,
 retry/failover selection, cooldown recovery probes, and manual activation. Pausing also clears that
 account's thread-affinity map: in-flight requests keep their captured credentials, but subsequent
@@ -156,14 +161,18 @@ restarts; if every account is paused, Pool routing fails instead of silently sel
 only those whose relevant quota window is freshly confirmed at 100%; accounts without credentials
 and unknown or failed quota refreshes are left unchanged.
 :::
+On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
+On a **429**, it honors `Retry-After`, starts the account cooldown, clears affinity, and may rotate
+the request to another eligible Pool account. These failure transitions remain active with
+`autoSwitchThreshold: 0`; that setting disables only usage-based proactive switching.
 
-**Rotation strategies** (new sessions only; bound threads are unchanged):
+**Assignment and proactive-switching strategies:**
 
 | Strategy | Behaviour |
 | --- | --- |
-| `quota` (default) | When the active account's known usage crosses `autoSwitchThreshold`, pick the lowest-usage eligible account across 5h, weekly, and 30d windows. `autoSwitchThreshold: 0` disables quota-based picking. |
-| `round-robin` | Even spread across eligible accounts. `accountPoolStickyLimit` (default `1`, range 1–100) keeps that many successful new-session binds on one pick before advancing. |
-| `fill-first` | Drain the active account until cooldown, reauthentication, or (when set) `autoSwitchThreshold`; unknown usage does not force a switch. Then advance to the next eligible account in stable sorted order. |
+| `quota` (default) | If no active account exists, pick the lowest-usage eligible account across 5h, weekly, and 30d windows. Otherwise retain an eligible active account below `autoSwitchThreshold`; after it crosses the threshold, an unbound request or a bound task's next request can move to a lower-usage eligible account. `autoSwitchThreshold: 0` disables this usage-driven re-evaluation, not failure recovery. |
+| `round-robin` | Evenly assign unbound requests across eligible accounts. `autoSwitchThreshold` does not change normal round-robin selection. `accountPoolStickyLimit` (default `1`, range 1–100) counts assignments/bindings on one pick, not successful upstream responses. |
+| `fill-first` | Assign unbound requests to the active account until cooldown, reauthentication, or (when set) the `autoSwitchThreshold` drain point; unknown usage does not force a switch. Healthy bound tasks keep affinity. |
 
 Rotation strategies do not protect against provider enforcement — multi-account use may violate
 provider terms of service.

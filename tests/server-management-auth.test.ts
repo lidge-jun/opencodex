@@ -474,13 +474,16 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
-  test("directory ACL timeout keeps management unavailable and names OPENCODEX_ADMIN_AUTH_TOKEN", async () => {
+  test("directory ACL timeout keeps management unavailable and names OPENCODEX_ADMIN_AUTH_TOKEN", () => {
     delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
     saveConfig(remoteConfig());
     const adminToken = `ocx_admin_${"d".repeat(43)}`;
     writeFileSync(join(testHome, "admin-api-token"), `${adminToken}\n`, { mode: 0o600 });
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
+    // Timeout only the management-token directory. File hardens must succeed so
+    // startServer → saveConfig can atomic-write on real win32; Linux CI skips
+    // that path via process.platform and hid the blanket-timeout failure mode.
     setIcaclsRunnerForTests(args => {
       const target = args[0] ?? "";
       if (target === testHome) {
@@ -489,25 +492,13 @@ describe("management and data-plane credential separation", () => {
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     resetHardenedStateForTests();
+    // Probe only: startServer would re-harden the same home for config mutation
+    // and poison/conflict with this required directory timeout. HTTP 503 coverage
+    // for ACL timeouts lives in "an icacls timeout keeps the management plane closed".
     const state = initializeManagementAuthState(remoteConfig());
     expect(state.available).toBe(false);
     if (state.available) return;
     expect(state.reason).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
-
-    const server = startServer(0);
-    try {
-      const settings = await fetch(new URL("/api/settings", server.url), {
-        headers: { "x-opencodex-api-key": adminToken },
-      });
-      expect(settings.status).toBe(503);
-      const body = await settings.json() as { error?: string; hint?: string; reason?: string };
-      expect(body.error).toBe("management API unavailable");
-      expect(body.hint).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
-      expect(body.reason).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
-      expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
-    } finally {
-      await server.stop(true);
-    }
   });
 
   test("required management harden retries after a soft loadConfig directory timeout", async () => {
@@ -550,6 +541,10 @@ describe("management and data-plane credential separation", () => {
     saveConfig(remoteConfig());
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
+    // Env-token init never needs file ACL. Time out management-token paths so a
+    // broken file-backed ACL cannot be what made management available; allow
+    // other file hardens so startServer → saveConfig works on real win32
+    // (config-mutation directory harden soft-fails home timeouts).
     setIcaclsRunnerForTests(args => {
       const target = args[0] ?? "";
       if (target === testHome || target.endsWith("admin-api-token")) {

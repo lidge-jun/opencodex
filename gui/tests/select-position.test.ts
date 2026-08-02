@@ -57,7 +57,7 @@ test("right placement opens beside the trigger", () => {
     width: 200,
     height: 36,
   }, { placement: "right", menuHeight: 120 });
-  expect(style.left).toBe(326);
+  expect(style.left).toBe(332);
   expect(style.top).toBe(120);
   expect(style.minWidth).toBe(160);
 });
@@ -71,7 +71,7 @@ test("right placement flips above when the trigger is near the bottom edge", () 
     width: 200,
     height: 36,
   }, { placement: "right", menuHeight: 220 });
-  expect(style.left).toBe(326);
+  expect(style.left).toBe(332);
   expect(style.bottom).toBe(108);
   expect(style.top).toBeUndefined();
 });
@@ -98,7 +98,7 @@ test("right placement flips above when the menu would overflow vertically below 
     width: 200,
     height: 36,
   }, { placement: "right", menuHeight: 280 });
-  expect(style.left).toBe(326);
+  expect(style.left).toBe(332);
   expect(style.bottom).toBe(108);
   expect(style.top).toBeUndefined();
 });

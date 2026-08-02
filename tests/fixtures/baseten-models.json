@@ -1,0 +1,11 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.6"
+    }
+  ]
+}

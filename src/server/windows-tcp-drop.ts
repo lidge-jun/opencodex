@@ -79,6 +79,12 @@ export type WindowsTcpDropResult = {
   dropped: number;
   /** IPv6 (or unparseable) rows skipped — never coerced into IPv4 wildcards. */
   skippedIpv6: number;
+  /**
+   * SetTcpEntry returned ERROR_ACCESS_DENIED (5) or the UAC-non-elevated code (317).
+   * On a normal (non-admin) update worker this is expected — ghost LISTEN rows must
+   * clear by waiting for the OS, not by SetTcpEntry.
+   */
+  accessDenied: number;
 };
 
 function htons(port: number): number {
@@ -133,21 +139,22 @@ function readNetstatAno(): string {
  */
 export function dropWindowsTcpRowsForLocalPort(port: number): WindowsTcpDropResult {
   if (process.platform !== "win32" || !Number.isFinite(port) || port <= 0) {
-    return { dropped: 0, skippedIpv6: 0 };
+    return { dropped: 0, skippedIpv6: 0, accessDenied: 0 };
   }
   const setTcpEntry = loadSetTcpEntry();
-  if (!setTcpEntry) return { dropped: 0, skippedIpv6: 0 };
+  if (!setTcpEntry) return { dropped: 0, skippedIpv6: 0, accessDenied: 0 };
 
   let output = "";
   try {
     output = readNetstatAno();
   } catch {
-    return { dropped: 0, skippedIpv6: 0 };
+    return { dropped: 0, skippedIpv6: 0, accessDenied: 0 };
   }
 
   const rows = parseTcpQuadsForLocalPort(output, Math.trunc(port));
   let dropped = 0;
   let skippedIpv6 = 0;
+  let accessDenied = 0;
   for (const row of rows) {
     const localDw = ipv4ToWinUint32(row.localAddr);
     const remoteDw = ipv4ToWinUint32(row.remoteAddr);
@@ -165,10 +172,13 @@ export function dropWindowsTcpRowsForLocalPort(port: number): WindowsTcpDropResu
     view.setUint32(12, remoteDw, true);
     view.setUint32(16, htons(row.remotePort), true);
     try {
-      if (setTcpEntry(ptr(buf)) === 0) dropped += 1;
+      const rc = setTcpEntry(ptr(buf));
+      if (rc === 0) dropped += 1;
+      // 5 = ERROR_ACCESS_DENIED, 317 = non-elevated SetTcpEntry (MSDN).
+      else if (rc === 5 || rc === 317) accessDenied += 1;
     } catch {
       /* keep going */
     }
   }
-  return { dropped, skippedIpv6 };
+  return { dropped, skippedIpv6, accessDenied };
 }

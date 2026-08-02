@@ -20,9 +20,12 @@ import {
   ApiKeysModelsPanel,
   ApiKeysUsagePanel,
 } from "../../pages/api-keys-panels";
+import ClientConfigPanel from "./ClientConfigPanel";
 
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
+  /** Management API origin the client-config panel fetches from. */
+  apiBase: string;
   /** Dataset-level. Absent means nothing is attributable yet — a different
    *  statement from a key whose counters read zero. */
   attributionSince?: string;
@@ -39,6 +42,8 @@ export interface ApiKeysWorkspaceProps {
   copied: boolean;
   filteredModels: ExternalModelRow[];
   modelsLoading: boolean;
+  /** Quiet revalidation / retry over rows already on screen — not a skeleton. */
+  modelsRefreshing?: boolean;
   modelsLoadFailed: boolean;
   modelCount: number;
   hasModelData: boolean;
@@ -62,6 +67,7 @@ export interface ApiKeysWorkspaceProps {
 
 export default function ApiKeysWorkspace({
   keys,
+  apiBase,
   attributionSince,
   historyTruncated,
   authMatrix,
@@ -76,6 +82,7 @@ export default function ApiKeysWorkspace({
   copied,
   filteredModels,
   modelsLoading,
+  modelsRefreshing = false,
   modelsLoadFailed,
   modelCount,
   hasModelData,
@@ -414,12 +421,17 @@ export default function ApiKeysWorkspace({
                   onDelete={() => {}}
                 />
                 <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                {/* 003 §6 fallback placement: the connect-bar rework has not landed, so the
+                    panel sits in the left column directly below Endpoints — it answers the same
+                    "how do I point a client at this proxy" question. */}
+                <ClientConfigPanel apiBase={apiBase} baseUrl={endpoints.baseUrl} hasKeys={keys.length > 0} />
                 <ApiKeysUsagePanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} />
               </div>
               <div className="awi-overview-right">
                 <ApiKeysModelsPanel
                   filteredModels={filteredModels}
                   modelsLoading={modelsLoading}
+                  modelsRefreshing={modelsRefreshing}
                   modelsLoadFailed={modelsLoadFailed}
                   modelCount={modelCount}
                   hasModelData={hasModelData}

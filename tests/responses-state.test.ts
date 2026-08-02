@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { BULK_DURABLE_IO_BUDGET_MS } from "./helpers/test-budget";
 import {
+  closeSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -615,6 +616,39 @@ describe("Responses previous_response_id state", () => {
     setSpillIoForTest({ record: event => events.push(event) });
     deleteResponseSpill(ref);
     expect(events).toEqual(["dir-fsync"]);
+  });
+
+  test("directory fsync still records and closes when fsync throws", () => {
+    const events: string[] = [];
+    const closed: number[] = [];
+    setSpillIoForTest({
+      record: event => events.push(event),
+      fsyncDir: () => {
+        throw new Error("injected directory fsync failure");
+      },
+      closeDir: fd => {
+        closed.push(fd);
+        closeSync(fd);
+      },
+    });
+    writeResponseSpillDurably("resp_dir_fsync_throw", { createdAt: Date.now(), items: ["x"] });
+    expect(events).toContain("dir-fsync");
+    expect(closed).toHaveLength(1);
+  });
+
+  test("directory fsync records even when directory open fails", () => {
+    const events: string[] = [];
+    setSpillIoForTest({
+      record: event => events.push(event),
+      openDir: () => {
+        throw Object.assign(new Error("injected directory open failure"), { code: "ENOENT" });
+      },
+    });
+    writeResponseSpillDurably("resp_dir_open_fail", { createdAt: Date.now(), items: ["x"] });
+    // Record happens before open so Windows (no directory-handle fsync) still
+    // observes the durability seam in ordering tests.
+    expect(events).toContain("dir-fsync");
+    expect(events).toContain("publish");
   });
 
   test("spill temp cleanup forgets successful ACL memos and retains failed removals", () => {

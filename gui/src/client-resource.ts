@@ -40,6 +40,12 @@ type Store<T> = {
   /** Store-level visibilitychange handler, installed only while this store polls. */
   visibilityListener: (() => void) | null;
   generation: number;
+  /**
+   * Set when `setClientResourceData` publishes while nobody is subscribed (session-cache
+   * seed). The first subscribe must quiet-revalidate; otherwise mount never fetches and
+   * seeded rows stay indefinitely stale with `lastAttemptOk: true`.
+   */
+  seedNeedsRevalidate: boolean;
 };
 
 /**
@@ -80,6 +86,7 @@ function getStore<T>(key: string): Store<T> {
       inflightOwner: null,
       visibilityListener: null,
       generation: 0,
+      seedNeedsRevalidate: false,
     };
     stores.set(key, store);
   }
@@ -223,6 +230,8 @@ async function runFetch<T>(
   try {
     const data = await fetcher(controller.signal);
     if (gen !== store.generation || controller.signal.aborted) return;
+    // Cleared on settle (not at subscribe) so StrictMode's aborted first mount still revalidates.
+    store.seedNeedsRevalidate = false;
     store.snapshot = {
       data,
       error: undefined,
@@ -233,6 +242,7 @@ async function runFetch<T>(
     };
   } catch (error) {
     if (gen !== store.generation || controller.signal.aborted) return;
+    store.seedNeedsRevalidate = false;
     store.snapshot = {
       ...store.snapshot,
       // Normalize so a loader that rejects with `undefined` still reads as a failure.
@@ -298,9 +308,12 @@ function subscribeResource<T>(
   store.fetcherByListener.set(onStoreChange, fetcher);
   store.subscriberCount++;
 
-  // Cold start only — keep cached data across transient 0→1 resubscribe gaps.
-  if (store.subscriberCount === 1 && store.snapshot.data === undefined) {
-    void runFetch(store, fetcher, { replaceInflight: true, owner: onStoreChange });
+  // Cold start, or a pre-subscribe seed that still needs a network check. Keep
+  // cached data across transient 0→1 resubscribe gaps when neither applies.
+  if (store.subscriberCount === 1) {
+    if (store.snapshot.data === undefined || store.seedNeedsRevalidate) {
+      void runFetch(store, fetcher, { replaceInflight: true, owner: onStoreChange });
+    }
   }
   recomputePoll(store);
 
@@ -328,7 +341,7 @@ function subscribeResource<T>(
 }
 
 /** Module-level fetch cache with useSyncExternalStore subscriptions (no fetch in useEffect). */
-export interface ClientResourceOptions {
+export interface ClientResourceOptions<T = unknown> {
   pollMs?: number;
   enabled?: boolean;
   /**
@@ -337,18 +350,34 @@ export interface ClientResourceOptions {
    * happening off-screen — a restarting server, for instance.
    */
   pauseWhenHidden?: boolean;
+  /**
+   * Optional seed applied once before the first subscribe (session-cache revisit).
+   * Lives in the store — not a render-time ref — so React Compiler / react-hooks/refs
+   * stay quiet while the mount fetch still quiet-revalidates via `seedNeedsRevalidate`.
+   */
+  initialData?: T;
+}
+
+/** Seed an empty, unsubscribed store. No-ops when data already exists or someone is listening. */
+function seedClientResourceIfEmpty<T>(key: string, data: T): void {
+  const store = getStore<T>(key);
+  if (store.subscriberCount !== 0 || store.snapshot.data !== undefined) return;
+  setClientResourceData(key, data);
 }
 
 export function useClientResource<T>(
   key: string,
   fetcher: (signal: AbortSignal) => Promise<T>,
-  options?: ClientResourceOptions,
+  options?: ClientResourceOptions<T>,
 ): ResourceSnapshot<T> & { refresh: (opts?: { forceLoading?: boolean }) => void } {
   const enabled = options?.enabled !== false;
   const pollMs = options?.pollMs;
   // Default true: a background tab has nobody reading the paint. Opt out for polls that
   // must keep running while hidden, such as waiting for a restarted server to answer.
   const pauseWhenHidden = options?.pauseWhenHidden !== false;
+  if (enabled && options?.initialData !== undefined) {
+    seedClientResourceIfEmpty(key, options.initialData);
+  }
   const fetcherRef = useRef(fetcher);
   // Sync latest fetcher every commit. No dep array on purpose: inline fetchers are
   // reallocated every render; listing them would re-subscribe forever.
@@ -411,7 +440,7 @@ export function useKeyedClientResource<T>(
   key: string,
   deps: readonly unknown[],
   load: (signal: AbortSignal) => Promise<T>,
-  options?: ClientResourceOptions,
+  options?: ClientResourceOptions<T>,
 ): ResourceSnapshot<T> & { refresh: (opts?: { forceLoading?: boolean }) => void } {
   const resource = useClientResource(key, load, options);
   const prevDepsRef = useRef<readonly unknown[] | null>(null);
@@ -447,6 +476,9 @@ export function setClientResourceData<T>(key: string, data: T) {
     hasSucceeded: true,
     lastAttemptOk: true,
   };
+  // Only pre-subscribe seeds need a follow-up fetch. Live publishers (mutation
+  // results) already hold the fresh value and must not schedule a redundant GET.
+  store.seedNeedsRevalidate = store.subscriberCount === 0;
   emit(store);
 }
 

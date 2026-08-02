@@ -250,12 +250,40 @@ function runNpmSelfUpdate() {
       try {
         const svcArgs = serviceReinstallArgs();
         const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
-        if (svc.status !== 0) {
+        let needDirectStart = svc.status !== 0;
+        if (!needDirectStart) {
+          // Exit 0 can still leave stale/missing assets that never bring the proxy
+          // back — match the GUI/CLI fallthrough so /healthz is not left dead.
+          try {
+            const st = spawnSync(process.execPath, [launcher, "status", "--json"], {
+              encoding: "utf8",
+              timeout: 20_000,
+              windowsHide: true,
+            });
+            if (st.status === 0 && typeof st.stdout === "string" && st.stdout.trim()) {
+              const parsed = JSON.parse(st.stdout);
+              const proxyUp = parsed?.proxy?.running === true || parsed?.proxy?.health?.ok === true;
+              const viable = parsed?.startup?.serviceViable === true;
+              if (!proxyUp && !viable) needDirectStart = true;
+            } else {
+              // status failed or empty — fail closed to direct start (match CLI).
+              needDirectStart = true;
+            }
+          } catch {
+            needDirectStart = true;
+          }
+        }
+        if (needDirectStart) {
           // On Windows, schtasks /create requires elevation. The launcher inherits the
           // user's (non-admin) token, so the service reinstall can fail with access
-          // denied. Fall back to a direct detached proxy start so the update never
-          // leaves the user without a running proxy.
-          console.warn("opencodex: service refresh failed — starting the proxy directly instead.");
+          // denied — or exit 0 while leaving a non-viable manager. Fall back to a
+          // direct detached proxy start so the update never leaves the user without
+          // a running proxy.
+          console.warn(
+            svc.status === 0
+              ? "opencodex: service refresh left a non-viable manager — starting the proxy directly instead."
+              : "opencodex: service refresh failed — starting the proxy directly instead.",
+          );
           console.warn("  Run 'ocx service install' as administrator to refresh the background service.");
           const env = { ...process.env };
           delete env.OCX_SERVICE;
