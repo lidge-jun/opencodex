@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import type { BunRuntimeSource, DurableBunRuntime } from "../src/lib/bun-runtime";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, serviceLogPath, serviceStartableFromTray, serviceStatusSummary, windowsTaskRegistrationHealthy } from "../src/service";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
@@ -50,6 +51,10 @@ function expectTextToContainPath(text: string, path: string): void {
   expect(pathVariants(path).some(candidate => text.includes(candidate))).toBe(true);
 }
 
+function testBunRuntime(path: string, source: BunRuntimeSource = "process"): DurableBunRuntime {
+  return { path, source, overrideEnv: "OPENCODEX_BUN_PATH" };
+}
+
 describe("service listen-port bake", () => {
   test("resolveServiceListenPort prefers override, then OCX_BAKE_PORT, then config", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -74,14 +79,34 @@ describe("service listen-port bake", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });
     saveConfig({ port: 13337, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript(testBunRuntime("C:\\OpenCodex\\bun.exe"));
     expect(script).toContain("start --port 13337");
     expect(buildPlist()).toContain("start --port 13337");
     expect(buildUnit()).toContain("start --port 13337");
   });
 
+  test("service artifacts pair each runtime source with its selected Bun path", () => {
+    const runtimes: DurableBunRuntime[] = [
+      testBunRuntime("C:\\OpenCodex\\override-bun.exe", "override"),
+      testBunRuntime("C:\\OpenCodex\\bundled-bun.exe", "bundled"),
+      testBunRuntime("C:\\OpenCodex\\process-bun.exe", "process"),
+    ];
+
+    for (const runtime of runtimes) {
+      const script = buildWindowsServiceScript(runtime);
+      const plist = buildPlist(runtime);
+      const unit = buildUnit(runtime);
+      expect(script).toContain(`set "OCX_BUN_RUNTIME_SOURCE=${runtime.source}"`);
+      expect(plist).toContain(`<key>OCX_BUN_RUNTIME_SOURCE</key><string>${runtime.source}</string>`);
+      expect(unit).toContain(`Environment="OCX_BUN_RUNTIME_SOURCE=${runtime.source}"`);
+      expectTextToContainPath(script, runtime.path);
+      expectTextToContainPath(plist, runtime.path);
+      expectTextToContainPath(unit, runtime.path);
+    }
+  });
+
   test("scheduler, launchd, and systemd artifacts bake the selected Bun runtime source", () => {
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript(testBunRuntime("C:\\OpenCodex\\bun.exe"));
     expect(script).toMatch(/set "OCX_BUN_RUNTIME_SOURCE=(override|bundled|process)"/);
     expect(buildPlist()).toMatch(/<key>OCX_BUN_RUNTIME_SOURCE<\/key><string>(override|bundled|process)<\/string>/);
     expect(buildUnit()).toMatch(/Environment="OCX_BUN_RUNTIME_SOURCE=(override|bundled|process)"/);
@@ -498,10 +523,11 @@ describe("Windows service task", () => {
   });
 
   test("escapes service executable paths through variables", () => {
-    const script = buildWindowsServiceScript({
-      bun: "C:\\Bun&Dir\\100%bun^\\bun.exe",
-      cli: "C:\\OpenCodex&Dir\\cli.ts",
-    });
+    const script = buildWindowsServiceScript(
+      testBunRuntime("C:\\Bun&Dir\\100%bun^\\bun.exe"),
+      undefined,
+      "C:\\OpenCodex&Dir\\cli.ts",
+    );
 
     expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
     expect(script).toContain('set "OCX_CLI=C:\\OpenCodex&Dir\\cli.ts"');
@@ -510,7 +536,7 @@ describe("Windows service task", () => {
   });
 
   test("switches the wrapper console to UTF-8 and sleeps via ping (timeout dies without console stdin)", () => {
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript(testBunRuntime("C:\\OpenCodex\\bun.exe"));
 
     expect(script).toContain("chcp 65001 >nul");
     expect(script.indexOf("chcp 65001 >nul")).toBeLessThan(script.indexOf('set "OCX_SERVICE=1"'));
@@ -524,10 +550,9 @@ describe("Windows service task", () => {
     try {
       process.env.USERPROFILE = "C:\\Users\\한글사용자";
       process.env.APPDATA = "C:\\Users\\한글사용자\\AppData\\Roaming";
-      const script = buildWindowsServiceScript({
-        bun: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
-        cli: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
-      });
+      const script = buildWindowsServiceScript(testBunRuntime(
+        "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
+      ), undefined, "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts");
 
       expect(script).toContain('set "OCX_BUN=%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"');
       expect(script).toContain('set "OCX_CLI=%APPDATA%\\npm\\node_modules\\opencodex\\src\\cli.ts"');
@@ -548,10 +573,7 @@ describe("Windows service task", () => {
       process.env.CODEX_HOME = "C:\\codex-home";
       process.env.OPENCODEX_HOME = TEST_DIR;
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-      const script = buildWindowsServiceScript({
-        bun: "C:\\OpenCodex\\bun.exe",
-        cli: "C:\\OpenCodex\\cli.ts",
-      });
+      const script = buildWindowsServiceScript(testBunRuntime("C:\\OpenCodex\\bun.exe"));
 
       expectTextToContainPath(script, serviceLogPath());
       expect(script).toContain('set "OCX_SERVICE_LOG=');

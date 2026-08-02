@@ -433,6 +433,17 @@ describe("service memory section (#314 WP4)", () => {
     expect(text).toContain('streamMode "eager-relay"');
   });
 
+  test("guidance gating: process runtime does not offer bundled-runtime remediation", () => {
+    const text = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, bunRuntimeSource: "process" },
+    }).join("\n");
+
+    expect(text).toContain("process runtime (process.execPath)");
+    expect(text).toContain("OPENCODEX_BUN_PATH explicitly and reinstall the service");
+    expect(text).not.toContain("wait for a bundled runtime update");
+  });
+
   test("legacy payload keeps runtime source unknown without circular override advice", async () => {
     const legacy = { ...baseData };
     delete legacy.bunRevision;

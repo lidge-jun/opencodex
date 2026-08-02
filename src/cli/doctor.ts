@@ -681,6 +681,12 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
       lines.push("         Repair or reinstall the service to add provenance; the conservative auto-known-bad decision remains in effect.");
       return lines;
     }
+    if (d.bunRuntimeSource === "process") {
+      lines.push("         service is using the process runtime (process.execPath), not a bundled Bun runtime.");
+      lines.push("         To use a different runtime, set OPENCODEX_BUN_PATH explicitly and reinstall the service.");
+      lines.push("         You can still opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+      return lines;
+    }
     lines.push(`         service is running Bun ${d.bunVersion} on Windows — a version affected by the upstream Bun memory issue.`);
     lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
     lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");

@@ -15,7 +15,7 @@ import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime } from "./codex/home";
-import { BUN_RUNTIME_SOURCE_ENV, durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
+import { BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
 import { randomUUID } from "node:crypto";
@@ -43,11 +43,11 @@ const TASK = "opencodex-proxy";
 
 export type ServiceBackend = "scheduler" | "native";
 
-function cliEntry(): { bun: string; cli: string } {
+function cliEntry(bunRuntime: DurableBunRuntime, cli = join(import.meta.dir, "cli", "index.ts")): { bun: string; cli: string } {
   // Bake the bundled Bun (npm global prefix, survives `ocx update`) rather than
   // a transient system Bun, so launchd/systemd/schtasks keep resolving even if a
   // standalone Bun is later removed. The CLI entry lives at src/cli/index.ts.
-  return { bun: durableBunPath(), cli: join(import.meta.dir, "cli", "index.ts") };
+  return { bun: bunRuntime.path, cli };
 }
 
 function plistPath(): string {
@@ -137,7 +137,7 @@ export function parseServiceInstallState(value: unknown): ServiceInstallState | 
 }
 
 function writeServiceInstallState(backend: ServiceBackend = "scheduler"): void {
-  const { bun, cli } = cliEntry();
+  const { bun, cli } = cliEntry(durableBunRuntime());
   const state: ServiceInstallState = {
     version: 2,
     codexHome: currentCodexHome(),
@@ -267,9 +267,8 @@ function writeServiceApiTokenFile(): string | null {
   return path;
 }
 
-export function buildPlist(): string {
-  const { bun, cli } = cliEntry();
-  const bunRuntime = durableBunRuntime();
+export function buildPlist(bunRuntime = durableBunRuntime()): string {
+  const { bun, cli } = cliEntry(bunRuntime);
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
@@ -1023,9 +1022,12 @@ function taskXmlRunLevelAcceptable(principal: string): boolean {
   return value === "leastprivilege" || value === "highestavailable";
 }
 
-export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
-  const { bun, cli } = entry;
-  const bunRuntime = durableBunRuntime();
+export function buildWindowsServiceScript(
+  bunRuntime = durableBunRuntime(),
+  port = resolveServiceListenPort(),
+  cliPath?: string,
+): string {
+  const { bun, cli } = cliEntry(bunRuntime, cliPath);
   const path = process.env.PATH ?? "";
   const lines = [
     "@echo off",
@@ -1572,9 +1574,8 @@ function unitPath(): string {
   return join(unitDir(), `${TASK}.service`);
 }
 
-export function buildUnit(): string {
-  const { bun, cli } = cliEntry();
-  const bunRuntime = durableBunRuntime();
+export function buildUnit(bunRuntime = durableBunRuntime()): string {
+  const { bun, cli } = cliEntry(bunRuntime);
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
