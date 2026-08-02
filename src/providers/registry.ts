@@ -149,6 +149,14 @@ export interface ProviderRegistryEntry {
    */
   modelWireDefaults?: Record<string, ModelWireDefault>;
   /**
+   * Registry-only per-model override for the upstream request shape used behind a
+   * Codex Responses WebSocket turn. `false` keeps the client-facing WebSocket but
+   * asks the upstream Responses endpoint for bounded JSON, which the bridge then
+   * reframes as Responses events. Use only for upstreams whose streaming response
+   * can omit or indefinitely delay the terminal event.
+   */
+  modelWebsocketUpstreamStreaming?: Record<string, boolean>;
+  /**
    * Responses-API resource path for providers whose route is not `/v1/responses`.
    * Unlike `modelWireDefaults` above, this IS seeded into saved config: it describes
    * the provider's fixed endpoint rather than a default a user might want to override
@@ -960,6 +968,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // for no gain.
       "deepseek-v4-flash": { wire: "openai-responses", inbound: ["responses"] },
     },
+    // DeepSeek's Codex Responses stream can deliver output without closing on the
+    // terminal event. Keep Codex on WebSocket, but use the provider's bounded JSON
+    // response upstream so the bridge can synthesize a complete WS event sequence.
+    modelWebsocketUpstreamStreaming: { "deepseek-v4-flash": false },
     // DeepSeek's Responses route is `POST /responses` with no `/v1` segment. Without
     // this the passthrough adapter falls back to its legacy `/v1/responses`
     // construction and the wire above can never route.
@@ -1571,6 +1583,17 @@ export function providerModelWireDefault(
   if (typeof declared !== "string" && !declared.inbound.includes(inbound)) return undefined;
   const wire = typeof declared === "string" ? declared : declared.wire;
   return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
+}
+
+/** Resolve a registry-only upstream-streaming compatibility hint for WS turns. */
+export function providerModelWebsocketUpstreamStreaming(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+): boolean | undefined {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWebsocketUpstreamStreaming || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  return entry.modelWebsocketUpstreamStreaming[modelId.trim().toLowerCase()];
 }
 
 /**

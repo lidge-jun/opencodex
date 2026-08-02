@@ -73,20 +73,28 @@ describe("the inbound scope survives the handleResponses replay", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
 
-  function captureUpstreamUrl(): string[] {
-    const urls: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      urls.push(String(input));
-      return new Response("data: [DONE]\n\n", {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
+  function captureUpstreamRequests(): Array<{ url: string; body: Record<string, unknown> }> {
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      });
+      return Response.json({
+        id: "resp_deepseek",
+        object: "response",
+        status: "completed",
+        output: [],
       });
     }) as typeof fetch;
-    return urls;
+    return requests;
   }
 
-  async function drive(inboundWire?: "responses" | "chat" | "anthropic"): Promise<string> {
-    const urls = captureUpstreamUrl();
+  async function drive(
+    inboundWire?: "responses" | "chat" | "anthropic",
+    inboundTransport?: "websocket",
+  ): Promise<{ url: string; body: Record<string, unknown> }> {
+    const requests = captureUpstreamRequests();
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
     await handleResponses(
       new Request("http://localhost/v1/responses", {
@@ -96,23 +104,36 @@ describe("the inbound scope survives the handleResponses replay", () => {
       }),
       config,
       { model: "", provider: "" },
-      inboundWire === undefined ? {} : { inboundWire },
+      {
+        ...(inboundWire === undefined ? {} : { inboundWire }),
+        ...(inboundTransport === undefined ? {} : { inboundTransport }),
+      },
     );
-    return urls[0] ?? "";
+    return requests[0] ?? { url: "", body: {} };
   }
 
   test("a native Responses request reaches the documented /responses route", async () => {
-    expect(await drive("responses")).toBe("https://api.deepseek.com/responses");
+    expect((await drive("responses")).url).toBe("https://api.deepseek.com/responses");
   });
 
   test("an Anthropic replay reaches /chat/completions, not /responses", async () => {
     // Regression guard for the audit's critical finding: editing only the pre-flight
     // resolution in claude-messages.ts left this URL on /responses.
-    expect(await drive("anthropic")).toBe("https://api.deepseek.com/chat/completions");
+    expect((await drive("anthropic")).url).toBe("https://api.deepseek.com/chat/completions");
   });
 
   test("a Chat replay reaches /chat/completions, not /responses", async () => {
-    expect(await drive("chat")).toBe("https://api.deepseek.com/chat/completions");
+    expect((await drive("chat")).url).toBe("https://api.deepseek.com/chat/completions");
+  });
+
+  test("a Codex WebSocket turn asks DeepSeek for bounded JSON upstream", async () => {
+    const request = await drive("responses", "websocket");
+    expect(request.url).toBe("https://api.deepseek.com/responses");
+    expect(request.body.stream).toBe(false);
+  });
+
+  test("ordinary HTTP Responses requests keep streaming upstream", async () => {
+    expect((await drive("responses")).body.stream).toBe(true);
   });
 });
 

@@ -95,7 +95,7 @@ import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../provid
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import type { InboundWire } from "../../providers/registry";
+import { providerModelWebsocketUpstreamStreaming, type InboundWire } from "../../providers/registry";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
@@ -537,6 +537,8 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /** Internal transport identity for route-scoped upstream compatibility policy. */
+  inboundTransport?: "websocket";
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
@@ -776,8 +778,9 @@ async function applyFinalRouteRequestNormalization(args: {
   req: Request;
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
+  inboundTransport?: "websocket";
 }): Promise<void> {
-  const { parsed, route, config, req, logCtx, inboundWire } = args;
+  const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -786,12 +789,23 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
+  const websocketUpstreamStreaming = inboundTransport === "websocket"
+    ? providerModelWebsocketUpstreamStreaming(route.providerName, route.provider, route.modelId)
+    : undefined;
+
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
+
+  if (websocketUpstreamStreaming === false) {
+    parsed.stream = false;
+    if (parsed._rawBody && typeof parsed._rawBody === "object") {
+      (parsed._rawBody as Record<string, unknown>).stream = false;
+    }
+  }
 
   // Final selected model before virtual wire-model rewriting (Pro aliases).
   const finalSelectedModelId = route.modelId;
@@ -1347,7 +1361,15 @@ async function handleResponsesInner(
     );
   }
 
-  await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx, inboundWire });
+  await applyFinalRouteRequestNormalization({
+    parsed,
+    route,
+    config,
+    req,
+    logCtx,
+    inboundWire,
+    inboundTransport: options.inboundTransport,
+  });
 
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);

@@ -1030,6 +1030,7 @@ export function startServer(port?: number) {
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
             const response = await handleResponses(req, config, logCtx, {
               forceEmptyResponseId: true,
+              inboundTransport: "websocket",
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
