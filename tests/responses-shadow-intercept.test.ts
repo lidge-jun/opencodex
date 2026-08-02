@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../src/server/responses";
+import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
@@ -51,6 +52,42 @@ describe("isShadowSourceModel", () => {
   });
 });
 
+describe("shouldInterceptShadowCall", () => {
+  const metadata = (requestKind: string) => new Headers({
+    "x-codex-turn-metadata": JSON.stringify({ request_kind: requestKind }),
+  });
+
+  test("intercepts recognized maintenance kinds but not normal turns", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("memory"))).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("compaction"))).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("prewarm"))).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn"))).toBe(false);
+  });
+
+  test("keeps legacy matching for headerless, malformed, and unrecognized metadata", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, new Headers())).toBe(true);
+    expect(shouldInterceptShadowCall(
+      "gpt-5.6-luna",
+      undefined,
+      new Headers({ "x-codex-turn-metadata": "{" }),
+    )).toBe(true);
+    expect(shouldInterceptShadowCall(
+      "gpt-5.6-luna",
+      undefined,
+      new Headers({ "x-codex-turn-metadata": "{}" }),
+    )).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("future-kind"))).toBe(true);
+  });
+
+  test("uses case-insensitive Headers lookup and still excludes non-source models", () => {
+    const headers = new Headers({
+      "X-CoDeX-TuRn-MeTaDaTa": JSON.stringify({ request_kind: "turn" }),
+    });
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, headers)).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, metadata("memory"))).toBe(false);
+  });
+});
+
 function interceptConfig(): OcxConfig {
   return {
     port: 0,
@@ -67,10 +104,14 @@ function interceptConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-async function post(config: OcxConfig, model: string): Promise<Response> {
+async function post(config: OcxConfig, model: string, requestKind?: string): Promise<Response> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (requestKind) {
+    headers["x-codex-turn-metadata"] = JSON.stringify({ request_kind: requestKind });
+  }
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
       model,
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
@@ -91,7 +132,7 @@ describe("shadow call intercept request path (issue #311)", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    await post(interceptConfig(), "gpt-5.6-luna");
+    await post(interceptConfig(), "gpt-5.6-luna", "memory");
 
     expect(bodies.length).toBe(1);
     // Routed through xai openai-chat: upstream model is the decoded routed id, not the helper id
@@ -99,6 +140,19 @@ describe("shadow call intercept request path (issue #311)", () => {
     const effort = (bodies[0]?.reasoning as { effort?: string } | undefined)?.effort
       ?? bodies[0]?.reasoning_effort;
     expect(effort).toBe("low");
+  });
+
+  test("does not rewrite a foreground gpt-5.6-luna turn", async () => {
+    let sawFetch = false;
+    globalThis.fetch = (async () => {
+      sawFetch = true;
+      return new Response(JSON.stringify({ error: { message: "unreachable" } }), { status: 500 });
+    }) as typeof fetch;
+
+    const response = await post(interceptConfig(), "gpt-5.6-luna", "turn");
+
+    expect(sawFetch).toBe(false);
+    expect(response.status).toBe(404);
   });
 
   test("leaves gpt-5.6-terra requests unrewritten", async () => {

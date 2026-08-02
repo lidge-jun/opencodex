@@ -186,7 +186,7 @@ export function sidecarOutcomeRecorder(
 
 
 
-import { isShadowSourceModel } from "../../lib/shadow-call";
+import { isShadowSourceModel, shouldInterceptShadowCall } from "../../lib/shadow-call";
 
 export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";
 
@@ -1247,7 +1247,11 @@ async function handleResponsesInner(
   // Shadow call intercept: rewrite Codex's hard-coded helper calls
   // (gpt-5.4-mini on older clients, gpt-5.6-luna on 0.145.0+)
   const _sci = config.shadowCallIntercept;
-  if (_sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+  if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
+    parsed.modelId,
+    _sci.sourceModels,
+    req.headers,
+  )) {
     const _sciOriginal = parsed.modelId;
     parsed.modelId = _sci.model;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
