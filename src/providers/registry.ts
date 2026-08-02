@@ -1434,6 +1434,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // rather than kept on the wire the client happened to speak.
     // Verified 2026-07-30 with real `codex exec` runs, not minimal text probes: presence in
     // GET /models proves neither. Recheck when Copilot changes models.
+    // `gpt-5.4-nano` is the one exception to that sentence: it was absent from the captured
+    // catalog, so it rests on GitHub's published model list plus the family pattern (every
+    // GPT-5.3+ entry Copilot serves is Responses-only; only the gpt-4o/4.1/gpt-5-mini tier
+    // answers chat). Confirm it on a plan that exposes it, or drop it.
     modelWireDefaults: {
       "gpt-5.3-codex": "openai-responses",
       "gpt-5.4": "openai-responses",

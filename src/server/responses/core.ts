@@ -1722,7 +1722,10 @@ async function handleResponsesInner(
         // Rebuild the request from the rotated provider so the new credential replaces the
         // old one everywhere the request carries it — the adapter closes over the provider.
         passthroughAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+          // `inboundWire` must match the original resolve: an inbound-scoped registry default
+          // would otherwise pick a different wire here and replay the request on a protocol
+          // the first send never used.
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
         request = await passthroughAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
