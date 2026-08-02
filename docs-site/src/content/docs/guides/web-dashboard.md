@@ -126,7 +126,9 @@ allowed to answer for you:
 - `ocx start` and `ocx service install` **skip the prompt entirely** when an agent or CI
   harness is driving them (`CLAUDECODE`, `CODEX_THREAD_ID`, `CURSOR_TRACE_ID`, `CI`, and
   similar). The one-time marker stays unwritten, so the real prompt still shows up on your
-  next hand-typed run. The agent is told to ask you instead.
+  next hand-typed run. The agent is told to ask you instead — and to ask as a plain Yes/No
+  choice you have to answer, not as a soft aside it can slip past you. If you never get
+  around to answering, the agent is told to re-ask rather than treat your silence as a no.
 - `POST /api/github/star` answers `403` with `code: "agent_consent_required"` when the proxy
   runs under an agent session and the request has no dashboard browser session. Possessing
   the admin token is not consent: an agent on your machine can read that file.

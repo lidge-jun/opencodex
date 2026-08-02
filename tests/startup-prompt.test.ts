@@ -55,6 +55,39 @@ describe("startup star prompt", () => {
     expect(prompt).not.toMatch(/isAgentDriven\(\)[\s\S]{0,80}starRepo\(\)/);
   });
 
+  test("the relayed question is a real choice that silence cannot settle", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    // The failure this guards against is an agent softening the question into a
+    // throwaway aside, then treating the user's non-answer as a decline. Neither
+    // side may be decided for the user: no answer keeps the question open.
+    expect(prompt).toContain(`"Star ${"${REPO}"}? Yes / No"`);
+    expect(prompt).toMatch(/soft aside/);
+    expect(prompt).toContain("Silence is not an answer, and it is not a No");
+    expect(prompt).toMatch(/the choice is still open/);
+  });
+
+  test("the deferral is folded, because only the agent is reading it", async () => {
+    const prompt = await readText("src/cli/star-prompt.ts");
+
+    // An agent-driven start means no human is watching this stream, so the loud
+    // form spent ~22 lines of startup output on nobody. The instruction still has
+    // to reach the agent verbatim, hence a fold rather than a truncation.
+    expect(prompt).toContain("<details>");
+    expect(prompt).toContain("</details>");
+    expect(prompt).toMatch(/<summary>Agent: relay this question/);
+    // The visible line stays dim and single: it is a pointer, not the message.
+    expect(prompt).toMatch(/prompt was deferred to you/);
+    // The body must remain inside the fold — collapsing it must never become
+    // dropping it, which would silently decide the user's account for them.
+    const foldStart = prompt.indexOf("<details>");
+    const foldEnd = prompt.indexOf("</details>");
+    const folded = prompt.slice(foldStart, foldEnd);
+    expect(folded).toContain("Do not answer this on their behalf");
+    expect(folded).toContain("gh api -X PUT /user/starred/");
+    expect(folded).toContain("Silence is not an answer");
+  });
+
   test("the management star endpoint refuses agent callers too", async () => {
     const routes = await readText("src/server/management/sidebar-routes.ts");
 
