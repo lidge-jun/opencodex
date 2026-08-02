@@ -144,7 +144,7 @@ import {
   sanitizePassthroughHeaders,
 } from "../relay";
 import { relaySseEagerBounded } from "../relay-eager";
-import { selectEagerPath } from "../../lib/bun-stream-caps";
+import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import {
   createResponsesItemIdPayloadRewrite,
@@ -1759,12 +1759,23 @@ async function handleResponsesInner(
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
+      const payloadRewrites = [
+        createImageGenCallRestoreRewrite(imageGenCallAliases),
+        hasResponsesItemIdRepair(repairConfig)
+          ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
+          : undefined,
+      ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
+      // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
+      // lost). The eager single reader applies the same rewrites inline.
+      const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
       const eagerPath = selectEagerPath(
         process.platform,
         needsClientRewrite,
         config.streamMode ?? "auto",
       );
-      if (eagerPath?.useEagerRelay) {
+      if (eagerPath?.useEagerRelay || win32EagerRewrite) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
         registerTurn(turnAc, options.turnAdmissionLease);
@@ -1801,6 +1812,9 @@ async function handleResponsesInner(
           finishInspection: () => inspector.finish(),
           disposeInspection: () => inspector.dispose(),
           sawTerminal: () => inspector.reported(),
+          ...(win32EagerRewrite
+            ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
+            : {}),
           onSynthetic: kind => {
             if (!reportNativeTerminal) return;
             if (kind === "incomplete") {
@@ -1814,9 +1828,10 @@ async function handleResponsesInner(
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
-        });
-        // selectEagerPath admits only no-rewrite traffic, so this stays a pure native relay on
-        // both eligible platforms; win32 must never enter an image/item-id JS pull wrapper (#32111).
+        }, win32EagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
+        // selectEagerPath admits only no-rewrite traffic on both eligible platforms;
+        // win32 rewrite traffic reaches this relay too, but with the payload rewrite
+        // applied inline — never via an image/item-id JS pull wrapper (#32111, #864).
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
         return markEagerRelaySseResponse(
           markNativePassthroughSseResponse(new Response(eagerBody, {
@@ -1886,13 +1901,6 @@ async function handleResponsesInner(
       // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
       // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
       // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
-      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
-      const payloadRewrites = [
-        createImageGenCallRestoreRewrite(imageGenCallAliases),
-        hasResponsesItemIdRepair(repairConfig)
-          ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
-          : undefined,
-      ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const rewrittenBody = payloadRewrites.length > 0
         ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
         : nativeBody;

@@ -4,10 +4,20 @@ import {
   compareBunVersions,
   decideEagerRelay,
   isStreamMode,
+  isWin32EagerRewrite,
   MIN_FIXED_BUN_VERSION,
   parseBunVersion,
   selectEagerPath,
 } from "../src/lib/bun-stream-caps";
+
+describe("isWin32EagerRewrite (#864 transport gate)", () => {
+  test("win32 + rewrite → eager inline rewrite; everything else stays out", () => {
+    expect(isWin32EagerRewrite("win32", true)).toBe(true);
+    expect(isWin32EagerRewrite("win32", false)).toBe(false);
+    expect(isWin32EagerRewrite("darwin", true)).toBe(false);
+    expect(isWin32EagerRewrite("linux", true)).toBe(false);
+  });
+});
 
 describe("parseBunVersion", () => {
   test("parses plain and prerelease versions to the numeric triple", () => {

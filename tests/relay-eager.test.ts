@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS } from "../src/server/relay";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../src/server/relay-eager";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 import type { RequestLogContext } from "../src/server/request-log";
 
 const enc = new TextEncoder();
@@ -108,6 +109,127 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
   }
   return text;
 }
+
+describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
+  test("rewrites complete blocks across fragmented chunks and flushes the tail at EOF", async () => {
+    const up = controlledUpstream();
+    const { hooks } = makeHooks();
+    hooks.rewritePayload = (payload: string) => payload.replaceAll("image_gen__gen", "RESTORED");
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const reading = readAll(relayed);
+
+    const aliased = `data: {"type":"response.output_item.done","item":{"name":"image_gen__gen"}}\n\n`;
+    // Fragment mid-block: the rewrite must wait for the complete SSE block.
+    up.push(enc.encode(aliased.slice(0, 30)));
+    await settle();
+    up.push(enc.encode(aliased.slice(30)));
+    up.push(enc.encode(`event: response.completed\ndata: ${COMPLETED}\n\n`));
+    up.push(enc.encode(`data: {"type":"trailing-partial"`));
+    up.close();
+
+    const text = await reading;
+    expect(text).toContain("RESTORED");
+    expect(text).not.toContain("image_gen__gen");
+    expect(text).toContain("response.completed");
+    // A partial trailing block reaches the client verbatim at EOF.
+    expect(text).toContain("trailing-partial");
+  });
+
+  test("identity rewrite preserves framing byte-for-byte", async () => {
+    const up = controlledUpstream();
+    const { hooks } = makeHooks();
+    let rewriteCalls = 0;
+    hooks.rewritePayload = (payload: string) => {
+      rewriteCalls += 1;
+      return payload;
+    };
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const reading = readAll(relayed);
+
+    const first = sse(DELTA);
+    const second = `event: response.completed\ndata: ${COMPLETED}\n\n`;
+    up.push(first);
+    up.push(enc.encode(second));
+    up.close();
+
+    const text = await reading;
+    expect(text).toBe(new TextDecoder().decode(joinBytes([first, enc.encode(second)])));
+    // The rewrite actually ran — this is what makes the test red pre-fix.
+    expect(rewriteCalls).toBeGreaterThan(0);
+  });
+
+  test("unchanged multi-data-line events keep their original framing", async () => {
+    const up = controlledUpstream();
+    const { hooks } = makeHooks();
+    hooks.rewritePayload = (payload: string) => payload;
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const reading = readAll(relayed);
+
+    // Two data fields in one event plus CRLF framing: must pass through
+    // byte-identical when the rewrite changes nothing.
+    const multi = `event: response.output_text.delta\r\ndata: {"delta":"part1",\r\ndata: "more":true}\r\n\r\n`;
+    up.push(enc.encode(multi));
+    up.push(enc.encode(`event: response.completed\ndata: ${COMPLETED}\n\n`));
+    up.close();
+
+    const text = await reading;
+    expect(text).toContain(`data: {"delta":"part1",\r\ndata: "more":true}`);
+  });
+
+  test("decoder-flushed bytes follow the buffered tail at EOF", async () => {
+    const up = controlledUpstream();
+    const { hooks } = makeHooks();
+    hooks.rewritePayload = (payload: string) => payload;
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const reading = readAll(relayed);
+
+    // Close with an INCOMPLETE multibyte sequence: the decoder flush emits the
+    // replacement char AFTER the buffered text, never before it.
+    const euro = enc.encode("data: €");
+    up.push(euro.subarray(0, euro.length - 1));
+    up.close();
+
+    const text = await reading;
+    expect(text).toBe("data: �");
+  });
+
+  test("retained rewrite-budget bytes are released on upstream abort", async () => {
+    const budget = createTranslatorBudget();
+    const up = controlledUpstream();
+    const ac = new AbortController();
+    const { hooks } = makeHooks();
+    hooks.rewritePayload = (payload: string) => payload;
+    relaySseEagerBounded(up.stream, ac, hooks, { rewriteBudget: budget });
+
+    up.push(enc.encode(`data: {"type":"unterminated"`));
+    await settle();
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+    ac.abort(new Error("test abort"));
+    await settle();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("blocks without a data field pass through untouched", async () => {
+    const up = controlledUpstream();
+    const { hooks } = makeHooks();
+    let rewriteCalls = 0;
+    hooks.rewritePayload = (payload: string) => {
+      rewriteCalls += 1;
+      return payload;
+    };
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const reading = readAll(relayed);
+
+    up.push(enc.encode(`event: response.completed\ndata: ${COMPLETED}\n\n`));
+    up.push(enc.encode(`: keepalive comment\n\n`));
+    up.close();
+
+    const text = await reading;
+    expect(text).toContain(": keepalive comment");
+    // Only the data-bearing block invoked the rewrite.
+    expect(rewriteCalls).toBe(1);
+  });
+});
 
 async function readAllBytes(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
   const reader = stream.getReader();

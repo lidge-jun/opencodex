@@ -110,3 +110,17 @@ export function selectEagerPath(
   if (platform === "win32") return decision;
   return decision.reason === "config-eager" ? decision : null;
 }
+
+/**
+ * #864 transport gate: win32 traffic that needs a client payload rewrite must
+ * use the eager single reader with the rewrite applied inline, because the
+ * alternative tee()+JS-pull chain is the Bun#32111-unsafe path that loses the
+ * terminal SSE block on Windows. Independent of the version-based eager
+ * policy: the pull chain is unsafe on the AFFECTED runtimes by definition.
+ */
+export function isWin32EagerRewrite(
+  platform: NodeJS.Platform,
+  needsClientRewrite: boolean,
+): boolean {
+  return platform === "win32" && needsClientRewrite;
+}

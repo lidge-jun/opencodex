@@ -183,6 +183,18 @@ export interface MultiAgentGuidanceDeps {
     configuredModels: readonly string[],
     surface: SpawnAgentSurface,
   ) => EffectiveSubagentRoster | Promise<EffectiveSubagentRoster>;
+  collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" };
+}
+
+async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
+  // Explicit override for tests and diagnostics: process state is global and
+  // would otherwise leak the host machine's app-server into hermetic tests.
+  const override = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  if (override === "fresh" || override === "stale" || override === "not_running" || override === "unknown") {
+    return { state: override };
+  }
+  const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
+  return collectCodexAppServerCatalogState();
 }
 
 
@@ -214,6 +226,15 @@ export async function multiAgentGuidanceText(
   if (surface === null) return null;
 
   if (surface === "v2") {
+    // #857: the disk catalog may be newer than the running app-server's
+    // in-memory copy. Advertising preferred models or a roster the running
+    // Codex cannot actually spawn makes spawn_agent reject the override, so
+    // suppress positive model claims while the state is stale or unknown.
+    const catalogState = await (deps.collectCatalogState ?? defaultCollectCatalogState)();
+    if (catalogState.state === "stale" || catalogState.state === "unknown") {
+      return "<multi_agent_mode>The model catalog changed after Codex started; do not set "
+        + "model or reasoning_effort overrides until Codex restarts.</multi_agent_mode>";
+    }
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
     // injectionModel and/or a roster entry that resolves in the injected catalog.

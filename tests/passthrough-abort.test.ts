@@ -56,6 +56,11 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain('process.platform === "win32"');
     expect(sseBranch).toContain("&& !needsClientRewrite");
     expect(sseBranch).toContain("? nativeBody");
+    // #864: win32 traffic that DOES need a client rewrite takes the eager single
+    // reader with the payload rewrite applied inline — never the tee()+JS-pull
+    // chain that loses the terminal block on Windows (Bun#32111).
+    expect(sseBranch).toContain("win32EagerRewrite");
+    expect(sseBranch).toContain("rewritePayload: composeSsePayloadRewrites(...payloadRewrites)");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
     expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
     expect(sseBranch).toContain("new Response(clientBody");

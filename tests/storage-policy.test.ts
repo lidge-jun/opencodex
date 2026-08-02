@@ -136,6 +136,44 @@ describe("normalizeStorageCleanupPolicy", () => {
   });
 });
 
+describe("pinned threads (#858)", () => {
+  function pinOldest(homeDir: string): void {
+    const db = new Database(join(homeDir, "state_5.sqlite"));
+    db.exec("ALTER TABLE threads ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE threads SET is_pinned = 1 WHERE id = 'rollout-old.jsonl'");
+    db.close();
+  }
+
+  test("percent selection excludes pinned threads and backfills the next-oldest", () => {
+    const dir = seedHome([
+      { name: "rollout-old.jsonl", bytes: 100, when: OLD },
+      { name: "rollout-mid.jsonl", bytes: 200, when: MID },
+      { name: "rollout-new.jsonl", bytes: 300, when: NEW },
+    ]);
+    pinOldest(dir);
+    const sel = selectPolicyPreview(
+      policy({ enabled: true, trigger: { archivedBytesOver: 0 }, target: { removeOldestPercent: 50 } }),
+      dir,
+    );
+    expect(sel.count).toBe(1);
+    expect(sel.bytes).toBe(200);
+  });
+
+  test("reduceToBytes exact selection excludes pinned threads", () => {
+    const dir = seedHome([
+      { name: "rollout-old.jsonl", bytes: 100, when: OLD },
+      { name: "rollout-mid.jsonl", bytes: 200, when: MID },
+      { name: "rollout-new.jsonl", bytes: 300, when: NEW },
+    ]);
+    pinOldest(dir);
+    const sel = selectPolicyPreview(
+      policy({ enabled: true, trigger: { archivedBytesOver: 0 }, target: { reduceToBytes: 300 } }),
+      dir,
+    );
+    expect(sel.candidateRelPaths).toEqual(["archived_sessions/rollout-mid.jsonl"]);
+  });
+});
+
 describe("selection helpers", () => {
   test("selectReduceToBytes takes oldest until under target", () => {
     const dir = seedHome([
