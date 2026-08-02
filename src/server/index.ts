@@ -475,7 +475,7 @@ export function startServer(port?: number) {
           }
           throw error;
         }
-        const { applyNativeVisibility, buildCatalogEntries, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, nativeOpenAiSlugs, orderForSubagents, filterCatalogVisibleModels, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { applyNativeVisibility, buildCatalogEntries, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const nativeSlugs = nativeOpenAiSlugs();
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
@@ -525,9 +525,45 @@ export function startServer(port?: number) {
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
+        // Grok Build discovers models through this endpoint too, and its model picker only
+        // enables /effort for entries that advertise the reasoning ladder in the Grok model
+        // catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
+        // branch above already carries the same ladders, so mirror them here — native rows
+        // from the upstream snapshot, routed rows from the configured provider tiers. The
+        // default uses the same canonical fallback as the Codex catalog resolver
+        // (configured default, then medium, then high, then the first tier). Extra fields
+        // are ignored by plain OpenAI clients.
+        const grokEffortOption = (value: string, isDefault: boolean) => ({
+          value,
+          label: `${value[0].toUpperCase()}${value.slice(1)} Effort`,
+          ...(isDefault ? { default: true } : {}),
+        });
+        const grokEffortFields = (efforts: string[], configuredDefault?: string) => {
+          if (efforts.length === 0) return {};
+          const defaultEffort = configuredDefault && efforts.includes(configuredDefault)
+            ? configuredDefault
+            : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high" : efforts[0];
+          return {
+            supports_reasoning_effort: true,
+            reasoning_effort: defaultEffort,
+            reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
+          };
+        };
         const data = [
-          ...visibleNativeSlugs(config).map(id => ({ id, object: "model", created: 0, owned_by: "openai" })),
-          ...uniqueCatalogModelsForRawPublicList(goOrdered).map(m => ({ id: m.alias ?? `${m.provider}/${m.id}`, object: "model", created: 0, owned_by: m.owned_by ?? m.provider })),
+          ...visibleNativeSlugs(config).map(id => ({
+            id,
+            object: "model",
+            created: 0,
+            owned_by: "openai",
+            ...grokEffortFields(nativeReasoningEfforts(id), nativeDefaultReasoningEffort(id)),
+          })),
+          ...uniqueCatalogModelsForRawPublicList(goOrdered).map(m => ({
+            id: m.alias ?? `${m.provider}/${m.id}`,
+            object: "model",
+            created: 0,
+            owned_by: m.owned_by ?? m.provider,
+            ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
+          })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, config);
       }
