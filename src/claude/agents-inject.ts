@@ -61,14 +61,15 @@ function pickerDefaultModel(configDir: string): string | null {
  */
 function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
   const bare = stripOneMillionMarker(selector);
-  const canonicalExact = selector === bare ? selector : `${bare}[1m]`;
-  const exactWindow = windows[selector] ?? windows[canonicalExact];
-  if (typeof exactWindow === "number" && exactWindow > 0) {
-    return shouldMarkOneMillion(exactWindow, AUTO_CONTEXT_OFF)
+  const wasMarked = selector !== bare;
+  const canonicalExact = wasMarked ? `${bare}[1m]` : selector;
+  const authoritativeWindow = windows[selector] ?? windows[canonicalExact] ?? windows[bare];
+  if (typeof authoritativeWindow === "number" && authoritativeWindow > 0) {
+    return shouldMarkOneMillion(authoritativeWindow, AUTO_CONTEXT_OFF)
       ? (withOneMillionMarker(selector, windows) ?? selector)
-      : stripOneMillionMarker(selector);
+      : bare;
   }
-  return withOneMillionMarker(bare, windows) ?? bare;
+  return wasMarked ? selector : bare;
 }
 
 /** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".

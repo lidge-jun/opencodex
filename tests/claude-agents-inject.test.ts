@@ -144,6 +144,44 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     });
   });
 
+  test("generated profiles preserve marked catalog selectors when context metadata is incomplete", () => {
+    const anthropic = structuredClone(OAUTH_PROVIDERS.anthropic.providerConfig);
+    anthropic.liveModels = false;
+    const config = cfg({
+      defaultProvider: "anthropic",
+      providers: { anthropic },
+      subagentModels: [
+        "anthropic/claude-opus-4-6[1m]",
+        "anthropic/claude-opus-4-7[1m]",
+      ],
+    });
+    const catalog = [
+      { provider: "anthropic", id: "claude-opus-4-6[1m]" },
+      { provider: "anthropic", id: "claude-opus-4-7[1m]" },
+    ];
+    const windows = buildClaudeContextWindows([], catalog);
+    const dir = tempDir();
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-opus-4-7[1m]" }));
+    const models = (contextWindows: Record<string, number>) => Object.fromEntries(
+      buildClaudeAgentDefs(config, contextWindows, dir).map(def => [def.name, def.model]),
+    );
+
+    expect(windows).toEqual({});
+    expect(models(windows)).toEqual({
+      "ocx-claude-opus-4-6-1m": "claude-opus-4-6[1m]",
+      "ocx-claude-opus-4-7-1m": "claude-opus-4-7[1m]",
+      "ocx-self": "claude-opus-4-7[1m]",
+    });
+    expect(models({
+      "claude-opus-4-6[1m]": 200_000,
+      "claude-opus-4-7[1m]": 200_000,
+    })).toEqual({
+      "ocx-claude-opus-4-6-1m": "claude-opus-4-6",
+      "ocx-claude-opus-4-7-1m": "claude-opus-4-7",
+      "ocx-self": "claude-opus-4-7",
+    });
+  });
+
   test("placeholder guidance recommends haiku, never sonnet (issue #252)", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-native--gpt-5.6-sol" }));
