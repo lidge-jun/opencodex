@@ -104,6 +104,8 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 
 - 通常の fetch/parse 経路の代わりに `runTurn` を使います。リクエスト、サーバーイベント、ツール引数、使用量 checkpoint、クライアントレスポンスは `cursor/gen/agent_pb.ts` の `@bufbuild/protobuf` スキーマでエンコードしたのち Connect メッセージとして framing します。
 - content-addressed blob で対話状態を再生し、サーバーツール呼び出しを Codex に再マッピングします。protobuf の `GetUsableModels` RPC でリアルタイム Cursor モデルを探し、run リクエストが wire に commit される前だけリトライします。
+- `cursor/grok-4.5-fast` は選択可能なモデルとして維持しつつ、Cursor には正規の `grok-4.5`
+  モデルを、個別の `effort` および `fast=true` パラメータとともに送信します。
 - Cursor ネイティブのローカルファイルシステム/shell/network 実行はデフォルトで拒否します。明示的な `mcpServers` と `desktopExecutor` 統合はそれぞれ別の opt-in です。`unsafeAllowNativeLocalExec` はより広い組み込み executor を有効にし、Codex の承認/サンドボックスルールを迂回します。
 
 ## `azure-openai`（別名: `azure`）
