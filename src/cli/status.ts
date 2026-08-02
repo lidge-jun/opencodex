@@ -3,7 +3,7 @@ import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
-import { diagnoseService } from "../service";
+import { diagnoseService, serviceLogPath } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
@@ -169,7 +169,12 @@ export async function collectStatus(): Promise<CliStatusView> {
     : await checkProxyHealth(listen);
   const bunRuntime = durableBunRuntime();
   const service = diagnoseService();
-  const serviceSummary = service.summary;
+  // A service can be registered and still not serve: the manager reports the job
+  // either way. `live` was already identity-probed a few lines above, so cross-check
+  // rather than print registration as if it were service.
+  const serviceSummary = service.installed && !live
+    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service install'`
+    : service.summary;
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;
   const startup = collectStartupHealth(config, {

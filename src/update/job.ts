@@ -637,6 +637,15 @@ export interface RestartIo {
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
   /** Override the /healthz appearance window (default {@link RESTART_HEALTH_TIMEOUT_MS}). */
   healthTimeoutMs?: number;
+  /**
+   * Override the window for deciding whether a service-managed restart actually
+   * served (default {@link SERVICE_RECOVERY_HEALTH_MS}). Distinct from
+   * {@link healthTimeoutMs}, which is the FINAL /healthz appearance window consumed
+   * by awaitRestartedProxyHealthy: this one only chooses whether to ALSO attempt a
+   * direct start, so coupling them would let a test tightening one silently retune
+   * the other.
+   */
+  serviceHealthTimeoutMs?: number;
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
@@ -666,6 +675,48 @@ export interface RestartIo {
   verifyOcxFn?: (pid: number) => number | null;
   /** Liveness check when deciding whether a reclaim timeout still has live holders. */
   isAliveFn?: (pid: number) => boolean;
+}
+
+/**
+ * Health window for deciding whether a service-managed restart served, before
+ * falling back to a direct start. Deliberately shorter than the final verdict
+ * window: being wrong here costs one extra start attempt; being wrong the other way
+ * leaves the user with no proxy at all.
+ *
+ * It runs AFTER the child's own 20s install probe (SERVICE_INSTALL_HEALTH_MS on
+ * macOS/Linux), so a reinstall that exits 0 but never serves spends up to 45s before
+ * the fallback — inside RESTART_TIMEOUT_MS of 60s. That is why this is 25s, not more.
+ */
+export const SERVICE_RECOVERY_HEALTH_MS = 25_000;
+
+/**
+ * Whether the reinstalled service actually produced a listener on the captured target.
+ *
+ * Not a duplicate of the child's own check: since WP2 the child asserts the port on
+ * macOS/Linux, but Windows still reports success from registration alone, a flapping
+ * supervisor can satisfy a single probe, and the child may be a CLI older than that
+ * change. `isServiceViable()` cannot see any of those — it reads registration state.
+ */
+async function serviceRestartServed(
+  job: UpdateJobState,
+  port: number,
+  hostname: string,
+  io: RestartIo = {},
+): Promise<boolean> {
+  const probe = io.probeProxy ?? (async (p: number, h?: string) => (
+    !!(await proxyIdentityAt(p, { hostname: h }))
+  ));
+  const sleep = io.sleepMs ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const now = io.now ?? (() => Date.now());
+  const deadline = now() + (io.serviceHealthTimeoutMs ?? SERVICE_RECOVERY_HEALTH_MS);
+  for (;;) {
+    if (await probe(port, hostname)) {
+      updateJob(job, {}, `Service-managed proxy answered on ${hostname}:${port}.`);
+      return true;
+    }
+    if (now() >= deadline) return false;
+    await sleep(500);
+  }
 }
 
 async function restartAfterUpdate(
@@ -768,24 +819,49 @@ async function restartAfterUpdate(
           // Falling back to a direct proxy start keeps the update from leaving the proxy
           // stopped; the stale service manager can be refreshed later with an admin
           // `ocx service install`.
-          updateJob(job, {}, `Service reinstall failed (exit ${result.status ?? "?"}); falling back to a direct proxy start. Run 'ocx service install' as administrator to refresh the background service manager.`);
+          //
+          // That advice is Windows-only, and on macOS/Linux it now actively misleads:
+          // `ocx service install` gained a non-zero exit for a service that registers
+          // but does not serve, so this branch fires there for a reason elevation
+          // cannot fix. Point at the command that prints the real reason instead.
+          updateJob(
+            job,
+            {},
+            `Service reinstall failed (exit ${result.status ?? "?"}); falling back to a direct proxy start.`
+            + (process.platform === "win32"
+              ? " Run 'ocx service install' as administrator to refresh the background service manager."
+              : " Run 'ocx service install' by hand to see the reason, then 'ocx service status'."),
+          );
         }
       } finally {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
       }
       if (serviceOk) {
-        // Exit 0 is not enough: a reinstall can leave stale/missing assets (or a
-        // disabled/conflicting manager) that never brings /healthz back. Fall through
-        // to a direct start so browser-dashboard updates do not require a viable
-        // Background Service for recovery.
+        // Exit 0 is not enough, and neither is `viable`. Registration state cannot
+        // distinguish a serving supervisor from one that registered and bound nothing:
+        // `launchctl list` reports both, and `schtasks` reports a task whose child
+        // exited immediately. Since WP2 the child asserts the port itself on
+        // macOS/Linux, but Windows still reports success from registration alone, a
+        // flapping supervisor can satisfy one probe, and the child may be an older CLI.
+        // Ask the port before skipping the fallback this branch exists to protect.
         const viable = (io.serviceViableFn ?? isServiceViable)();
-        if (viable) return;
-        updateJob(
-          job,
-          {},
-          "Service reinstall exited 0 but the background service is not viable (stale or missing assets, disabled, or conflicting); falling back to a direct proxy start.",
-        );
+        if (viable) {
+          if (await serviceRestartServed(job, port, hostname, io)) return;
+          updateJob(
+            job,
+            {},
+            `Service reinstall exited 0 and reported viable, but nothing answered on ${hostname}:${port} `
+            + `within ${Math.trunc((io.serviceHealthTimeoutMs ?? SERVICE_RECOVERY_HEALTH_MS) / 1000)}s; `
+            + "falling back to a direct proxy start.",
+          );
+        } else {
+          updateJob(
+            job,
+            {},
+            "Service reinstall exited 0 but the background service is not viable (stale or missing assets, disabled, or conflicting); falling back to a direct proxy start.",
+          );
+        }
       }
     }
     // Fall through to the direct proxy start below so the update never leaves the

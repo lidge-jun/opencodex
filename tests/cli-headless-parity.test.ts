@@ -111,6 +111,18 @@ describe("headless GUI parity CLI", () => {
     }]);
   });
 
+  test("provider test treats a static catalog as neutral", async () => {
+    const runtime = fakeRuntime(() => ({ applicable: false, reason: "static_catalog", latencyMs: 0 }));
+    const code = await handleProviderRuntimeCommand("test", ["google-antigravity", "--json"], runtime.deps);
+    expect(code).toBe(0);
+    expect(process.exitCode).not.toBe(1);
+    expect(runtime.requests).toEqual([{
+      path: "/api/providers/test?name=google-antigravity",
+      method: "POST",
+      body: null,
+    }]);
+  });
+
   test("model context all maps to the atomic GUI endpoint", async () => {
     const runtime = fakeRuntime();
     const code = await handleModelsRuntimeCommand("context", ["all", "on", "--json"], runtime.deps);

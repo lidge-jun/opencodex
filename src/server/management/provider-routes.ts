@@ -365,7 +365,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       });
     }
     if (prov.liveModels === false) {
-      return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified" });
+      // A static catalog has no live discovery endpoint to test. This is neither
+      // positive connectivity evidence nor an outage, and it must stay before
+      // credential resolution/network access for providers such as Antigravity.
+      return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
     const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
     const apiKey = await resolveModelsAuthToken(name, prov);

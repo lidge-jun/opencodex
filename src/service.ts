@@ -5,8 +5,8 @@
  * Codex on a service-managed restart (the restarted instance re-injects); explicit stop/uninstall
  * restore it via the command.
  */
-import { execFileSync, execSync } from "node:child_process";
-import { findLiveProxy, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
+import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -32,7 +32,7 @@ import {
   type ElevatedSchtasksCreateAndRunExecution,
   type ElevatedSchtasksCreateAndRunResult,
 } from "./lib/windows-elevation";
-import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
+import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, winswXmlPath, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
@@ -333,6 +333,177 @@ function buildServiceShellCommand(bun: string, cli: string, port = resolveServic
   return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start --port ${port}`;
 }
 
+/**
+ * The `--port <n>` actually baked into the installed launchd plist, or null when it
+ * cannot be read. macOS only — named for launchd rather than "service" so no caller
+ * assumes it covers systemd or the Windows wrapper.
+ *
+ * `start` needs this because it does NOT rewrite the plist: an install made under
+ * OCX_BAKE_PORT, or any later config.port edit, would otherwise leave launchd serving
+ * one port while the confirmation probes another, failing a healthy service.
+ *
+ * Anchored on the closing tag and matched LAST: the command also carries the Bun and
+ * CLI paths, and a path containing the literal `start --port 9999` must not shadow
+ * the real argument. buildPlist emits the command as the final ProgramArguments
+ * string, and buildServiceShellCommand puts the port at the very end of it.
+ */
+export function launchdListenPort(deps: { readPlist?: () => string } = {}): number | null {
+  try {
+    const text = (deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")))();
+    const last = [...text.matchAll(/start --port (\d{1,5})\s*<\/string>/g)].at(-1);
+    if (!last) return null;
+    const n = Number(last[1]);
+    return n > 0 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `--port <n>` baked into the installed systemd user unit. Linux only. */
+export function systemdListenPort(deps: { readUnit?: () => string } = {}): number | null {
+  try {
+    const text = (deps.readUnit ?? (() => readFileSync(unitPath(), "utf8")))();
+    const last = [...text.matchAll(/start --port (\d{1,5})(?:\s|"|$)/gm)].at(-1);
+    if (!last) return null;
+    const n = Number(last[1]);
+    return n > 0 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Shared tail parser for the baked `--port <n>`.
+ *
+ * Terminators cover all three artifact shapes: whitespace (batch wrapper, systemd
+ * unit), `"` (systemd's quoted ExecStart), `<` (WinSW's `</arguments>`), and `&` (an
+ * XML-escaped quote). Matched LAST because every artifact carries the Bun and CLI
+ * paths ahead of the argument, and a path containing the literal must not shadow it.
+ */
+function parseBakedListenPort(read: () => string): number | null {
+  try {
+    const last = [...read().matchAll(/start --port (\d{1,5})(?:\s|"|&|<|$)/gm)].at(-1);
+    if (!last) return null;
+    const n = Number(last[1]);
+    return n > 0 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `--port <n>` baked into the Task Scheduler wrapper. Windows scheduler backend. */
+export function windowsListenPort(deps: { readScript?: () => string } = {}): number | null {
+  return parseBakedListenPort(deps.readScript ?? (() => readFileSync(windowsServiceScriptPath(), "utf8")));
+}
+
+/**
+ * The `--port <n>` baked into the WinSW XML's `<arguments>`. Windows native backend.
+ *
+ * Separate from {@link windowsListenPort} rather than one function branching on
+ * `readServiceBackend()`: the recorded backend can disagree with what is actually on
+ * disk (the `stale` / `backendStateMismatch` cases `deriveWindowsServiceDiagnostic`
+ * exists to catch), and a reader that trusted it would then read the wrong file.
+ * Each returns null when its own artifact is absent, so the chain needs no branch.
+ */
+export function winswListenPort(deps: { readXml?: () => string } = {}): number | null {
+  return parseBakedListenPort(deps.readXml ?? (() => readFileSync(winswXmlPath(), "utf8")));
+}
+
+/**
+ * The listen port of the INSTALLED service artifact, falling back to the configured
+ * one. Each reader returns null off its own platform, so the chain needs no platform
+ * branch — and on Windows both return null, preserving today's behavior.
+ */
+export function installedServiceListenPort(): number {
+  return launchdListenPort()
+    ?? systemdListenPort()
+    ?? windowsListenPort()
+    ?? winswListenPort()
+    ?? resolveServiceListenPort();
+}
+
+export const SERVICE_INSTALL_HEALTH_MS = 20_000;
+
+/**
+ * Whether a proxy actually answers on the port this install/start just produced.
+ *
+ * Registration is not service: `launchctl list` reports a job that never bound, and
+ * `systemctl is-active` reports a process that bound nothing. Probing is the only
+ * thing that answers the question the user is actually asking.
+ *
+ * Probes the BAKED target rather than resolving one. `findLiveProxy` resolves through
+ * pidfile -> runtime-port -> config.port, and a service reinstall has just invalidated
+ * the first two while `resolveServiceListenPort` (OCX_BAKE_PORT precedence, config.port
+ * === 0 normalization) can disagree with the third.
+ *
+ * Soft: returns the outcome, never throws; the caller chooses between a checkmark and
+ * an actionable warning.
+ */
+export async function confirmServiceServing(
+  deps: {
+    port?: number;
+    hostname?: string;
+    probe?: (port: number, hostname: string) => Promise<boolean>;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    timeoutMs?: number;
+  } = {},
+): Promise<{ ok: true; port: number } | { ok: false; port: number }> {
+  const port = deps.port ?? installedServiceListenPort();
+  const hostname = deps.hostname ?? loadConfig().hostname ?? "127.0.0.1";
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const probe = deps.probe ?? (async (p, h) => !!(await proxyIdentityAt(p, { hostname: h })));
+  const deadline = now() + (deps.timeoutMs ?? SERVICE_INSTALL_HEALTH_MS);
+  for (;;) {
+    if (await probe(port, hostname)) return { ok: true, port };
+    if (now() >= deadline) return { ok: false, port };
+    await sleep(500);
+  }
+}
+
+/**
+ * Print the outcome of `install` / `start` / `repair` in terms of what the user cares
+ * about — is it serving? — instead of whether the manager accepted the registration.
+ *
+ * Sets `process.exitCode = 1` when nothing answers. That is deliberate: the GUI update
+ * worker reads the child's exit status, so a registered-but-silent service now makes it
+ * fall back to a direct proxy start rather than reporting a successful update over a
+ * dead port.
+ */
+async function reportServiceServing(
+  verb: "installed" | "started" | "repaired",
+  deps: Parameters<typeof confirmServiceServing>[0] = {},
+): Promise<void> {
+  const serving = await confirmServiceServing(deps);
+  if (serving.ok) {
+    console.log(`✅ opencodex service ${verb} and serving on port ${serving.port}.`);
+    return;
+  }
+  console.error(
+    `⚠️  Service ${verb}, but no proxy answered on port ${serving.port} within `
+    + `${Math.trunc(SERVICE_INSTALL_HEALTH_MS / 1000)}s.\n`
+    + `   The manager registered the job; that is not the same as serving.\n`
+    + `   Log:       ${serviceLogPath()}\n`
+    + `   Meanwhile: ocx start   (serves in the foreground)`,
+  );
+  process.exitCode = 1;
+}
+
+/**
+ * The reinstall command for the CURRENTLY INSTALLED backend.
+ *
+ * Plain `ocx service install` on a native/WinSW install runs installWindows's
+ * transactional backend switch, which tears down WinSW and replaces it with the Task
+ * Scheduler backend. Advising it in a repair hint would silently change the user's
+ * backend, so the hint has to carry `--native` when that is what is installed.
+ */
+function serviceRepairCommand(): string {
+  return process.platform === "win32" && readServiceBackend() === "native"
+    ? "ocx service install --native"
+    : "ocx service install";
+}
+
 function systemdQuote(value: string): string {
   return `"${value
     .replace(/\\/g, "\\\\")
@@ -354,6 +525,72 @@ function systemdOutputTarget(value: string): string {
 
 function sh(cmd: string): string {
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
+
+/**
+ * Run `launchctl` and report BOTH streams regardless of exit status.
+ *
+ * `launchctl load` writes "Load failed: <n>: <reason>" to stderr and exits 0 for
+ * every already-bootstrapped job. `sh()` above is execSync, which throws only on a
+ * non-zero exit, so install and start both reported success for a load that did
+ * nothing — leaving launchd running the PREVIOUS plist while a freshly written one
+ * sat unused on disk. That is the 2026-08-02 report: `ocx service` prints a
+ * checkmark, `launchctl list` shows the job, and the port answers nothing.
+ *
+ * spawnSync, NOT execFileSync: execFileSync discards stderr when the child exits 0,
+ * which is precisely this case — a runner built on it returns an empty stderr and
+ * the guard below can never fire. Measured on macOS 27.0.
+ */
+export function runLaunchctl(
+  args: string[],
+  deps: { run?: typeof spawnSync } = {},
+): { ok: boolean; stdout: string; stderr: string } {
+  const run = deps.run ?? spawnSync;
+  const result = run("/bin/launchctl", args, { encoding: "utf8", windowsHide: true });
+  // `error` is set when the spawn itself failed (ENOENT off macOS) and `status` is
+  // null for a signalled child; neither may be reported as success.
+  if (result.error) return { ok: false, stdout: "", stderr: String(result.error.message ?? "") };
+  return {
+    ok: result.status === 0,
+    stdout: String(result.stdout ?? "").trim(),
+    stderr: String(result.stderr ?? "").trim(),
+  };
+}
+
+/**
+ * Whether launchctl output indicates the operation did not take. Needed because
+ * `ok` alone is insufficient for the legacy `load`/`unload` subcommands, which
+ * report failure on stderr while exiting 0. `bootstrap` exits 5, so for that path
+ * this is belt-and-braces rather than the only signal.
+ */
+export function launchctlLoadFailed(stderr: string): boolean {
+  return /\b(?:Load|Bootstrap) failed\b/i.test(stderr);
+}
+
+/** launchd domain target for the current user's GUI session. */
+function launchdGuiDomain(): string {
+  return `gui/${process.getuid?.() ?? 0}`;
+}
+
+/**
+ * Whether launchd is running the job from the CURRENT plist. `launchctl list` only
+ * proves domain membership — a job bootstrapped from an older plist stays listed
+ * forever. `launchctl print` exposes the live `arguments`, which is the only way to
+ * catch a load that silently no-op'd.
+ */
+export function launchdJobMatchesPlist(
+  expectedCommand: string,
+  deps: { run?: typeof runLaunchctl } = {},
+): { loaded: boolean; matchesPlist: boolean } {
+  const run = deps.run ?? runLaunchctl;
+  const printed = run(["print", `${launchdGuiDomain()}/${LABEL}`]);
+  if (!printed.ok) return { loaded: false, matchesPlist: false };
+  // `print` writes the arguments block to stdout for a live job. Search both streams
+  // anyway so a future launchctl that moves diagnostics between them cannot turn this
+  // into a false negative — a false "stale" verdict would send users to `bootout` for
+  // nothing.
+  const printedText = `${printed.stdout}\n${printed.stderr}`;
+  return { loaded: true, matchesPlist: printedText.includes(expectedCommand) };
 }
 
 /**
@@ -1287,11 +1524,58 @@ function installLaunchd(): void {
   writeServiceApiTokenFile();
   const p = plistPath();
   writeFileSync(p, buildPlist(), "utf8");
-  try { sh(`launchctl unload "${p}" 2>/dev/null`); } catch { /* not loaded */ }
-  sh(`launchctl load -w "${p}"`);
+  // Best-effort: an absent job is fine here, and a failed unload is caught by the
+  // load verification below with a better message than a raw unload error.
+  runLaunchctl(["unload", p]);
+  const loaded = runLaunchctl(["load", "-w", p]);
+  if (!loaded.ok || launchctlLoadFailed(loaded.stderr)) {
+    // Do NOT write install state for a load that did not take: state describing an
+    // unused plist is what made this failure invisible.
+    throw new Error(
+      `launchctl could not load ${p}: ${loaded.stderr || "load reported failure"}\n`
+      + "A previous job may still be bootstrapped. Try:\n"
+      + `  launchctl bootout ${launchdGuiDomain()}/${LABEL}\n`
+      + "then re-run 'ocx service install'.",
+    );
+  }
   writeServiceInstallState();
 }
-function startLaunchd(): void { sh(`launchctl load -w "${plistPath()}"`); }
+/**
+ * Deps are named for the layer they replace, not for the process API: `launchctl`
+ * returns a {@link runLaunchctl} result and `matches` a {@link launchdJobMatchesPlist}
+ * result. Only `runLaunchctl` itself takes a spawnSync mock.
+ *
+ * Exported for the branch tests. Every parameter is optional, so this stays
+ * assignable to `ServiceOps.start` (`() => void`) and `platformOps` wires the same
+ * function the tests exercise.
+ */
+export function startLaunchd(deps: {
+  launchctl?: typeof runLaunchctl;
+  matches?: typeof launchdJobMatchesPlist;
+} = {}): void {
+  const run = deps.launchctl ?? runLaunchctl;
+  const p = plistPath();
+  const loaded = run(["load", "-w", p]);
+  if (loaded.ok && !launchctlLoadFailed(loaded.stderr)) return;
+  // `Load failed` on start is AMBIGUOUS in a way it is not on install: the job may
+  // already be bootstrapped from THIS plist, which is a no-op rather than an error.
+  // `install` can assume a stale job (it just rewrote the plist); `start` cannot, and
+  // throwing here would break `ocx service start` on every healthy service.
+  const entry = cliEntry();
+  const live = (deps.matches ?? launchdJobMatchesPlist)(
+    buildServiceShellCommand(entry.bun, entry.cli),
+  );
+  if (live.loaded && live.matchesPlist) {
+    console.log("ℹ️  service was already loaded from the current plist; nothing to do.");
+    return;
+  }
+  throw new Error(
+    `launchctl could not load ${p}: ${loaded.stderr || "load reported failure"}\n`
+    + (live.loaded
+      ? `launchd is running an OLDER plist. Fix:\n  launchctl bootout ${launchdGuiDomain()}/${LABEL}\n  ocx service install`
+      : "The job is not loaded. Run 'ocx service install' to re-register it."),
+  );
+}
 function stopLaunchd(): void { try { sh(`launchctl unload "${plistPath()}"`); } catch { /* not loaded */ } }
 function statusLaunchd(): string { try { return sh(`launchctl list | grep ${LABEL} || true`); } catch { return ""; } }
 function uninstallLaunchd(): void {
@@ -1646,12 +1930,47 @@ function installSystemd(): void {
   sh(`systemctl --user restart ${TASK}`);
   writeServiceInstallState();
 }
+/**
+ * Whether systemd's in-memory unit differs from the file on disk.
+ *
+ * The systemd analogue of launchd's stale-plist case: writing
+ * `~/.config/systemd/user/<unit>` does not change the definition systemd has loaded
+ * until `daemon-reload`, so a plain `systemctl start` would run the PREVIOUS
+ * ExecStart. `NeedDaemonReload` is a per-unit property emitted as a bare
+ * `NeedDaemonReload=yes|no` line; pass the unit name or `show` reports the manager's
+ * own property instead, which answers a different question.
+ *
+ * Fail-open: if the query cannot run (no user bus, unit absent) we must not block a
+ * start that would otherwise work.
+ */
+export function systemdNeedsDaemonReload(deps: { show?: () => string } = {}): boolean {
+  try {
+    const out = (deps.show ?? (() => sh(`systemctl --user show -p NeedDaemonReload ${TASK}`)))();
+    return /NeedDaemonReload\s*=\s*yes/i.test(out);
+  } catch {
+    return false;
+  }
+}
+
 function startSystemd(): void {
   ensureUserBusEnv();
   if (!existsSync(unitPath())) {
     console.error(`opencodex service is not installed: ${unitPath()}`);
     console.error("Run `ocx service install` first to create and enable the systemd user unit.");
     process.exit(1);
+  }
+  // The unit on disk may be newer than what systemd loaded; starting now would run
+  // the previous definition.
+  //
+  // `start` alone is not enough after a reload: it is a no-op on an already-active
+  // unit, so the stale process would keep running the old ExecStart. NeedDaemonReload
+  // compares disk against loaded, never loaded against running, so the only way to
+  // make the running process match the file is to restart it.
+  if (systemdNeedsDaemonReload()) {
+    console.log("ℹ️  unit file changed on disk; reloading systemd and restarting the service.");
+    sh("systemctl --user daemon-reload");
+    sh(`systemctl --user restart ${TASK}`);
+    return;
   }
   sh(`systemctl --user start ${TASK}`);
 }
@@ -2011,6 +2330,60 @@ export function serviceStatusSummary(): string {
   return diagnoseService().summary;
 }
 
+/**
+ * Status a human can act on: registration state, whether a proxy actually answers,
+ * and — when it does not — whether launchd is running the plist we have on disk.
+ *
+ * `launchctl list` membership cannot distinguish "serving", "bootstrapped from an
+ * older plist", and "loaded but never bound"; the reported failure was the middle
+ * one presented as the first.
+ *
+ * Resolves the port through `confirmServiceServing`, i.e. the same
+ * `installedServiceListenPort()` path install/start/repair use, so those surfaces can
+ * never disagree about one service. The budget is short (2 probes) because this is a
+ * status read, not a post-install wait.
+ */
+export async function serviceStatusReport(
+  deps: {
+    diagnose?: () => ServiceDiagnostic;
+    serving?: () => Promise<{ ok: boolean; port: number }>;
+    matchesPlist?: () => { loaded: boolean; matchesPlist: boolean };
+  } = {},
+): Promise<string> {
+  const diag = (deps.diagnose ?? diagnoseService)();
+  if (!diag.installed) return `❌ ${diag.summary}`;
+
+  const serving = await (deps.serving ?? (() => confirmServiceServing({ timeoutMs: 1_500 })))();
+  if (serving.ok) return `✅ ${diag.summary}\n   Serving on port ${serving.port}.`;
+
+  // The dep is consulted FIRST; the platform check only guards the default. Wrapping
+  // the whole expression in a darwin check would discard an injected seam on
+  // Linux/Windows and make the stale-plist case untestable there.
+  const stalePlist = deps.matchesPlist?.() ?? (process.platform === "darwin"
+    ? (() => {
+        const entry = cliEntry();
+        // Pass the INSTALLED port explicitly: the default third argument is
+        // resolveServiceListenPort(), which reads OCX_BAKE_PORT/config.port, so after
+        // a config edit the expected string would never match and every run would
+        // print a false "OLDER plist".
+        return launchdJobMatchesPlist(
+          buildServiceShellCommand(entry.bun, entry.cli, installedServiceListenPort()),
+        );
+      })()
+    : null);
+  const staleLine = stalePlist && stalePlist.loaded && !stalePlist.matchesPlist
+    ? "   launchd is running an OLDER plist than the one on disk.\n"
+      + `   Fix:    launchctl bootout gui/$(id -u)/${LABEL} && ocx service install\n`
+    : "";
+
+  return `⚠️  ${diag.summary}\n`
+    + `   Registered, but no proxy is answering on port ${serving.port}.\n`
+    + staleLine
+    + `   Log:    ${serviceLogPath()}\n`
+    + `   Repair: ${serviceRepairCommand()}\n`
+    + "   Meanwhile: ocx start           (serves in the foreground)";
+}
+
 export function normalizeServiceSubcommand(sub?: string): string {
   return sub ?? "install";
 }
@@ -2064,7 +2437,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     assertServiceEnvironmentMatchesInstall();
     assertServiceAuthEnvironment();
     await repairService();
-    console.log("✅ opencodex background service repaired (assets refreshed, no Task Scheduler re-registration).");
+    // All three platforms: a repair that reports success while nothing serves is the
+    // defect class this unit exists to close. Windows bakes its port into the
+    // scheduler wrapper or the WinSW XML, both of which installedServiceListenPort()
+    // now reads.
+    await reportServiceServing("repaired");
     return;
   }
   // Non-install subcommands follow the backend recorded at install time (state v2).
@@ -2079,9 +2456,10 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
       await ops.install();
-      console.log(backend === "native"
-        ? "✅ opencodex native service installed + started (windowless, starts at boot, auto-restarts on crash)."
-        : "✅ opencodex service installed + started (auto-starts on login, auto-restarts on crash).");
+      // The wrapper was written moments ago in this process, so the configured port
+      // and the baked one cannot have diverged yet — unlike `start`, which reads the
+      // installed artifact instead.
+      await reportServiceServing("installed", { port: resolveServiceListenPort() });
       if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
       // Service users never reach the `ocx start` prompt: the proxy they run is the
       // supervised child, which always carries OCX_SERVICE=1. This command, though, is
@@ -2091,7 +2469,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       break;
     case "start":
       ops.start();
-      console.log("✅ service started.");
+      await reportServiceServing("started");
       break;
     case "stop": {
       assertServiceEnvironmentMatchesInstall();
@@ -2131,8 +2509,10 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       if (process.platform === "win32" && backend === "scheduler") {
         console.log(await inspectWindowsSchedulerServiceStatus());
       } else {
-        const s = ops.status();
-        console.log(s ? `✅ running:\n${s}` : "❌ service not installed/running.");
+        // Replaces raw `ops.status()` output, which on darwin is a `launchctl list`
+        // line: registration reported as if it were service. serviceStatusReport
+        // subsumes the not-installed case and adds the serving / stale-plist split.
+        console.log(await serviceStatusReport());
       }
       console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
       break;
@@ -2172,4 +2552,3 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       process.exit(1);
   }
 }
-

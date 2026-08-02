@@ -3,7 +3,7 @@
  * models are no longer v1-pinned by ocx, but legacy/v1-surface requests still need
  * the Proactive delegation prompt when they arrive with the synthetic top tier.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,12 +18,23 @@ import {
 } from "../src/lib/injection-debug-log";
 
 const savedCodexHome = process.env.CODEX_HOME;
+const savedCatalogStateOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+
+// Hermetic default: the host machine may run a real Codex app-server whose
+// process state must not leak into these tests (#857).
+process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
 
 afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
+  process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
   clearDebugSettings();
   resetInjectionDebugLogBufferForTests();
+});
+
+afterAll(() => {
+  if (savedCatalogStateOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = savedCatalogStateOverride;
 });
 
 function codexHomeFixture(configToml: string): string {
@@ -102,6 +113,32 @@ describe("multiAgentGuidanceText", () => {
     codexHomeFixture(V2_OFF);
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "max", tools: [{ name: "spawn_agent" }] }))).toBeNull();
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "max", tools: [{ name: "shell" }] }))).toBeNull();
+  });
+
+  test("v2 guidance suppresses positive model claims while the app-server catalog is stale or unknown (#857)", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const parsed = parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] });
+    const options = { injectionModel: "anthropic/claude-sonnet-5" };
+
+    for (const state of ["stale", "unknown"] as const) {
+      const text = await multiAgentGuidanceText(parsed, options, {
+        collectCatalogState: () => ({ state }),
+      });
+      expect(text).toContain("do not set");
+      expect(text).not.toContain("Preferred sub-agent");
+      expect(text).not.toContain("Available models");
+    }
+
+    for (const state of ["fresh", "not_running"] as const) {
+      const text = await multiAgentGuidanceText(parsed, options, {
+        collectCatalogState: () => ({ state }),
+      });
+      expect(text).toContain("Preferred sub-agent");
+    }
   });
 
   test("v2 built-in guidance is schema-agnostic and keeps fork rules", async () => {

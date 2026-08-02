@@ -321,6 +321,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           result.error === "codex_busy"
             || result.error === "stale_preview"
             || result.error === "referenced_history"
+            || result.error === "pinned_thread"
             || result.error === "storage_mutation_busy"
             || result.error === "restore_pending_overlap"
             ? 409
@@ -333,6 +334,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           stale_preview: "Archived files changed since preview — run Preview again.",
           restore_pending_overlap: "Selected archives overlap an incomplete trash restore — finish or retry restore first.",
           referenced_history: "Selected archives are still referenced by forked or paginated history.",
+          pinned_thread: "Selected archives include a pinned thread — unpin it in Codex before cleanup.",
           invalid_digest: "Preview digest is missing or invalid.",
           invalid_mode: "mode must be quarantine or permanent.",
           fs_failed: "Filesystem cleanup failed. Some changes may already be applied — check CODEX_HOME/.trash and any recovery path in the response.",

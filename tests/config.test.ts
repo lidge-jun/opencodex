@@ -150,6 +150,37 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("Antigravity static-catalog migration marker is schema-safe but not default-injected", () => {
+    expect(getDefaultConfig().googleAntigravityStaticCatalogVersion).toBeUndefined();
+
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    });
+    expect(loadConfig().googleAntigravityStaticCatalogVersion).toBe(1);
+
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      googleAntigravityStaticCatalogVersion: 99,
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    });
+    const degraded = loadConfig();
+    expect(degraded.googleAntigravityStaticCatalogVersion).toBeUndefined();
+    expect(degraded.providers.custom.baseUrl).toBe("https://example.test/v1");
+    expect(backupNames()).toEqual([]);
+
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      googleAntigravityStaticCatalogVersion: 99,
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("googleAntigravityStaticCatalogVersion"),
+    });
+  });
+
   test("Codex autostart can be disabled explicitly", () => {
     expect(codexAutoStartEnabled({ codexAutoStart: false })).toBe(false);
     expect(codexAutoStartEnabled({ codexAutoStart: true })).toBe(true);

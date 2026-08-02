@@ -1058,6 +1058,7 @@ export const en = {
   "pws.testing": "Testing…",
   "pws.connectionOk": "Connection OK",
   "pws.connectionFailed": "Connection failed",
+  "pws.connectionNotApplicable": "Not applicable — this provider uses a static model catalog.",
   "pws.editSettings": "Edit settings",
   "pws.viewUsage": "View detailed usage",
   "pws.allSystemsOk": "All systems operational",

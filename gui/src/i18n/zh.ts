@@ -1412,6 +1412,7 @@ export const zh: Record<TKey, string> = {
   "pws.testing": "测试中…",
   "pws.connectionOk": "连接成功",
   "pws.connectionFailed": "连接失败",
+  "pws.connectionNotApplicable": "不适用 — 此提供方使用静态模型目录。",
   "pws.editSettings": "编辑设置",
   "pws.viewUsage": "查看详细用量",
   "pws.allSystemsOk": "所有系统正常运行",

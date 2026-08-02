@@ -31,3 +31,15 @@ the generated date alias. Red: mock DeepSeek receives
 `deepseek/deepseek-v4-flash` and the adapter sends `deepseek-v4-flash`.
 (Existing 42 focused tests pass but only cover same-process generation or
 explicit discovery first — the coverage gap that hid this.)
+
+## Results (2026-08-02, wp4 executed on branch codex/bugfix-280)
+
+- ce249422 red regression (delegation contract, red at import pre-fix).
+- d05ec663 fix: applyProfile delegates to the live daemon through the
+  authenticated management API; route gains optional validated mode.
+- 71b7ac6e repair round 1 (Mencius FAIL): stale-daemon profile — the
+  delegated request now carries the profile, validated server-side with
+  parseDesktopProfile; CLI reports saved-but-not-applied explicitly.
+- 8a364c1d repair round 2 (FAIL): seam now passes (mode, profile) so
+  dropping the profile is red; registry guard uses a test-unique provider.
+- Final review: PASS. Suites 30 pass 0 fail; typecheck green.

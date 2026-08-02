@@ -613,6 +613,10 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
+    const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
+    expect(antigravityRegistry?.liveModels).toBe(false);
+    expect(providerConfigSeed(antigravityRegistry!).liveModels).toBe(false);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.liveModels).toBe(false);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash");
     // Collapsed picker: base models only, no effort-suffix variants.
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.6-flash");

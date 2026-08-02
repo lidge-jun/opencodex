@@ -343,14 +343,21 @@ export async function runUpdate(): Promise<void> {
                 ? "⚠️  Service refresh left a non-viable manager and the captured port is still busy; not starting on another port."
                 : "⚠️  Service refresh failed and the captured port is still busy; not starting on another port.",
             );
-            console.warn(`   Run 'ocx service install' as administrator, then 'ocx start --port ${capturedListen.port}'.`);
+            console.warn(process.platform === "win32"
+              ? `   Run 'ocx service install' as administrator, then 'ocx start --port ${capturedListen.port}'.`
+              : `   Run 'ocx service install' to see the reason, then 'ocx start --port ${capturedListen.port}'.`);
           } else {
             console.warn(
               serviceRefreshed
                 ? "⚠️  Service refresh left a non-viable manager (stale or missing assets) — starting the proxy directly instead."
                 : "⚠️  Service refresh failed — starting the proxy directly instead.",
             );
-            console.warn("   Run 'ocx service install' as administrator to refresh the background service.");
+            // Elevation is a Windows-only remedy; elsewhere the refresh fails for
+            // reasons `ocx service install` reports directly (since it now verifies
+            // the service actually serves).
+            console.warn(process.platform === "win32"
+              ? "   Run 'ocx service install' as administrator to refresh the background service."
+              : "   Run 'ocx service install' to refresh the background service and see why it failed.");
             const env = { ...process.env };
             delete env.OCX_SERVICE;
             const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(capturedListen.port)], {

@@ -198,6 +198,58 @@ ocx service status
 ocx service uninstall
 ```
 
+`install`, `start`, and `repair` confirm that a proxy actually answers on the port
+baked into the installed service before reporting success — on all three platforms.
+They wait up to 20 seconds and then print the serving port:
+
+```
+✅ opencodex service installed and serving on port 10100.
+```
+
+If nothing answers, they warn and **exit non-zero**:
+
+```
+⚠️  Service installed, but no proxy answered on port 10100 within 20s.
+   The manager registered the job; that is not the same as serving.
+   Log:       ~/.opencodex/service.log
+   Meanwhile: ocx start   (serves in the foreground)
+```
+
+A non-zero exit here means *registered but not serving* — not *not installed*. The
+service manager accepted the job; the proxy behind it never bound the port. Read the
+log named in the message, and use `ocx start` to serve in the foreground meanwhile.
+
+`ocx service status` reports the same three states rather than raw manager output:
+
+```
+✅ installed and loaded (launchd; logs: …)
+   Serving on port 10100.
+```
+
+```
+⚠️  installed and loaded (launchd; logs: …)
+   Registered, but no proxy is answering on port 10100.
+   launchd is running an OLDER plist than the one on disk.
+   Fix:    launchctl bootout gui/$(id -u)/com.opencodex.proxy && ocx service install
+   Log:    ~/.opencodex/service.log
+   Repair: ocx service install
+   Meanwhile: ocx start           (serves in the foreground)
+```
+
+It no longer prints the raw `launchctl list` / `systemctl status` line, which
+reported a registered job identically whether it was serving, bound to nothing, or
+running a previous definition. The `Diagnostics:` line still carries the log path and
+any stale-baked-path finding.
+
+On Windows the scheduler backend keeps its own richer status output, which already
+reported Task Scheduler registration separately from proxy reachability.
+
+On macOS this also covers a subtler failure: `launchctl load` reports failure on
+stderr while exiting 0, so a load that did not take used to leave launchd running a
+**previous** version of the service definition while the command printed a checkmark.
+`install` now fails loudly in that case and names the `launchctl bootout` command that
+clears the stale job.
+
 On Windows, `ocx service status` reports Task Scheduler registration separately from
 identity-verified OpenCodex proxy reachability. It does not print the localized `schtasks` table,
 so the summary remains readable across Windows code pages.

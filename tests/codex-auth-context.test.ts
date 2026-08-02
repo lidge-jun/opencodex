@@ -47,12 +47,17 @@ import {
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
 
 beforeEach(() => {
+  // This suite validates refresh admission and auth-context outcomes. Real icacls
+  // processes are covered elsewhere and can retain temp-dir handles long enough
+  // to obscure those assertions under Windows isolated-test load.
+  setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
   testDir = mkdtempSync(join(tmpdir(), "ocx-auth-ctx-"));
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
@@ -69,6 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setIcaclsRunnerForTests(null);
   rmSync(testDir, { recursive: true, force: true });
   clearThreadAccountMap();
   clearCodexUpstreamHealth();

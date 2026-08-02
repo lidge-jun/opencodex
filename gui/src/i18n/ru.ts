@@ -1050,6 +1050,7 @@ export const ru: Record<TKey, string> = {
   "pws.testing": "Проверка…",
   "pws.connectionOk": "Подключение успешно",
   "pws.connectionFailed": "Ошибка подключения",
+  "pws.connectionNotApplicable": "Не применимо — этот провайдер использует статический каталог моделей.",
   "pws.editSettings": "Изменить настройки",
   "pws.viewUsage": "Подробнее об использовании",
   "pws.allSystemsOk": "Все системы работают штатно",

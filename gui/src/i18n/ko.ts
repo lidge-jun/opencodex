@@ -1419,6 +1419,7 @@ export const ko: Record<TKey, string> = {
   "pws.testing": "테스트 중…",
   "pws.connectionOk": "연결 성공",
   "pws.connectionFailed": "연결 실패",
+  "pws.connectionNotApplicable": "해당 없음 — 이 프로바이더는 정적 모델 카탈로그를 사용합니다.",
   "pws.editSettings": "설정 편집",
   "pws.viewUsage": "사용량 상세 보기",
   "pws.allSystemsOk": "모든 시스템 정상",

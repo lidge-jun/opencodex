@@ -306,6 +306,12 @@ describe("GUI update execution decisions", () => {
       await restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
+        // The service-recovery gate now asks the port before skipping the direct-start
+        // fallback. This test is about the OCX_BAKE_PORT lifecycle, not the recovery
+        // decision, so answer the probe rather than letting it reach a real socket:
+        // without it the run falls through to the direct-start path, calls waitFn a
+        // second time, and times out on the ghost-LISTEN wait.
+        probeProxy: async () => true,
         waitForPort: async (port, hostname) => {
           waited.push({ port, hostname: hostname ?? "" });
           expect(process.env.OCX_BAKE_PORT).toBeUndefined();
@@ -1119,5 +1125,83 @@ describe("immutable update target (WP160)", () => {
     expect(source).toContain("Integrity pre-flight skipped");
     // The bun lane pins the resolved version through updateExecutionCommand.
     expect(source).toContain("updateExecutionCommand(check.installer, channel, undefined, check.latestVersion)");
+  });
+});
+
+/**
+ * `isServiceViable()` answers registration, not service: `launchctl list` reports a
+ * job that bound nothing, and `schtasks` reports a task whose child exited at once.
+ * Returning early on it skipped the direct-start fallback that exists so a dashboard
+ * update never leaves the proxy dead.
+ */
+describe("service recovery is health-gated, not viability-gated", () => {
+  function healthGateJob(id: string): UpdateJobState {
+    const job: UpdateJobState = {
+      id,
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.26",
+      latestVersion: "2.7.28",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    return job;
+  }
+
+  async function runGate(
+    id: string,
+    io: Parameters<typeof restartAfterUpdateForTests>[2],
+  ): Promise<number[]> {
+    const spawned: number[] = [];
+    let now = 0;
+    const prevService = process.env.OCX_SERVICE;
+    delete process.env.OCX_SERVICE;
+    try {
+      await restartAfterUpdateForTests(healthGateJob(id), { port: 18765, hostname: "127.0.0.1" }, {
+        serviceInstalledFn: () => true,
+        runService: () => ({ status: 0 }),
+        waitForPort: async () => true,
+        spawnStart: (_job, _installer, port) => { spawned.push(port ?? 0); },
+        sleepMs: async ms => { now += ms; },
+        now: () => now,
+        ...io,
+      });
+    } finally {
+      if (prevService === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prevService;
+    }
+    return spawned;
+  }
+
+  // The regression: viable=true, service registered, nothing listening.
+  test("falls through to a direct start when a viable service never serves", async () => {
+    const spawned = await runGate("svc-health-dead", {
+      serviceViableFn: () => true,
+      probeProxy: async () => false,
+      serviceHealthTimeoutMs: 1_000,
+    });
+    expect(spawned).toEqual([18765]);
+  });
+
+  test("returns without a direct start when the service does serve", async () => {
+    const spawned = await runGate("svc-health-live", {
+      serviceViableFn: () => true,
+      probeProxy: async () => true,
+    });
+    expect(spawned).toEqual([]);
+  });
+
+  test("still falls back when the service is not viable at all", async () => {
+    const spawned = await runGate("svc-health-nonviable", {
+      serviceViableFn: () => false,
+      probeProxy: async () => false,
+      serviceHealthTimeoutMs: 1_000,
+    });
+    expect(spawned).toEqual([18765]);
   });
 });

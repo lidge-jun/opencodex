@@ -460,7 +460,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
       ...visibleRouted,
     ];
-    return jsonResponse({ chosen: config.subagentModels ?? [], available });
+    // #857: let CLI/GUI show when a running Codex app-server keeps an older
+    // in-memory catalog than the one on disk.
+    const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
+    const catalogState = collectCodexAppServerCatalogState();
+    return jsonResponse({ chosen: config.subagentModels ?? [], available, catalogState });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
@@ -646,7 +650,40 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/claude-desktop/apply" && req.method === "POST") {
     try {
-      const state = await buildClaudeDesktopState(config);
+      // #859: the CLI delegates here so the registry is built in the serving
+      // process. Accept an optional mode; default stays static for back-compat.
+      let mode: "static" | "hybrid" | "discovery" = "static";
+      const rawBody = await req.text();
+      let parsed: unknown;
+      if (rawBody.trim()) {
+        try {
+          parsed = JSON.parse(rawBody);
+        } catch {
+          return jsonResponse({ error: "invalid JSON body" }, 400);
+        }
+        const requested = (parsed as { mode?: unknown } | null)?.mode;
+        if (requested !== undefined) {
+          if (requested === "static" || requested === "hybrid" || requested === "discovery") {
+            mode = requested;
+          } else {
+            return jsonResponse({ error: "mode must be static, hybrid, or discovery" }, 400);
+          }
+        }
+      }
+      // #859: a delegated CLI apply carries the profile it just saved — the
+      // daemon's own config can be older, and building state from it would
+      // apply (and persist) the stale profile over the newer one.
+      const bodyProfile = (parsed as { profile?: unknown } | null)?.profile;
+      let profileOverride: Parameters<typeof buildClaudeDesktopState>[1];
+      if (bodyProfile !== undefined) {
+        const { parseDesktopProfile } = await import("../../claude/desktop-profile");
+        try {
+          profileOverride = parseDesktopProfile(bodyProfile);
+        } catch (error) {
+          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
+      }
+      const state = await buildClaudeDesktopState(config, profileOverride);
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: state.profile };
       saveConfigPreservingClaudeCode(config);
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
@@ -662,7 +699,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         [...desktopVisibleNativeSlugs(config)],
         routed,
         config.apiKeys?.[0]?.key,
-        "static",
+        mode,
         state.profile,
       );
       if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);

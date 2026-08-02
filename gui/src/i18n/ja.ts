@@ -1008,6 +1008,7 @@ export const ja: Record<TKey, string> = {
   "pws.testing": "テスト中…",
   "pws.connectionOk": "接続 OK",
   "pws.connectionFailed": "接続失敗",
+  "pws.connectionNotApplicable": "対象外 — このプロバイダーは静的モデルカタログを使用します。",
   "pws.editSettings": "設定を編集",
   "pws.viewUsage": "詳細な使用量を表示",
   "pws.allSystemsOk": "すべてのシステムが稼働中",

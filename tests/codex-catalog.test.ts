@@ -25,6 +25,7 @@ import type { OcxConfig } from "../src/types";
 import type { NormalizedComboConfig } from "../src/combos/types";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { handleManagementAPI } from "../src/server/management-api";
+import { OAUTH_PROVIDERS } from "../src/oauth";
 
 const originalFetch = globalThis.fetch;
 
@@ -1267,6 +1268,42 @@ describe("Codex catalog routed normalization", () => {
       globalThis.fetch = originalFetch;
       clearModelCache("static-provider");
     }
+  });
+
+  test("Google Antigravity uses its static registry catalog and suppresses stale discovery (#723)", async () => {
+    const providerName = "google-antigravity";
+    const provider = structuredClone(OAUTH_PROVIDERS[providerName].providerConfig);
+    const config = {
+      port: 10100,
+      defaultProvider: providerName,
+      providers: { [providerName]: provider },
+    } as OcxConfig;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("static Antigravity catalog must not call /models");
+    }) as typeof fetch;
+    markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });
+
+    const models = await gatherRoutedModels(config);
+    const ids = models.filter(model => model.provider === providerName).map(model => model.id).sort();
+
+    expect(fetchCalls).toBe(0);
+    expect(ids).toEqual([...(provider.models ?? [])].sort());
+    expect(ids).toHaveLength(6);
+    expect(getProviderDiscoveryStatus(providerName)).toBeUndefined();
+
+    markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });
+    const url = new URL("http://127.0.0.1/api/providers");
+    const response = await handleManagementAPI(new Request(url), url, config);
+    const rows = await response!.json() as Array<Record<string, unknown>>;
+    const row = rows.find(item => item.name === providerName);
+    expect(row).toMatchObject({
+      name: providerName,
+      liveModels: false,
+      models: provider.models,
+    });
+    expect(row).not.toHaveProperty("discovery");
   });
 
   test("failed discovery falls back to defaultModel when no static models are configured (#308)", async () => {

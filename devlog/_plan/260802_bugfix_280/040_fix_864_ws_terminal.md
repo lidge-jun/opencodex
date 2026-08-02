@@ -37,3 +37,20 @@ restoration:
 - Note: full runtime red/green proof needs real Windows Bun 1.3.14
   (macOS cannot reproduce Bun#32111); CI Windows leg carries that proof
   after push.
+
+## Results (2026-08-02, wp5 executed on branch codex/bugfix-280)
+
+- f5e66fba red regression (rewrite framing + transport invariant, red with
+  fix stashed).
+- 9d271d09 fix: relaySseEagerBounded gains rewritePayload (complete-block
+  framing, budgeted buffer, EOF tail); core routes win32 && needsClientRewrite
+  through it, never the tee()+JS-pull chain.
+- 8b6f1613 repair round 1 (Chandrasekhar FAIL): unchanged blocks pass
+  byte-identical (multi-data CRLF), decoder flush ordered after buffer,
+  rewrite applied to EOF tail, budget released on all teardown paths,
+  isWin32EagerRewrite extracted with policy tests.
+- bf2afc0e repair round 2: decoder-tail regression exercises the real flush.
+- Final review: PASS. relay-eager + caps + passthrough-abort + image-gen +
+  sse-rewrite + ws + server-auth suites green; typecheck green.
+- Honest caveat: the Windows runtime proof (Bun#32111 stall itself) defers
+  to the CI Windows leg after push — recorded per plan.

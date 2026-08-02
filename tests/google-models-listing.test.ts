@@ -38,9 +38,10 @@ describe("buildModelsRequest google routing", () => {
     expect(headers["x-goog-api-key"]).toBe("gk-123");
   });
 
-  test("google-antigravity (oauth) keeps Authorization: Bearer via registry backfill", () => {
-    // A saved config may omit googleMode — the registry entry (cloud-code-assist) must win.
-    const prov = { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" } as OcxProviderConfig;
+  test("an explicit Antigravity live-discovery override keeps Authorization: Bearer", () => {
+    // Static discovery is the preset default. If a user explicitly opts into the generic probe,
+    // a saved config may still omit googleMode — the registry's cloud-code-assist mode must win.
+    const prov = { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com", liveModels: true } as OcxProviderConfig;
     const { url, headers } = buildModelsRequest(prov, "oauth-token", "google-antigravity");
     expect(url).toBe("https://daily-cloudcode-pa.googleapis.com/models");
     expect(headers["Authorization"]).toBe("Bearer oauth-token");

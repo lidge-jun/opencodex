@@ -873,6 +873,18 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     console.log(`  [${check.level}] ${check.message}`);
   }
 
+  // #857: a running Codex app-server can keep an older in-memory catalog than
+  // the one on disk — surface it outside sync time.
+  const { collectCodexAppServerCatalogState } = await import("../codex/app-server-processes");
+  const catalogState = collectCodexAppServerCatalogState();
+  if (catalogState.state === "stale") {
+    console.log(`  [WARN] Codex app-server (PID(s): ${catalogState.processes.map(p => p.pid).join(", ")}) started before the on-disk catalog changed; its in-memory model list disagrees with ocx. Action: restart Codex (or run \`ocx sync --restart-codex\`)`);
+  } else if (catalogState.state === "unknown") {
+    console.log("  [WARN] Could not verify whether the running Codex app-server's model catalog is current (start time or catalog unreadable). Action: if the model list looks stale, restart Codex");
+  } else if (catalogState.state === "fresh") {
+    console.log("  [OK] Codex app-server model catalog is current with the on-disk catalog.");
+  }
+
   // Hints, not fixes.
   const hints: string[] = [];
   const proxyDown = proxyDownRestartHint({

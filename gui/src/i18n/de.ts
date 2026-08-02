@@ -1392,6 +1392,7 @@ export const de: Record<TKey, string> = {
   "pws.testing": "Teste…",
   "pws.connectionOk": "Verbindung OK",
   "pws.connectionFailed": "Verbindung fehlgeschlagen",
+  "pws.connectionNotApplicable": "Nicht zutreffend — dieser Anbieter verwendet einen statischen Modellkatalog.",
   "pws.editSettings": "Einstellungen bearbeiten",
   "pws.viewUsage": "Detaillierte Nutzung anzeigen",
   "pws.allSystemsOk": "Alle Systeme betriebsbereit",

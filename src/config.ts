@@ -760,6 +760,9 @@ const configSchema = z.object({
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+  // Invalid hand edits must not discard an otherwise usable config. Treat them as
+  // pre-migration so startup can safely re-run the one-time normalization.
+  googleAntigravityStaticCatalogVersion: z.literal(1).optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
@@ -1457,9 +1460,20 @@ function appOwnedMemoryBudgetError(value: unknown): string | null {
   return null;
 }
 
+function googleAntigravityStaticCatalogVersionError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "googleAntigravityStaticCatalogVersion")) return null;
+  const version = raw.googleAntigravityStaticCatalogVersion;
+  if (version === undefined || version === 1) return null;
+  return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1 or omitted";
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
-  const boundaryError = blankHostnameError(value) ?? claudeSubagentEffortError(value) ?? appOwnedMemoryBudgetError(value);
+  const boundaryError = blankHostnameError(value)
+    ?? claudeSubagentEffortError(value)
+    ?? appOwnedMemoryBudgetError(value)
+    ?? googleAntigravityStaticCatalogVersionError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) return { ok: true, config: normalizeApiKeyIds(result.data as OcxConfig) };

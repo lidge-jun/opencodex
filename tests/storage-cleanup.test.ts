@@ -21,6 +21,7 @@ import {
   listTrashEntries,
   normalizeArchivedRolloutPath,
   previewArchivedCleanup,
+  previewExactArchivedCleanup,
   restoreTrashEntry,
   selectOldestPercent,
   type ExecuteCleanupOptions,
@@ -209,6 +210,117 @@ function runWithDigest(
     _test: extra?._test,
   });
 }
+
+describe("pinned archived threads", () => {
+  function pinThread(homeDir: string, threadId: string): void {
+    const db = new Database(join(homeDir, "state_5.sqlite"));
+    const hasColumn = db
+      .query<{ name: string }, []>(`PRAGMA table_info("threads")`)
+      .all()
+      .some(r => r.name === "is_pinned");
+    if (!hasColumn) {
+      db.exec("ALTER TABLE threads ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0");
+    }
+    db.exec(`UPDATE threads SET is_pinned = 1 WHERE id = '${threadId}'`);
+    db.close();
+  }
+
+  test.each(["quarantine", "permanent"] as const)(
+    "%s excludes pinned threads from preview and execution",
+    mode => {
+      home = buildHome();
+      pinThread(home, "told");
+
+      const preview = previewArchivedCleanup(50, home);
+      expect(preview.candidates.map(c => c.relPath)).toEqual([
+        "archived_sessions/rollout-mid.jsonl",
+      ]);
+
+      const result = executeArchivedCleanup({
+        percent: 50,
+        mode,
+        digest: preview.digest,
+        codexHome: home,
+      });
+      expect(result.ok).toBe(true);
+      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+
+      const check = new Database(join(home, "state_5.sqlite"), { readonly: true });
+      expect(check.query("SELECT id FROM threads WHERE id = 'told'").get()).toBeTruthy();
+      check.close();
+    },
+    { timeout: STORE_BUDGET_MS },
+  );
+
+  test("pinning after preview fails closed as stale_preview", () => {
+    home = buildHome();
+    const preview = previewArchivedCleanup(50, home);
+    expect(preview.candidates.map(c => c.relPath)).toEqual([
+      "archived_sessions/rollout-old.jsonl",
+    ]);
+
+    pinThread(home, "told");
+
+    const result = executeArchivedCleanup({
+      percent: 50,
+      mode: "quarantine",
+      digest: preview.digest,
+      codexHome: home,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("stale_preview");
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+  }, { timeout: STORE_BUDGET_MS });
+
+  test("exact-candidate preview also excludes pinned threads", () => {
+    home = buildHome();
+    pinThread(home, "told");
+    const all = listArchivedCandidates(home);
+    const preview = previewExactArchivedCleanup(all, home);
+    expect(preview.candidates.map(c => c.relPath)).toEqual([
+      "archived_sessions/rollout-mid.jsonl",
+      "archived_sessions/rollout-new.jsonl",
+    ]);
+  }, { timeout: STORE_BUDGET_MS });
+
+  test("pin landing after staging stops the locked reconcile and restores files", () => {
+    home = buildHome();
+    // Schema carries the column but nothing is pinned yet, so the preview
+    // still selects the oldest archived thread.
+    const db0 = new Database(join(home, "state_5.sqlite"));
+    db0.exec("ALTER TABLE threads ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0");
+    db0.close();
+
+    const preview = previewArchivedCleanup(50, home);
+    expect(preview.candidates.map(c => c.relPath)).toEqual([
+      "archived_sessions/rollout-old.jsonl",
+    ]);
+
+    const result = executeArchivedCleanup({
+      percent: 50,
+      mode: "quarantine",
+      digest: preview.digest,
+      codexHome: home,
+      _test: {
+        // The realistic race: the pin lands between preview/digest
+        // recompute and the reconcile write lock.
+        beforeReconcileLock: () => {
+          const db = new Database(join(home, "state_5.sqlite"));
+          db.exec("UPDATE threads SET is_pinned = 1 WHERE id = 'told'");
+          db.close();
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("pinned_thread");
+    expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+
+    const check = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(check.query("SELECT id FROM threads WHERE id = 'told'").get()).toBeTruthy();
+    check.close();
+  }, { timeout: STORE_BUDGET_MS });
+});
 
 describe("previewArchivedCleanup", () => {
   test("lists archived files oldest-first and ignores active sessions", () => {

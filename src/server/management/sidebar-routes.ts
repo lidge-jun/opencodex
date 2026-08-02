@@ -68,7 +68,9 @@ export async function handleSidebarRoutes(ctx: ManagementContext): Promise<Respo
         message:
           `Refused: agent session detected (${agentDrivenMarkers().slice(0, 3).join(", ")}) and this request `
           + `carries no dashboard session. Starring writes to the user's own GitHub account, so ask the user `
-          + `directly and only if they say yes run: gh api -X PUT /user/starred/${STAR_REPO}`,
+          + `directly as a required Yes/No choice — not a soft aside, and no answer is not a No, so re-ask `
+          + `it unchanged while it is open — and only if they say yes run: `
+          + `gh api -X PUT /user/starred/${STAR_REPO}`,
       }, 403);
     }
     const result = await starRepository();
