@@ -92,8 +92,15 @@ describe("provider rail source contract", () => {
     const app = await Bun.file("gui/src/App.tsx").text();
     expect(routing).toContain('rawHash === "providers/workspace"');
     expect(routing).toContain("hashBelongsToPage(rawHash, nextPage)");
-    expect(routeState).toContain('rawHash === "providers/workspace"');
-    expect(routeState).toContain("hashBelongsToPage(rawHash, page)");
+    /*
+     * The hook used to re-implement this redirect with its own literal, which
+     * is what these assertions pinned. It now delegates to the one resolver,
+     * so requiring the duplicate back would require the bug it caused: a
+     * mapping added in only one of the two places, making first load disagree
+     * with every later hash change. Assert the delegation instead.
+     */
+    expect(routeState).toContain("resolveAppHashChange");
+    expect(routeState).not.toContain('rawHash === "debug"');
     expect(app).toContain("useAppRouteState");
     expect(`${routing}\n${routeState}\n${app}`).not.toContain("window.location.hash !== nextHash");
   });

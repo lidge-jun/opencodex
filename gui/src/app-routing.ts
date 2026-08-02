@@ -13,9 +13,7 @@ export type Page =
   | "usage"
   | "storage"
   | "codex-auth"
-  | "api"
-  | "claude"
-  | "grok";
+  | "integrations";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
@@ -28,9 +26,7 @@ export const VALID_PAGES = new Set<Page>([
   "usage",
   "storage",
   "codex-auth",
-  "api",
-  "claude",
-  "grok",
+  "integrations",
 ]);
 
 export function readPageFromHash(hash?: string): Page {
@@ -41,6 +37,12 @@ export function readPageFromHash(hash?: string): Page {
   const pageId = raw.split("/")[0] as Page;
   // Legacy: Debug used to be a standalone page; it now lives as a tab on Logs.
   if (pageId === ("debug" as Page)) return "logs";
+  // Legacy integration pages now live below one Integrations route. Returning
+  // the destination page here keeps the initial hook state aligned until the
+  // resolver replaces the hash with the exact nested destination.
+  if (pageId === ("api" as Page)
+    || pageId === ("claude" as Page)
+    || pageId === ("grok" as Page)) return "integrations";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
 }
 
@@ -59,11 +61,32 @@ export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] 
  */
 export const DASHBOARD_UPDATE_HASH = "dashboard/update";
 
+/**
+ * Integrations uses a wrapping outer tab strip. Claude Desktop is a nested
+ * route owned by the Claude family panel, but it still has to be registered
+ * here or App normalization strips it before Claude can read it.
+ */
+export const INTEGRATION_TAB_HASHES = [
+  "integrations/keys",
+  "integrations/codex",
+  "integrations/claude",
+  "integrations/claude/desktop",
+  "integrations/grok",
+  "integrations/opencode",
+  "integrations/pi",
+  "integrations/hermes",
+  "integrations/openclaw",
+  "integrations/kimi",
+  "integrations/gajae",
+] as const;
+
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "dashboard"
-      && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)));
+      && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
+    || (page === "integrations"
+      && (INTEGRATION_TAB_HASHES as readonly string[]).includes(rawHash));
 }
 
 
@@ -85,6 +108,25 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
   // Legacy: Debug used to be a standalone page.
   if (rawHash === "debug" || rawHash.startsWith("debug/")) {
     return { page: "logs", replaceTo: "logs/debug" };
+  }
+
+  /*
+   * Legacy top-level integration pages.
+   *
+   * `readPageFromHash("api")` already answers `integrations`, so without these
+   * branches the generic normalization below would rewrite the hash to the
+   * bare page and silently drop the nested destination — an old `#api`
+   * bookmark would land on Overview instead of API Keys. `replaceTo` is
+   * applied with replaceState, so the correction adds no history entry.
+   */
+  if (rawHash === "api") {
+    return { page: "integrations", replaceTo: "integrations/keys" };
+  }
+  if (rawHash === "claude") {
+    return { page: "integrations", replaceTo: "integrations/claude" };
+  }
+  if (rawHash === "grok") {
+    return { page: "integrations", replaceTo: "integrations/grok" };
   }
 
   // Legacy deep link from the removed dual-layout era.

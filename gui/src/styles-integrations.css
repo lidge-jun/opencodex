@@ -1,0 +1,44 @@
+/* Integrations surfaces (devlog/_plan/260802_client_toggle_api/060).
+   Existing tokens only — no new color is introduced here. */
+
+/* Conflict and Cannot-verify are the two states a user must not misread as
+   ordinary drift, so they carry the same danger color with different weight:
+   filled for a conflict we can describe, outlined for a file we could not
+   even read. */
+.integration-badge--danger { background: var(--red-soft); color: var(--red); }
+.integration-badge--danger-outline { background: transparent; color: var(--red); border-color: var(--red); }
+
+.integration-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); margin-bottom: 14px; }
+.integration-summary-cell { display: flex; flex-direction: column; gap: 2px; }
+.integration-summary-label { font-size: var(--text-caption); color: var(--muted); }
+.integration-summary .btn { margin-left: auto; }
+
+.integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
+.integration-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.integration-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.integration-card-head h4 { margin: 0; }
+.integration-card-actions { display: flex; align-items: center; gap: 10px; margin-top: auto; }
+.integration-card-actions .btn { margin-left: auto; }
+
+.integration-empty { padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted); }
+
+.integration-client-head { display: flex; align-items: center; gap: 10px; }
+.integration-client-head h4 { margin: 0; }
+.integration-client-head .switch { margin-left: auto; }
+
+/* A config path is the thing a user copies when a refusal tells them to
+   finish by hand, so it must never be truncated into uselessness. */
+.integration-path { font-family: var(--font-code); font-size: var(--text-caption); color: var(--muted); overflow-wrap: anywhere; margin: 4px 0; }
+.integration-meta { font-size: var(--text-caption); color: var(--muted); }
+
+.integration-history { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.integration-history li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.integration-history-kind { font-family: var(--font-code); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.integration-history-client { font-size: var(--text-caption); color: var(--muted); }
+.integration-history-at { font-size: var(--text-caption); color: var(--muted); margin-right: auto; }
+
+.integration-restore-dialog .integration-path { margin: 10px 0; }
+
+/* The Claude Code connection switch, relocated out of the sidebar. */
+.claudecode-connection-head { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
+.claudecode-connection-head .switch { margin-left: auto; }

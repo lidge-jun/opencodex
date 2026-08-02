@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Notice } from "../ui";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { Notice, Switch } from "../ui";
 import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
@@ -35,6 +35,18 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
   const [selectedSection, setSelectedSection] = useState("settings");
+  /*
+   * The connection switch moved here from the sidebar's Claude nav row, which
+   * had made a navigation entry the owner of a mutation — and left it homeless
+   * once the three integration pages collapsed into one.
+   *
+   * It keeps the sidebar's IMMEDIATE semantics rather than becoming another
+   * draft: the Settings card below commits on Save, and quietly changing this
+   * control's meaning would be worse than moving it. The in-flight ref
+   * serializes rapid clicks so three taps cannot become three PUTs.
+   */
+  const [connectionPending, setConnectionPending] = useState(false);
+  const connectionInFlight = useRef(false);
 
   const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
     const res = await fetch(`${apiBase}/api/claude-code`, { signal });
@@ -96,6 +108,35 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       ...values.map(value => ({ value: String(value), label: formatCompactWindow(value, localeTag) })),
     ];
   }, [state?.autoCompactWindow, t, localeTag]);
+
+  /**
+   * Immediate connection toggle. Waits for the response instead of flipping
+   * optimistically: this writes the user's Claude settings file, so a switch
+   * that showed "on" after a failed PUT would be lying about their config.
+   */
+  const toggleConnection = async () => {
+    if (!state || connectionInFlight.current) return;
+    connectionInFlight.current = true;
+    setConnectionPending(true);
+    setStatus("");
+    const next = !state.enabled;
+    try {
+      const response = await fetch(`${apiBase}/api/claude-code`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      await readJsonOrThrow(response, t("claude.saveFailed"));
+      setState({ ...state, enabled: next });
+      codeResource.refresh();
+    } catch (error) {
+      setOk(false);
+      setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
+    } finally {
+      connectionInFlight.current = false;
+      setConnectionPending(false);
+    }
+  };
 
   const save = async () => {
     if (!state) return;
@@ -205,6 +246,17 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       {/* Page title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
+      {state && (
+        <div className="claudecode-connection-head">
+          <span id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
+          <Switch
+            on={state.enabled}
+            onClick={() => void toggleConnection()}
+            disabled={connectionPending}
+            label={t("claude.toggleAria")}
+          />
+        </div>
+      )}
       <div className="claudecode-workspace-root">
         <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
           <div className="claudecode-workspace-rail-list">

@@ -170,17 +170,17 @@ const helpEntries: Record<string, HelpEntry> = {
   },
   "api-key": { usage: "ocx api-key <list|create|remove> ...", summary: "Alias of ocx access key." },
   export: {
-    usage: "ocx export --client <opencode|pi> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (opencode, Pi) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|hermes|openclaw|kimi|gajae> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (opencode, Pi, Hermes, OpenClaw, Kimi Code, Gajae Code) wired to the running proxy.",
     details: [
       "--json prints only the config JSON on stdout, so it is safe to redirect to a file.",
       "--out <path> writes the config there and refuses to replace an existing file without --force.",
-      "The config never contains a key; it references the client's env var, which you export before launching.",
+      "The config never contains a key; it references the client's env var, which you export before launching. Kimi cannot hold an env reference, so it carries a loopback placeholder instead.",
       "The destination path is printed for merging by hand — ocx never writes your real client config.",
     ],
   },
   grok: { usage: "ocx grok <status|exclude|include|set|clear|apply> ...", summary: "Manage and apply the Grok Build model fence." },
-  integration: { usage: "ocx integration <claude|grok> ...", summary: "Manage supported client integrations." },
+  integration: { usage: "ocx integration <claude|grok|client> ...", summary: "Manage supported client integrations." },
   system: {
     usage: "ocx system <status|settings|startup|diagnostics|sync|update> ...",
     summary: "Manage headless runtime settings, startup, sync, diagnostics, and updates.",
@@ -296,7 +296,8 @@ Usage:
   ocx agent <sub>             Subagents, injection, effort caps, and sidecars
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx access <sub>            External API keys and endpoint information
-  ocx export --client <id>    Print an opencode/Pi config wired to the running proxy
+  ocx export --client <id>    Print a client config wired to the running proxy (6 clients)
+  ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, and updates
   ocx config <sub>            Validated configuration show/get/set/import/export

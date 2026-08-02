@@ -6,7 +6,7 @@ import { handleAccessCommand } from "../src/cli/access";
 import { handleAgentCommand } from "../src/cli/agent";
 import { handleComboCommand } from "../src/cli/combo";
 import { handleConfigCommand } from "../src/cli/config-command";
-import { handleGrokCommand } from "../src/cli/integrations";
+import { handleClientIntegrationCommand, handleGrokCommand } from "../src/cli/integrations";
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../src/cli/provider-runtime";
 
@@ -72,6 +72,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/model", "ocx models"],
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
+      ["/api/client-integrations", "ocx integration client"],
       ["/api/debug", "ocx debug/observe"],
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],
@@ -175,6 +176,42 @@ describe("headless GUI parity CLI", () => {
     });
     expect(await handleGrokCommand(["include", "a", "--json"], runtime.deps)).toBe(0);
     expect(runtime.requests[1]).toEqual({ path: "/api/grok/selection", method: "PUT", body: { excluded: ["b"] } });
+  });
+
+  test("client integration toggles hit the exact management routes", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(["enable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(["disable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
+    expect(runtime.requests.map(row => [row.path, row.method, row.body])).toEqual([
+      ["/api/client-integrations/hermes", "PUT", { enabled: true }],
+      ["/api/client-integrations/hermes", "PUT", { enabled: false }],
+    ]);
+  });
+
+  test("restore refuses to guess about drift, and forwards the confirmation when given", async () => {
+    /*
+     * Replacing edits a user made after the snapshot is their decision, so the
+     * flag has to travel exactly as typed. Defaulting it to true would make
+     * the headless path quietly more destructive than the GUI.
+     */
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(["restore", "--op", "op-1", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(
+      ["restore", "--op", "op-1", "--confirm-drift", "--json"],
+      runtime.deps,
+    )).toBe(0);
+    expect(runtime.requests.map(row => row.body)).toEqual([
+      { opId: "op-1", confirmDrift: false },
+      { opId: "op-1", confirmDrift: true },
+    ]);
+  });
+
+  test("a client integration command without its required target fails instead of guessing", async () => {
+    const runtime = fakeRuntime();
+    // No `--client`: picking one for the user would write a config they never named.
+    expect(await handleClientIntegrationCommand(["enable", "--json"], runtime.deps)).not.toBe(0);
+    expect(await handleClientIntegrationCommand(["restore", "--json"], runtime.deps)).not.toBe(0);
+    expect(runtime.requests).toEqual([]);
   });
 
   test("config set validates the complete candidate before the atomic write", async () => {

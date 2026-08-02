@@ -18,6 +18,7 @@
 @import "./styles-dashboard-workspace.css";
 @import "./styles-storage-workspace.css";
 @import "./styles-subagents-workspace.css";
+@import "./styles-integrations.css";
 @import "./styles-usage-workspace.css";
 @import "./styles-claudecode-workspace.css";
 @import "./styles-apikeys-workspace.css";

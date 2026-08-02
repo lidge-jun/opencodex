@@ -92,6 +92,7 @@ export default defineConfig({
             { label: "Grok Build", translations: { ko: "Grok Build", "zh-CN": "Grok Build", ru: "Grok Build", ja: "Grok Build" }, slug: "guides/grok-build" },
             { label: "opencode", translations: { ko: "opencode", "zh-CN": "opencode", ru: "opencode", ja: "opencode" }, slug: "guides/opencode" },
             { label: "Pi", translations: { ko: "Pi", "zh-CN": "Pi", ru: "Pi", ja: "Pi" }, slug: "guides/pi" },
+            { label: "Integrations", translations: { ko: "연동", "zh-CN": "集成", ru: "Интеграции", ja: "連携" }, slug: "guides/integrations" },
             { label: "Sidecars: Web Search & Vision", translations: { ko: "사이드카: 웹 검색 & 비전", "zh-CN": "边车：网络搜索与视觉", ru: "Сайдкары: веб-поиск и зрение", ja: "サイドカー: ウェブ検索 & ビジョン" }, slug: "guides/sidecars" },
             { label: "Image Bridge", translations: { ko: "이미지 브릿지", "zh-CN": "图像桥接", ru: "Image Bridge", ja: "画像ブリッジ" }, slug: "guides/image-bridge" },
             { label: "Video Bridge", translations: { ko: "비디오 브릿지", "zh-CN": "视频桥接", ru: "Video Bridge", ja: "動画ブリッジ" }, slug: "guides/video-bridge" },

@@ -22,8 +22,33 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
+import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
+
+export type { ConfigFormat };
+
+/**
+ * One entry opencodex owns inside a client's config: the JSON path to it and
+ * the value we put there.
+ *
+ * A path list rather than a single provider key because ownership is not
+ * always one entry — Kimi owns its provider block AND one model entry per
+ * model, and a writer that only knew about the provider would strand the rest
+ * (devlog 260802 006 §2).
+ */
+export interface ManagedFragment {
+  path: readonly string[];
+  value: unknown;
+}
+
+/** Everything opencodex contributes to one client's config, as one unit. */
+export interface ManagedContribution {
+  clientId: ExportClientId;
+  fragments: readonly ManagedFragment[];
+}
+
+export type BuildContribution = (ctx: ExportContext) => ManagedContribution;
 
 export interface OpencodeLaunchEnv {
   [key: string]: string | undefined;
@@ -87,6 +112,32 @@ export const PI_API_KEY_ENV = "OPENCODEX_API_KEY";
 /** Pi's reference form for the admission key. Never the value. */
 export const PI_API_KEY_ENV_REF = `$${PI_API_KEY_ENV}`;
 
+/**
+ * Hermes interpolates `${VAR}` anywhere in config.yaml, so the credential stays
+ * in the environment exactly as it does for OpenCode and Pi.
+ */
+export const HERMES_API_KEY_ENV = "OPENCODEX_HERMES_API_KEY";
+export const HERMES_API_KEY_ENV_REF = `\${${HERMES_API_KEY_ENV}}`;
+
+/** OpenClaw interpolates `${UPPERCASE_VAR}` and fails closed when it is unset. */
+export const OPENCLAW_API_KEY_ENV = "OPENCODEX_OPENCLAW_API_KEY";
+export const OPENCLAW_API_KEY_ENV_REF = `\${${OPENCLAW_API_KEY_ENV}}`;
+
+/**
+ * Kimi Code reads credentials ONLY from its config file — it never falls back
+ * to the shell environment. A loopback bind needs no real admission key, so we
+ * emit the same placeholder the Grok managed block uses rather than a user
+ * secret; a non-loopback bind is refused by the writer instead of papered over.
+ */
+export const KIMI_LOOPBACK_PLACEHOLDER = "opencodex-loopback";
+
+/**
+ * Gajae's `apiKeyEnv` is env-name-only and fail-closed. Its sibling `apiKey`
+ * falls back to treating the literal text as the token when the variable is
+ * unset, which would silently ship a bogus credential — so we never emit it.
+ */
+export const GAJAE_API_KEY_ENV = "OPENCODEX_GAJAE_API_KEY";
+
 /** Pi's wire-dialect selector for an OpenAI-compatible endpoint. */
 const PI_API_DIALECT = "openai-completions";
 
@@ -130,6 +181,49 @@ export function opencodeProxyBaseUrl(port: number, hostname?: string): string {
 }
 
 /**
+ * Hermes resolves its home the way cc-switch's writer does: an explicit
+ * `HERMES_HOME`, then Windows `%LOCALAPPDATA%\hermes`, then `~/.hermes`.
+ */
+export function hermesHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.HERMES_HOME?.trim();
+  if (override) return override;
+  if (process.platform === "win32") {
+    const local = env.LOCALAPPDATA?.trim();
+    return join(local && local.length > 0 ? local : join(home, "AppData", "Local"), "hermes");
+  }
+  return join(home, ".hermes");
+}
+
+export function hermesConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(hermesHomeDir(env, home), "config.yaml");
+}
+
+export function openclawHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(home, ".openclaw");
+}
+
+export function openclawConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(openclawHomeDir(env, home), "openclaw.json");
+}
+
+export function kimiHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.KIMI_CODE_HOME?.trim();
+  return override && override.length > 0 ? override : join(home, ".kimi-code");
+}
+
+export function kimiConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(kimiHomeDir(env, home), "config.toml");
+}
+
+export function gajaeHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(home, ".gjc");
+}
+
+export function gajaeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(gajaeHomeDir(env, home), "agent", "models.yml");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -157,7 +251,13 @@ export interface ExportContext {
   config?: OcxConfig;
 }
 
-export type ExportClientId = "opencode" | "pi";
+export type ExportClientId =
+  | "opencode"
+  | "pi"
+  | "hermes"
+  | "openclaw"
+  | "kimi"
+  | "gajae";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -170,6 +270,35 @@ export interface ExportClientSpec {
   /** Shell line the user runs before launching the client. */
   exportHint: string;
   build: (ctx: ExportContext) => unknown;
+  /**
+   * Text format of the client's config file. `filename` already carries the
+   * extension; this drives serialization and the download media type so no
+   * consumer has to infer either from the name.
+   */
+  format: ConfigFormat;
+  /**
+   * Count models in THIS client's document shape. Required so a new client
+   * cannot be added without teaching the summarizer about it — the old
+   * "anything that is not OpenCode must be Pi" branch was a latent bug.
+   */
+  summarize: (document: unknown) => { modelCount: number; modelsWithoutLimits: number };
+  /**
+   * The fragments opencodex owns inside this client's config. Only the builder
+   * knows where a client keeps our entries, so ownership paths originate here
+   * rather than being re-derived by the writer.
+   */
+  buildContribution: BuildContribution;
+  /**
+   * True when this client can only reach a loopback bind.
+   *
+   * `/v1/chat/completions` rejects bearer credentials and requires the
+   * dedicated `x-opencodex-api-key` header (AUTH_MATRIX in
+   * src/server/auth-cors.ts). A client whose schema has no place to put that
+   * header therefore cannot authenticate against a remote bind at all — so we
+   * say so rather than exporting a config that 401s. Same reasoning as the
+   * Grok managed block's non-loopback refusal.
+   */
+  loopbackOnly: boolean;
 }
 
 /**
@@ -307,6 +436,92 @@ export interface PiGeneratedConfig {
 }
 
 /**
+ * Hermes `~/.hermes/config.yaml`. We emit ONLY the provider entry — never
+ * `model.default` — because hijacking the user's main model is not what a
+ * connect action asks for.
+ */
+export interface HermesProviderBlock {
+  api: string;
+  api_key: string;
+  api_mode: "chat_completions";
+  /** We supply the list, so skip their live `/models` probe. */
+  discover_models: false;
+  models: string[];
+  extra_headers?: Record<string, string>;
+}
+
+export interface HermesGeneratedConfig {
+  providers: Record<string, HermesProviderBlock>;
+}
+
+export interface OpenclawModelEntry {
+  id: string;
+  name: string;
+  contextWindow?: number;
+}
+
+export interface OpenclawProviderBlock {
+  baseUrl: string;
+  apiKey: string;
+  api: "openai-completions";
+  models: OpenclawModelEntry[];
+  headers?: Record<string, string>;
+}
+
+/** `mode: "merge"` keeps OpenClaw's bundled catalog alongside ours. */
+export interface OpenclawGeneratedConfig {
+  models: {
+    mode: "merge";
+    providers: Record<string, OpenclawProviderBlock>;
+  };
+}
+
+export interface KimiProviderBlock {
+  type: "openai";
+  base_url: string;
+  api_key: string;
+}
+
+/**
+ * `max_context_size` is mandatory and must be positive, so a model with no
+ * authoritative context window is omitted from the document entirely rather
+ * than guessed at. `capabilities` is never emitted: our catalog does not
+ * assert them, and Kimi's own inference works off OpenAI-style name prefixes
+ * that a routed selector will not match.
+ */
+export interface KimiModelBlock {
+  provider: string;
+  model: string;
+  max_context_size: number;
+  display_name?: string;
+}
+
+export interface KimiGeneratedConfig {
+  providers: Record<string, KimiProviderBlock>;
+  models: Record<string, KimiModelBlock>;
+}
+
+export interface GajaeModelEntry {
+  id: string;
+  name: string;
+  input: string[];
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+/** Gajae validates strictly: an unknown field fails the whole config. */
+export interface GajaeProviderBlock {
+  baseUrl: string;
+  apiKeyEnv: string;
+  api: "openai-completions";
+  models: GajaeModelEntry[];
+}
+
+export interface GajaeGeneratedConfig {
+  providers: Record<string, GajaeProviderBlock>;
+}
+
+/**
  * Pi's `~/.pi/agent/models.json` shape. `models` is an ARRAY (identity lives in `id`),
  * unlike OpenCode's keyed object.
  *
@@ -346,6 +561,199 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
   };
 }
 
+/** Extra headers a non-loopback bind needs, or nothing on loopback. */
+function proxyAdmissionHeaders(config: OcxConfig | undefined, envRef: string): Record<string, string> | undefined {
+  return shouldInjectApiAuthHeader(config) ? { "x-opencodex-api-key": envRef } : undefined;
+}
+
+function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
+  const models = normalizeExportModels(ctx.models).map(model => model.namespaced);
+  const headers = proxyAdmissionHeaders(ctx.config, HERMES_API_KEY_ENV_REF);
+  return {
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        api: ctx.baseUrl,
+        api_key: HERMES_API_KEY_ENV_REF,
+        api_mode: "chat_completions",
+        discover_models: false,
+        models,
+        ...(headers ? { extra_headers: headers } : {}),
+      },
+    },
+  };
+}
+
+function buildOpenclawClientConfig(ctx: ExportContext): OpenclawGeneratedConfig {
+  const models: OpenclawModelEntry[] = normalizeExportModels(ctx.models).map(model => {
+    const context = authoritativeContextWindow(model.contextWindow);
+    return {
+      id: model.namespaced,
+      name: exportModelLabel(model),
+      ...(context !== undefined ? { contextWindow: context } : {}),
+    };
+  });
+  const headers = proxyAdmissionHeaders(ctx.config, OPENCLAW_API_KEY_ENV_REF);
+  return {
+    models: {
+      mode: "merge",
+      providers: {
+        [OPENCODE_PROVIDER_ID]: {
+          baseUrl: ctx.baseUrl,
+          apiKey: OPENCLAW_API_KEY_ENV_REF,
+          api: "openai-completions",
+          models,
+          ...(headers ? { headers } : {}),
+        },
+      },
+    },
+  };
+}
+
+/** Kimi's model alias: one key per model, namespaced under our provider id. */
+export function kimiModelAlias(namespaced: string): string {
+  return `${OPENCODE_PROVIDER_ID}/${namespaced}`;
+}
+
+function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
+  const models: Record<string, KimiModelBlock> = {};
+  for (const model of normalizeExportModels(ctx.models)) {
+    const context = authoritativeContextWindow(model.contextWindow);
+    // `max_context_size` is mandatory and must be positive. We do not guess it,
+    // so a model without an authoritative window is left out rather than
+    // shipped with a number we invented.
+    if (context === undefined) continue;
+    models[kimiModelAlias(model.namespaced)] = {
+      provider: OPENCODE_PROVIDER_ID,
+      model: model.namespaced,
+      max_context_size: context,
+      ...(model.displayName ? { display_name: model.displayName } : {}),
+    };
+  }
+  return {
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        type: "openai",
+        base_url: ctx.baseUrl,
+        api_key: KIMI_LOOPBACK_PLACEHOLDER,
+      },
+    },
+    models,
+  };
+}
+
+function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
+  const models: GajaeModelEntry[] = normalizeExportModels(ctx.models).map(model => {
+    const entry: GajaeModelEntry = {
+      id: model.namespaced,
+      name: exportModelLabel(model),
+      input: model.inputModalities && model.inputModalities.length > 0
+        ? [...model.inputModalities]
+        : ["text"],
+    };
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) {
+      entry.contextWindow = context;
+      entry.maxTokens = outputBudgetFor(context);
+    }
+    return entry;
+  });
+  return {
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        baseUrl: ctx.baseUrl,
+        apiKeyEnv: GAJAE_API_KEY_ENV,
+        api: "openai-completions",
+        models,
+      },
+    },
+  };
+}
+
+/**
+ * Per-client model counts, read back off the SERIALIZED document rather than
+ * recomputed from the input rows: `modelsWithoutLimits` drives a GUI line about
+ * the bytes the user actually receives, so a parallel reimplementation of the
+ * "authoritative context window" rule would be free to drift from it.
+ */
+function summarizeOpencode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = Object.values((document as OpencodeGeneratedConfig | undefined)?.provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => !model.limit).length };
+}
+
+function summarizePi(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as PiGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
+function summarizeHermes(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as HermesGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  // Hermes carries selectors only; it has no per-model limit to be missing.
+  return { modelCount: models.length, modelsWithoutLimits: 0 };
+}
+
+function summarizeOpenclaw(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as OpenclawGeneratedConfig | undefined)?.models?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
+function summarizeKimi(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = Object.values((document as KimiGeneratedConfig | undefined)?.models ?? {});
+  // A model with no authoritative window is omitted entirely, so every model
+  // present carries max_context_size by construction.
+  return { modelCount: models.length, modelsWithoutLimits: 0 };
+}
+
+function summarizeGajae(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as GajaeGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
+/** One fragment at `path`, built from this client's own document. */
+function singleFragment(clientId: ExportClientId, path: readonly string[], value: unknown): ManagedContribution {
+  return { clientId, fragments: [{ path, value }] };
+}
+
+function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildOpencodeClientConfig(ctx);
+  return singleFragment("opencode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
+}
+
+function buildPiContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildPiClientConfig(ctx);
+  return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildHermesContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildHermesClientConfig(ctx);
+  return singleFragment("hermes", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildOpenclawContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildOpenclawClientConfig(ctx);
+  return singleFragment("openclaw", ["models", "providers", OPENCODE_PROVIDER_ID], doc.models.providers[OPENCODE_PROVIDER_ID]);
+}
+
+/**
+ * Kimi is why a contribution is a LIST: it owns the provider block AND one
+ * `models` entry per model. A writer that only knew about the provider would
+ * strand every model entry on disable.
+ */
+function buildKimiContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildKimiClientConfig(ctx);
+  const fragments: ManagedFragment[] = [
+    { path: ["providers", OPENCODE_PROVIDER_ID], value: doc.providers[OPENCODE_PROVIDER_ID] },
+  ];
+  for (const [alias, block] of Object.entries(doc.models)) {
+    fragments.push({ path: ["models", alias], value: block });
+  }
+  return { clientId: "kimi", fragments };
+}
+
+function buildGajaeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildGajaeClientConfig(ctx);
+  return singleFragment("gajae", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   opencode: {
     id: "opencode",
@@ -354,6 +762,11 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     apiKeyEnv: OPENCODE_API_KEY_ENV,
     exportHint: `export ${OPENCODE_API_KEY_ENV}=<your key>`,
     build: buildOpencodeClientConfig,
+    format: "json",
+    summarize: summarizeOpencode,
+    buildContribution: buildOpencodeContribution,
+    // carries the dedicated header in provider options
+    loopbackOnly: false,
   },
   pi: {
     id: "pi",
@@ -362,6 +775,68 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     apiKeyEnv: PI_API_KEY_ENV,
     exportHint: `export ${PI_API_KEY_ENV}=<your key>`,
     build: buildPiClientConfig,
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: buildPiContribution,
+    // No header field in Pi's provider block (and the schema is unverified
+    // against a real install), so there is nowhere to put the dedicated
+    // admission header a remote bind requires.
+    loopbackOnly: true,
+  },
+  hermes: {
+    id: "hermes",
+    filename: "hermes-config.yaml",
+    destination: env => hermesConfigPath(env),
+    apiKeyEnv: HERMES_API_KEY_ENV,
+    exportHint: `export ${HERMES_API_KEY_ENV}=<your key>`,
+    build: buildHermesClientConfig,
+    format: "yaml",
+    summarize: summarizeHermes,
+    buildContribution: buildHermesContribution,
+    // extra_headers carries the dedicated header
+    loopbackOnly: false,
+  },
+  openclaw: {
+    id: "openclaw",
+    filename: "openclaw.json5",
+    destination: env => openclawConfigPath(env),
+    apiKeyEnv: OPENCLAW_API_KEY_ENV,
+    exportHint: `export ${OPENCLAW_API_KEY_ENV}=<your key>`,
+    build: buildOpenclawClientConfig,
+    format: "json5",
+    summarize: summarizeOpenclaw,
+    buildContribution: buildOpenclawContribution,
+    // headers carries the dedicated header
+    loopbackOnly: false,
+  },
+  kimi: {
+    id: "kimi",
+    filename: "kimi-config.toml",
+    destination: env => kimiConfigPath(env),
+    // Kimi reads credentials only from its own file, so there is no env var to
+    // export: a loopback bind uses the placeholder, and a remote bind is
+    // refused rather than handed the user's real key.
+    apiKeyEnv: "",
+    exportHint: "Kimi Code reads credentials from its config file; loopback needs no key.",
+    build: buildKimiClientConfig,
+    format: "toml",
+    summarize: summarizeKimi,
+    buildContribution: buildKimiContribution,
+    // no header field, and credentials come only from this file
+    loopbackOnly: true,
+  },
+  gajae: {
+    id: "gajae",
+    filename: "gajae-models.yaml",
+    destination: env => gajaeConfigPath(env),
+    apiKeyEnv: GAJAE_API_KEY_ENV,
+    exportHint: `export ${GAJAE_API_KEY_ENV}=<your key>`,
+    build: buildGajaeClientConfig,
+    format: "yaml",
+    summarize: summarizeGajae,
+    buildContribution: buildGajaeContribution,
+    // strict schema with no header field, so the dedicated header has nowhere to go
+    loopbackOnly: true,
   },
 };
 
@@ -374,4 +849,29 @@ export function isExportClientId(value: string): value is ExportClientId {
 /** Single entry point every export surface calls. */
 export function buildClientConfig(client: ExportClientId, ctx: ExportContext): unknown {
   return EXPORT_CLIENTS[client].build(ctx);
+}
+
+/**
+ * The bytes a user actually receives, plus what they are. One place turns a
+ * client id into text so the CLI, the API and the GUI cannot disagree about
+ * format or media type — and so no consumer has to infer either from a
+ * filename.
+ */
+export function buildClientConfigText(
+  client: ExportClientId,
+  ctx: ExportContext,
+): { document: unknown; text: string; format: ConfigFormat; mediaType: string } {
+  const spec = EXPORT_CLIENTS[client];
+  const document = spec.build(ctx);
+  return {
+    document,
+    text: serializeDocument(document, spec.format),
+    format: spec.format,
+    mediaType: FORMAT_MEDIA_TYPE[spec.format],
+  };
+}
+
+/** The fragments opencodex owns in a client's config (writer-side). */
+export function buildClientContribution(client: ExportClientId, ctx: ExportContext): ManagedContribution {
+  return EXPORT_CLIENTS[client].buildContribution(ctx);
 }

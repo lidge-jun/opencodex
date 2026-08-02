@@ -1054,8 +1054,11 @@ switch (command) {
     } else if (integration === "claude") {
       const { handleClaudeConfigCommand } = await import("./integrations");
       process.exitCode = await handleClaudeConfigCommand(args.slice(2));
+    } else if (integration === "client") {
+      const { handleClientIntegrationCommand } = await import("./integrations");
+      process.exitCode = await handleClientIntegrationCommand(args.slice(2));
     } else {
-      console.error("Usage: ocx integration <claude|grok> <subcommand>");
+      console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
       process.exitCode = 2;
     }
     break;
