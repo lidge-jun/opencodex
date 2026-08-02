@@ -80,6 +80,7 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 | `thinkingBudgetModels?` | `string[]` | 정수 `thinking_budget`를 쓰는 chat 모델입니다. effort는 예산 비율로 매핑됩니다. |
 | `noVisionModels?` | `string[]` | vision sidecar로 보내는 텍스트 전용 모델입니다. 일치 판정은 Ollama `:size` 태그도 허용합니다. |
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic 호환 게이트웨이를 위해 내장 도구 이름을 이스케이프하고, 반환된 호출에서는 다시 복원합니다. |
+| `anthropicEofTolerance?` | `boolean` | `message_stop` 전에 스트림이 끝나도 표시 텍스트 또는 완전한 JSON 객체 툴 입력을 받은 경우에만 완료를 허용합니다（Anthropic 호환 게이트웨이용）. 기본값은 꺼짐. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 전송/인증 모드입니다. 기본값은 `ai-studio`입니다. |
 | `project?` | `string` | Vertex 또는 Antigravity Cloud Code Assist 프로젝트 id입니다. |
 | `location?` | `string` | Vertex 위치입니다. 환경 변수 폴백은 `GOOGLE_CLOUD_LOCATION`입니다. |

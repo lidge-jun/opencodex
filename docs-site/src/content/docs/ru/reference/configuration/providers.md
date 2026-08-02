@@ -96,6 +96,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `thinkingBudgetModels?` | `string[]` | Chat-модели, использующие целочисленный `thinking_budget`; effort отображается в долю бюджета. |
 | `noVisionModels?` | `string[]` | Text-only-модели, идущие через vision sidecar; при сопоставлении tolerируется тег Ollama вида `:size`. |
 | `escapeBuiltinToolNames?` | `boolean` | Экранировать built-in tool name'ы для Anthropic-compatible gateway'ев и восстанавливать их в возвращаемых call'ах. |
+| `anthropicEofTolerance?` | `boolean` | Позволяет Anthropic-совместимому шлюзу завершить поток до `message_stop`, только если получен видимый текст или полный JSON-объект аргументов инструмента. По умолчанию выключено. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Режим транспорта/аутентификации Google. По умолчанию `ai-studio`. |
 | `project?` | `string` | Идентификатор проекта Vertex или Antigravity Cloud Code Assist. |
 | `location?` | `string` | Локация Vertex; fallback через окружение — `GOOGLE_CLOUD_LOCATION`. |

@@ -277,7 +277,39 @@ function usableToolUseId(id: unknown): string {
   return typeof id === "string" && id.trim() ? id : synthesizeToolUseId();
 }
 
-function toolUseArguments(input: unknown): string {
+/**
+ * Bound repair for a malformed tool-arguments string under the compatibility profile (#658):
+ * a gateway such as AgentRouter can concatenate JSON objects (`{}{"value":42}`). Find the
+ * last parseable JSON object by scanning suffixes from each object-open brace and prefixes
+ * ending at each object-close brace, bounded so hostile input cannot cost unbounded time.
+ */
+function lastValidJsonObject(input: string, maxCandidates: number): string | undefined {
+  const opens: number[] = [];
+  const closes: number[] = [];
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] === "{") opens.push(i);
+    else if (input[i] === "}") closes.push(i);
+  }
+  let tried = 0;
+  for (let i = opens.length - 1; i >= 0 && tried < maxCandidates; i--, tried++) {
+    const candidate = input.slice(opens[i]);
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return candidate;
+    } catch { /* keep scanning */ }
+  }
+  tried = 0;
+  for (let i = closes.length - 1; i >= 0 && tried < maxCandidates; i--, tried++) {
+    const candidate = input.slice(0, closes[i] + 1);
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return candidate;
+    } catch { /* keep scanning */ }
+  }
+  return undefined;
+}
+
+function toolUseArguments(input: unknown, lenient = false): string {
   if (typeof input === "string") {
     const trimmed = input.trim();
     if (!trimmed) return "{}";
@@ -285,6 +317,10 @@ function toolUseArguments(input: unknown): string {
       JSON.parse(trimmed);
       return trimmed;
     } catch {
+      if (lenient) {
+        const repaired = lastValidJsonObject(trimmed, 32);
+        if (repaired !== undefined) return repaired;
+      }
       // A tool call's arguments must be a JSON object. Re-encoding an unparseable string as a
       // JSON *string* is the double-encoding #765 reports: the caller then receives
       // `"get weather"` where an object was required and the tool call is unusable either way.
@@ -798,6 +834,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
+      let sawVisibleText = false;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -853,6 +890,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 const delta = data.delta as Record<string, unknown> | undefined;
                 if (!delta) break;
                 if (delta.type === "text_delta" && typeof delta.text === "string") {
+                  sawVisibleText = true;
                   yield { type: "text_delta", text: delta.text };
                 } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
                   yield { type: "thinking_delta", thinking: delta.thinking };
@@ -951,6 +989,26 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
             usage: usageFromAnthropic(pendingUsage),
             ...(stopReason ? { stopReason } : {}),
           };
+        } else if (provider.anthropicEofTolerance === true) {
+          // AgentRouter-style compatibility profile (#658): the upstream can close the stream
+          // after valid content without terminal frames. Complete only when visible text was
+          // received or an open tool call has complete JSON-object arguments; everything else
+          // (incomplete tool JSON, no usable content, transport failure) stays a truncation
+          // error, matching the strict default.
+          if (currentToolCallId) {
+            if (streamedToolArgumentsParse(currentToolCallJson)) {
+              budget.closeCall(currentToolCallId);
+              currentToolCallId = "";
+              yield { type: "tool_call_end" };
+              yield* emitDone();
+            } else {
+              yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
+            }
+          } else if (sawVisibleText) {
+            yield* emitDone();
+          } else {
+            yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
+          }
         } else {
           yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
         }
@@ -980,7 +1038,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "tool_use") {
             const id = usableToolUseId(block.id);
             events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
-            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
+            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input, provider.anthropicEofTolerance === true) });
             events.push({ type: "tool_call_end" });
           }
         }

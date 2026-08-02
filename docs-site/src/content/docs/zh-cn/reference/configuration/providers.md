@@ -80,6 +80,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `thinkingBudgetModels?` | `string[]` | 使用整数 `thinking_budget` 的 chat 模型；effort 会映射为预算比例。 |
 | `noVisionModels?` | `string[]` | 经由视觉 sidecar 发送的纯文本模型；匹配时会容忍 Ollama 的 `:size` 标记。 |
 | `escapeBuiltinToolNames?` | `boolean` | 为 Anthropic 兼容网关转义内置工具名，并在返回的调用中恢复。 |
+| `anthropicEofTolerance?` | `boolean` | 允许 Anthropic 兼容网关在 `message_stop` 前结束流，仅当已收到可见文本或完整的 JSON 对象工具输入时。默认关闭。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 传输/身份验证模式。默认 `ai-studio`。 |
 | `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 项目 id。 |
 | `location?` | `string` | Vertex 位置；环境变量回退为 `GOOGLE_CLOUD_LOCATION`。 |

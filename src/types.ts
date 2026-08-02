@@ -1105,6 +1105,13 @@ export interface OcxProviderConfig {
   /** Anthropic-compatible gateways that need custom tool names escaped on the wire. */
   escapeBuiltinToolNames?: boolean;
   /**
+   * Anthropic-compatible gateways (e.g. AgentRouter) that may close the stream before
+   * `message_stop`. With this enabled the adapter completes an otherwise-clean EOF only when
+   * visible text was received or an open tool call has complete JSON-object arguments; all
+   * other EOFs remain truncation errors. Absent = strict default behavior.
+   */
+  anthropicEofTolerance?: boolean;
+  /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.
    */

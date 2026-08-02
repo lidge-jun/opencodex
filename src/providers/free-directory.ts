@@ -45,6 +45,8 @@ export interface FreeDirectoryProvider {
   keyOptional?: boolean;
   models?: string[];
   liveModels: boolean;
+  /** Anthropic-compatible gateways that may close streams before terminal frames. */
+  anthropicEofTolerance?: boolean;
   note?: string;
   googleMode?: "ai-studio" | "vertex";
 }
@@ -116,7 +118,7 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   // `unverified` and drops the shared verification date rather than borrowing it.
   bytez: openAi("https://api.bytez.com/models/v2/openai/v1", "https://bytez.com", { verification: "unverified", lastVerified: undefined, documentationUrl: "https://docs.bytez.com/", discovery: "static", liveModels: false, models: ["meta-llama/Llama-3.3-70B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "Qwen/Qwen2.5-72B-Instruct"], note: "The recurring-credit classification is retained from the requested catalog, but the current reset terms could not be independently verified." }),
   "nous-research": openAi("https://inference-api.nousresearch.com/v1", "https://portal.nousresearch.com", { discovery: "static", liveModels: false, models: ["Hermes-4-405B", "Hermes-4-70B"] }),
-  agentrouter: { baseUrl: "https://agentrouter.org", dashboardUrl: "https://agentrouter.org", adapter: "anthropic", authKind: "key", supportLevel: "experimental", verification: "primary", modelsUrl: "https://agentrouter.org/v1/models", lastVerified: LAST_VERIFIED, discovery: "live", liveModels: true },
+  agentrouter: { baseUrl: "https://agentrouter.org", dashboardUrl: "https://agentrouter.org", adapter: "anthropic", authKind: "key", supportLevel: "experimental", verification: "primary", modelsUrl: "https://agentrouter.org/v1/models", lastVerified: LAST_VERIFIED, discovery: "live", liveModels: true, anthropicEofTolerance: true },
   ai21: openAi("https://api.ai21.com/studio/v1", "https://studio.ai21.com/account/api-key", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.ai21.com/reference/models" }),
   baichuan: openAi("https://api.baichuan-ai.com/v1", "https://platform.baichuan-ai.com/console/apikey", { verification: "official" }),
   // Verified end-to-end 2026-07-30: /v1/models returns the OpenAI-shaped live catalog (13 models),

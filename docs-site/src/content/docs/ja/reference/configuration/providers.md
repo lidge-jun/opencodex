@@ -80,6 +80,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `thinkingBudgetModels?` | `string[]` |整数 `thinking_budget` を使用したチャット モデル。労力は予算の一部にマッピングされます。 |
 | `noVisionModels?` | `string[]` |ビジョン サイドカーを通じて送信されるテキストのみのモデル。マッチングでは、Ollama `:size` タグが許容されます。 |
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic 互換ゲートウェイの組み込みツール名をエスケープし、返された呼び出しで復元します。 |
+| `anthropicEofTolerance?` | `boolean` | `message_stop` 前にストリームが終了しても、可視テキストまたは完全な JSON オブジェクトのツール入力が受信済みの場合に限り完了を許可します（Anthropic 互換ゲートウェイ向け）。デフォルトはオフ。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google トランスポート/認証モード。デフォルトは`ai-studio`です。 |
 | `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。 |
 | `location?` | `string` |頂点の位置。環境フォールバックは `GOOGLE_CLOUD_LOCATION` です。 |
