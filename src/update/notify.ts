@@ -92,7 +92,7 @@ function gt(a: number[], b: number[]): boolean {
 export function isNewer(latest: string, current: string, channel: Channel): boolean {
   if (channel === "latest") {
     const l = parseStable(latest);
-    const c = parseStable(current);
+    const c = parseStable(current) ?? parsePreview(current)?.slice(0, 3);
     if (!l || !c) return false;
     return gt(l, c);
   }

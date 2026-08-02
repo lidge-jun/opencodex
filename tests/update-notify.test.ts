@@ -38,6 +38,10 @@ describe("isNewer — latest channel", () => {
   test("prereleases are ignored on the stable channel", () => {
     expect(isNewer("2.7.0-preview.1", "2.6.4", "latest")).toBe(false);
   });
+  test("stable releases compare against a preview current by its base version", () => {
+    expect(isNewer("2.9.1", "2.8.2-preview.20260731", "latest")).toBe(true);
+    expect(isNewer("2.9.1", "2.9.1-preview.20260731", "latest")).toBe(false);
+  });
 });
 
 describe("isNewer — preview channel", () => {
