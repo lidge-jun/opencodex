@@ -239,7 +239,7 @@ Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`는 `ocx init`과 dashboard Add
 Provider picker에 실험적 local config 항목으로 표시되며, Cursor의 static fallback model catalog
 metadata를 저장합니다. Cursor access token이 설정되면 opencodex는 Cursor live HTTP/2 transport를
-사용합니다. v2.7.1 폴백 목록에는 1M 컨텍스트의 `gpt-5.6-sol` / `terra` / `luna`, 500K 컨텍스트의
+사용합니다. 번들 폴백 목록에는 1M 컨텍스트의 `gpt-5.6-sol` / `terra` / `luna`, 500K 컨텍스트의
 `grok-4.5` / `grok-4.5-fast`, 262K 컨텍스트의 `kimi-k3`가 들어 있으며, 실시간 탐색 결과에 따라
 현재 계정에 표시할 모델을 결정합니다. Cursor는 Kimi K3를 effort 접미사가 붙은 wire id로만
 제공하므로 `cursor/kimi-k3`는 `low` / `high` / `max` 래더를 노출하고 기본값은 모델 문서의 API

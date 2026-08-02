@@ -1,134 +1,168 @@
 ---
 title: 서브에이전트 서피스 (v1 / base / v2)
-description: 모든 모델의 Codex 서브에이전트 생성·관리 방식을 전역으로 제어합니다.
+description: Codex가 모든 모델에서 서브에이전트를 생성하고 관리하는 방식을 제어합니다.
 ---
 
-opencodex에서는 카탈로그의 모든 모델이 사용할 멀티에이전트 협업 서피스를 선택할 수 있습니다. 대시보드와 모델 페이지의 **서브에이전트** 토글이 이 값을 전역으로 제어합니다.
+## 서브에이전트란
 
-:::note
-v2 서피스(`multi_agent_v2`)의 서브에이전트는 **기본적으로** 부모 모델을 상속합니다. `fork_turns` 기본값이 `all`이고, 전체 히스토리 fork는 오버라이드를 거부하기 때문입니다. v2.7.2부터 opencodex가 상속을 깨는 방법을 가이드로 주입합니다. `fork_turns`를 `"none"`(또는 `"3"` 같은 부분 fork)으로 지정한 `spawn_agent` 호출은 `model` / `reasoning_effort` 인자를 전달할 수 있고, 공개된 툴 스키마에 이 인자가 안 보여도 Codex 런타임은 파싱해서 적용합니다. 알려진 전송 제한: **네이티브** 부모가 **비네이티브**(라우팅) 프로바이더의 자식을 스폰하면 Codex 클라이언트가 `NEW_TASK` 페이로드를 백엔드 암호화된 `encrypted_content`로만 볼 수 있습니다([#92](https://github.com/lidge-jun/opencodex/issues/92)). opencodex는 읽을 수 없는 작업을 외부 프로바이더로 전달하지 않습니다. 직접 라우팅은 HTTP 400과 `unreadable_encrypted_agent_task` 코드로 실패하고, 콤보는 복호화할 수 없는 대상은 제외하고 가능하면 정규 네이티브 ChatGPT 대상을 선택합니다. 이종 프로바이더 위임에는 v1을 쓰거나, 네이티브 ChatGPT 자식을 선택하거나, 작업을 평문 v2 `agent_message` 콘텐츠로 다시 볼 수 있습니다.
-:::
+서브에이전트는 메인 에이전트가 집중된 작업을 맡기기 위해 생성할 수 있는 별도의 Codex 작업자입니다. 자체 컨텍스트와 도구를 가지므로 서로 독립적인 작업을 병렬로 진행할 수 있습니다. opencodex는 어떤 Codex 협업 서피스가 이 작업자들을 노출할지, Codex가 서브에이전트에 어떤 모델을 제공할지, 실패한 모델이 어떻게 대체 경로로 넘어갈지를 제어합니다. 다만 메인 에이전트가 언제 위임해야 하는지는 결정하지 않습니다.
 
 ## 모드
 
-| 모드 | 서피스 | 동작 |
+새 세션에는 원하는 모드를 고르세요. 이미 시작된 세션은 시작할 때의 서피스를 유지합니다.
+
+| 모드 | Codex에 제공되는 것 | 누구에게 적합한가 |
 | --- | --- | --- |
-| **v1** | `multi_agent_v1` | 네임스페이스 방식의 클래식 에이전트 툴과 `send_input` / `close_agent` / `resume_agent`를 사용합니다. `spawn_agent` 모델 오버라이드로 다른 모델의 서브에이전트를 띄울 수 있습니다. |
-| **base** (기본값) | 업스트림 핀 | 업스트림 모델 핀을 복원합니다. gpt-5.6-sol과 gpt-5.6-terra는 v2, gpt-5.6-luna는 v1을 쓰고, 핀이 없는 모델은 Codex `multi_agent_v2` 기능 플래그를 따릅니다. 실제 스폰 동작은 각 모델에 결정된 서피스를 따릅니다. |
-| **v2** | `multi_agent_v2` | 플랫 `spawn_agent` 툴과 동시 세션, `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`를 사용합니다. 전체 히스토리 fork에서는 자식이 부모 모델을 상속하고, `fork_turns: "none"`(또는 부분 fork)에서는 `model` / `reasoning_effort` 오버라이드가 적용됩니다. 네이티브→라우팅 자식이 백엔드 암호화된 작업 콘텐츠만 받으면 외부 라우팅은 `unreadable_encrypted_agent_task`를 반환하고, 혼합 콤보는 복호화 가능한 네이티브 대상을 우선합니다([#92](https://github.com/lidge-jun/opencodex/issues/92)). |
+| **v1** | 네임스페이스 방식의 클래식 `spawn_agent`, `send_input`, `resume_agent`, `close_agent` 툴을 제공합니다. 스폰 시 다른 모델을 직접 고를 수 있습니다. | 서로 다른 프로바이더를 넘나드는 위임을 안정적으로 써야 하는 초보자에게 적합합니다. 특히 네이티브에서 라우팅된 자식으로 넘어가는 경우에 좋습니다. |
+| **base** (기본값) | 업스트림 모델 핀을 따릅니다. GPT-5.6 Sol/Terra는 v2를, Luna는 v1을 사용하고, 핀이 없는 모델은 Codex의 `multi_agent_v2` 기능 플래그를 따릅니다. | 대부분의 사용자에게 적합합니다. 전역 강제 없이 각 모델에 대해 Codex가 의도한 서피스를 따릅니다. |
+| **v2** | 플랫 `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, 에이전트 목록 툴을 제공하며, 동시 세션을 지원합니다. | 더 새로운 동시 워크플로를 원하고, 모델 상속과 아래의 암호화 작업 제한을 이해하는 사용자에게 적합합니다. |
 
-### 암호화된 v2 작업 전달
-
-네이티브 ChatGPT 백엔드만 자신의 암호화된 작업 페이로드를 읽을 수 있습니다. 읽을 수 없는 v2 `agent_message`에 대해 opencodex는 프로바이더 디스패치 전에 다음 규칙을 적용합니다.
-
-- 비네이티브 직접 라우팅은 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환합니다. 응답에 암호화된 페이로드를 담지 않습니다.
-- 콤보는 재시도를 포함해 해당 작업에 정규 네이티브 ChatGPT 대상만 고려합니다. 복호화 가능한 대상이 없으면 외부 프로바이더로 빈 작업을 볼 수 있는 대신 같은 400 응답을 반환합니다.
-- 읽을 수 있는 평문 작업은 기존 콤보 순서와 페일오버 동작을 그대로 따릅니다.
-
-복구하려면 자식을 네이티브 ChatGPT 모델로 바꾸거나, 콤보에 네이티브 대상을 추가하거나, 이종 프로바이더 위임에 v1 서피스를 쓰거나, 호출자를 제어할 수 있으면 작업을 평문 v2 `agent_message` 콘텐츠로 다시 볼 수 있습니다.
+:::tip[헷갈리시나요?]
+**base**부터 시작하세요. 서로 다른 프로바이더를 안정적으로 넘나드는 위임이 필요하면 **v1**을 고르세요. 모든 카탈로그 항목에서 더 새로운 세션 모델을 명시적으로 쓰고 싶을 때만 **v2**를 강제로 선택하세요.
+:::
 
 ## 동작 방식
 
-선택한 모드는 Codex가 읽는 모든 카탈로그 항목의 `multi_agent_version` 필드를 설정합니다.
+선택한 모드는 Codex가 읽는 모든 카탈로그 항목의 `multi_agent_version` 필드를 결정합니다.
 
-- **v1 모드**: 모든 항목에 `multi_agent_version = "v1"`을 강제해 업스트림 핀을 덮어씁니다.
-- **base 모드**: 업스트림 기본값을 복원합니다. 핀이 있는 모델은 스냅샷 값을 쓰고, 핀이 없는 모델은 필드를 제거해 Codex 기능 플래그가 결정하게 합니다.
-- **v2 모드**: 모든 항목에 `multi_agent_version = "v2"`를 강제해 업스트림 핀을 덮어씁니다.
+- **v1**은 모든 모델에 `multi_agent_version = "v1"`을 설정합니다.
+- **base**는 업스트림 핀을 복원합니다. 핀이 없는 항목은 기본 `multi_agent_v2` 기능 플래그를 따릅니다.
+- **v2**는 모든 모델에 `multi_agent_version = "v2"`를 설정합니다.
 
-이 오버라이드는 라이브 `/v1/models` 카탈로그 응답과 디스크 카탈로그 동기화 양쪽에서 마지막 패스로 실행됩니다. 따라서 항목이 어떤 경로로 만들어졌든 새 세션부터 같은 모드가 적용됩니다.
+opencodex는 이 값을 Codex가 읽는 실시간 `/v1/models` 카탈로그와 디스크에 동기화된 카탈로그 모두에 마지막 단계로 적용합니다. 그래서 모드를 바꾸면 새로 만들어지는 App, CLI, TUI 세션에 일관되게 반영됩니다.
 
-### 위임 모델과 추론 강도
+v2 로스터의 경우 적합성은 세 가지 상태로 나뉩니다. `"v2"`로 표시된 항목, 명시적으로 `null`로 설정된 항목, 또는 `multi_agent_version` 필드가 없는 항목은 사용 가능합니다. 진짜 `"v1"` 핀은 해당 모델이 다른 협업 서피스에 속한다고 명시하므로 제외됩니다.
 
-대시보드의 **서브에이전트 위임** 선택기는 `injectionModel`과 선택 사항인 `injectionEffort`를 저장합니다. 선택한 값은 OpenCodex가 작성하는 위임 가이드에 사용되며, 이 가이드는 `multiAgentGuidanceEnabled`가 별도로 제어합니다. 이 값은 프록시가 스폰 요청을 다른 모델로 다시 라우팅하는 규칙이 아닙니다. `injectionPrompt`를 지정하면 내장 가이드 문구 전체를 원하는 텍스트로 교체할 수 있습니다.
+## 위임 모델과 추론 강도
 
-`syncCodexSubagentDefaults`를 명시적으로 켜면 OpenCodex가 활성 Codex 라우팅을 관리하는 경우 다음 sync 또는 restart에서 선택한 모델과 강도를 Codex 네이티브 `[agents]` 서브에이전트 기본값으로 적용합니다. 외부 사용자 관리 provider 설정은 변경하지 않습니다. 이 기본값은 새로 생성되는 Codex task에만 적용되며 위임 자체를 일으키지는 않습니다. 기존 사용자 소유 `[agents]` 기본값은 덮어쓰지 않고 보존하므로, 요청한 기본값과 실제 Codex 기본값이 다를 수 있습니다.
+대시보드의 **서브에이전트 위임** 설정은 다음 세 가지 값을 제어합니다.
 
-`multiAgentGuidanceText`는 요청에 들어온 툴 목록으로 서피스를 판별합니다. Codex Desktop의 WebSocket 경로(`responses_lite`)처럼 툴이 요청의 `tools` 배열 대신 `additional_tools` input 항목으로 도착하는 경우도 인식합니다.
+- `injectionModel`은 opencodex 가이드에서 선호하는 작업자 모델입니다.
+- `injectionEffort`는 해당 모델에 요청할 선택적 `reasoning_effort`입니다.
+- `injectionPrompt`는 내장 v2 가이드 문구를 바꿉니다.
 
-**v2** 요청(base 모드의 Sol/Terra, v2 모드에서는 전체 모델)에서는 유효한 주입 모델이 설정되어 있거나 실효 서브에이전트 로스터가 비어 있지 않을 때 700자 이내의 간결한 가이드를 주입합니다. 가이드는 `model` / `reasoning_effort`가 현재 스키마에 노출되는지 단정하지 않고 조걸부로 override를 설명하며, `fork_turns: "none"`(또는 부분 fork) 규칙, 유효한 정규 slug의 선호 모델, Codex의 picker-visible·v2 호환·priority 순 상위 5개에 포함된 설정 모델과 사용 가능한 effort 사다리만 표시합니다.
+`multiAgentGuidanceEnabled`는 기본적으로 켜져 있으며, opencodex가 작성한 가이드에 대한 전역 스위치입니다. 이 값을 끄면 v2 지정 블록과 v1의 능동적 안내 문구가 모두 사라집니다.
 
-**v1** 요청에서는 최고 추론 단계(max / ultra)에서 업스트림과 동일한 능동 위임 문구만 미러링합니다. 모델 지정, 로스터, 커스텀 프롬프트는 v1에 추가되지 않습니다.
+이 값들은 메인 에이전트에 대한 지시이며, 프록시 쪽 스폰 라우터가 아닙니다. v2에서는 전체 히스토리 fork가 부모 모델을 상속하고 모델 또는 추론 강도 오버라이드를 거부합니다. 그래서 가이드는 `model` 또는 `reasoning_effort`를 넘길 때 `fork_turns: "none"`(또는 `"3"` 같은 양수 부분 turn 수)을 사용하고, 작업 메시지를 자체 완결형으로 만들라고 안내합니다.
 
-내장 v2 가이드를 교체하려면 `injectionPrompt`(config 키 또는 `PUT /api/injection-model`의 `prompt` 값)를 설정하세요. `{{model}}`, `{{effort}}`, `{{roster}}` 플레이스홀더가 설정된 주입 모델, 추론 강도, 해석된 로스터로 치환됩니다. 발화 조건은 그대로라서, 커스텀 프롬프트가 원래 침묵할 요청을 발화시키지는 않습니다.
+사용자 정의 `injectionPrompt`에는 다음 네 개의 플레이스홀더를 모두 쓸 수 있습니다.
+
+| 플레이스홀더 | 대체되는 값 |
+| --- | --- |
+| `{{model}}` | 설정된 `injectionModel`, 또는 빈 문자열 |
+| `{{effort}}` | 설정된 `injectionEffort`, 또는 빈 문자열 |
+| `{{roster}}` | 해석된 선택기 표시 가능, 서피스 호환 로스터 |
+| `{{fallback}}` | 설정된 전역 폴백 가이드 |
+
+내장 v2 가이드는 700자 예산을 가집니다. 이 한도를 넘기면 opencodex는 핵심 스폰 지시를 자르는 대신 로스터를 먼저 제거합니다. 가이드는 선호 모델, 적합한 로스터, 폴백 체인이 해석될 때만 발화합니다. 사용자 정의 프롬프트라고 해서 이 조건을 우회할 수는 없습니다.
+
+v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트림 스타일의 능동 위임 가이드만 주입합니다. v1에는 선호 모델, 로스터, 폴백 목록, 사용자 정의 프롬프트를 추가하지 않습니다.
+
+기본값이 꺼진 `syncCodexSubagentDefaults` 옵션은 가이드와 별개입니다. opencodex가 활성 Codex 라우팅을 소유하는 경우, 동기화나 재시작 시 선택한 값을 Codex TOML의 표식이 붙은 `[agents] default_subagent_model` 및 `default_subagent_reasoning_effort` 항목으로 쓸 수 있습니다. opencodex는 자신이 붙인 표식이 있는 필드만 갱신하거나 제거합니다. 대상 필드 중 하나라도 사용자 소유라면 부분 쓰기는 하지 않고 쌍을 그대로 둡니다. 애매한 TOML은 쓰기 없이 거부합니다. 외부 프로바이더 관리자와 사용자 소유 루트 라우팅도 여전히 최종 권한을 가집니다.
+
+## Fallback 체인
+
+스폰된 작업자에 대해 opencodex는 다음 우선순위를 적용합니다.
+
+1. 요청한 기본 모델
+2. 역할의 `$CODEX_HOME/agents/*.toml` 정의에 있는 `model_fallback` 목록
+3. opencodex 설정의 전역 `subagentModelFallback` 목록
+
+중복 모델 id는 첫 번째 출현을 유지한 채 제거합니다. 선택 과정에서 opencodex는 비활성화된 후보, 라우팅 불가 후보, 비활성화된 프로바이더가 받쳐주는 후보, unhealthy로 표시된 후보, cooldown 중인 후보, 사용할 수 있는 pooled Codex 계정이 없는 후보, 또는 설정된 quota 임계치를 넘는 후보를 건너뜁니다. 가용성 프로브는 기본값 60초인 `subagentModelFallbackPollMs` 동안 캐시됩니다.
+
+폴백이 호환되지 않는 암호화 작업을 읽을 수 있게 만들어 주지는 않습니다. 자식 작업이 ChatGPT용으로 암호화되어 있으면, 체인 앞쪽에 외부 모델이 있더라도 선택은 정규 네이티브 ChatGPT 대상만 허용됩니다.
+
+## 암호화된 v2 작업 전달
+
+Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `encrypted_content`로만 보낼 수 있습니다. 이 페이로드는 네이티브 ChatGPT 백엔드가 읽을 수 있지만 외부 프로바이더는 읽을 수 없습니다. 이것이 알려진 [#92 제한](https://github.com/lidge-jun/opencodex/issues/92)입니다.
+
+opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안전하게 실패합니다.
+
+- 비네이티브 직접 라우팅은 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환하며, 암호문을 에코하지 않습니다.
+- 콤보는 해당 작업에 대해 재시도를 포함해 정규 네이티브 ChatGPT 대상만 고려합니다. 사용할 수 있는 대상이 없으면 같은 400 오류를 반환합니다.
+- 읽을 수 있는 평문 작업은 정상 라우트와 폴백 동작을 그대로 유지합니다.
+
+복구 방법은 네이티브 ChatGPT 자식을 선택하거나, 콤보에 네이티브 ChatGPT 대상을 추가하거나, 이종 프로바이더 위임에는 v1을 사용하거나, 호출자를 제어할 수 있을 때 작업을 평문 v2 `agent_message` 콘텐츠로 다시 보내는 것입니다.
 
 ## 모드 변경
 
 ### GUI
 
-- **대시보드** → 첫 번째 스탯 셀에서 **v1**, **base**, **v2**를 선택합니다.
-- **모델** 페이지 → 상단 세그먼트 컨트롤에서 선택합니다.
-- 두 페이지 모두 **?** 버튼을 누르면 이 문서로 연결되는 도움말 모달이 열립니다.
-- **대시보드** → **서브에이전트 위임**에서 선호 모델과 선택 사항인 추론 강도를 고릅니다. **Codex 네이티브 서브에이전트 기본값으로 사용**을 켜면 OpenCodex가 활성 Codex 라우팅을 관리할 때 다음 sync 또는 restart부터 새 Codex task에도 같은 선택값을 적용합니다. 외부 사용자 관리 provider 설정은 그대로 유지합니다. 이 토글은 위임 가이드 토글과 별개입니다. v2에서는 주입된 가이드가 `fork_turns: "none"` 스폰을 지시해 모델 오버라이드가 적용되게 합니다 — 다만 네이티브→라우팅 자식은 작업 본문이 암호화 상태로 도착할 수 있습니다([#92](https://github.com/lidge-jun/opencodex/issues/92)).
+- **Dashboard** → 첫 번째 상태 셀: **v1**, **base**, **v2**를 고릅니다.
+- **Models** → 맨 위 행의 세그먼트 선택기: 같은 전역 모드를 고릅니다.
+- **Dashboard** → **Sub-agent delegation**: 가이드 모델/추론 강도와 네이티브 기본값 사용 여부를 설정합니다.
+- **Subagents**: 로스터를 선택하고 순서를 정한 뒤 전역 폴백 체인을 설정합니다.
 
 ### CLI
 
+서피스 협업 설정과 네이티브 기능 설정에는 `ocx v2`를 사용합니다.
+
 ```bash
-ocx v2 mode v1       # 모든 모델을 v1으로 강제
-ocx v2 mode default  # 업스트림 핀 복원
-ocx v2 mode v2       # 모든 모델을 v2로 강제
-ocx v2 status        # 현재 모드 + Codex 기능 플래그 확인
+ocx v2 status
+ocx v2 mode v1
+ocx v2 mode default
+ocx v2 mode v2
+ocx v2 threads 8
 ```
+
+위임, 로스터, 추론 상한, 폴백 설정에는 `ocx agent`를 사용합니다.
+
+```bash
+ocx agent status
+ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
+ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
+ocx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
+ocx agent effort set --subagent max
+```
+
+널 값이 가능한 `ocx agent injection` 값을 지우려면 `-`를 넘기거나, 로스터나 폴백 목록에는 해당 `clear` 액션을 사용하세요. 모든 명령 패밀리는 [CLI reference](/reference/cli/)를 참고하세요.
 
 ### API
 
-```bash
-# 서피스 모드, 기능 플래그, 스레드 제한 조회
-curl http://localhost:10100/api/v2
+관리 API는 대응하는 `GET`과 `PUT` 엔드포인트를 제공합니다.
 
-# 서피스 모드 설정
+| 엔드포인트 | 관리하는 항목 |
+| --- | --- |
+| `/api/v2` | 서피스 모드, 네이티브 기능 플래그, 스레드 설정 |
+| `/api/injection-model` | 선호 모델, 추론 강도, 사용자 정의 프롬프트, 가이드, 네이티브 기본값 동기화 |
+| `/api/effort-caps` | 메인 에이전트와 서브에이전트의 추론 상한 |
+| `/api/subagent-models` | 최대 다섯 모델의 순서가 있는 로스터 |
+| `/api/subagent-model-fallback` | 전역 폴백 순서와 폴링 간격 |
+
+예를 들면 다음과 같습니다.
+
+```bash
 curl -X PUT http://localhost:10100/api/v2 \
   -H 'Content-Type: application/json' \
-  -d '{"multiAgentMode": "v2"}'
+  -d '{"multiAgentMode":"v2"}'
+
+curl -X PUT http://localhost:10100/api/injection-model \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"anthropic/claude-sonnet-5","effort":"xhigh"}'
 ```
 
-`/api/v2` PUT 엔드포인트는 `enabled`(불리언, Codex 기능 플래그)와 `maxConcurrentThreadsPerSession`(정수)도 받습니다. 요청을 검증하고 모드를 저장한 뒤 카탈로그를 다시 동기화하며, 변경 사항은 새 세션부터 적용됩니다.
+## FAQ
 
-위임 선택기는 별도 엔드포인트를 사용합니다.
+### 위임 모델을 고르면 Codex가 반드시 그 모델을 스폰하나요?
 
-```bash
-# 현재 모델/추론 강도와 선택 가능한 값 조회
-curl http://localhost:10100/api/injection-model
+아닙니다. 가이드는 모델을 추천할 수 있고, 네이티브 기본값 동기화는 Codex 기본값을 제공할 수 있지만, 실제로 위임할지는 여전히 메인 에이전트가 결정합니다.
 
-# 두 값 설정
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "anthropic/claude-sonnet-5", "effort": "xhigh"}'
+### v2 자식이 왜 부모 모델을 썼나요?
 
-# 선택값을 Codex 네이티브 서브에이전트 기본값으로 동기화하도록 설정(모델 필요)
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "anthropic/claude-sonnet-5", "syncCodexSubagentDefaults": true}'
+전체 히스토리 v2 fork는 부모 모델을 상속합니다. `fork_turns`를 `"none"` 또는 양수의 부분 turn 수로 설정한 spawn을 사용한 뒤 모델이나 추론 강도 오버라이드를 넘기세요.
 
-# 커스텀 가이드 프롬프트 설정 ({{model}}/{{effort}}/{{roster}} 플레이스홀더)
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "anthropic/claude-sonnet-5", "prompt": "{{model}}에 위임해.{{roster}}"}'
+### 왜 설정한 모델이 v2 로스터에서 빠지나요?
 
-# 두 값 모두 해제
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": null}'
-```
+선택기에서 숨겨져 있거나, 다섯 모델 표시 한도를 넘었거나, 카탈로그에 없거나, v1에 고정되어 있을 수 있습니다. `v2`, `null`, 또는 값이 없는 서피스 값은 사용할 수 있지만, 실제 `"v1"` 핀은 사용할 수 없습니다.
 
-`GET /api/injection-model`은 `model`, `effort`, `prompt`, `multiAgentGuidanceEnabled`, `syncCodexSubagentDefaults`, 전역 `efforts` 단계, 활성화된 네이티브·라우팅 모델인 `available`을 반환합니다. PUT은 부분 업데이트입니다. `effort`나 `prompt`를 생략하면 기존 값을 유지하고, `null`이면 지웁니다. `syncCodexSubagentDefaults: true`에는 선택된 모델이 필요하며, `model`을 지우면 추론 강도와 네이티브 기본값 동기화도 함께 꺼집니다. API는 전역 Codex 단계에 맞는 추론 강도인지 검증하고, Codex는 스폰 시 대상 카탈로그 항목이 그 강도를 지원하는지 다시 검증합니다.
+### 모드를 바꾸면 실행 중인 세션에도 반영되나요?
 
-## 추론 강도
+아닙니다. 모드를 바꾼 뒤에는 새 Codex 세션을 시작하세요. 오래 실행 중인 App 호스트에 오래된 카탈로그 상태가 남아 있으면 `ocx sync`를 실행한 뒤 해당 Codex 서피스를 다시 시작하세요.
 
-서브에이전트 추론 강도는 `injectionEffort`에 저장되며 주입 모델이 있을 때만 의미가 있습니다. 이 값은 주입된 v2 가이드에 `reasoning_effort` 지시를 추가하며, 부모 세션의 추론 강도를 바꾸지는 않습니다. `syncCodexSubagentDefaults`를 켜고 OpenCodex가 활성 Codex 라우팅을 관리하는 경우에는 다음 sync 또는 restart부터 새 Codex task의 네이티브 서브에이전트 기본 강도로도 사용됩니다. 오버라이드가 허용되는 fork에서는 `spawn_agent`에 전달된 `reasoning_effort`를 Codex가 그대로 적용합니다.
+### 추론 강도
 
-`ultra`는 Codex 카탈로그에서 `max`보다 높은 단계이며 자동 위임 의미가 더해지지만, 프로바이더 와이어에는 `ultra`라는 값이 그대로 전달되지 않습니다. Codex가 클라이언트 경계에서 `ultra`를 `max`로 바꾸고, opencodex가 프로바이더에 맞는 유효한 값으로 조정합니다.
+`injectionEffort`는 위임된 작업자 가이드와, 명시적으로 활성화한 경우 네이티브 Codex 서브에이전트 기본값에만 영향을 줍니다. 부모 세션의 추론 강도는 바꾸지 않습니다. `ultra`는 Codex가 `max`로 변환하는 클라이언트 노출 상위 단계이며, opencodex는 그 값을 선택한 프로바이더에 맞게 매핑하거나 클램프합니다.
 
-| 모델 | 와이어의 `max` | `ultra` 선택 시 와이어 값 |
-| --- | --- | --- |
-| gpt-5.5, gpt-5.4, gpt-5.4-mini | xhigh | xhigh (max 변환 후 `nativeEffortClamp`) |
-| gpt-5.6-sol, gpt-5.6-terra | max | max |
-| gpt-5.6-luna | max | 정확한 업스트림 단계에 노출되지 않음 |
-| 라우팅 모델 | 어댑터가 매핑하거나 클램프 | max로 변환한 뒤 어댑터가 매핑하거나 클램프 |
+### 컨텍스트 상한
 
-카탈로그에 어떤 추론 강도를 노출할지는 v1/v2 모드와 무관합니다. 추론 가능한 생성 항목에는 직접 지정한 서브에이전트 강도가 검증을 통과하도록 `max`가 들어가며, 현재 생성되는 라우팅 항목에는 `ultra`도 들어갑니다. 다만 정확한 업스트림 모델 단계는 그대로 보존하므로 gpt-5.6-luna는 `max`에서 끝납니다.
-
-## 컨텍스트 상한
-
-전역 컨텍스트 상한 값의 기본값은 350k입니다. 상한을 켠 라우팅 프로바이더의 `context_window`만 제한하며, 네이티브 OpenAI 모델은 실제 컨텍스트 윈도우를 그대로 사용합니다.
-
-모델 페이지에서 값이나 전체 프로바이더 설정을 바꾸거나, 각 프로바이더 그룹 헤더 옆에서 상한을 개별적으로 켜고 끌 수 있습니다.
+모델 컨텍스트 상한은 서브에이전트 모드와 무관합니다. Models 페이지에서 설정하세요. 네이티브 OpenAI 모델은 실제 컨텍스트 윈도우를 그대로 유지합니다.

@@ -3,132 +3,205 @@ title: Sub-agent Surface (v1 / base / v2)
 description: Control how Codex spawns and manages sub-agents across all models.
 ---
 
-opencodex lets you choose the multi-agent collaboration surface for every model in the catalog. The **Sub-agent** toggle in the dashboard and Models page controls this globally.
+## What sub-agents are
 
-:::note
-On the v2 surface (`multi_agent_v2`), a spawned sub-agent inherits the parent model **by default**: `fork_turns` defaults to `all`, and full-history forks reject overrides. Since v2.7.2 opencodex injects guidance that teaches the model how to break inheritance — a `spawn_agent` call that sets `fork_turns` to `"none"` (or a partial fork such as `"3"`) can pass `model` / `reasoning_effort` arguments, which the Codex runtime parses and applies even though the published tool schema hides them. Known transport limitation: when a **native** parent spawns a child routed to a **non-native** provider, the Codex client may send the `NEW_TASK` payload only as backend-encrypted `encrypted_content` ([#92](https://github.com/lidge-jun/opencodex/issues/92)). opencodex does not forward that unreadable task to an external provider: a direct route fails with HTTP 400 and code `unreadable_encrypted_agent_task`, while a combo skips non-decrypting targets and selects a canonical native ChatGPT target when one is available. Use v1 for heterogeneous-provider delegation, select a native ChatGPT child, or resend the task as plaintext v2 `agent_message` content.
-:::
+A sub-agent is a separate Codex worker that the main agent can create for a focused task. It has its
+own context and tools, so several independent tasks can run in parallel. opencodex controls which
+Codex collaboration surface exposes those workers, which models Codex offers for them, and how a
+failed model can fall back. It does not decide when your main agent must delegate.
 
 ## Modes
 
-| Mode | Surface | Behavior |
+Choose the mode for **new sessions**. Existing sessions keep the surface they started with.
+
+| Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
-| **v1** | `multi_agent_v1` | Classic namespaced agent tools with `send_input` / `close_agent` / `resume_agent`. A `spawn_agent` model override can start a sub-agent on a different model. |
-| **base** (default) | Upstream pins | Restores upstream model pins: gpt-5.6-sol and gpt-5.6-terra use v2, gpt-5.6-luna uses v1, and unpinned models follow the Codex `multi_agent_v2` feature flag. Spawn behavior follows the surface that resolves for that model. |
-| **v2** | `multi_agent_v2` | Flat `spawn_agent` tools with concurrent sessions and `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`. Children inherit the parent model on full-history forks; `fork_turns: "none"` (or a partial fork) accepts `model` / `reasoning_effort` overrides. If a native→routed child receives only backend-encrypted task content, external routes return `unreadable_encrypted_agent_task`; mixed combos prefer a decrypt-capable native target ([#92](https://github.com/lidge-jun/opencodex/issues/92)). |
+| **v1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
+| **base** (default) | Upstream model pins: GPT-5.6 Sol/Terra use v2, Luna uses v1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **v2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow and understand model inheritance and the encrypted-task limitation below. |
 
-### Encrypted v2 task delivery
-
-Only the native ChatGPT backend can read its encrypted task payload. For an unreadable v2 `agent_message`, opencodex applies these rules before provider dispatch:
-
-- A direct non-native route returns HTTP 400 with `error.code = "unreadable_encrypted_agent_task"`. The response never echoes the encrypted payload.
-- A combo considers only canonical native ChatGPT targets for that task, including retries. If the combo has no decrypt-capable target, it returns the same 400 response instead of sending an empty task to an external provider.
-- Readable plaintext tasks keep the normal combo order and failover behavior.
-
-To recover, switch the child to a native ChatGPT model, add a native target to the combo, use the v1 surface for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message` content when you control the caller.
+:::tip[Not sure?]
+Start with **base**. Choose **v1** when cross-provider delegation must work predictably. Force **v2**
+only when you specifically want its newer session model across every catalog entry.
+:::
 
 ## How it works
 
-The mode sets the `multi_agent_version` field on every catalog entry that Codex reads:
+The selected mode controls the `multi_agent_version` field in every catalog entry Codex reads:
 
-- **v1 mode**: forces `multi_agent_version = "v1"` on all entries, overriding upstream pins.
-- **base mode**: restores upstream defaults. Pinned models get their snapshot value; unpinned models omit the field so the Codex feature flag decides.
-- **v2 mode**: forces `multi_agent_version = "v2"` on all entries, overriding upstream pins.
+- **v1** stamps `multi_agent_version = "v1"` on every model.
+- **base** restores upstream pins. Unpinned entries follow the native `multi_agent_v2` feature flag.
+- **v2** stamps `multi_agent_version = "v2"` on every model.
 
-The override is the final pass in both the live `/v1/models` catalog response and the on-disk catalog sync. Mode changes therefore apply consistently to newly created sessions, regardless of how an entry was built.
+opencodex applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
+to disk. That is why a mode change affects newly created App, CLI, and TUI sessions consistently.
 
-### Delegation model and effort
+For a v2 roster, eligibility has three states: an entry stamped `"v2"`, explicitly set to `null`, or
+with no `multi_agent_version` field is eligible. A genuine `"v1"` pin is excluded because it states
+that the model belongs to the other collaboration surface.
 
-The dashboard's **Sub-agent delegation** picker stores an `injectionModel` and, optionally, an `injectionEffort`. OpenCodex-authored delegation guidance can use these selections, but it remains controlled separately by **OpenCodex multi-agent guidance**. These settings are not a proxy-side spawn router. An optional `injectionPrompt` replaces the built-in guidance text entirely.
+## Delegation model and effort
 
-The default-off **Use as native Codex subagent defaults** switch sets `syncCodexSubagentDefaults`. When OpenCodex manages the active Codex routing, a sync or restart applies the selected model and effort as native Codex `[agents]` defaults for newly created Codex tasks. External user-managed provider configs remain untouched. This does not trigger delegation. Existing user-owned `[agents]` defaults are preserved rather than overwritten, so they remain authoritative.
+The dashboard's **Sub-agent delegation** controls three related settings:
 
-`multiAgentGuidanceText` identifies the surface from the request's tools — including the Codex Desktop WebSocket path (`responses_lite`), where tools arrive inside an `additional_tools` input item instead of the request's `tools` array.
+- `injectionModel` is the preferred worker model named in opencodex guidance.
+- `injectionEffort` is the optional `reasoning_effort` to request for that model.
+- `injectionPrompt` replaces the built-in v2 guidance text.
 
-On a **v2** turn (Sol/Terra in base mode, every model in v2 mode), the proxy injects a compact guidance block — budgeted to 700 characters — whenever an eligible injection model is set or the effective sub-agent roster is non-empty. The block conditionally describes `model` / `reasoning_effort` overrides without assuming whether they appear in the active schema, mandates `fork_turns: "none"` (or a partial fork), names only an eligible canonical preferred model, and lists only configured models in Codex's picker-visible, v2-compatible, priority-sorted first five with their available effort ladders.
+`multiAgentGuidanceEnabled` defaults to on and is the master switch for opencodex-authored guidance
+on both surfaces. Turning it off suppresses both the v2 designation block and v1 proactive text.
 
-On a **v1** turn the proxy only mirrors upstream's Proactive delegation text at the top effort tier (max / ultra). No model designation, roster, or custom prompt is added there — v1 stays lean by design.
+These are instructions to the main agent, not a proxy-side spawn router. On v2, a full-history fork
+inherits the parent model and rejects model or effort overrides. Guidance therefore tells Codex to
+use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
+`reasoning_effort`, and to make the task message self-contained.
 
-To replace the built-in v2 guidance, set `injectionPrompt` (config key, or `PUT /api/injection-model` with a `prompt` value). The placeholders `{{model}}`, `{{effort}}`, and `{{roster}}` are substituted with the configured injection model, effort, and the resolved roster line. Firing gates are unchanged: a custom prompt never makes a turn fire that would otherwise stay silent.
+Custom `injectionPrompt` text can use all four placeholders:
+
+| Placeholder | Replaced with |
+| --- | --- |
+| `{{model}}` | The configured `injectionModel`, or an empty string |
+| `{{effort}}` | The configured `injectionEffort`, or an empty string |
+| `{{roster}}` | The resolved picker-visible, surface-compatible roster |
+| `{{fallback}}` | The configured global fallback guidance |
+
+The built-in v2 guidance has a 700-character budget. If it would exceed the budget, opencodex drops
+the roster first rather than truncating the core spawn instructions. Guidance fires only when a
+preferred model, eligible roster, or fallback chain resolves. A custom prompt does not bypass that
+gate.
+
+On v1, opencodex injects only the upstream-style proactive delegation guidance at `max` or `ultra`
+effort. It does not add a preferred model, roster, fallback list, or custom prompt on v1.
+
+The default-off `syncCodexSubagentDefaults` option is separate from guidance. When opencodex owns
+active Codex routing, sync or restart can write the selected values as marker-owned
+`[agents] default_subagent_model` and `default_subagent_reasoning_effort` entries in Codex TOML.
+opencodex updates or removes only fields bearing its markers. If either target field is user-owned,
+the pair is left unchanged rather than partially written; ambiguous TOML is rejected without a
+write. External provider managers and user-owned root routing also remain authoritative.
+
+## Fallback chains
+
+For a spawned worker, opencodex builds this priority order:
+
+1. The requested primary model.
+2. The role's `model_fallback` list from its `$CODEX_HOME/agents/*.toml` definition.
+3. The global `subagentModelFallback` list in opencodex config.
+
+Duplicate model ids are removed while preserving the first occurrence. During selection, opencodex
+skips candidates that are disabled, unroutable, backed by a disabled provider, marked unhealthy,
+inside a cooldown, missing a usable pooled Codex account, or beyond the configured quota threshold.
+Availability probes are cached for `subagentModelFallbackPollMs` (60 seconds by default).
+
+Fallback does not make incompatible encrypted tasks readable. When the child task is encrypted for
+ChatGPT, selection is restricted to canonical native ChatGPT targets even if an external model
+appears earlier in the chain.
+
+## Encrypted v2 task delivery
+
+Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. That
+payload can be read by the native ChatGPT backend, but not by an external provider. This is the
+known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
+
+opencodex fails safely instead of forwarding an empty or unreadable task:
+
+- A direct non-native route returns HTTP 400 with
+  `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext.
+- A combo considers only canonical native ChatGPT targets for that task, including retries. If none
+  is available, it returns the same 400 error.
+- A readable plaintext task keeps the normal route and fallback behavior.
+
+Recovery options are to select a native ChatGPT child, add a native ChatGPT target to the combo, use
+v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
+content when you control the caller.
 
 ## Changing the mode
 
 ### GUI
 
-- **Dashboard** → first stat cell: click **v1**, **base**, or **v2**.
-- **Models** page → top-row segmented control.
-- Both pages have a **?** button that opens a help modal with a link back here.
-- **Dashboard** → **Sub-agent delegation**: choose a preferred model and optional reasoning effort. Enable **OpenCodex multi-agent guidance** for delegation instructions, or independently enable **Use as native Codex subagent defaults** to apply the selection to new Codex tasks after sync/restart. The defaults switch does not cause delegation, and existing user-owned `[agents]` defaults are preserved rather than overwritten. On v2 the injected guidance instructs the agent to spawn with `fork_turns: "none"` so the model override applies. If a native→routed child receives only encrypted task content, use a native target or v1; external-only delivery now fails explicitly with `unreadable_encrypted_agent_task` ([#92](https://github.com/lidge-jun/opencodex/issues/92)).
+- **Dashboard** → first stat cell: choose **v1**, **base**, or **v2**.
+- **Models** → top-row segmented control: choose the same global mode.
+- **Dashboard** → **Sub-agent delegation**: set guidance model/effort and the native-default opt-in.
+- **Subagents**: choose and order the roster and configure the global fallback chain.
 
 ### CLI
 
+Use `ocx v2` for the collaboration surface and native feature settings:
+
 ```bash
-ocx v2 mode v1       # force all models to v1
-ocx v2 mode default  # restore upstream pins
-ocx v2 mode v2       # force all models to v2
-ocx v2 status        # show current mode + Codex feature flag
+ocx v2 status
+ocx v2 mode v1
+ocx v2 mode default
+ocx v2 mode v2
+ocx v2 threads 8
 ```
+
+Use `ocx agent` for delegation, roster, effort-cap, and fallback settings:
+
+```bash
+ocx agent status
+ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
+ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
+ocx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
+ocx agent effort set --subagent max
+```
+
+Pass `-` to clear a nullable `ocx agent injection` value, or use the relevant `clear` action for a
+roster or fallback list. See the [CLI reference](/reference/cli/) for all command families.
 
 ### API
 
-```bash
-# Read the surface mode, feature flag, and thread limit
-curl http://localhost:10100/api/v2
+The management API exposes matching `GET` and `PUT` endpoints:
 
-# Set the surface mode
+| Endpoint | Manages |
+| --- | --- |
+| `/api/v2` | Surface mode, native feature flag, and thread settings |
+| `/api/injection-model` | Preferred model, effort, custom prompt, guidance, and native-default sync |
+| `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
+| `/api/subagent-models` | Ordered roster of up to five models |
+| `/api/subagent-model-fallback` | Global fallback order and poll interval |
+
+For example:
+
+```bash
 curl -X PUT http://localhost:10100/api/v2 \
   -H 'Content-Type: application/json' \
-  -d '{"multiAgentMode": "v2"}'
+  -d '{"multiAgentMode":"v2"}'
+
+curl -X PUT http://localhost:10100/api/injection-model \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"anthropic/claude-sonnet-5","effort":"xhigh"}'
 ```
 
-The `/api/v2` PUT endpoint also accepts `enabled` (boolean, the Codex feature flag) and `maxConcurrentThreadsPerSession` (integer). It validates the request, saves the mode, resyncs the catalog, and reports that mode changes apply to new sessions.
+## FAQ
 
-The delegation picker uses a separate endpoint:
+### Does choosing a delegation model force Codex to spawn it?
 
-```bash
-# Read the current model/effort and the available picker values
-curl http://localhost:10100/api/injection-model
+No. Guidance can recommend a model, and native-default sync can provide a Codex default, but the
+main agent still decides whether to delegate.
 
-# Set both values
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "anthropic/claude-sonnet-5", "effort": "xhigh"}'
+### Why did my v2 child use the parent model?
 
-# Opt in to native Codex defaults for new tasks after sync/restart (requires a model)
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "anthropic/claude-sonnet-5", "syncCodexSubagentDefaults": true}'
+A full-history v2 fork inherits the parent model. Use a spawn that sets `fork_turns` to `"none"` or
+a positive partial count before passing a model or effort override.
 
-# Set a custom guidance prompt ({{model}}/{{effort}}/{{roster}} placeholders)
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "anthropic/claude-sonnet-5", "prompt": "Delegate to {{model}}.{{roster}}"}'
+### Why is a configured model missing from the v2 roster?
 
-# Clear both values
-curl -X PUT http://localhost:10100/api/injection-model \
-  -H 'Content-Type: application/json' \
-  -d '{"model": null}'
-```
+It may be picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
+to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
 
-`GET /api/injection-model` returns `model`, `effort`, `prompt`, `multiAgentGuidanceEnabled`, `syncCodexSubagentDefaults`, the global `efforts` ladder, and enabled native/routed `available` models. PUT is partial: omitted fields keep their current values, `null` clears nullable values, and clearing `model` always clears both the effort and native-default opt-in. Enabling `syncCodexSubagentDefaults` requires a model. The API validates effort against the global Codex ladder; Codex still validates a spawn effort against the target catalog entry.
+### Do mode changes affect running sessions?
 
-## Reasoning effort
+No. Start a new Codex session after changing the mode. If a long-running App host still shows stale
+catalog state, run `ocx sync` and restart that Codex surface.
 
-The optional sub-agent effort setting is stored as `injectionEffort` and is meaningful only with an injection model. It adds a `reasoning_effort` instruction to the injected v2 guidance; with native-default sync enabled, it also becomes the `[agents]` reasoning default for new Codex tasks after sync/restart. It does not change the parent session's effort. On any fork that accepts overrides, Codex applies a `reasoning_effort` passed to `spawn_agent` directly.
+### Reasoning effort
 
-`ultra` ranks above `max` in the Codex catalog and adds automatic-delegation semantics, but it never reaches a provider as a literal wire value. Codex converts `ultra` to `max` at the client boundary. opencodex then keeps the provider request valid:
+`injectionEffort` affects only delegated-worker guidance and, when explicitly enabled, native Codex
+sub-agent defaults. It does not change the parent session's effort. `ultra` is a client-facing top
+tier that Codex converts to `max`; opencodex then maps or clamps the value for the selected provider.
 
-| Model | `max` on wire | `ultra` selection on wire |
-| --- | --- | --- |
-| gpt-5.5, gpt-5.4, gpt-5.4-mini | xhigh | xhigh (via max, then `nativeEffortClamp`) |
-| gpt-5.6-sol, gpt-5.6-terra | max | max |
-| gpt-5.6-luna | max | Not advertised by its exact upstream ladder |
-| Routed models | Mapped or clamped by the adapter | Converted to max, then mapped or clamped by the adapter |
+### Context cap
 
-Catalog availability is independent of the v1/v2 mode. Reasoning-capable generated entries advertise `max` so direct sub-agent effort overrides validate; current generated routed entries also advertise `ultra`. Exact upstream model ladders are preserved, which is why gpt-5.6-luna stops at `max`.
-
-## Context cap
-
-The global context cap value defaults to 350k and limits the advertised `context_window` only for routed providers whose cap is enabled. Native OpenAI models keep their real context windows.
-
-Change the value or the all-provider setting in the Models page, or toggle the cap next to an individual provider group header.
+The model context cap is independent of sub-agent mode. Configure it on the Models page; native
+OpenAI models retain their real context windows.

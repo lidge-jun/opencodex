@@ -35,40 +35,9 @@ Earlier v1 three-provider configurations migrate automatically into the single o
 
 ## Integration path
 
-`ocx init`, `ocx start`, and `ocx sync` keep these Codex files aligned under the resolved
-`CODEX_HOME` directory:
-
-```text
-$CODEX_HOME/config.toml
-$CODEX_HOME/opencodex.config.toml
-$CODEX_HOME/opencodex-catalog.json
-$CODEX_HOME/models_cache.json
-```
-
-On the default loopback bind, Codex keeps its built-in `openai` provider id. opencodex installs root
-keys that point the provider and model catalog at the proxy:
-
-```toml
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-openai_base_url = "http://127.0.0.1:10100/v1"
-```
-
-For a non-loopback hostname, Codex also needs the generated API-auth header. That mode uses a root
-`model_provider = "opencodex"` key and a dedicated Responses-compatible provider:
-
-```toml
-[model_providers.opencodex]
-name = "OpenCodex Proxy"
-base_url = "http://your-host:10100/v1"
-wire_api = "responses"
-requires_openai_auth = true
-env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
-```
-
-`websockets` is off by default. Dedicated-provider and catalog entries advertise
-`supports_websockets = true` only when `"websockets": true`; on loopback, Codex's built-in provider
-may probe WebSocket first, and a disabled proxy returns `426` so Codex falls back to HTTP/SSE. See
-[Codex Integration](/guides/codex-integration/) for the full injection and restore flow.
+`ocx init`, `ocx start`, and `ocx sync` wire the shared Codex config and catalog into the proxy; see
+[Codex Integration](/guides/codex-integration/) for config injection, catalog sync, shims, WebSocket
+fallback, and restore mechanics.
 
 ## Why routed models show up
 
@@ -85,7 +54,7 @@ The clone keeps strict-parser fields such as reasoning levels, shell type, API s
 base instructions. opencodex then removes native-only capabilities that the route cannot honor,
 including OpenAI service-tier metadata.
 
-## Model coverage in v2.7.1
+## Current stable model coverage
 
 The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
 `gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. For the GPT-5.5/5.4 family, opencodex preserves
@@ -124,24 +93,9 @@ forces Codex's model cache stale after a toggle.
 
 ## Multi-agent surface mode
 
-opencodex adds a 3-state override for the `multi_agent_version` field on every catalog entry:
-
-| Mode | Effect |
-| --- | --- |
-| **v1** | Force every model to the v1 multi-agent surface, overriding upstream pins (including Sol/Terra). |
-| **base** (install default) | Restore upstream pins: Sol/Terra use v2, Luna uses v1, and unpinned models follow the Codex `multi_agent_v2` feature flag. |
-| **v2** | Force every model to the v2 multi-agent surface, overriding upstream pins (including Luna). |
-
-Set the mode from the Dashboard or Models page, `ocx v2 mode v1|default|v2`, or `PUT /api/v2`
-with `{ "multiAgentMode": "v1" }`. Changes apply to new Codex sessions.
-
-:::caution
-On the v2 (`multi_agent_v2`) surface, a spawn without an explicit model can inherit the parent
-session's model. OpenCodex guidance can ask Codex to pass the selected model/effort explicitly, and
-the separate native-default opt-in can supply defaults after sync/restart. Neither mechanism is a
-proxy-side per-spawn router. See [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical
-behavior.
-:::
+The Models-page v1/base/v2 control changes which Codex collaboration surface each picker entry uses;
+see [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical mode, delegation, inheritance,
+fallback, and encrypted-task behavior.
 
 ## Reasoning top tiers
 

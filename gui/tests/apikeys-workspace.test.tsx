@@ -119,14 +119,20 @@ async function mountWorkspace(
   };
 }
 
+/**
+ * Retargeted from the workspace rail to the key table. The rail was replaced by a
+ * pinned section strip plus a table in the Keys section; every behavioral contract
+ * below is unchanged, only the elements that drive it moved. "Back" now returns to
+ * the overview where the rail's Overview row used to.
+ */
 function overviewButton(container: HTMLElement): HTMLButtonElement {
-  return [...container.querySelectorAll<HTMLButtonElement>(".apikeys-workspace-rail-row")]
-    .find(el => el.textContent?.includes("Overview"))!;
+  return [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(el => el.textContent?.includes("Back"))!;
 }
 
 function keyButton(container: HTMLElement, name: string): HTMLButtonElement {
-  return [...container.querySelectorAll<HTMLButtonElement>(".apikeys-workspace-rail-row")]
-    .find(el => el.querySelector(".apikeys-workspace-rail-name")?.textContent === name)!;
+  return [...container.querySelectorAll<HTMLButtonElement>(".awi-keylist-name")]
+    .find(el => el.textContent === name)!;
 }
 
 test("workspace overview navigation preserves pending secret and resets delete confirm", async () => {
@@ -138,7 +144,10 @@ test("workspace overview navigation preserves pending secret and resets delete c
   expect(container.textContent).toContain(FULL_SECRET);
   expect(container.querySelector("main")).toBeNull();
   expect(container.querySelector("section.apikeys-workspace-main")?.getAttribute("aria-label")).toBe("API key details");
-  expect(container.querySelector(".tbl")).toBeNull();
+  // The overview HAS a key table now. It asserted the opposite while the rail
+  // owned key navigation; with the rail gone the table is that surface, so the
+  // contract inverts rather than disappears.
+  expect(container.querySelector(".awi-keylist-table")).not.toBeNull();
 
   await act(async () => { keyButton(container, "alpha").click(); });
   expect(container.textContent).toContain("Key details");

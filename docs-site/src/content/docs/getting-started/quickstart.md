@@ -26,7 +26,8 @@ ocx init
 The result is saved to `$OPENCODEX_HOME/config.json` (default `~/.opencodex/config.json`).
 
 :::note[GPT-5.6 rollout entries]
-Stable v2.7.1 seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key, OpenRouter, and
+The current stable release seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key,
+OpenRouter, and
 the experimental Cursor adapter. They work only when that upstream account has access. The OpenAI
 API-key and OpenRouter presets advertise a 372,000-token usable context window; Cursor keeps its own
 adapter metadata.
@@ -76,7 +77,8 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 A fresh config features five native models in Codex's sub-agent picker: `gpt-5.5`,
 `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.4-mini`. Open `ocx gui` to replace or
 reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model
-and reasoning effort; opencodex adds that guidance to v1 collaboration requests.
+and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and
+understand when guidance, native defaults, and fallback apply.
 
 ## Logging in instead of pasting a key
 

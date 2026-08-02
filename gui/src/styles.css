@@ -564,7 +564,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .api-auth-list { display: grid; gap: 8px; margin: 0; padding-left: 1.1rem; }
 .api-auth-list li { color: var(--muted); font-size: var(--text-label); }
-.api-model-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* `flex-wrap` is owned by styles-apikeys-workspace.css, which sets `nowrap` now
+   that the single-column overview gives the catalog room. Declaring `wrap` here
+   too silently won on cascade order and re-stacked every action cell — caught
+   only by reading the served bundle, never by the source-text tests. */
+.api-model-actions { display: inline-flex; align-items: center; gap: 6px; }
 .api-test-note { font-size: var(--text-label); }
 .api-test-note--ok { color: var(--green, #22c55e); }
 .api-test-note--error { color: var(--red); }
@@ -942,9 +946,9 @@ a.btn, a.btn:hover { text-decoration: none; }
 .api-models-panel {
   min-height: 0;
 }
-.awi-overview-right .api-models-panel > .input,
-.awi-overview-right .api-models-panel > .api-panel-head,
-.awi-overview-right .api-models-panel > .muted {
+.awi-overview-section .api-models-panel > .input,
+.awi-overview-section .api-models-panel > .api-panel-head,
+.awi-overview-section .api-models-panel > .muted {
   flex: 0 0 auto;
 }
 /* Models panel sizing (incl. desktop fill) lives in styles-apikeys-workspace.css. */

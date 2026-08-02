@@ -1,6 +1,6 @@
 ---
 title: Codex Integration
-description: How opencodex injects itself into Codex, syncs the model catalog, drives the subagent picker, and restores cleanly.
+description: How opencodex injects itself into Codex, syncs the model catalog, installs shims, and restores cleanly.
 ---
 
 opencodex makes Codex route through the proxy by editing two things Codex reads: its config
@@ -295,24 +295,7 @@ it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
 ## The subagent picker
 
-Codex's `spawn_agent` advertises the first **5 picker-visible catalog models** after sorting by
-priority. `subagentModels` accepts up to five ids, either bare native GPT slugs or namespaced
-`provider/model` routes, and gives them priorities 0–4 so they sort first:
-
-```json
-{
-  "subagentModels": [
-    "gpt-5.5",
-    "gpt-5.6-sol",
-    "anthropic/claude-opus-5",
-    "xai/grok-4.5",
-    "cursor/gpt-5.6-terra"
-  ]
-}
-```
-
-Priority ranking: featured (0–4) < other routed (5) < native (9). You can also manage this from the
-[web dashboard](/guides/web-dashboard/).
+Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for v1/base/v2 delegation and fallback behavior.
 
 ## Codex account warmup
 

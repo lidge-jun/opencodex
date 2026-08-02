@@ -317,7 +317,7 @@ Gateway** needs your account + gateway ids filled into the URL.
 Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ocx init`
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
 fallback model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's
-live HTTP/2 transport. Its v2.7.1 fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
+live HTTP/2 transport. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
 `grok-4.5` / `grok-4.5-fast` (500K), and `kimi-k3` (262K); live discovery decides which remain
 visible for the account. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
 `cursor/kimi-k3` exposes a `low` / `high` / `max` ladder and defaults to `max`, matching the
