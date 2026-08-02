@@ -73,7 +73,7 @@ describe("oauth ToS warning UI seam", () => {
       "oauthTos.acknowledge",
       "oauthTos.continue",
     ];
-    for (const locale of ["en", "de", "ko", "zh"]) {
+    for (const locale of ["en", "de", "ko", "zh", "zh-TW", "ru", "ja"]) {
       const text = await Bun.file(`gui/src/i18n/${locale}.ts`).text();
       for (const key of keys) {
         expect(text).toContain(`"${key}"`);

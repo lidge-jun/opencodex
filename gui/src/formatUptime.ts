@@ -5,6 +5,7 @@ const UPTIME_UNITS: Record<Locale, { day: string; hour: string; minute: string; 
   de: { day: "T", hour: "Std", minute: "Min", second: "Sek" },
   ko: { day: "일", hour: "시간", minute: "분", second: "초" },
   zh: { day: "天", hour: "小时", minute: "分钟", second: "秒" },
+  "zh-TW": { day: "天", hour: "小時", minute: "分鐘", second: "秒" },
   ru: { day: "д", hour: "ч", minute: "мин", second: "с" },
   ja: { day: "日", hour: "時間", minute: "分", second: "秒" },
 };

@@ -19,14 +19,15 @@ const prefix = locale ? `${base}${locale}/` : base;
 type NavLink = { label: string; href: string };
 type NavGroup = { label: string; links: NavLink[] };
 
-const t = (en: string, ko: string, zh: string, ru: string, ja: string) =>
-	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'ru' ? ru : locale === 'ja' ? ja : en;
+const t = (en: string, ko: string, zh: string, ru: string, ja: string, zhTW: string) =>
+	locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : en;
 
-type LanguageOption = { code: 'root' | 'ko' | 'zh-cn' | 'ru' | 'ja'; label: string };
+type LanguageOption = { code: 'root' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja'; label: string };
 const languages: LanguageOption[] = [
 	{ code: 'root', label: 'English' },
 	{ code: 'ko', label: '한국어' },
 	{ code: 'zh-cn', label: '简体中文' },
+	{ code: 'zh-tw', label: '繁體中文' },
 	{ code: 'ru', label: 'Русский' },
 	{ code: 'ja', label: '日本語' },
 ];
@@ -42,60 +43,61 @@ const languageHref = (code: LanguageOption['code']) =>
 	`${code === 'root' ? base : `${base}${code}/`}${routeSuffix}`;
 
 const themeLabels = {
-	auto: t('Auto', '자동', '自动', 'Авто', '自動'),
-	light: t('Light', '라이트', '浅色', 'Светлая', 'ライト'),
-	dark: t('Dark', '다크', '深色', 'Тёмная', 'ダーク'),
+	auto: t('Auto', '자동', '自动', 'Авто', '自動', '自動'),
+	light: t('Light', '라이트', '浅色', 'Светлая', 'ライト', '淺色'),
+	dark: t('Dark', '다크', '深色', 'Тёмная', 'ダーク', '深色'),
 };
-const themeName = t('Theme', '테마', '主题', 'Тема', 'テーマ');
+const themeName = t('Theme', '테마', '主题', 'Тема', 'テーマ', '主題');
 const themeCycleHint = t(
 	'Click to use the next theme',
 	'클릭하여 다음 테마로 전환',
 	'点击切换到下一个主题',
 	'Нажмите, чтобы включить следующую тему',
 	'クリックして次のテーマに切り替え',
+	'點選切換到下一個主題',
 );
 
 const groups: NavGroup[] = [
 	{
-		label: t('Getting Started', '시작하기', '开始使用', 'Начало работы', 'はじめに'),
+		label: t('Getting Started', '시작하기', '开始使用', 'Начало работы', 'はじめに', '開始使用'),
 		links: [
-			{ label: t('Installation', '설치', '安装', 'Установка', 'インストール'), href: `${prefix}getting-started/installation/` },
-			{ label: t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт', 'クイックスタート'), href: `${prefix}getting-started/quickstart/` },
-			{ label: t('How It Works', '동작 원리', '工作原理', 'Как это работает', '仕組み'), href: `${prefix}getting-started/how-it-works/` },
-			{ label: t('Agent Quickstart', '에이전트 퀵스타트', 'Agent 快速上手', 'Быстрый старт для агентов', 'エージェント向けクイックスタート'), href: `${prefix}getting-started/for-agents/` },
+			{ label: t('Installation', '설치', '安装', 'Установка', 'インストール', '安裝'), href: `${prefix}getting-started/installation/` },
+			{ label: t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門'), href: `${prefix}getting-started/quickstart/` },
+			{ label: t('How It Works', '동작 원리', '工作原理', 'Как это работает', '仕組み', '運作原理'), href: `${prefix}getting-started/how-it-works/` },
+			{ label: t('Agent Quickstart', '에이전트 퀵스타트', 'Agent 快速上手', 'Быстрый старт для агентов', 'エージェント向けクイックスタート', 'Agent 快速上手'), href: `${prefix}getting-started/for-agents/` },
 		],
 	},
 	{
-		label: t('Guides', '가이드', '指南', 'Руководства', 'ガイド'),
+		label: t('Guides', '가이드', '指南', 'Руководства', 'ガイド', '指南'),
 		links: [
-			{ label: t('Providers', '프로바이더', '提供商', 'Провайдеры', 'プロバイダー'), href: `${prefix}guides/providers/` },
-			{ label: t('Model Routing', '모델 라우팅', '模型路由', 'Маршрутизация моделей', 'モデルルーティング'), href: `${prefix}guides/model-routing/` },
-			{ label: t('Combos', '콤보', '组合', 'Комбо', 'コンボ'), href: `${prefix}guides/combos/` },
-			{ label: t('Codex Integration', 'Codex 통합', 'Codex 集成', 'Интеграция с Codex', 'Codex 連携'), href: `${prefix}guides/codex-integration/` },
-			{ label: t('Codex App Model Picker', 'Codex App 모델 선택기', 'Codex App 模型选择器', 'Селектор моделей Codex App', 'Codex App モデルピッカー'), href: `${prefix}guides/codex-app-models/` },
+			{ label: t('Providers', '프로바이더', '提供商', 'Провайдеры', 'プロバイダー', '供應商'), href: `${prefix}guides/providers/` },
+			{ label: t('Model Routing', '모델 라우팅', '模型路由', 'Маршрутизация моделей', 'モデルルーティング', '模型路由'), href: `${prefix}guides/model-routing/` },
+			{ label: t('Combos', '콤보', '组合', 'Комбо', 'コンボ', '組合'), href: `${prefix}guides/combos/` },
+			{ label: t('Codex Integration', 'Codex 통합', 'Codex 集成', 'Интеграция с Codex', 'Codex 連携', 'Codex 整合'), href: `${prefix}guides/codex-integration/` },
+			{ label: t('Codex App Model Picker', 'Codex App 모델 선택기', 'Codex App 模型选择器', 'Селектор моделей Codex App', 'Codex App モデルピッカー', 'Codex App 模型選擇器'), href: `${prefix}guides/codex-app-models/` },
 			{ label: 'Claude Code', href: `${prefix}guides/claude-code/` },
-			{ label: t('Sidecars: Search & Vision', '사이드카: 검색 & 비전', '边车：搜索与视觉', 'Сайдкары: поиск и зрение', 'サイドカー: 検索 & ビジョン'), href: `${prefix}guides/sidecars/` },
-			{ label: t('Image Bridge', '이미지 브릿지', '图像桥接', 'Image Bridge', '画像ブリッジ'), href: `${prefix}guides/image-bridge/` },
-			{ label: t('Video Bridge', '비디오 브릿지', '视频桥接', 'Video Bridge', '動画ブリッジ'), href: `${prefix}guides/video-bridge/` },
-			{ label: t('Web Dashboard', '웹 대시보드', '网页控制台', 'Веб-дашборд', 'ウェブダッシュボード'), href: `${prefix}guides/web-dashboard/` },
-			{ label: t('Sub-agent Surface', '서브에이전트 서피스', '子代理界面', 'Интерфейс подагентов', 'サブエージェントサーフェス'), href: `${prefix}guides/sub-agent-surface/` },
+			{ label: t('Sidecars: Search & Vision', '사이드카: 검색 & 비전', '边车：搜索与视觉', 'Сайдкары: поиск и зрение', 'サイドカー: 検索 & ビジョン', '邊車：搜尋與視覺'), href: `${prefix}guides/sidecars/` },
+			{ label: t('Image Bridge', '이미지 브릿지', '图像桥接', 'Image Bridge', '画像ブリッジ', '圖像橋接'), href: `${prefix}guides/image-bridge/` },
+			{ label: t('Video Bridge', '비디오 브릿지', '视频桥接', 'Video Bridge', '動画ブリッジ', '影片橋接'), href: `${prefix}guides/video-bridge/` },
+			{ label: t('Web Dashboard', '웹 대시보드', '网页控制台', 'Веб-дашборд', 'ウェブダッシュボード', '網頁儀表板'), href: `${prefix}guides/web-dashboard/` },
+			{ label: t('Sub-agent Surface', '서브에이전트 서피스', '子代理界面', 'Интерфейс подагентов', 'サブエージェントサーフェス', '子代理介面'), href: `${prefix}guides/sub-agent-surface/` },
 		],
 	},
 	{
-		label: t('Reference', '레퍼런스', '参考', 'Справочник', 'リファレンス'),
+		label: t('Reference', '레퍼런스', '参考', 'Справочник', 'リファレンス', '參考'),
 		links: [
 			{ label: 'CLI', href: `${prefix}reference/cli/` },
-			{ label: t('Configuration', '설정', '配置', 'Конфигурация', '設定'), href: `${prefix}reference/configuration/` },
-			{ label: t('Adapters', '어댑터', '适配器', 'Адаптеры', 'アダプター'), href: `${prefix}reference/adapters/` },
-			{ label: t('Architecture', '아키텍처', '架构', 'Архитектура', 'アーキテクチャ'), href: `${prefix}reference/architecture/` },
-			{ label: t('Proxy API Formats', '프록시 API 형식', '代理 API 格式', 'Форматы API прокси', 'プロキシAPI形式'), href: `${prefix}reference/proxy-formats/` },
-			{ label: t('Management API', '관리 API', '管理 API', 'API управления', '管理API'), href: `${prefix}reference/management-api/` },
+			{ label: t('Configuration', '설정', '配置', 'Конфигурация', '設定', '設定'), href: `${prefix}reference/configuration/` },
+			{ label: t('Adapters', '어댑터', '适配器', 'Адаптеры', 'アダプター', '適配器'), href: `${prefix}reference/adapters/` },
+			{ label: t('Architecture', '아키텍처', '架构', 'Архитектура', 'アーキテクチャ', '架構'), href: `${prefix}reference/architecture/` },
+			{ label: t('Proxy API Formats', '프록시 API 형식', '代理 API 格式', 'Форматы API прокси', 'プロキシAPI形式', '代理 API 格式'), href: `${prefix}reference/proxy-formats/` },
+			{ label: t('Management API', '관리 API', '管理 API', 'API управления', '管理API', '管理 API'), href: `${prefix}reference/management-api/` },
 		],
 	},
 ];
 
 const contributing: NavLink = {
-	label: t('Contributing', '기여하기', '贡献', 'Участие в проекте', 'コントリビュート'),
+	label: t('Contributing', '기여하기', '贡献', 'Участие в проекте', 'コントリビュート', '貢獻'),
 	href: `${prefix}contributing/`,
 };
 ---
@@ -104,7 +106,7 @@ const contributing: NavLink = {
 	<div class="title-wrapper sl-flex">
 		<SiteTitle />
 	</div>
-	<nav class="glass-nav print:hidden" aria-label={t('Main', '주 메뉴', '主导航', 'Основная навигация', 'メイン')}>
+	<nav class="glass-nav print:hidden" aria-label={t('Main', '주 메뉴', '主导航', 'Основная навигация', 'メイン', '主導航')}>
 		<ul>
 			{
 				groups.map((group, i) => (
@@ -174,7 +176,7 @@ const contributing: NavLink = {
 					aria-haspopup="menu"
 					aria-expanded="false"
 					aria-controls="language-menu"
-					aria-label={t('Select language', '언어 선택', '选择语言', 'Выбрать язык', '言語を選択')}
+					aria-label={t('Select language', '언어 선택', '选择语言', 'Выбрать язык', '言語を選択', '選擇語言')}
 				>
 					<Icon name="translate" class="preference-icon" />
 					<span>{currentLanguage.label}</span>
@@ -206,7 +208,7 @@ const contributing: NavLink = {
 				aria-haspopup="true"
 				aria-expanded="false"
 				aria-controls="lp-menu-panel"
-				aria-label={t('Menu', '메뉴', '菜单', 'Меню', 'メニュー')}
+				aria-label={t('Menu', '메뉴', '菜单', 'Меню', 'メニュー', '選單')}
 			>
 				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
 					<path d="M4 6h16M4 12h16M4 18h16" />
