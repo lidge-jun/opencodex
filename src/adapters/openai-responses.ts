@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
+import { modelInList, namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
@@ -32,10 +32,14 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
-export function sanitizeReasoningInputContent(body: unknown): unknown {
+export function sanitizeReasoningInputContent(
+  body: unknown,
+  opts?: { preserveContentModels?: string[]; modelId?: string },
+): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
   if (!Array.isArray(raw.input)) return body;
+  const preserveContent = modelInList(opts?.preserveContentModels, opts?.modelId ?? "");
 
   let changed = false;
   const input = raw.input.map(item => {
@@ -43,16 +47,27 @@ export function sanitizeReasoningInputContent(body: unknown): unknown {
     const rec = item as Record<string, unknown>;
     if (rec.type !== "reasoning") return item;
     const hasRawContent = Array.isArray(rec.content) && rec.content.length > 0;
-    // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — the native
-    // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
+    // ocxr1 envelopes are proxy-minted (Anthropic signatures), not OpenAI encryption — no
+    // backend can decrypt them. Strip regardless of content shape or preserve setting.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
     if (!hasRawContent && !hasOcxEnvelope) return item;
+    const next: Record<string, unknown> = { ...rec };
+    let mutated = false;
+    if (hasOcxEnvelope) {
+      delete next.encrypted_content;
+      mutated = true;
+    }
+    // Routed models can produce raw `reasoning_text` output items. ChatGPT's Responses backend
+    // accepts reasoning input only with empty `content`, so native passthrough keeps summaries/ids
+    // and drops the raw content to avoid a 400. Stateless Responses backends such as DeepSeek
+    // instead require the caller to replay the reasoning text on every continuation, so models in
+    // `preserveReasoningContentModels` keep it (issue #875).
+    if (hasRawContent && !preserveContent) {
+      next.content = [];
+      mutated = true;
+    }
+    if (!mutated) return item;
     changed = true;
-    // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
-    // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
-    // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.
-    const next: Record<string, unknown> = { ...rec, content: [] };
-    if (hasOcxEnvelope) delete next.encrypted_content;
     return next;
   });
 
@@ -1024,7 +1039,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), {
+        preserveContentModels: provider.preserveReasoningContentModels,
+        modelId: parsed.modelId,
+      })))))));
       const body = JSON.stringify(stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
