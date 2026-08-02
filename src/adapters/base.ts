@@ -1,8 +1,10 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
+import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
   headers: Headers;
+  translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
@@ -26,12 +28,12 @@ export interface ProviderAdapter {
    * (e.g. Vertex AI ADC token) return a Promise. Sync adapters return the object directly; callers
    * must `await` the result (awaiting a non-Promise is a no-op).
    */
-  buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
+  buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
 
   fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
 
-  parseStream(response: Response): AsyncGenerator<AdapterEvent>;
-  parseResponse?(response: Response): Promise<AdapterEvent[]>;
+  parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
+  parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
   runTurn?(
     parsed: OcxParsedRequest,
     incoming: IncomingMeta,
@@ -44,6 +46,8 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Releases observation of a serialized request body after its final fetch attempt settles. */
+    releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
     reasoningLog?: {
       effectiveEffort: string;

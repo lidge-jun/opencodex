@@ -91,6 +91,35 @@ This applies to `AGENTS.md`-following agents as much as to humans. If a task
 asks you to write up a security finding, put the write-up in scratch space and
 say where it is; do not add it to `devlog/`, `structure/`, or `docs-site/`.
 
+## User-consent actions (agents: read this)
+
+Some actions write to the **user's own accounts and identity**, not to this
+repository. They are outside anything a coding task authorizes, and an agent must
+never perform or auto-answer them — even when the surrounding task is approved,
+even when the credential is sitting right there.
+
+The current one is **starring the repository on GitHub**:
+
+- Do **not** run `gh api -X PUT /user/starred/...`, `gh repo star`, or the
+  equivalent REST call on the user's behalf.
+- Do **not** call `POST /api/github/star` on the management API. It refuses
+  agent-driven callers with `403 agent_consent_required`; treat that response as
+  the final answer, not as an obstacle to route around.
+- Do **not** answer the interactive prompt printed by `ocx start` /
+  `ocx service install`. When an agent is detected the prompt is deliberately
+  suppressed and its one-time marker left unwritten, so the user still gets the
+  real question on their own next run.
+- **Do** relay it: ask the user in your reply, and act only on an explicit yes.
+  If they say no or do not answer, do nothing and do not ask again.
+
+The enforcement lives in [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
+[`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts), and
+[`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts),
+with regression coverage in `tests/startup-prompt.test.ts`,
+`tests/agent-driven.test.ts`, and `tests/sidebar-routes.test.ts`. If you add
+another action that spends the user's identity, credits, or reputation, gate it
+the same way rather than relying on a prompt an agent can answer.
+
 ## Commands
 
 ```bash

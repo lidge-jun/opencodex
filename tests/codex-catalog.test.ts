@@ -25,6 +25,7 @@ import type { OcxConfig } from "../src/types";
 import type { NormalizedComboConfig } from "../src/combos/types";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { handleManagementAPI } from "../src/server/management-api";
+import { OAUTH_PROVIDERS } from "../src/oauth";
 
 const originalFetch = globalThis.fetch;
 
@@ -736,65 +737,22 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(catalogModelSlug(model)).toBe("deepseek/deepseek-v4");
   });
 
-  test("absent displayName uses the native model id without the provider namespace", () => {
+  test("absent displayName leaves display_name as the slug (unchanged behavior)", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "anthropic", id: "claude-sonnet-4-6", owned_by: "anthropic" },
     ]);
     const row = entries.find(e => e.slug === "anthropic/claude-sonnet-4-6");
 
-    expect(row?.display_name).toBe("claude-sonnet-4-6");
+    expect(row?.display_name).toBe("anthropic/claude-sonnet-4-6");
     expect(row?.slug).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  test("namespaced native ids use only their final segment as the default label", () => {
+  test("empty/whitespace displayName is ignored and falls back to the slug", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
-      { provider: "openrouter", id: "google/gemini-3.6-flash", displayName: "   ", owned_by: "openrouter" },
+      { provider: "deepseek", id: "deepseek-v4", displayName: "   ", owned_by: "deepseek" },
     ]);
-    const row = entries.find(e => e.slug === "openrouter/google-gemini-3.6-flash");
-    expect(row?.display_name).toBe("gemini-3.6-flash");
-    expect(row?.slug).toBe("openrouter/google-gemini-3.6-flash");
-  });
-
-  test("basename collisions retain only the route context needed to distinguish rows", () => {
-    const entries = buildCatalogEntries(nativeTemplate(), [], [
-      { provider: "openrouter", id: "reka/reka-edge", owned_by: "openrouter" },
-      { provider: "openrouter", id: "rekaai/reka-edge", owned_by: "openrouter" },
-    ]);
-    const reka = entries.find(e => e.slug === "openrouter/reka-reka-edge");
-    const rekaAi = entries.find(e => e.slug === "openrouter/rekaai-reka-edge");
-
-    expect(reka?.display_name).toBe("reka/reka-edge");
-    expect(rekaAi?.display_name).toBe("rekaai/reka-edge");
-    expect(reka?.description).toContain("openrouter/reka-reka-edge");
-    expect(rekaAi?.description).toContain("openrouter/rekaai-reka-edge");
-  });
-
-  test("the same native id exposed by multiple providers also includes the provider", () => {
-    const entries = buildCatalogEntries(nativeTemplate(), [], [
-      { provider: "openrouter", id: "moonshotai/kimi-k3", owned_by: "openrouter" },
-      { provider: "nvidia", id: "moonshotai/kimi-k3", owned_by: "nvidia" },
-    ]);
-
-    expect(entries.find(e => e.slug === "openrouter/moonshotai-kimi-k3")?.display_name)
-      .toBe("moonshotai/kimi-k3 (openrouter)");
-    expect(entries.find(e => e.slug === "nvidia/moonshotai-kimi-k3")?.display_name)
-      .toBe("moonshotai/kimi-k3 (nvidia)");
-  });
-
-  test("explicit display names keep precedence when they collide with a default label", () => {
-    const entries = buildCatalogEntries(nativeTemplate(), [], [
-      { provider: "openrouter", id: "reka/reka-edge", displayName: "reka-edge", owned_by: "openrouter" },
-      { provider: "openrouter", id: "rekaai/reka-edge", owned_by: "openrouter" },
-    ]);
-
-    expect(entries.find(e => e.slug === "openrouter/reka-reka-edge")?.display_name).toBe("reka-edge");
-    expect(entries.find(e => e.slug === "openrouter/rekaai-reka-edge")?.display_name).toBe("rekaai/reka-edge");
-  });
-
-  test("an aliased combo keeps its public alias when no displayName is configured", () => {
-    const withAlias = { provider: "combo", id: "x", alias: "fast-chat", owned_by: "combo" };
-    const entries = buildCatalogEntries(nativeTemplate(), [], [withAlias], undefined, false, "default", new Set(["fast-chat"]));
-    expect(entries.find(e => e.slug === "fast-chat")?.display_name).toBe("fast-chat");
+    const row = entries.find(e => e.slug === "deepseek/deepseek-v4");
+    expect(row?.display_name).toBe("deepseek/deepseek-v4");
   });
 
   test("displayName never affects the routing slug, alias, or provider", () => {
@@ -1310,6 +1268,42 @@ describe("Codex catalog routed normalization", () => {
       globalThis.fetch = originalFetch;
       clearModelCache("static-provider");
     }
+  });
+
+  test("Google Antigravity uses its static registry catalog and suppresses stale discovery (#723)", async () => {
+    const providerName = "google-antigravity";
+    const provider = structuredClone(OAUTH_PROVIDERS[providerName].providerConfig);
+    const config = {
+      port: 10100,
+      defaultProvider: providerName,
+      providers: { [providerName]: provider },
+    } as OcxConfig;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("static Antigravity catalog must not call /models");
+    }) as typeof fetch;
+    markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });
+
+    const models = await gatherRoutedModels(config);
+    const ids = models.filter(model => model.provider === providerName).map(model => model.id).sort();
+
+    expect(fetchCalls).toBe(0);
+    expect(ids).toEqual([...(provider.models ?? [])].sort());
+    expect(ids).toHaveLength(6);
+    expect(getProviderDiscoveryStatus(providerName)).toBeUndefined();
+
+    markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });
+    const url = new URL("http://127.0.0.1/api/providers");
+    const response = await handleManagementAPI(new Request(url), url, config);
+    const rows = await response!.json() as Array<Record<string, unknown>>;
+    const row = rows.find(item => item.name === providerName);
+    expect(row).toMatchObject({
+      name: providerName,
+      liveModels: false,
+      models: provider.models,
+    });
+    expect(row).not.toHaveProperty("discovery");
   });
 
   test("failed discovery falls back to defaultModel when no static models are configured (#308)", async () => {
@@ -2213,16 +2207,16 @@ describe("Codex catalog routed normalization", () => {
     expect(models).toEqual([]);
   });
 
-  test("anthropic sonnet 4.6 uses the 200k opencodex catalog cap", () => {
+  test("anthropic sonnet 4.6 keeps the upstream 1M context window", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "anthropic", id: "claude-sonnet-4-6" },
     ]);
     const routed = entries.find(e => e.slug === "anthropic/claude-sonnet-4-6");
 
-    expect(routed?.context_window).toBe(200_000);
-    expect(routed?.max_context_window).toBe(200_000);
-    expect(routed?.auto_compact_token_limit).toBe(180_000);
-    expect(getJawcodeModelMetadata("anthropic", "claude-sonnet-4-6")?.contextWindow).toBe(200_000);
+    expect(routed?.context_window).toBe(1_000_000);
+    expect(routed?.max_context_window).toBe(1_000_000);
+    expect(routed?.auto_compact_token_limit).toBe(900_000);
+    expect(getJawcodeModelMetadata("anthropic", "claude-sonnet-4-6")?.contextWindow).toBe(1_000_000);
   });
 
   test("routed entries resolve jawcode provider aliases", () => {

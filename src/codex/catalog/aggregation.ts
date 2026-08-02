@@ -281,6 +281,21 @@ export function resetOpenAiApiCatalogWarningStateForTests(): void {
 export const slugAliasCollisionWarnings = new Set<string>();
 
 export const comboMasqueradeCollisionWarnings = new Set<string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileCatalogWarningMemos(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = openAiApiCollisionWarnings.size
+    + comboCatalogWarningSignatures.size
+    + slugAliasCollisionWarnings.size
+    + comboMasqueradeCollisionWarnings.size;
+  openAiApiCollisionWarnings.clear();
+  comboCatalogWarningSignatures.clear();
+  slugAliasCollisionWarnings.clear();
+  comboMasqueradeCollisionWarnings.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 export function warnComboMasqueradeCollisionOnce(slug: string): void {
   if (comboMasqueradeCollisionWarnings.has(slug)) return;

@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { createGoogleAdapter } from "../src/adapters/google";
+import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { isVertexTruncationReason, vertexTruncationErrorMessage } from "../src/adapters/google-truncation";
 import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
+  withTestTranslatorBudget(createGoogleAdapterProduction(...args));
 
 function sseResponse(chunks: unknown[]): Response {
   const body = chunks.map(c => `data: ${JSON.stringify(c)}\n`).join("\n") + "\n";

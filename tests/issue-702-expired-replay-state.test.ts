@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -10,9 +10,12 @@ import {
 import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
+  rememberResponseState,
   responseStateMetrics,
+  setResponseStateByteCapForTests,
   type ResponseStateMetrics,
 } from "../src/responses/state";
+import { responseSpillDirectory } from "../src/responses/spill-store";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -228,6 +231,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearResponseStateForTests();
+  setResponseStateByteCapForTests(null);
   resetSubagentModelFallbackStateForTests();
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
@@ -240,6 +244,98 @@ afterEach(() => {
 });
 
 describe("Issue #702 expired forward replay state", () => {
+  test("known continuation spill failure returns terminal structured previous_response_not_found before upstream I/O", async () => {
+    const responseId = "resp_issue_702_missing_spill";
+    setResponseStateByteCapForTests(1_024);
+    rememberResponseState(
+      { model: "openai/gpt-5.6-sol", input: "x".repeat(8_000), store: false },
+      { id: responseId, status: "completed", output: [{ role: "assistant", content: "done" }] },
+      undefined,
+      { force: true },
+    );
+    const spillDir = responseSpillDirectory(testHome);
+    const spill = readdirSync(spillDir).find(name => name.endsWith(".spill.json"));
+    expect(spill).toBeDefined();
+    unlinkSync(join(spillDir, spill!));
+
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("upstream must not be called");
+    }) as typeof fetch;
+    const routeClasses: Array<{ config: OcxConfig; model: string }> = [
+      { config: forwardConfig(), model: "gpt-5.6-sol" },
+      {
+        config: {
+          port: 0,
+          hostname: "127.0.0.1",
+          openaiProviderTierVersion: 2,
+          defaultProvider: "kiro-test",
+          providers: {
+            "kiro-test": {
+              adapter: "kiro",
+              baseUrl: "https://runtime.us-east-1.kiro.dev",
+              authMode: "key",
+              apiKey: "synthetic-token",
+              models: ["gpt-5.6-sol"],
+            },
+          },
+        } as OcxConfig,
+        model: "kiro-test/gpt-5.6-sol",
+      },
+      {
+        config: {
+          port: 0,
+          hostname: "127.0.0.1",
+          openaiProviderTierVersion: 2,
+          defaultProvider: "test-openai",
+          providers: {
+            "test-openai": {
+              adapter: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authMode: "key",
+              apiKey: "provider-key",
+              models: ["gpt-5.6-sol"],
+            },
+          },
+        } as OcxConfig,
+        model: "test-openai/gpt-5.6-sol",
+      },
+    ];
+
+    try {
+      for (const routeClass of routeClasses) {
+        saveConfig(routeClass.config);
+        const server = startServer(0);
+        try {
+          const response = await originalFetch(new URL("/v1/responses", server.url), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model: routeClass.model,
+              previous_response_id: responseId,
+              input: [inputMessage(CURRENT_USER_SENTINEL)],
+              stream: true,
+            }),
+          });
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({
+            error: {
+              message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+              type: "invalid_request_error",
+              code: "previous_response_not_found",
+            },
+          });
+        } finally {
+          await server.stop(true);
+        }
+      }
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("forward mode fails closed when previous response replay state has expired", async () => {
     let quotaPrimeCalls = 0;
     setSubagentQuotaPrimeForTests(async () => {

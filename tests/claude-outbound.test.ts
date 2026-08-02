@@ -3,11 +3,40 @@ import {
   anthropicErrorBody,
   anthropicErrorType,
   anthropicUsage,
-  collectAnthropicMessage,
+  collectAnthropicMessage as collectAnthropicMessageProduction,
   responsesJsonToAnthropicMessage,
-  responsesSseToAnthropicSse,
+  responsesSseToAnthropicSse as responsesSseToAnthropicSseProduction,
   sanitizeWebSearchInput,
 } from "../src/claude/outbound";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import {
+  TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
+  type TranslatorBudget,
+} from "../src/lib/translator-budget";
+
+const streamBudgets = new WeakMap<ReadableStream<Uint8Array>, TranslatorBudget>();
+
+function responsesSseToAnthropicSse(
+  upstream: ReadableStream<Uint8Array>,
+  model: string,
+  opts: { pingIntervalMs?: number; translatorBudget?: TranslatorBudget } = {},
+): ReadableStream<Uint8Array> {
+  const translatorBudget = opts.translatorBudget ?? createTestTranslatorBudget();
+  const stream = responsesSseToAnthropicSseProduction(upstream, model, {
+    ...opts,
+    translatorBudget,
+  });
+  streamBudgets.set(stream, translatorBudget);
+  return stream;
+}
+
+function collectAnthropicMessage(
+  stream: ReadableStream<Uint8Array>,
+  model: string,
+  translatorBudget = streamBudgets.get(stream) ?? createTestTranslatorBudget(),
+) {
+  return collectAnthropicMessageProduction(stream, model, translatorBudget);
+}
 
 function sse(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -30,6 +59,16 @@ function streamFrom(text: string): ReadableStream<Uint8Array> {
   });
 }
 
+function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+}
+
 async function collectEvents(stream: ReadableStream<Uint8Array>): Promise<{ name: string; data: Record<string, any> }[]> {
   const text = await new Response(stream).text();
   const events: { name: string; data: Record<string, any> }[] = [];
@@ -47,6 +86,69 @@ async function collectEvents(stream: ReadableStream<Uint8Array>): Promise<{ name
 }
 
 describe("claude outbound SSE", () => {
+  test("translator overflow emits one typed error and cancels the upstream reader", async () => {
+    const frame = sse("response.failed", {
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: {
+          message: "upstream translation buffer exceeded the safe limit",
+          type: "upstream_error",
+          code: "translation_buffer_limit",
+        },
+      },
+    });
+    let cancelled = false;
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(frame));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const events = await collectEvents(responsesSseToAnthropicSse(upstream, "m"));
+    expect(events).toEqual([{
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "request_too_large",
+          message: "upstream translation buffer exceeded the safe limit",
+          code: "translation_buffer_limit",
+        },
+      },
+    }]);
+    expect(cancelled).toBe(true);
+  });
+
+  test("multiline Responses data assembly is charged as an old/new replacement", async () => {
+    const half = 512 * 1024;
+    const multiline = `data: {"type":"unknown","payload":"${"x".repeat(half)}\n`
+      + `data: ${"y".repeat(half)}"}\n\n`;
+    // Source + raw frame peaks below 3.5 MiB; admitting old data + fragment + replacement does not.
+    const budget = createTestTranslatorBudget({ maxTurnBytes: Math.floor(3.5 * 1024 * 1024) });
+    const events = await collectEvents(responsesSseToAnthropicSse(
+      streamFromChunks([multiline]),
+      "m",
+      { translatorBudget: budget },
+    ));
+
+    expect(events).toEqual([{
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "request_too_large",
+          message: "upstream translation buffer exceeded the safe limit",
+          code: "translation_buffer_limit",
+        },
+      },
+    }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("text + thinking + tool call + completed w/ usage -> exact Anthropic sequence", async () => {
     const upstream = [
       sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
@@ -651,4 +753,44 @@ describe("sanitizeWebSearchInput (#381)", () => {
       blocked_domains: ["example.com"],
     });
   });
+
+  test("fragmented WebSearch args admit exact 2 MiB and reject one byte over", async () => {
+    const prefix = "{\"query\":\"";
+    const suffix = "\"}";
+    const exactArgs = prefix
+      + "x".repeat(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix))
+      + suffix;
+    const exactSplit = Math.floor(exactArgs.length / 2);
+    const exactBudget = createTestTranslatorBudget();
+    const exactEvents = await collectEvents(responsesSseToAnthropicSse(streamFromChunks([
+      sse("response.output_item.added", {
+        item: { type: "function_call", id: "fc_exact", call_id: "toolu_exact", name: "WebSearch" },
+      }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_exact", delta: exactArgs.slice(0, exactSplit) }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_exact", delta: exactArgs.slice(exactSplit) }),
+      sse("response.output_item.done", {
+        item: { type: "function_call", id: "fc_exact", call_id: "toolu_exact", name: "WebSearch" },
+      }),
+      sse("response.completed", { response: { status: "completed" } }),
+    ]), "m", { translatorBudget: exactBudget }));
+    const exactDelta = exactEvents.find(event => event.data.delta?.type === "input_json_delta");
+    expect(JSON.parse(exactDelta!.data.delta.partial_json).query.length)
+      .toBe(exactArgs.length - prefix.length - suffix.length);
+    expect(exactEvents.at(-1)?.name).toBe("message_stop");
+    expect(exactBudget.snapshot().activeCalls).toBe(0);
+
+    const overArgs = exactArgs.slice(0, -suffix.length) + "z" + suffix;
+    const overSplit = Math.floor(overArgs.length / 2);
+    const overEvents = await collectEvents(responsesSseToAnthropicSse(streamFromChunks([
+      sse("response.output_item.added", {
+        item: { type: "function_call", id: "fc_over", call_id: "toolu_over", name: "WebSearch" },
+      }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_over", delta: overArgs.slice(0, overSplit) }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_over", delta: overArgs.slice(overSplit) }),
+    ]), "m"));
+    expect(overEvents.at(-1)).toMatchObject({
+      name: "error",
+      data: { error: { type: "request_too_large", code: "translation_buffer_limit" } },
+    });
+  }, 60_000);
 });

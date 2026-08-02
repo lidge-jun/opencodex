@@ -4,7 +4,7 @@ import { type TFn, useI18n } from "../i18n/shared";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import {
   StartupDetailsSection,
   StartupHeroSection,
@@ -73,6 +73,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const { t } = useI18n();
   const cacheKey = `${STARTUP_PAGE_CACHE_PREFIX}${apiBase}`;
   const cached = useMemo(() => readSessionListCache<StartupPageCache>(cacheKey), [cacheKey]);
+  const startupResourceKey = `startup-page:${apiBase}`;
 
   const [copied, setCopied] = useState<string | null>(null);
   const [tray, setTray] = useState<TrayStatusData | null>(() => cached?.tray ?? null);
@@ -107,6 +108,13 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       if (!res.ok) throw new Error("fetch failed");
       const next = await res.json() as StartupHealthData;
       paintedRef.current = true;
+      const prevCache = readSessionListCache<StartupPageCache>(cacheKey);
+      writeSessionListCache(cacheKey, {
+        data: next,
+        warning: prevCache?.warning ?? null,
+        fix: prevCache?.fix ?? null,
+        tray: prevCache?.tray ?? null,
+      } satisfies StartupPageCache);
 
       const trayPromise = next.platform === "win32"
         ? fetch(`${apiBase}/api/windows-tray`, { signal })
@@ -172,14 +180,16 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   }, [apiBase, cacheKey, t]);
 
   const startupResource = useDataSurface<StartupHealthData>(
-    `startup-page:${apiBase}`,
+    startupResourceKey,
     [apiBase],
     fetchStartup,
-    { isEmpty: () => false },
+    { isEmpty: () => false, initialData: cached?.data ?? undefined },
   );
   const loadState = startupResource.state;
   const refresh = startupResource.refresh;
   const data = loadState.data ?? cached?.data ?? null;
+  // Keep Refresh / install actions disabled for the whole in-flight window, including
+  // warm revisits where `data` is already seeded from session cache.
   const loading = loadState.refreshing;
   const failed = Boolean(data?.diagnosticStale) || loadState.showError;
 
@@ -268,9 +278,6 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       ) : data ? (
         <>
           {loadState.showError && <Notice tone="err">{t("startup.error")}</Notice>}
-          {loadState.refreshing && (
-            <DataSurfaceStatus live={!loadState.showError}>{t("startup.loading")}</DataSurfaceStatus>
-          )}
           {failed && (
             <div className="notice notice-warn startup-page-notice" role="alert">
               {t("startup.staleData")}

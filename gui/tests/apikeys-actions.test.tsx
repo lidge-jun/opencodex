@@ -285,9 +285,14 @@ test("a failed delete reports beside the key, and the error does not follow the 
   expect(error).not.toBeNull();
   expect(error!.getAttribute("role")).toBe("alert");
 
-  // Selecting another key must not inherit the previous key's failure.
+  // Selecting another key must not inherit the previous key's failure. With the
+  // rail gone the key list is not beside the detail pane, so reaching another
+  // key goes back to the overview first — the same journey a user now makes.
   await act(async () => {
-    [...container.querySelectorAll("button")].find(b => b.textContent?.includes("beta"))!.click();
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Back"))!.click();
+  });
+  await act(async () => {
+    [...container.querySelectorAll<HTMLButtonElement>(".awi-keylist-name")].find(b => b.textContent === "beta")!.click();
   });
   expect(container.querySelector(".awi-delete-error")).toBeNull();
 });
@@ -310,18 +315,19 @@ test("a pending mutation cannot land its result on another key", async () => {
   await act(async () => { await new Promise(r => setTimeout(r, 350)); });
   await act(async () => { button(container, "Confirm").click(); });
 
-  // Mid-flight, the rail is locked: otherwise alpha's outcome would land on
-  // whichever key the user wandered to.
-  const betaRow = [...container.querySelectorAll("button")].find(b => b.textContent?.includes("beta")) as HTMLButtonElement;
-  expect(betaRow.disabled).toBe(true);
-  await act(async () => { betaRow.click(); });
+  // Mid-flight, navigation is locked: otherwise alpha's outcome would land on
+  // whichever key the user wandered to. Back is the way out of the detail pane,
+  // so it is the control the lock has to hold.
+  const back = () => [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(b => b.textContent?.includes("Back"))!;
+  expect(back().disabled).toBe(true);
+  await act(async () => { back().click(); });
   expect(container.textContent).toContain("alpha");
 
   await act(async () => { settle(false); await Promise.resolve(); });
   // Only now can the user move, and the error stays with the key it belongs to.
   expect(container.querySelector(".awi-delete-error")).not.toBeNull();
-  const betaAfter = [...container.querySelectorAll("button")].find(b => b.textContent?.includes("beta")) as HTMLButtonElement;
-  expect(betaAfter.disabled).toBe(false);
+  expect(back().disabled).toBe(false);
 });
 
 test("zero usage and unavailable attribution read differently", async () => {

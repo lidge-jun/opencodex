@@ -2,8 +2,10 @@
  * ApiKeysWorkspace — rail + main for the API tab. Overview hosts the existing
  * endpoint/auth/generate/models/usage panels; selecting a key opens detail.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { IconChevron, IconTrash } from "../../icons";
+import { SectionTabs } from "../section-tabs";
+import { sectionAnchorId } from "../../section-anchors";
 import { useT } from "../../i18n/shared";
 import type { ExternalModelRow, GatewayInboundProtocol } from "../../api-access-models";
 import {
@@ -20,12 +22,17 @@ import {
   ApiKeysModelsPanel,
   ApiKeysUsagePanel,
 } from "../../pages/api-keys-panels";
+import ClientConfigPanel from "./ClientConfigPanel";
+import ApiKeysListPanel from "./ApiKeysListPanel";
 
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
+  /** Management API origin the client-config panel fetches from. */
+  apiBase: string;
   /** Dataset-level. Absent means nothing is attributable yet — a different
    *  statement from a key whose counters read zero. */
   attributionSince?: string;
+  historyTruncated?: boolean;
   authMatrix: ApiAuthMatrixRow[];
   keysLoading: boolean;
   keysLoadFailed: boolean;
@@ -38,6 +45,8 @@ export interface ApiKeysWorkspaceProps {
   copied: boolean;
   filteredModels: ExternalModelRow[];
   modelsLoading: boolean;
+  /** Quiet revalidation / retry over rows already on screen — not a skeleton. */
+  modelsRefreshing?: boolean;
   modelsLoadFailed: boolean;
   modelCount: number;
   hasModelData: boolean;
@@ -61,7 +70,9 @@ export interface ApiKeysWorkspaceProps {
 
 export default function ApiKeysWorkspace({
   keys,
+  apiBase,
   attributionSince,
+  historyTruncated,
   authMatrix,
   keysLoading,
   keysLoadFailed,
@@ -74,6 +85,7 @@ export default function ApiKeysWorkspace({
   copied,
   filteredModels,
   modelsLoading,
+  modelsRefreshing = false,
   modelsLoadFailed,
   modelCount,
   hasModelData,
@@ -110,6 +122,15 @@ export default function ApiKeysWorkspace({
 
   const selected = selectedId ? (keys.find(k => k.id === selectedId) ?? null) : null;
   const mutationPending = deleting || renamePending;
+
+  /** The strip's items. Counts sit in `meta` so the strip reports scale, not just names. */
+  const sectionTabs = useMemo(() => [
+    { id: "keys", label: t("api.section.keys"), meta: keysLoading ? undefined : String(keys.length) },
+    { id: "connect", label: t("api.section.connect") },
+    { id: "endpoints", label: t("api.section.endpoints") },
+    { id: "models", label: t("api.section.models"), meta: String(modelCount) },
+    { id: "examples", label: t("api.section.examples") },
+  ], [t, keys.length, keysLoading, modelCount]);
 
   const clearDeleteConfirm = () => {
     setConfirmDelete(false);
@@ -184,68 +205,12 @@ export default function ApiKeysWorkspace({
 
   return (
     <div className="apikeys-workspace-shell">
+      {/* No side rail. Sections stay in the document and a pinned strip scrolls to
+          one, the pattern Usage / Logs / Subagents already use. A rail plus a
+          content pane was a second vertical band competing for the same width,
+          and at 1280px it cost the content column 252px it could not spare. */}
+      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} />}
       <div className="apikeys-workspace-root">
-        <aside className="apikeys-workspace-rail" aria-label={t("api.title")}>
-          <div className="apikeys-workspace-rail-header">
-            <span className="apikeys-workspace-rail-title">
-              {keysLoading ? t("api.activeKeysLoading") : t("api.activeKeys", { count: keys.length })}
-            </span>
-          </div>
-          <div className="apikeys-workspace-rail-list">
-            <button
-              type="button"
-              className={`apikeys-workspace-rail-row${selectedId === null ? " apikeys-workspace-rail-row--selected" : ""}`}
-              onClick={showOverview}
-              disabled={mutationPending}
-              aria-current={selectedId === null ? "page" : undefined}
-            >
-              <span className="apikeys-workspace-rail-name">{t("api.workspace.overview")}</span>
-            </button>
-            {keysLoading ? (
-              <span className="apikeys-workspace-rail-empty">{t("common.loading")}</span>
-            ) : keys.length === 0 ? (
-              <span className="apikeys-workspace-rail-empty">
-                {keysLoadFailed ? t("api.keysLoadFailed") : t("api.workspace.noKeysHint")}
-              </span>
-            ) : (
-              keys.map(k => (
-                <button
-                  key={k.id}
-                  type="button"
-                  className={`apikeys-workspace-rail-row${selectedId === k.id ? " apikeys-workspace-rail-row--selected" : ""}`}
-                  // Navigation is blocked while a mutation is in flight: its
-                  // result is bound to the key it was issued for, and letting the
-                  // selection move would land the outcome on a bystander.
-                  disabled={mutationPending}
-                  onClick={() => {
-                    setSelectedId(k.id);
-                    clearDeleteConfirm();
-                    setRenaming(false);
-                    setRenameFailed(false);
-                    setDeleteFailed(false);
-                  }}
-                  aria-current={selectedId === k.id ? "page" : undefined}
-                >
-                  <span className="apikeys-workspace-rail-name">{k.name}</span>
-                  <span className="apikeys-workspace-rail-meta">
-                    {/* Prefix moved to detail: it reads the same on every row, so
-                        the rail carries what actually differs between keys. */}
-                    {!attributionSince
-                      ? t("api.attribution.unavailable")
-                      : k.usage.ambiguous
-                        ? t("api.attribution.railAmbiguous")
-                        : `${t("api.attribution.railRequests", { count: k.usage.requests7d })} · ${
-                          k.usage.lastUsedAt
-                            ? t("api.attribution.railLastUsed", { date: formatCreatedDate(k.usage.lastUsedAt, localeTag) })
-                            : t("api.attribution.railNeverUsed")
-                        }`}
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </aside>
-
         <section className="apikeys-workspace-main" aria-label={t("api.workspace.details")}>
           {selected ? (
             <div className="awi-detail">
@@ -371,7 +336,7 @@ export default function ApiKeysWorkspace({
                         <dd>{selected.usage.requests7d.toLocaleString(localeTag)}</dd>
                       </div>
                       <div className="awi-kv-row">
-                        <dt>{t("api.attribution.totalRequests")}</dt>
+                        <dt>{historyTruncated ? t("api.attribution.totalRequestsAvailable") : t("api.attribution.totalRequests")}</dt>
                         <dd>{selected.usage.totalRequests.toLocaleString(localeTag)}</dd>
                       </div>
                       <div className="awi-kv-row">
@@ -381,7 +346,7 @@ export default function ApiKeysWorkspace({
                           : t("api.attribution.neverUsed")}</dd>
                       </div>
                       <div className="awi-kv-row">
-                        <dt>{t("api.attribution.since")}</dt>
+                        <dt>{historyTruncated ? t("api.attribution.sinceAvailable") : t("api.attribution.since")}</dt>
                         <dd>{formatCreatedDate(attributionSince, localeTag)}</dd>
                       </div>
                     </dl>
@@ -391,33 +356,64 @@ export default function ApiKeysWorkspace({
             </div>
           ) : (
             <div className="awi-overview">
-              <div className="awi-overview-left">
-                <ApiKeysManagePanel
-                  keys={keys}
-                  keysLoading={keysLoading}
-                  keysLoadFailed={keysLoadFailed}
-                  newName={newName}
-                  creating={creating}
-                  newKey={newKey}
-                  copied={copied}
-                  confirmDelete={null}
-                  localeTag={localeTag}
-                  showKeyList={false}
-                  onNewNameChange={onNewNameChange}
-                  onCreate={onCreate}
-                  onDismissNewKey={onDismissNewKey}
-                  onCopyKey={onCopyKey}
-                  onConfirmDelete={() => {}}
-                  onCancelDelete={() => {}}
-                  onDelete={() => {}}
-                />
-                <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
-                <ApiKeysUsagePanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} />
-              </div>
-              <div className="awi-overview-right">
+              {/* One column, in reading order: identity (generate a key) →
+                  transport (where to point a client) → reference (what the
+                  endpoints accept) → inventory (what to call) → examples. Each
+                  step is a precondition of the next, and the pinned strip above
+                  scrolls to one instead of swapping the page. */}
+              <div className="awi-overview-section">
+                <div id={sectionAnchorId("api", "keys")} className="awi-section-anchor">
+                  <ApiKeysManagePanel
+                    keys={keys}
+                    keysLoading={keysLoading}
+                    keysLoadFailed={keysLoadFailed}
+                    newName={newName}
+                    creating={creating}
+                    newKey={newKey}
+                    copied={copied}
+                    confirmDelete={null}
+                    localeTag={localeTag}
+                    showKeyList={false}
+                    onNewNameChange={onNewNameChange}
+                    onCreate={onCreate}
+                    onDismissNewKey={onDismissNewKey}
+                    onCopyKey={onCopyKey}
+                    onConfirmDelete={() => {}}
+                    onCancelDelete={() => {}}
+                    onDelete={() => {}}
+                  />
+                  {/* The rail used to own key navigation. With it gone the list is a
+                      table in its own section, which is also where a comparative
+                      surface belongs: requests and last-used sort, a rail does not. */}
+                  <ApiKeysListPanel
+                    keys={keys}
+                    keysLoading={keysLoading}
+                    keysLoadFailed={keysLoadFailed}
+                    attributionSince={attributionSince}
+                    localeTag={localeTag}
+                    busy={mutationPending}
+                    onSelect={id => {
+                      setSelectedId(id);
+                      clearDeleteConfirm();
+                      setRenaming(false);
+                      setRenameFailed(false);
+                      setDeleteFailed(false);
+                    }}
+                  />
+                </div>
+                {/* Transport before reference: "where do I point a client" is the
+                    question a reader has before "what headers does it accept". */}
+                <div id={sectionAnchorId("api", "connect")} className="awi-section-anchor">
+                  <ClientConfigPanel apiBase={apiBase} baseUrl={endpoints.baseUrl} hasKeys={keys.length > 0} />
+                </div>
+                <div id={sectionAnchorId("api", "endpoints")} className="awi-section-anchor">
+                  <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                </div>
+                <div id={sectionAnchorId("api", "models")} className="awi-section-anchor">
                 <ApiKeysModelsPanel
                   filteredModels={filteredModels}
                   modelsLoading={modelsLoading}
+                  modelsRefreshing={modelsRefreshing}
                   modelsLoadFailed={modelsLoadFailed}
                   modelCount={modelCount}
                   hasModelData={hasModelData}
@@ -433,6 +429,10 @@ export default function ApiKeysWorkspace({
                   sourceLabel={sourceLabel}
                   protocolLabel={protocolLabel}
                 />
+                </div>
+                <div id={sectionAnchorId("api", "examples")} className="awi-section-anchor">
+                  <ApiKeysUsagePanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} />
+                </div>
               </div>
             </div>
           )}

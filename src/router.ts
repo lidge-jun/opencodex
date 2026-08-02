@@ -152,6 +152,15 @@ function configuredOriginForLog(url: string): string {
 // `routedProviderConfig` runs per request, so warn once per (provider, discarded, effective) triple.
 // Keyed by the URLs too: editing config.json to a different wrong value warns again.
 const discardedBaseUrlWarnings = new Set<string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileRouterWarningMemos(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = discardedBaseUrlWarnings.size;
+  discardedBaseUrlWarnings.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 /**
  * A pinned registry entry — non-template `baseUrl`, no `allowBaseUrlOverride` — outranks a saved

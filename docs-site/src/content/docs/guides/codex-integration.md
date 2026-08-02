@@ -1,6 +1,6 @@
 ---
 title: Codex Integration
-description: How opencodex injects itself into Codex, syncs the model catalog, drives the subagent picker, and restores cleanly.
+description: How opencodex injects itself into Codex, syncs the model catalog, installs shims, and restores cleanly.
 ---
 
 opencodex makes Codex route through the proxy by editing two things Codex reads: its config
@@ -184,15 +184,7 @@ start and on `ocx sync`, opencodex:
 4. **Filters** `config.disabledModels` and each provider's non-empty `selectedModels` allowlist.
 5. **Re-ranks** so featured models sort first (see below), then writes the merged catalog back.
 
-The cloned catalog `base_instructions` identity line is rewritten to the real upstream model name
-as static catalog metadata. Runtime request identity is handled separately: routed adapters replace
-Codex's live GPT-5 identity line with a model-agnostic coding-agent introduction.
-When unique, their default picker label is the final segment of the native model id, so provider
-namespaces do not hide the model name in narrow pickers. Basename collisions retain enough native
-route context to distinguish the rows; if the same native id comes from multiple providers, the
-provider is shown too. The full catalog slug remains in the description. Configure a custom display
-name when the route itself matters visually (for example, `Claude Opus 5 (TeamClaude)`); custom
-names continue to take precedence.
+Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
 
@@ -303,24 +295,7 @@ it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
 ## The subagent picker
 
-Codex's `spawn_agent` advertises the first **5 picker-visible catalog models** after sorting by
-priority. `subagentModels` accepts up to five ids, either bare native GPT slugs or namespaced
-`provider/model` routes, and gives them priorities 0–4 so they sort first:
-
-```json
-{
-  "subagentModels": [
-    "gpt-5.5",
-    "gpt-5.6-sol",
-    "anthropic/claude-opus-5",
-    "xai/grok-4.5",
-    "cursor/gpt-5.6-terra"
-  ]
-}
-```
-
-Priority ranking: featured (0–4) < other routed (5) < native (9). You can also manage this from the
-[web dashboard](/guides/web-dashboard/).
+Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for v1/base/v2 delegation and fallback behavior.
 
 ## Codex account warmup
 

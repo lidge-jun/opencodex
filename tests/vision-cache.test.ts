@@ -7,10 +7,13 @@ import { parseRequest } from "../src/responses/parser";
 import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../src/types";
 import {
   describeImagesInPlace,
+  evictOldestVisionDescriptionForBudget,
   resetVisionDescriptionCache,
   resolveMaxDescriptionsPerTurn,
   setVisionDescriptionCache,
+  setVisionDescriptionCacheLimitsForTests,
   shouldResolveOpenAiVisionSidecar,
+  visionDescriptionRetainedStoreSnapshot,
   type VisionPlan,
 } from "../src/vision";
 
@@ -119,6 +122,7 @@ describe("vision description cache and per-turn cap", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    setVisionDescriptionCacheLimitsForTests();
     setVisionDescriptionCache();
   });
 
@@ -187,6 +191,19 @@ describe("vision description cache and per-turn cap", () => {
     expect(calls).toBe(4);
   });
 
+  test("error outcome reaches the caller unchanged and does not mutate the cache", async () => {
+    const before = visionDescriptionRetainedStoreSnapshot();
+    globalThis.fetch = (async () => new Response("preserve this exact detail", { status: 503 })) as typeof fetch;
+    const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+
+    expect(textParts(request)).toEqual([
+      "[An image was attached but could not be processed: vision sidecar HTTP 503: preserve this exact detail]",
+    ]);
+    expect(visionDescriptionRetainedStoreSnapshot()).toEqual(before);
+  });
+
   test("interleaves hits, misses, and over-cap markers without changing message or part order", async () => {
     globalThis.fetch = (async (_url, init) => openaiSse(imageCaption(JSON.parse(String(init?.body))))) as typeof fetch;
     const headers = new Headers({ authorization: "Bearer test" });
@@ -249,5 +266,78 @@ describe("vision description cache and per-turn cap", () => {
     }), "hello world");
 
     expect(calls).toBe(5);
+  });
+
+  test("clamps a successful description before cache insertion and first render", async () => {
+    let cached = "";
+    setVisionDescriptionCache({
+      get: () => undefined,
+      set: (_key, value) => { cached = value; },
+      clear: () => {},
+    });
+    globalThis.fetch = (async () => openaiSse("x".repeat(2_100))) as typeof fetch;
+    const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+    const expected = `${"x".repeat(2_000)}\n…[description truncated]`;
+    expect(cached).toBe(expected);
+    expect(textParts(request).join("\n")).toContain(expected);
+  });
+
+  test("cache hit returns the same clamped description without a sidecar call", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return openaiSse("y".repeat(2_100)); }) as typeof fetch;
+    const first = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(first, plan(), new Headers({ authorization: "Bearer test" }));
+    const second = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(second, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(calls).toBe(1);
+    expect(textParts(second)).toEqual(textParts(first));
+  });
+
+  test("test-only limits make a successful clamped value larger than maxBytes observable but not retained", async () => {
+    setVisionDescriptionCacheLimitsForTests({ maxBytes: 1 });
+    globalThis.fetch = (async () => openaiSse("observable")) as typeof fetch;
+    const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(textParts(request).join("\n")).toContain("observable");
+    expect(visionDescriptionRetainedStoreSnapshot()).toEqual({
+      count: 0, bytes: 0, evictableBytes: 0, pinnedBytes: 0, oldestAt: null,
+    });
+  });
+
+  test("multiple entries fit exactly at the aggregate byte boundary and the next byte evicts the oldest before insert", async () => {
+    const headers = new Headers({ authorization: "Bearer test" });
+    globalThis.fetch = (async () => openaiSse("v")) as typeof fetch;
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    const oneEntryBytes = visionDescriptionRetainedStoreSnapshot().bytes;
+
+    setVisionDescriptionCacheLimitsForTests({ maxEntries: 3, maxBytes: oneEntryBytes * 2 });
+    let calls = 0;
+    globalThis.fetch = (async (_url, init) => {
+      calls++;
+      const caption = imageCaption(JSON.parse(String(init?.body)));
+      return openaiSse(caption === "caption-c" ? "vv" : "v");
+    }) as typeof fetch;
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_B }]), plan(), headers);
+    expect(visionDescriptionRetainedStoreSnapshot().bytes).toBe(oneEntryBytes * 2);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_C }]), plan(), headers);
+    const after = visionDescriptionRetainedStoreSnapshot();
+    expect(after.count).toBe(1);
+    expect(after.bytes).toBeLessThanOrEqual(oneEntryBytes * 2);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    expect(calls).toBe(4);
+  });
+
+  test("040 snapshot is observe-only and oldest-entry eviction returns exact released bytes", async () => {
+    globalThis.fetch = (async () => openaiSse("snapshot")) as typeof fetch;
+    const headers = new Headers({ authorization: "Bearer test" });
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_B }]), plan(), headers);
+    const before = visionDescriptionRetainedStoreSnapshot();
+    expect(visionDescriptionRetainedStoreSnapshot()).toEqual(before);
+    const released = evictOldestVisionDescriptionForBudget();
+    expect(released).toBeGreaterThan(0);
+    expect(visionDescriptionRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
   });
 });

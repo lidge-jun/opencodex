@@ -158,8 +158,8 @@ describe("AccountPoolStrategyControls", () => {
     // Custom Select only paints the active label until opened (sidecar DNA).
     expect(quota).toContain("Quota");
     expect(quota).toContain("select-trigger");
-    expect(quota).toContain("Applies to new sessions only");
-    expect(quota).not.toContain("Sticky successes before rotate");
+    expect(quota).toContain("Quota can also rebind an existing task on its next request after the usage threshold is crossed.");
+    expect(quota).not.toContain("New/unbound assignments before rotate");
 
     const rr = renderToStaticMarkup(
       <LanguageProvider>
@@ -173,7 +173,7 @@ describe("AccountPoolStrategyControls", () => {
       </LanguageProvider>,
     );
     expect(rr).toContain("Round-robin");
-    expect(rr).toContain("Sticky successes before rotate");
+    expect(rr).toContain("New/unbound assignments before rotate");
     expect(rr).toContain('value="2"');
   });
 
@@ -214,8 +214,8 @@ describe("AccountPoolStrategyControls", () => {
         />
       </LanguageProvider>,
     );
-    expect(markup).toContain("How new sessions pick an account from the pool.");
-    expect(markup).toContain("Applies to new sessions only");
+    expect(markup).toContain("How OpenCodex assigns an account to a new/unbound task.");
+    expect(markup).toContain("New/unbound task means a request with no current account binding");
     expect((markup.match(/class="desc"/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
@@ -238,11 +238,11 @@ describe("AccountPoolStrategyControls", () => {
         />
       </LanguageProvider>,
     );
-    expect(markup).toContain("How new sessions pick an account from the pool.");
-    expect(markup).toContain("Applies to new sessions only");
+    expect(markup).toContain("How OpenCodex assigns an account to a new/unbound task.");
+    expect(markup).toContain("Round-robin rotates only tasks without a live binding");
     expect(markup).toContain('id="anthropic-pool-strategy"');
     // Round-robin adds its own row, and the sticky help text is a desc rather than a card-sub.
-    expect(markup).toContain("Sticky successes before rotate");
+    expect(markup).toContain("New/unbound assignments before rotate");
     expect((markup.match(/class="setting-row"/g) ?? []).length).toBe(2);
   });
 });
@@ -368,7 +368,7 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
 
     expect(strategyTrigger(host).textContent).toContain("Round-robin");
     expect(strategyTrigger(host).disabled).toBe(false);
-    expect(host.textContent).toContain("Sticky successes before rotate");
+    expect(host.textContent).toContain("New/unbound assignments before rotate");
   });
 
   test("rolls back strategy when save fails", async () => {

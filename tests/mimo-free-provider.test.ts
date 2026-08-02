@@ -221,6 +221,31 @@ describe("mimo-free JWT cache", () => {
       resetMimoJwtCache();
     }
   });
+
+  test("MiMo accepts exact JWT boundary and rejects one byte over without caching", async () => {
+    const originalFetch = globalThis.fetch;
+    let jwt = "x".repeat(64 * 1024);
+    let fetchCalls = 0;
+    globalThis.fetch = mock(async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ jwt }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      expect(await getMimoJwt()).toBe(jwt);
+      resetMimoJwtCache();
+      jwt = "x".repeat(64 * 1024 + 1);
+      await expect(getMimoJwt()).rejects.toThrow("MiMo bootstrap response too large");
+      jwt = "valid";
+      expect(await getMimoJwt()).toBe("valid");
+      expect(fetchCalls).toBe(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetMimoJwtCache();
+    }
+  });
 });
 
 describe("mimo-free auth retry predicate", () => {

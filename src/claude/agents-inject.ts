@@ -15,7 +15,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
-import { stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
+import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
@@ -61,6 +61,13 @@ function pickerDefaultModel(configDir: string): string | null {
  */
 function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
   const bare = stripOneMillionMarker(selector);
+  const canonicalExact = selector === bare ? selector : `${bare}[1m]`;
+  const exactWindow = windows[selector] ?? windows[canonicalExact];
+  if (typeof exactWindow === "number" && exactWindow > 0) {
+    return shouldMarkOneMillion(exactWindow, AUTO_CONTEXT_OFF)
+      ? (withOneMillionMarker(selector, windows) ?? selector)
+      : stripOneMillionMarker(selector);
+  }
   return withOneMillionMarker(bare, windows) ?? bare;
 }
 

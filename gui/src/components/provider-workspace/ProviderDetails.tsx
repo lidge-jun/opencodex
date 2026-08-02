@@ -98,6 +98,14 @@ export default function ProviderDetails({
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
   const authSurface = useMemo(() => providerAuthSurface(item), [item]);
+  const connectionIdentity = JSON.stringify([
+    codexController?.activeId ?? "",
+    accounts?.find(account => account.active)?.id ?? "",
+    keys?.find(entry => entry.active)?.id ?? "",
+    oauth?.loggedIn === undefined ? "" : String(oauth.loggedIn),
+    oauth?.needsReauth === undefined ? "" : String(oauth.needsReauth),
+    oauthEmail ?? "",
+  ]);
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
     { id: "models", label: t("pws.tab.models") },
@@ -230,6 +238,8 @@ export default function ProviderDetails({
               />
             ) : undefined}
             item={item}
+            apiBase={apiBase}
+            connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
             oauthEmail={oauthEmail}

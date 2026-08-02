@@ -32,6 +32,7 @@ import {
   type UsageDebugBodyKind,
 } from "../usage/debug";
 import { matchesLogConversationId } from "./request-log-conversation";
+import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
 export interface RequestLogContext {
   model: string;
@@ -149,9 +150,47 @@ export interface RequestLogEntry {
 
 const requestLog: RequestLogEntry[] = [];
 const MAX_LOG_SIZE = 2000;
+const requestLogEntryBytes = new WeakMap<RequestLogEntry, number>();
+let requestLogBytes = 0;
 let requestLogSeq = 0;
 /** True after hydrateRequestLogsFromDisk ran once in this process. */
 let requestLogsHydratedFromDisk = false;
+
+function retainedRequestLogBytes(entry: RequestLogEntry): number {
+  return Buffer.byteLength(JSON.stringify(entry), "utf8");
+}
+
+function removeOldestRequestLogEntry(): number {
+  const entry = requestLog.shift();
+  if (!entry) return 0;
+  const bytes = requestLogEntryBytes.get(entry) ?? retainedRequestLogBytes(entry);
+  requestLogEntryBytes.delete(entry);
+  requestLogBytes = Math.max(0, requestLogBytes - bytes);
+  return bytes;
+}
+
+function retainRequestLogEntry(entry: RequestLogEntry): void {
+  const bytes = retainedRequestLogBytes(entry);
+  requestLog.push(entry);
+  requestLogEntryBytes.set(entry, bytes);
+  requestLogBytes += bytes;
+  while (requestLog.length > MAX_LOG_SIZE) removeOldestRequestLogEntry();
+  enforceAppOwnedMemoryBudget();
+}
+
+export function requestLogRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  return {
+    count: requestLog.length,
+    bytes: requestLogBytes,
+    evictableBytes: requestLogBytes,
+    pinnedBytes: 0,
+    oldestAt: requestLog[0]?.timestamp ?? null,
+  };
+}
+
+export function evictOldestRequestLogForBudget(): number {
+  return removeOldestRequestLogEntry();
+}
 
 function asTerminalStatus(value: string | undefined): ResponsesTerminalStatus | undefined {
   if (value === "completed" || value === "failed" || value === "incomplete") return value;
@@ -230,7 +269,7 @@ export function hydrateRequestLogsFromDisk(
     const slice = persisted.length > MAX_LOG_SIZE
       ? persisted.slice(persisted.length - MAX_LOG_SIZE)
       : persisted;
-    for (const entry of slice) requestLog.push(requestLogEntryFromPersistedUsage(entry));
+    for (const entry of slice) retainRequestLogEntry(requestLogEntryFromPersistedUsage(entry));
     return slice.length;
   } catch (err) {
     requestLogsHydratedFromDisk = true;
@@ -242,8 +281,7 @@ export function hydrateRequestLogsFromDisk(
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
-  requestLog.push(entry);
-  if (requestLog.length > MAX_LOG_SIZE) requestLog.shift();
+  retainRequestLogEntry(entry);
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
     // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
@@ -1002,6 +1040,7 @@ export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
 /** Test-only process-state reset for isolated integration harnesses. */
 export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
+  requestLogBytes = 0;
   requestLogSeq = 0;
   requestLogsHydratedFromDisk = false;
 }

@@ -12,6 +12,7 @@ import { startServer } from "../src/server";
 import { appendUsageDebug } from "../src/usage/debug";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../src/lib/admission";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -162,7 +163,20 @@ describe("management API /api/debug", () => {
 });
 
 describe("management API /api/debug/logs", () => {
-  test("returns buffered provider lines with seq cursor and limit", async () => {
+  test("serves only the truncated owner-retained debug value", async () => {
+    appendDebugLogLine("한".repeat(8_000));
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/debug/logs", server.url));
+      const entries = await response.json() as { line: string }[];
+      expect(entries[0]?.line.endsWith(RETAINED_TRUNCATION_MARKER)).toBe(true);
+      expect(retainedUtf8Bytes(entries[0]?.line ?? "")).toBeLessThanOrEqual(16 * 1024);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("polling debug-log route remains JSON and never invents an SSE admission response", async () => {
     setDebugSettings({ debug: true });
     appendDebugLogLine("[ocx:test:one]");
     appendDebugLogLine("[ocx:test:two]");
@@ -171,6 +185,8 @@ describe("management API /api/debug/logs", () => {
     try {
       const all = await fetch(new URL("/api/debug/logs?limit=500", server.url));
       expect(all.status).toBe(200);
+      expect(all.headers.get("content-type")).toContain("application/json");
+      expect(all.headers.get("content-type")).not.toContain("text/event-stream");
       const entries = await all.json() as { seq: number; line: string }[];
       expect(entries).toHaveLength(2);
       expect(entries[0]!.seq).toBe(1);

@@ -9,6 +9,7 @@ import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
+const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
@@ -24,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   testWindow.close();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
@@ -46,6 +48,8 @@ async function flush(): Promise<void> {
 async function mountOverview(
   onUpdateProvider: (name: string, patch: { note?: string }) => Promise<{ ok: boolean; error?: string }>,
   providerItem = item,
+  apiBase?: string,
+  connectionIdentity?: string,
 ): Promise<{ root: Root; container: HTMLElement }> {
   const container = document.createElement("div");
   document.body.append(container);
@@ -55,7 +59,12 @@ async function mountOverview(
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <ProviderOverview item={providerItem} onUpdateProvider={onUpdateProvider} />
+        <ProviderOverview
+          item={providerItem}
+          apiBase={apiBase}
+          connectionIdentity={connectionIdentity}
+          onUpdateProvider={onUpdateProvider}
+        />
       </LanguageProvider>,
     );
   });
@@ -138,6 +147,126 @@ test("notes save closes editor only after an acknowledged success", async () => 
 
   expect(container.querySelector(".pws-notes-textarea")).toBeNull();
   expect(container.querySelector(".pws-notes-display")?.textContent).toContain("existing note");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("static catalog connection test renders as not applicable instead of failed", async () => {
+  let requests = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests += 1;
+    expect(String(input)).toBe("http://localhost/api/providers/test?name=google-antigravity");
+    expect(init?.method).toBe("POST");
+    return Response.json({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+  }) as typeof fetch;
+  const antigravity = {
+    name: "google-antigravity",
+    adapter: "google",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    authMode: "oauth",
+    liveModels: false,
+  } as WorkspaceItem;
+
+  const { root, container } = await mountOverview(async () => ({ ok: true }), antigravity, "http://localhost");
+  const button = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(candidate => candidate.textContent?.includes("Test connection"));
+  expect(button).toBeTruthy();
+
+  await act(async () => {
+    button!.click();
+    await flush();
+  });
+
+  const result = container.querySelector<HTMLElement>('[data-connection-test-state="not-applicable"]');
+  expect(requests).toBe(1);
+  expect(result?.textContent).toContain("Not applicable");
+  expect(result?.classList.contains("pws-status-warn")).toBe(false);
+  expect(container.textContent).not.toContain("Connection failed");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("same-provider config changes clear a rendered connection result", async () => {
+  globalThis.fetch = (async () => Response.json({
+    ok: true,
+    latencyMs: 4,
+    message: "Connected",
+  })) as typeof fetch;
+  const update = async () => ({ ok: true as const });
+  const { root, container } = await mountOverview(update, item, "http://localhost", "key:key-a");
+  const button = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(candidate => candidate.textContent?.includes("Test connection"))!;
+
+  await act(async () => {
+    button.click();
+    await flush();
+  });
+  expect(container.querySelector('[data-connection-test-state="ok"]')).toBeTruthy();
+
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <ProviderOverview
+          item={{ ...item, disabled: true }}
+          apiBase="http://localhost"
+          connectionIdentity="key:key-a"
+          onUpdateProvider={update}
+        />
+      </LanguageProvider>,
+    );
+    await flush();
+  });
+
+  expect(container.querySelector("[data-connection-test-state]")).toBeNull();
+  expect(container.textContent).not.toContain("Connected");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("same-provider auth identity changes abort and ignore an in-flight result", async () => {
+  let resolveFetch!: (response: Response) => void;
+  let signal: AbortSignal | null = null;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    signal = init?.signal ?? null;
+    return await new Promise<Response>(resolve => {
+      resolveFetch = resolve;
+    });
+  }) as typeof fetch;
+  const update = async () => ({ ok: true as const });
+  const { root, container } = await mountOverview(update, item, "http://localhost", "key:key-a");
+  const button = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(candidate => candidate.textContent?.includes("Test connection"))!;
+
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
+  expect(button.disabled).toBe(true);
+
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <ProviderOverview
+          item={item}
+          apiBase="http://localhost"
+          connectionIdentity="key:key-b"
+          onUpdateProvider={update}
+        />
+      </LanguageProvider>,
+    );
+    await flush();
+  });
+
+  expect(signal?.aborted).toBe(true);
+  expect(container.querySelector("[data-connection-test-state]")).toBeNull();
+  expect(container.querySelector<HTMLButtonElement>("button")?.disabled).toBe(false);
+
+  await act(async () => {
+    resolveFetch(Response.json({ ok: true, latencyMs: 4, message: "Old result" }));
+    await flush();
+  });
+  expect(container.querySelector("[data-connection-test-state]")).toBeNull();
+  expect(container.textContent).not.toContain("Old result");
 
   await act(async () => { root.unmount(); });
 });

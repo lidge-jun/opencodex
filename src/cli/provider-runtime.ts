@@ -69,6 +69,13 @@ async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<void>
   const result = await runtimeRequest<Record<string, unknown>>(`/api/providers/test?name=${encodeURIComponent(name)}`, {
     method: "POST",
   }, deps);
+  if (result.applicable === false) {
+    printData(result, wantsJson, [
+      `${name}: not applicable`,
+      "Static catalog; no live model-discovery endpoint to test.",
+    ]);
+    return;
+  }
   const ok = result.ok === true;
   printData(result, wantsJson, [
     `${name}: ${ok ? "connected" : "failed"}`,

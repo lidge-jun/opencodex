@@ -99,6 +99,10 @@ export function SidebarGithubRow({
         setStarOverride({ state: "starred", basedOn: polledState });
         return;
       }
+      // Also covers the 403 the proxy returns when it is running under an agent
+      // session and this click carried no dashboard session (`agent_consent_required`):
+      // the repo page is exactly where the user can star it themselves.
+      //
       // gh refused (logged out, revoked scope, network). The server reports a fixed code
       // rather than gh's output, so there is nothing to show — hand over the page instead.
       if (data?.state) setStarOverride({ state: data.state, basedOn: polledState });

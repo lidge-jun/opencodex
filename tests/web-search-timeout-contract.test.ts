@@ -3,7 +3,20 @@ import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base"
 import { parseRequest } from "../src/responses/parser";
 import { responseWithDeferredRequestLog, type RequestLogEntry } from "../src/server";
 import type { AdapterEvent, OcxProviderConfig } from "../src/types";
-import { runWithWebSearch } from "../src/web-search/loop";
+import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../src/web-search/loop";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+function runWithWebSearch(
+  deps: Omit<WebSearchLoopDeps, "incomingMeta"> & { incomingMeta?: WebSearchLoopDeps["incomingMeta"] },
+): Promise<Response> {
+  return runWithWebSearchProduction({
+    ...deps,
+    incomingMeta: deps.incomingMeta ?? {
+      headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget(),
+    },
+  });
+}
 
 const originalFetch = globalThis.fetch;
 

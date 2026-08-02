@@ -17,6 +17,8 @@ import {
 } from "../src/server/claude-messages";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -141,7 +143,7 @@ test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", 
     server.stop(true);
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("non-streaming /v1/messages returns an Anthropic message JSON", async () => {
   const upstream = mockChatUpstream();
@@ -503,7 +505,7 @@ test("synthetic error tail parses as a terminal error in the Anthropic dialect (
     '\n\nevent: error\ndata: {"type":"error","error":{"type":"timeout_error","message":"anthropic passthrough body stalled: no upstream bytes for 90s"}}\n\n',
   ].join(""));
   const events: Array<{ type: string }> = [];
-  for await (const event of adapter.parseStream(response)) events.push(event);
+  for await (const event of adapter.parseStream(response, createTestTranslatorBudget())) events.push(event);
   const errorIndex = events.findIndex(e => e.type === "error");
   expect(errorIndex).toBeGreaterThanOrEqual(0);
   expect(events.slice(errorIndex + 1).filter(e => e.type === "done")).toHaveLength(0);

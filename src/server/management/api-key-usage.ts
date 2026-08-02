@@ -18,6 +18,7 @@ export type ApiKeyUsage =
 
 export interface ApiKeyUsageSnapshot {
   rollup: Map<string, ApiKeyUsage>;
+  historyTruncated?: true;
   /**
    * Earliest row carrying a recognized `admissionKind`. A property of the DATA
    * SET, not of a key, so it is singular and lives beside the map: it is what
@@ -135,11 +136,11 @@ export function clearApiKeyUsageCacheForTests(): void {
  * `attributionSince`. Key management working matters more than usage numbers
  * being present, and the GUI already treats an absent field as "no data".
  */
-export async function readApiKeyUsageRollup(configuredIds: string[]): Promise<ApiKeyUsageSnapshot> {
+export async function readApiKeyUsageRollup(configuredIds: string[], maxReadBytes?: number): Promise<ApiKeyUsageSnapshot> {
   // JSON rather than a joined string: ids are only validated as non-empty
   // strings, so `["a\0b","c"]` and `["a","b\0c"]` join to the same value and one
   // config could be served the other's cached rollup.
-  const idsKey = JSON.stringify(configuredIds);
+  const idsKey = JSON.stringify([configuredIds, maxReadBytes]);
   const now = Date.now();
   try {
     const observedKey = `${usageLogRevisionKey(currentUsageLogRevision())}|${idsKey}`;
@@ -147,8 +148,11 @@ export async function readApiKeyUsageRollup(configuredIds: string[]): Promise<Ap
       return rollupCache.snapshot;
     }
 
-    const snapshot = await readUsageSnapshotForManagement();
-    const rolled = rollupApiKeyUsage(snapshot.entries, configuredIds, now);
+    const snapshot = await readUsageSnapshotForManagement(maxReadBytes);
+    const rolled = {
+      ...rollupApiKeyUsage(snapshot.entries, configuredIds, now),
+      ...(snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated ? { historyTruncated: true as const } : {}),
+    };
     rollupCache = {
       revisionKey: `${usageLogRevisionKey(snapshot.revision)}|${idsKey}`,
       expiresAt: now + ROLLUP_CACHE_TTL_MS,

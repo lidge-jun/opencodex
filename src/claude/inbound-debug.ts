@@ -14,6 +14,8 @@
  */
 import { createHmac, randomBytes } from "node:crypto";
 import { isClaudeDebugEnabled } from "../lib/debug-settings";
+import { retainedUtf8Bytes, truncateRetainedUtf8 } from "../lib/admission";
+import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 export interface ClaudeInboundDebugEntry {
   /** Monotonic capture id — unique even when several entries share Date.now(). */
@@ -28,6 +30,8 @@ export interface ClaudeInboundDebugEntry {
   thinkingBudgetTokens?: number;
   outputConfigEffort?: string;
   metadataKeys?: string[];
+  metadataKeysDropped?: number;
+  rowTruncated?: true;
   hasMetadataUserId: boolean;
   hasSystem: boolean;
   /** Raw anthropic-beta header (comma list) — carries context-1m / effort betas. */
@@ -38,7 +42,11 @@ export interface ClaudeInboundDebugEntry {
 }
 
 const RING_LIMIT = 20;
+const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
+const MAX_CLAUDE_INBOUND_METADATA_KEYS = 64;
+const MAX_CLAUDE_INBOUND_ROW_BYTES = 32 * 1024;
 const ring: ClaudeInboundDebugEntry[] = [];
+let ringBytes = 0;
 const salt = randomBytes(16).toString("hex");
 let lastEnabled = false;
 let nextCaptureId = 0;
@@ -64,6 +72,18 @@ function systemText(system: unknown): string | undefined {
   return undefined;
 }
 
+function entryBytes(entry: ClaudeInboundDebugEntry): number {
+  return retainedUtf8Bytes(JSON.stringify(entry));
+}
+
+function removeOldest(): number {
+  const removed = ring.shift();
+  if (!removed) return 0;
+  const bytes = entryBytes(removed);
+  ringBytes -= bytes;
+  return bytes;
+}
+
 /** Record one inbound request. No-op (and ring flush) when the claude debug flag is off. */
 export function captureClaudeInbound(
   endpoint: "messages" | "count_tokens",
@@ -73,7 +93,7 @@ export function captureClaudeInbound(
 ): void {
   const enabled = isClaudeDebugEnabled();
   if (!enabled) {
-    if (lastEnabled) ring.length = 0; // flag turned off: drop captured entries
+    if (lastEnabled) clearClaudeInboundDebug(); // flag turned off: drop captured entries
     lastEnabled = false;
     return;
   }
@@ -84,26 +104,42 @@ export function captureClaudeInbound(
   const metadata = isRec(body.metadata) ? body.metadata : undefined;
   const userId = metadata && typeof metadata.user_id === "string" ? metadata.user_id : undefined;
   const system = systemText(body.system);
+  const metadataNames = metadata ? Object.keys(metadata) : [];
   const entry: ClaudeInboundDebugEntry = {
     id: ++nextCaptureId,
     at: Date.now(),
     endpoint,
-    model: typeof body.model === "string" ? body.model : "unknown",
-    ...(resolvedModel ? { resolvedModel } : {}),
+    model: truncateRetainedUtf8(typeof body.model === "string" ? body.model : "unknown", MAX_DIAGNOSTIC_VALUE_BYTES),
+    ...(resolvedModel ? { resolvedModel: truncateRetainedUtf8(resolvedModel, MAX_DIAGNOSTIC_VALUE_BYTES) } : {}),
     ...(typeof body.stream === "boolean" ? { stream: body.stream } : {}),
     ...(typeof body.max_tokens === "number" ? { maxTokens: body.max_tokens } : {}),
-    ...(thinking && typeof thinking.type === "string" ? { thinkingType: thinking.type } : {}),
+    ...(thinking && typeof thinking.type === "string" ? { thinkingType: truncateRetainedUtf8(thinking.type, MAX_DIAGNOSTIC_VALUE_BYTES) } : {}),
     ...(thinking && typeof thinking.budget_tokens === "number" ? { thinkingBudgetTokens: thinking.budget_tokens } : {}),
-    ...(outputConfig && typeof outputConfig.effort === "string" ? { outputConfigEffort: outputConfig.effort } : {}),
-    ...(metadata ? { metadataKeys: Object.keys(metadata) } : {}),
+    ...(outputConfig && typeof outputConfig.effort === "string" ? { outputConfigEffort: truncateRetainedUtf8(outputConfig.effort, MAX_DIAGNOSTIC_VALUE_BYTES) } : {}),
+    ...(metadata ? { metadataKeys: metadataNames.slice(0, MAX_CLAUDE_INBOUND_METADATA_KEYS).map(key => truncateRetainedUtf8(key, MAX_DIAGNOSTIC_VALUE_BYTES)) } : {}),
+    ...(metadataNames.length > MAX_CLAUDE_INBOUND_METADATA_KEYS ? { metadataKeysDropped: metadataNames.length - MAX_CLAUDE_INBOUND_METADATA_KEYS } : {}),
     hasMetadataUserId: userId !== undefined,
     hasSystem: system !== undefined,
-    ...(anthropicBeta ? { anthropicBeta } : {}),
+    ...(anthropicBeta ? { anthropicBeta: truncateRetainedUtf8(anthropicBeta, MAX_DIAGNOSTIC_VALUE_BYTES) } : {}),
     ...(userId !== undefined ? { userIdTag: tag(userId) } : {}),
     ...(system !== undefined ? { systemTag: tag(system) } : {}),
   };
+  while (entryBytes(entry) > MAX_CLAUDE_INBOUND_ROW_BYTES && entry.metadataKeys?.length) {
+    entry.metadataKeys.pop();
+    entry.metadataKeysDropped = (entry.metadataKeysDropped ?? 0) + 1;
+    entry.rowTruncated = true;
+  }
+  for (const key of ["anthropicBeta", "resolvedModel", "outputConfigEffort", "thinkingType"] as const) {
+    if (entryBytes(entry) <= MAX_CLAUDE_INBOUND_ROW_BYTES) break;
+    if (entry[key] !== undefined) {
+      delete entry[key];
+      entry.rowTruncated = true;
+    }
+  }
   ring.push(entry);
-  if (ring.length > RING_LIMIT) ring.shift();
+  ringBytes += entryBytes(entry);
+  if (ring.length > RING_LIMIT) removeOldest();
+  enforceAppOwnedMemoryBudget();
 }
 
 /** Newest-first snapshot for /api/claude/inbound-debug. */
@@ -114,5 +150,14 @@ export function getClaudeInboundDebugEntries(): ClaudeInboundDebugEntry[] {
 /** Test isolation / explicit clear. */
 export function clearClaudeInboundDebug(): void {
   ring.length = 0;
+  ringBytes = 0;
   lastEnabled = false;
+}
+
+export function claudeInboundDebugMetrics(): { entries: number; bytes: number; oldestAt: number | null } {
+  return { entries: ring.length, bytes: ringBytes, oldestAt: ring[0]?.at ?? null };
+}
+
+export function evictOldestClaudeInboundForBudget(): number {
+  return removeOldest();
 }

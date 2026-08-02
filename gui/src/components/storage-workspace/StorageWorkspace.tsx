@@ -169,18 +169,18 @@ export default function StorageWorkspace({ report, locale }: StorageWorkspacePro
           </div>
         ) : (
           <div className="stw-overview">
-            <div className="usage-cards">
-              <div className="stat">
-                <div className="muted">{t("storage.card.total")}</div>
-                <div className="stat-value">{formatBytes(report.total.bytes, locale)}</div>
+            <div className="stw-summary">
+              <div className="stw-summary-card">
+                <div className="stw-summary-label">{t("storage.card.total")}</div>
+                <div className="stw-summary-value">{formatBytes(report.total.bytes, locale)}</div>
               </div>
-              <div className="stat">
-                <div className="muted">{t("storage.card.files")}</div>
-                <div className="stat-value">{report.total.fileCount.toLocaleString(locale)}</div>
+              <div className="stw-summary-card">
+                <div className="stw-summary-label">{t("storage.card.files")}</div>
+                <div className="stw-summary-value">{report.total.fileCount.toLocaleString(locale)}</div>
               </div>
-              <div className="stat">
-                <div className="muted">{t("storage.card.home")}</div>
-                <div className="stat-value mono stw-home-path" title={report.codexHome}>{report.codexHome}</div>
+              <div className="stw-summary-card">
+                <div className="stw-summary-label">{t("storage.card.home")}</div>
+                <div className="stw-summary-value mono stw-home-path" title={report.codexHome}>{report.codexHome}</div>
               </div>
             </div>
 

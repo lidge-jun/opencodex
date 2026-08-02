@@ -22,8 +22,9 @@ import {
   startLoginFlow,
   submitManualLoginCode,
 } from "../../oauth";
-import { removeCredential } from "../../oauth/store";
+import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -66,19 +67,22 @@ import { buildApiAccessEndpoints } from "./api-access";
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
+import { readManagementJsonBody, readManagementJsonBodyOr, rethrowManagementBodyTooLarge } from "./body";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 
 /**
- * Parses a JSON object body, or null. Never throws: `await req.json()` rejects on
+ * Parses a bounded JSON object body, or null. Malformed JSON is swallowed; an
+ * oversized body still throws so the management dispatcher can return 413.
  * a malformed body, which used to surface as a 500 from the key routes.
  */
 async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
   try {
-    const parsed: unknown = await req.json();
+    const parsed: unknown = await readManagementJsonBody(req);
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : null;
-  } catch {
+  } catch (error) {
+    rethrowManagementBodyTooLarge(error);
     return null;
   }
 }
@@ -124,7 +128,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
@@ -150,7 +154,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         // startLoginFlow returns the authorization URL before background persistence completes.
         // Three-way reconcile settled disk changes so a failed login cannot leave a provider
         // live-only and an in-flight management mutation cannot be erased before it saves.
-        onSettled: () => reconcileLiveConfigFromDisk(config, persistedBaseline),
+        onSettled: () => {
+          reconcileLiveConfigFromDisk(config, persistedBaseline);
+          reconcileLiveStateStores();
+        },
       });
       if (authUrl && !deviceCode) {
         // Open the browser server-side (the proxy runs on the user's machine) — the GUI's
@@ -160,6 +167,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       return jsonResponse({ url: authUrl, instructions, deviceCode });
     } catch (err) {
+      if (err instanceof OAuthMutationBusyError) throw err;
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 409);
     }
   }
@@ -167,7 +175,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Cancel an in-progress browser/device OAuth login (GUI "Cancel" / modal close). Guarded by
   // the same public predicate as /api/oauth/login — only publicly startable flows are cancellable.
   if (url.pathname === "/api/oauth/login/cancel" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { provider?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const { cancelLoginFlow } = await import("../../oauth");
@@ -178,7 +186,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)
   // when the browser cannot reach the loopback callback (remote/SSH/blocked localhost).
   if (url.pathname === "/api/oauth/login/code" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { provider?: string; input?: string; code?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
@@ -200,6 +208,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
+    reconcileLiveStateStores();
     clearLoginState(provider);
     // Drop cached/last-good quota rows tied to the removed credential.
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
@@ -262,7 +271,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     });
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { provider?: string; accountId?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
@@ -292,7 +301,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     });
   }
   if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
-    const parsedBody = await req.json().catch(() => ({}));
+    const parsedBody = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(parsedBody)) {
       return jsonResponse({ error: "body must be an object" }, 400);
     }
@@ -345,6 +354,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
     };
     saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
     return jsonResponse({
       ok: true,
       provider,
@@ -356,7 +366,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     });
   }
   if (url.pathname === "/api/oauth/accounts/clear-cooldown" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { provider?: unknown; accountId?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
     if (provider !== "anthropic") return jsonResponse({ error: "clear-cooldown is only supported for anthropic" }, 400);
@@ -367,7 +377,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   if (url.pathname === "/api/oauth/accounts/alias" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { provider?: unknown; accountId?: unknown; alias?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown; alias?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
@@ -387,6 +397,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { removeAccount, getAccountSet } = await import("../../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
+    reconcileLiveStateStores();
     if (provider === "anthropic") {
       const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
       clearAnthropicAccountCooldown(id);
@@ -409,7 +420,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse(listProviderApiKeys(config, name));
   }
   if (url.pathname === "/api/providers/keys" && req.method === "POST") {
-    const body = await req.json().catch(() => ({})) as { name?: string; key?: string; label?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { name?: string; key?: string; label?: string };
     const name = (body.name ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     if (typeof body.key !== "string" || !body.key.trim()) return jsonResponse({ error: "key is required" }, 400);
@@ -425,7 +436,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, id: result.id }, 201);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { name?: string; id?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };
     const name = (body.name ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     if (!body.id) return jsonResponse({ error: "missing id" }, 400);
@@ -440,7 +451,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, name, activeId: body.id });
   }
   if (url.pathname === "/api/providers/keys/alias" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { name?: unknown; id?: unknown; alias?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { name?: unknown; id?: unknown; alias?: unknown };
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const id = typeof body.id === "string" ? body.id.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
@@ -480,7 +491,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       requestOrigin: req.headers.get("origin"),
     });
     const { readApiKeyUsageRollup } = await import("./api-key-usage");
-    const { rollup, attributionSince } = await readApiKeyUsageRollup(keys.map(k => k.id));
+    const { rollup, attributionSince, historyTruncated } = await readApiKeyUsageRollup(keys.map(k => k.id), config.managementUsageMaxReadBytes);
     return jsonResponse({
       // 8 random hex past the fixed `ocx_data_` literal: enough to tell two keys
       // apart in a list, with 128 bits of the tail still unrevealed. Masking only
@@ -494,6 +505,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       })),
       // Dataset-level and singular: it describes the usage log, not any one key.
       ...(attributionSince ? { attributionSince } : {}),
+      ...(historyTruncated ? { historyTruncated: true } : {}),
       authMatrix: AUTH_MATRIX,
       ...endpoints,
     }, 200, req, config);
@@ -514,6 +526,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
     config.apiKeys = [...(config.apiKeys ?? []), entry];
     saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
     return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
   }
 
@@ -527,6 +540,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
     entry.name = nameField.value;
     saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
     // Never echo key material from a rename.
     return jsonResponse({ id: entry.id, name: entry.name, createdAt: entry.createdAt }, 200, req, config);
   }
@@ -540,6 +554,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // A stale id must not read as a successful revocation.
     if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
     saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
     return jsonResponse({ success: true }, 200, req, config);
   }
   return null;

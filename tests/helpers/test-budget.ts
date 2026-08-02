@@ -40,6 +40,13 @@ export const SERVER_BUDGET_MS = 30_000;
 export const STORE_BUDGET_MS = 30_000;
 
 /**
+ * Hundreds of individually fsync'd durable writes in one test. The fsyncs ARE the
+ * assertion (durable spill is the product contract), so the wait is intrinsic; the
+ * orphan-cleanup cap test measured ~34s on windows-latest against Bun's 5s default.
+ */
+export const BULK_DURABLE_IO_BUDGET_MS = 90_000;
+
+/**
  * A deadline *inside* a test, for an await that would otherwise hang forever.
  *
  * Keep these at least a few times under the surrounding budget. An internal deadline

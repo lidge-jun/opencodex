@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
+import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
+import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { applyProviderConfigHints, buildCatalogEntries } from "../src/codex/catalog";
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { deriveProviderPresets, providerConfigSeed } from "../src/providers/derive";
@@ -12,6 +12,12 @@ import { buildProviderPostBody } from "../gui/src/provider-payload";
 import { en } from "../gui/src/i18n/en";
 import { interpolate, type TFn } from "../gui/src/i18n/shared";
 import { formatProviderDisplayName, isCatalogProviderId } from "../gui/src/provider-icons";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
+  withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 

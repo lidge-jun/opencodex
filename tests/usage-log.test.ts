@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { STORE_BUDGET_MS } from "./helpers/test-budget";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -68,6 +69,67 @@ describe("usage log", () => {
     expect(usageReadCacheStatsForTests()).toEqual({ fullReads: 1, tailReads: 0, parsedLines: 2_100 });
   });
 
+  test("usage reader never requests more than 64 MiB from an oversized log", async () => {
+    const path = usageLogPath();
+    const fd = openSync(path, "w");
+    try {
+      truncateSync(fd, 64 * 1024 * 1024 + 1024);
+      const tail = Buffer.from(`${persistedLine("tail")}\n`);
+      const tailPosition = 64 * 1024 * 1024 + 1024 - tail.byteLength;
+      writeSync(fd, Buffer.from("\n"), 0, 1, tailPosition - 1);
+      writeSync(fd, tail, 0, tail.byteLength, tailPosition);
+    } finally {
+      closeSync(fd);
+    }
+    const snapshot = await readUsageSnapshotForManagement();
+    expect(snapshot.truncatedPrefixBytes).toBeGreaterThan(0);
+    expect(snapshot.entries.map(entry => entry.requestId)).toEqual(["tail"]);
+  }, STORE_BUDGET_MS); // sparse >64 MiB fixture IO is intrinsic; Windows self-hosted measured 7.193s against Bun's 5s default.
+
+  test("usage tail exact row boundary keeps the complete newest row", async () => {
+    const newest = Buffer.from(`${persistedLine("newest")}\n`);
+    writeFileSync(usageLogPath(), `${persistedLine("older")}\n${newest.toString("utf-8")}`);
+
+    const snapshot = await readUsageSnapshotForManagement(newest.byteLength);
+
+    expect(snapshot.entries.map(entry => entry.requestId)).toEqual(["newest"]);
+  });
+
+  test("usage byte-prefix truncation and entry-count truncation report independent metadata", async () => {
+    writeFileSync(
+      usageLogPath(),
+      `${Array.from({ length: 200_001 }, (_, index) => JSON.stringify({ requestId: String(index) })).join("\n")}\n`,
+    );
+    const snapshot = await readUsageSnapshotForManagement();
+    expect(snapshot.entries).toHaveLength(200_000);
+    expect(snapshot.entries[0]?.requestId).toBe("1");
+    expect(snapshot.entries.at(-1)?.requestId).toBe("200000");
+    expect(snapshot.truncatedPrefixBytes).toBe(0);
+    expect(snapshot.entriesTruncated).toBe(true);
+    expect(snapshot.entriesDropped).toBe(1);
+  }, STORE_BUDGET_MS); // parsing 200,001 rows IS the entry-cap assertion; windows-latest measured ~5.05s against Bun's 5s default.
+
+  test("stale usage-read flight is replaced and old completion cannot clear new owner", async () => {
+    writeFileSync(
+      usageLogPath(),
+      `${Array.from({ length: 5_000 }, (_, index) => persistedLine(`stale-${index}`)).join("\n")}\n`,
+    );
+    const first = readUsageSnapshotForManagement();
+    await Promise.resolve();
+    const originalNow = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(originalNow + 30_001);
+    try {
+      const replacement = readUsageSnapshotForManagement();
+      const joiner = readUsageSnapshotForManagement();
+      await expect(first).rejects.toThrow("management usage read superseded");
+      const [second, third] = await Promise.all([replacement, joiner]);
+      expect(third.entries).toEqual(second.entries);
+      expect(usageReadCacheStatsForTests().fullReads).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("a replacement does not join an in-flight read for the previous file revision", async () => {
     writeFileSync(
       usageLogPath(),
@@ -77,10 +139,9 @@ describe("usage log", () => {
     await new Promise<void>(resolve => setTimeout(resolve, 0));
     writeFileSync(usageLogPath(), `${persistedLine("replacement")}\n`);
     const newRead = readUsageSnapshotForManagement();
-    const [oldSnapshot, newSnapshot] = await Promise.all([oldRead, newRead]);
-    expect(oldSnapshot.entries).toHaveLength(2_100);
+    await expect(oldRead).rejects.toThrow("management usage read superseded");
+    const newSnapshot = await newRead;
     expect(newSnapshot.entries.map(entry => entry.requestId)).toEqual(["replacement"]);
-    expect(usageLogRevisionKey(newSnapshot.revision)).not.toBe(usageLogRevisionKey(oldSnapshot.revision));
   });
 
   test("persists conversationId for Logs session correlation", () => {

@@ -1,13 +1,13 @@
-import { useCallback, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./claude-desktop-lane";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { IconChevron } from "../icons";
 import { EmptyState, Notice } from "../ui";
-import { useT, type TFn, type TKey } from "../i18n/shared";
+import { LOCALES, useI18n, type TFn, type TKey } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 
 const FAMILIES = ["opus", "fable", "sonnet", "haiku"] as const;
 type Family = typeof FAMILIES[number];
@@ -131,6 +131,7 @@ function readDesktopCache(cacheKey: string): CachedDesktop | null {
 function seedDesktop(cacheKey: string) {
   const cached = readDesktopCache(cacheKey);
   return {
+    held: cached,
     data: cached?.data ?? null,
     profile: cached?.profile ?? null,
     savedProfile: cached?.profile ? cloneProfile(cached.profile) : null,
@@ -139,13 +140,23 @@ function seedDesktop(cacheKey: string) {
         cached.data.models.map(model => [model.route, cached.profile.assignments[model.route]?.family ?? "opus"]),
       )
       : {} as Record<string, Family>,
-    hasCache: Boolean(cached?.data),
   };
 }
 
-export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
-  const t = useT();
+export default function ClaudeDesktop({
+  apiBase,
+  active = true,
+  onPortChange,
+}: {
+  apiBase: string;
+  active?: boolean;
+  /** Keeps the Claude page intro subtitle in sync once /api/claude-desktop settles (port or failure). */
+  onPortChange?: (port: number | null) => void;
+}) {
+  const { t, locale } = useI18n();
+  const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   const cacheKey = `ocx.claude-desktop.v1:${apiBase}`;
+  const resourceKey = `claude-desktop:${apiBase}`;
   const cached = useMemo(() => seedDesktop(cacheKey), [cacheKey]);
   const [draftProfile, setProfile] = useState<DesktopProfile | null>(() => cached.profile);
   const [savedDraftProfile, setSavedProfile] = useState<DesktopProfile | null>(() => cached.savedProfile);
@@ -194,13 +205,13 @@ export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: str
     }
     writeSessionListCache(cacheKey, next);
     return next;
-  }, [apiBase, cacheKey, t]);
+  }, [apiBase, cacheKey, t, setDestinations, setProfile, setSavedProfile]);
 
   const desktopResource = useDataSurface<CachedDesktop>(
-    `claude-desktop:${apiBase}`,
+    resourceKey,
     [apiBase],
     fetchDesktop,
-    { isEmpty: () => false, enabled: active },
+    { isEmpty: () => false, enabled: active, initialData: cached.held ?? undefined },
   );
   const loadState = desktopResource.state;
   const resourceData = loadState.data ?? (cached.data && cached.profile ? { data: cached.data, profile: cached.profile } : null);
@@ -211,6 +222,16 @@ export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: str
     ? Object.fromEntries(resourceData.data.models.map(model => [model.route, resourceData.profile.assignments[model.route]?.family ?? "opus"]))
     : {} as Record<string, Family>;
   const destinations = Object.keys(draftDestinations).length > 0 ? draftDestinations : resourceDestinations;
+
+  useEffect(() => {
+    if (!onPortChange) return;
+    if (typeof data?.port === "number") {
+      onPortChange(data.port);
+      return;
+    }
+    // Cold failure with no port: stop the parent subtitle from claiming "Loading…" forever.
+    if (loadState.kind === "failed-cold") onPortChange(null);
+  }, [data?.port, loadState.kind, onPortChange]);
 
   const dirty = useMemo(
     () => profile !== null && savedProfile !== null && JSON.stringify(profile) !== JSON.stringify(savedProfile),
@@ -236,18 +257,24 @@ export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: str
 
   // The status poll is a separate resource: visibility pauses it without unmounting the
   // profile editor, which keeps its drafts intact across Code/Desktop tab switches.
+  const statusCacheKey = `ocx.claude-desktop.status.v1:${apiBase}`;
+  const statusResourceKey = `claude-desktop-status:${apiBase}`;
+  const cachedStatus = readSessionListCache<DesktopStatus>(statusCacheKey);
   const statusResource = useDataSurface<DesktopStatus>(
-    `claude-desktop-status:${apiBase}`,
+    statusResourceKey,
     [apiBase],
     async (signal) => {
       const response = await fetch(`${apiBase}/api/claude-desktop/status`, { signal });
       const next = await readJsonIfOk<DesktopStatus>(response);
       if (!next) throw new Error("Claude Desktop status unavailable");
+      writeSessionListCache(statusCacheKey, next);
       return next;
     },
-    { isEmpty: () => false, pollMs: 5000, enabled: active },
+    { isEmpty: () => false, pollMs: 5000, enabled: active, initialData: cachedStatus ?? undefined },
   );
-  const status = statusResource.state.data ?? null;
+  const statusState = statusResource.state;
+  const status = statusState.data ?? cachedStatus ?? null;
+  const statusFailed = statusState.showError;
 
   const moveModel = (route: string, family: Family) => {
     if (!profile || profile.assignments[route]?.family === family) return;
@@ -300,6 +327,8 @@ export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: str
         setMessage({ tone: "ok", text: t("claudeDesktop.saved") });
         setAnnouncement(t("claudeDesktop.savedAnnounce"));
       }
+      // Apply/save change the bar tone; do not wait for the 5s poll or the strip flips late.
+      void statusResource.refresh();
     } catch (error) {
       const text = error instanceof Error ? error.message : t("claudeDesktop.updateFailed");
       setMessage({ tone: "err", text });
@@ -362,11 +391,8 @@ export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: str
 
   return (
     <>
-      <div className="page-head claude-desktop-head">
-        <div>
-          <h2>{t("claudeDesktop.title")}</h2>
-          <p className="page-sub">{t("claudeDesktop.subtitle", { port: data.port })}</p>
-        </div>
+      {/* Title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
+      <div className="claude-desktop-toolbar">
         <div className="claude-profile-tools">
           <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={event => void importProfile(event)} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => importRef.current?.click()}>{t("claudeDesktop.importJson")}</button>
@@ -374,23 +400,57 @@ export default function ClaudeDesktop({ apiBase, active = true }: { apiBase: str
         </div>
       </div>
 
-      {status && (
-        <div className={`claude-status-bar ${status.activeProfile === false ? "not-applied" : status.stale ? "stale" : status.applied ? "applied" : "not-applied"}`}>
-          <span className="claude-status-dot" />
-          {/* Desktop serving another profile outranks content drift: stale config that is
-              read still works, a config that is never read does not. */}
-          <span>{status.activeProfile === false ? t("claudeDesktop.status.notActiveProfile") : status.stale ? t("claudeDesktop.status.stale") : status.applied ? t("claudeDesktop.status.applied") : t("claudeDesktop.status.notApplied")}</span>
-          {status.health.lastRequestAt && <span className="claude-status-health">{t("claudeDesktop.health.lastRequest")}: {new Date(status.health.lastRequestAt).toLocaleTimeString()}</span>}
-          {status.health.requestCount > 0 && <span className="claude-status-health">{t("claudeDesktop.health.stats", { count: status.health.requestCount, errors: status.health.errorCount })}</span>}
-        </div>
-      )}
+      {/* Always mount the bar (pending strut when status is still cold) so a late /status
+          response cannot insert a full row under the title and shove the lanes down. */}
+      <div
+        className={`claude-status-bar ${
+          statusFailed && !status
+            ? "not-applied"
+            : !status
+              ? "pending"
+              : status.activeProfile === false
+                ? "not-applied"
+                : status.stale
+                  ? "stale"
+                  : status.applied
+                    ? "applied"
+                    : "not-applied"
+        }`}
+        aria-busy={(!status && !statusFailed) || undefined}
+      >
+        <span className="claude-status-dot" />
+        {/* Desktop serving another profile outranks content drift: stale config that is
+            read still works, a config that is never read does not. */}
+        <span>
+          {statusFailed && !status
+            ? t("claudeDesktop.loadFail")
+            : !status
+              ? t("claudeDesktop.loading")
+              : status.activeProfile === false
+                ? t("claudeDesktop.status.notActiveProfile")
+                : status.stale
+                  ? t("claudeDesktop.status.stale")
+                  : status.applied
+                    ? t("claudeDesktop.status.applied")
+                    : t("claudeDesktop.status.notApplied")}
+        </span>
+        {status?.health.lastRequestAt && (
+          <span className="claude-status-health">
+            {t("claudeDesktop.health.lastRequest")}:{" "}
+            {new Date(status.health.lastRequestAt).toLocaleTimeString(localeTag)}
+          </span>
+        )}
+        {status && status.health.requestCount > 0 && (
+          <span className="claude-status-health">
+            {t("claudeDesktop.health.stats", { count: status.health.requestCount, errors: status.health.errorCount })}
+          </span>
+        )}
+      </div>
 
       <div className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</div>
       {message && <Notice tone={message.tone}>{message.text}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claudeDesktop.loadFail")}</Notice>}
-      {loadState.refreshing && (
-        <DataSurfaceStatus live={!loadState.showError}>{t("claudeDesktop.loading")}</DataSurfaceStatus>
-      )}
+      {statusFailed && status && <Notice tone="err">{t("claudeDesktop.loadFail")}</Notice>}
 
       <div className="claude-profile-bar">
         <span className={`claude-dirty${dirty ? " active" : ""}`}>{dirty ? t("claudeDesktop.unsaved") : t("claudeDesktop.upToDate")}</span>

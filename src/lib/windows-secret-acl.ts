@@ -19,11 +19,9 @@
  *   hardenSecretPath(path, { required: false }) — non-fatal read-path mode.
  *     Never throws. Returns { ok, diagnostics? }.
  *   hardenSecretPath(path, { required: true })  — write-path mode.
- *     Throws a sanitized error (no raw path) on Windows ACL failure — EXCEPT a
- *     genuine icacls timeout, which soft-fails (warn + ok:false) so a hung/slow
- *     icacls cannot block OAuth logins or token refresh (field report: Kimi auth
- *     stuck behind ETIMEDOUT). Real EPERM/EACCES/exit-code failures still throw:
- *     availability never silently overrides confidentiality for those.
+ *     Throws a sanitized error (no raw path) on every Windows ACL failure,
+ *     including genuine icacls timeouts. Required secret publication therefore
+ *     fails closed; only required:false read-path probes may soft-fail.
  *   hardenSecretPathAsync / hardenSecretDirAsync — same policy, async icacls
  *     runner so the event loop is not held for the child lifetime (#612).
  *   HardenOptions.timeoutMemoKey — optional destination-path key for the
@@ -170,8 +168,23 @@ export function resetHardenedStateForTests(): void {
   timedOutPaths.clear();
 }
 
+/** Forget a successful harden only after this exact ephemeral path is gone. */
+export function forgetHardenedSecretPath(targetPath: string): void {
+  hardenedPaths.delete(targetPath);
+}
+
+/** Test seam for proving ephemeral success memos do not grow across replacements. */
+export function hardenedSecretPathCountForTests(): number {
+  return hardenedPaths.size;
+}
+
 function effectivePlatform(): string {
   return platformOverride ?? platform;
+}
+
+/** Test-aware platform predicate for callers that must avoid even a no-op ACL call. */
+export function windowsSecretAclApplies(): boolean {
+  return (platformOverride ?? process.platform) === "win32";
 }
 
 /** Error carrying an honest code: ETIMEDOUT only for real timeouts, EICACLS otherwise. */
@@ -373,8 +386,8 @@ function timeoutMemoKey(targetPath: string, opts: HardenOptions): string {
 /**
  * Shared harden flow for files and directories: one total budget (env-configurable)
  * covering the initial attempt, ONE timeout retry, and the diagnostic verification.
- * Real EPERM/EACCES/EICACLS failures stay fail-closed on required paths; only
- * genuine timeouts soft-fail, with an honest state-annotated diagnostic.
+ * Required paths fail closed for every hardening failure, including genuine
+ * timeouts. Optional read paths soft-fail with an honest diagnostic.
  */
 function hardenEntry(
   targetPath: string,
@@ -387,7 +400,9 @@ function hardenEntry(
   if (cache.has(targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   if (timedOutPaths.has(memoKey)) {
-    return { ok: false, diagnostics: "ACL hardening skipped — previous attempt timed out" };
+    const diagnostics = "ACL hardening skipped — previous attempt timed out";
+    if (opts.required) throw new Error(diagnostics);
+    return { ok: false, diagnostics };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -409,8 +424,7 @@ function hardenEntry(
     timedOutPaths.add(memoKey);
     const state = describeAclStateAfterTimeout(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    // Timeout-only soft-fail: a hung icacls must not block OAuth/token writes.
-    // chmod is still applied by the caller.
+    if (opts.required) throw new Error(annotated);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
@@ -430,7 +444,9 @@ async function hardenEntryAsync(
   if (cache.has(targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   if (timedOutPaths.has(memoKey)) {
-    return { ok: false, diagnostics: "ACL hardening skipped — previous attempt timed out" };
+    const diagnostics = "ACL hardening skipped — previous attempt timed out";
+    if (opts.required) throw new Error(diagnostics);
+    return { ok: false, diagnostics };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -452,6 +468,7 @@ async function hardenEntryAsync(
     timedOutPaths.add(memoKey);
     const state = await describeAclStateAfterTimeoutAsync(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
+    if (opts.required) throw new Error(annotated);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }

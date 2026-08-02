@@ -9,6 +9,7 @@ import {
 import { clearModelCache } from "../src/codex/model-cache";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import type { OcxConfig } from "../src/types";
+import { CatalogGatherBusyError } from "../src/codex/catalog/provider-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -161,6 +162,40 @@ describe("gatherRoutedModels single-flight", () => {
     expect(a1.map(m => `${m.provider}/${m.id}`)).toEqual(["a/model-a"]);
     expect(b1.map(m => `${m.provider}/${m.id}`)).toEqual(["b/model-b"]);
     expect(a2).toEqual(a1);
+  });
+
+  test("an omitted registry-static setting never shares a flight with explicit live discovery", async () => {
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return new Response(JSON.stringify({ data: [{ id: "live-only" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const config = (liveModels?: true): OcxConfig => ({
+      port: 10100,
+      defaultProvider: "alibaba-token-plan",
+      providers: {
+        "alibaba-token-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          apiKey: "test-key",
+          models: ["configured-static"],
+          ...(liveModels === undefined ? {} : { liveModels }),
+        },
+      },
+    });
+
+    const [registryStatic, explicitLive] = await Promise.all([
+      gatherRoutedModels(config()),
+      gatherRoutedModels(config(true)),
+    ]);
+
+    expect(fetchCount).toBe(1);
+    expect(registryStatic.map(model => model.id)).toEqual(["configured-static"]);
+    expect(explicitLive.map(model => model.id)).toEqual(["live-only"]);
   });
 
   test("concurrent distinct keys keep flight-local combo omissions", async () => {
@@ -336,6 +371,40 @@ describe("gatherRoutedModels single-flight", () => {
     expect(withDisabledModels.map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
     expect(filterCatalogVisibleModels(all, base).map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
     expect(filterCatalogVisibleModels(withDisabledModels, withDisabled).map(m => m.id)).toEqual(["keep-me"]);
+  });
+
+  test("ninth distinct catalog gather is busy while same-fingerprint caller still joins", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      await gate;
+      return new Response(JSON.stringify({ data: [{ id: "model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const configs = Array.from({ length: 9 }, (_, index): OcxConfig => ({
+      port: 10100,
+      defaultProvider: `p${index}`,
+      providers: {
+        [`p${index}`]: {
+          adapter: "openai-chat",
+          baseUrl: `https://provider-${index}.example.test/v1`,
+          models: [],
+        },
+      },
+    }));
+    const admitted = configs.slice(0, 8).map(config => gatherRoutedModels(config));
+    const joiner = gatherRoutedModels(configs[0]!);
+    await Promise.resolve();
+    expect(fetchCount).toBe(8);
+    await expect(gatherRoutedModels(configs[8]!)).rejects.toBeInstanceOf(CatalogGatherBusyError);
+    release();
+    const [first, joined] = await Promise.all([admitted[0]!, joiner]);
+    await Promise.all(admitted.slice(1));
+    expect(joined).toEqual(first);
   });
 
 });

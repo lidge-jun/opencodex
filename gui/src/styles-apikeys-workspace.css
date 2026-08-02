@@ -9,9 +9,11 @@
    `contain` scrollers it needed kept the wheel from ever reaching the document.
    ============================================================================ */
 
+/* Match Storage / other workspace pages (1200). `.api-page` covers cold skeleton before the shell mounts. */
+.main-inner:has(.api-page),
 .main-inner:has(.apikeys-workspace-shell) {
-  max-width: 1280px;
-  padding: 16px 28px 32px;
+  max-width: 1200px;
+  /* Inherit .main-inner padding (incl. the mobile shrink) so the heading inset matches every other tab. */
   box-sizing: border-box;
 }
 
@@ -46,9 +48,12 @@
   container-name: apikeys-workspace;
 }
 
+/* Single track. The side rail became a pinned section strip above the content,
+   so the page no longer spends 252px of a 976px shell on a second vertical band
+   before the content column even starts. */
 .apikeys-workspace-root {
   display: grid;
-  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   width: 100%;
   max-width: 100%;
@@ -56,94 +61,46 @@
   align-items: start;
 }
 
-/* ── Rail ─────────────────────────────────────────────── */
-
-.apikeys-workspace-rail {
+/* Anchors are wrappers, not spacers: the panels inside keep their own rhythm. */
+.awi-section-anchor {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  border-right: 1px solid var(--border);
-  padding-right: var(--space-3);
+  gap: var(--space-3);
   min-width: 0;
 }
 
-.apikeys-workspace-rail-header {
-  display: flex;
-  align-items: baseline;
-}
-
-.apikeys-workspace-rail-title {
-  font-size: var(--text-body);
-  font-weight: var(--weight-semibold);
-  color: var(--text);
-}
-
-.apikeys-workspace-rail-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-}
-
-.apikeys-workspace-rail-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
-  width: 100%;
-  min-height: 46px;
+.awi-keylist-panel .awi-keylist-name {
   appearance: none;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1-5) var(--space-2);
-  cursor: pointer;
-  text-align: left;
-  color: inherit;
+  padding: 0;
   font: inherit;
-  overflow: hidden;
-  transition: background var(--motion-fast), box-shadow var(--motion-fast);
+  color: var(--accent-text, var(--text));
+  font-weight: var(--weight-semibold);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
 }
 
-.apikeys-workspace-rail-row:hover {
-  background: var(--surface);
+.awi-keylist-panel .awi-keylist-name:hover {
+  text-decoration: underline;
 }
 
-.apikeys-workspace-rail-row--selected {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--border);
+.awi-keylist-panel .awi-keylist-name:disabled {
+  cursor: default;
+  opacity: 0.6;
+  text-decoration: none;
 }
 
-.apikeys-workspace-rail-row:focus-visible {
+.awi-keylist-panel .awi-keylist-name:focus-visible {
   outline: 2px solid var(--accent-ring);
-  outline-offset: -2px;
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
-.apikeys-workspace-rail-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-body);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-ui);
-}
-
-.apikeys-workspace-rail-meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-caption);
-  line-height: var(--leading-ui);
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.apikeys-workspace-rail-empty {
-  font-size: 12px;
-  padding: 8px 4px;
-  color: var(--muted);
-}
+/* The rail's styles lived here. It was replaced by the pinned `SectionTabs`
+   strip (shared with Usage / Logs / Subagents) plus a key table in the Keys
+   section, so nothing below renders `.apikeys-workspace-rail*` any more. */
 
 /* ── Main ─────────────────────────────────────────────── */
 
@@ -178,29 +135,28 @@
   padding-top: 14px;
 }
 
+/* One column at every width. The two-track grid left each band near 340px
+   inside a 708px main track, which is what clipped the auth matrix and forced
+   the catalog to stack its action chips. Measured at 1280x720 with the 232px
+   app sidebar counted: 976px shell content, 708px main track, ~670px panel
+   interior after this collapse versus ~300px before. */
 .awi-overview {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  column-gap: var(--space-3);
   row-gap: var(--space-3);
   padding-top: 0;
 }
 
-.awi-overview-left,
-.awi-overview-right {
+.awi-overview-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   min-width: 0;
 }
 
-.awi-overview-left > .panel,
-.awi-overview-right > .panel {
+.awi-overview-section > .panel {
   margin-top: 0 !important;
-}
-
-.awi-overview-left > .panel {
   flex: 0 0 auto;
 }
 
@@ -217,16 +173,12 @@
   margin-top: 4px;
 }
 
-.awi-overview-left > .panel > p.muted.small {
+.awi-overview-section > .panel > p.muted.small {
   margin: 0;
   line-height: 1.35;
 }
 
-.awi-overview-right > .panel:not(.api-models-panel) {
-  flex: 0 0 auto;
-}
-
-.awi-overview-right > .api-models-panel {
+.awi-overview-section > .api-models-panel {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
@@ -238,10 +190,10 @@
   overflow: visible;
 }
 
-.awi-overview-right .api-models-panel > .input,
-.awi-overview-right .api-models-panel > .api-panel-head,
-.awi-overview-right .api-models-panel > .muted,
-.awi-overview-right .api-models-panel > .api-models-error {
+.awi-overview-section .api-models-panel > .input,
+.awi-overview-section .api-models-panel > .api-panel-head,
+.awi-overview-section .api-models-panel > .muted,
+.awi-overview-section .api-models-panel > .api-models-error {
   flex: 0 0 auto;
 }
 
@@ -249,7 +201,7 @@
    rule Usage settled on: bound the height, keep `overscroll-behavior: auto` so
    an exhausted table gives the wheel back to the page, and let a partly visible
    last row be the affordance instead of a fade that only looks like one. */
-.awi-overview-right .api-models-panel > .api-models-scroll {
+.awi-overview-section .api-models-panel > .api-models-scroll {
   margin-top: 0.5rem;
   min-width: 0;
   max-height: min(574px, 58vh);
@@ -259,8 +211,24 @@
   scrollbar-gutter: stable;
 }
 
+/* With `nowrap` action cells, the protocol column's min-content width pushed the
+   table 20px past its scroller at 1280x720 — every button was still visible, but
+   the scroller overflowed, which is the failure the acceptance criterion tests
+   for. Bound the table to its container and let the model id absorb the
+   difference: the id already wraps, the chips must not. Measured in Chrome at
+   1280x720; without these two rules scrollWidth was 680 against a 660 client. */
+.awi-overview-section .api-models-scroll > .tbl {
+  width: 100%;
+  table-layout: auto;
+}
+
+.awi-overview-section .api-models-scroll .api-model-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* Sticky offset is 0, not Usage's negative inset: this wrapper has no top pad. */
-.awi-overview-right .api-models-scroll thead th {
+.awi-overview-section .api-models-scroll thead th {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -400,13 +368,15 @@
   min-width: 0;
 }
 
-/* Three protocol chips plus Copy ID do not fit across a narrow catalog column —
-   laid out in a row they pushed the table wider than its panel and the last chip
-   was clipped at the edge. Stack them instead: the column grows down, which this
-   layout has room for, rather than sideways, which it does not. */
+/* Was `flex-wrap: wrap`, which existed because three protocol chips plus Copy ID
+   could not fit across a ~300px panel interior. The single-column collapse above
+   more than doubles that, so the chips fit on one line and the wrap is no longer
+   needed. `nowrap` is deliberate rather than merely default: it makes a future
+   narrowing fail visibly in the catalog's own scroller instead of silently
+   re-stacking every row to four lines. */
 .api-model-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -446,9 +416,176 @@
   color: var(--text);
 }
 
-.awi-overview-left > .api-generate-panel,
-.awi-overview-left > .api-newkey-panel {
+.awi-overview-section > .api-generate-panel,
+.awi-overview-section > .api-newkey-panel {
   margin-top: 0;
+}
+
+/* ── Client config export (devlog 260731_client_config_export/040) ────── */
+
+/* `.api-panel` clips overflow for every panel on this tab. That is wrong here for the
+   same reason it was wrong for the catalog: the JSON block is tall, and a `hidden`
+   ancestor eats the wheel event instead of handing it back to the page. Measured in a
+   real browser at 1280x720 — a bare `.awi-clientconfig-panel` selector ties `.api-panel`
+   on specificity and lost, so this carries the parent qualifier the catalog uses. The
+   unscoped `.api-example-pre` rules above (overflow-y: visible, overscroll-behavior:
+   auto) are what keep the block itself from trapping scroll — do not scope them to
+   .awi-usage-panel. */
+.awi-overview-section > .awi-clientconfig-panel,
+.awi-clientconfig-panel.api-panel {
+  overflow: visible;
+}
+
+.awi-clientconfig-head {
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* One row per export client. The client switch this replaced made the user
+   choose before acting, and choosing wrong showed the wrong config; rendering
+   both rows deletes the decision instead of relocating it. */
+.awi-clientconfig-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.awi-clientconfig-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.awi-clientconfig-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  overflow: hidden;
+}
+
+/* Brand SVGs bring their own rounded plate (Pi's is a dark #09090b square), so
+   the slot's border and fill would double it. Let a real mark fill the slot and
+   keep the chrome for the monogram fallback only. */
+.awi-clientconfig-mark:has(img) {
+  border-color: transparent;
+  background: none;
+}
+
+.awi-clientconfig-mark img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+}
+
+/* Fallback for a client with no brand asset. Honest about being a placeholder,
+   and the slot a real mark drops into later. */
+.awi-clientconfig-monogram {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  line-height: 1;
+}
+
+.awi-clientconfig-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.awi-clientconfig-name {
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+/* Destination paths are long; truncate rather than wrap to a third line. The
+   full path is copyable in the detail dialog. */
+.awi-clientconfig-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.awi-clientconfig-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.awi-clientconfig-row-actions .btn {
+  white-space: nowrap;
+}
+
+/* The JSON block only exists inside the dialog now, where `.modal-card` in
+   styles.css already bounds the card to 84vh and scrolls it. Deliberately no
+   height cap here: this stylesheet declares exactly one, and it belongs to the
+   model catalog. */
+.awi-clientconfig-dialog .awi-clientconfig-json {
+  margin: 0 0 var(--space-2);
+}
+
+@container apikeys-workspace (max-width: 560px) {
+  .awi-clientconfig-row {
+    flex-wrap: wrap;
+  }
+  .awi-clientconfig-row-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* No vertical cap and no y-scroller of its own: the catalog table is the only capped
+   region on this tab, and the unscoped `.api-example-pre` rules above already give this
+   block `overflow-y: visible` + `overscroll-behavior: auto`. Adding a `max-height` here
+   would make the JSON a second wheel trap. */
+.awi-clientconfig-json {
+  margin: 0;
+}
+
+.awi-clientconfig-json:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.awi-clientconfig-count,
+.awi-clientconfig-degraded,
+.awi-clientconfig-nokey,
+.awi-clientconfig-merge {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.awi-clientconfig-line {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Heading for the destination explanation inside the dialog. It replaced a
+   <details> fold: with the JSON already behind a dialog, folding the one
+   sentence that says where the file goes would hide the answer twice. */
+.awi-clientconfig-where-title {
+  margin: var(--space-2) 0 2px;
 }
 
 .awi-section {
@@ -561,44 +698,19 @@
 /* ── Responsive ───────────────────────────────────────── */
 /* Keep @container and @media stacking rules in sync when changing breakpoints. */
 
-@container apikeys-workspace (max-width: 980px) {
-  .awi-overview {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+/* `.awi-overview` is single-column at every width now, so it needs no stacking
+   breakpoint of its own. What remains responsive is the rail. */
 
+/* The root is single-track at every width now, so these breakpoints only trim
+   the main pane's side padding; the rail rules they carried are gone with it. */
 @container apikeys-workspace (max-width: 720px) {
-  .apikeys-workspace-root {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .apikeys-workspace-rail {
-    border-right: none;
-    padding-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
-  }
   .apikeys-workspace-main {
     padding: var(--space-2) 0 0;
   }
 }
 
 @media (max-width: 768px) {
-  .main-inner:has(.apikeys-workspace-shell) {
-    padding: 16px 18px 32px;
-  }
-  .apikeys-workspace-root {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .apikeys-workspace-rail {
-    border-right: none;
-    padding-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
-  }
   .apikeys-workspace-main {
     padding: var(--space-2) 0 0;
-  }
-  .awi-overview {
-    grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -8,6 +8,7 @@ import type { XaiImageRequest } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 let fulfillImageCall: typeof import("../../src/images/fulfill")["fulfillImageCall"];
+let imageFulfillmentTailSnapshot: typeof import("../../src/images/fulfill")["imageFulfillmentTailSnapshot"];
 let testHome = "";
 
 beforeAll(async () => {
@@ -28,7 +29,7 @@ beforeAll(async () => {
     downloadImageToArtifact: async () => downloadFn(dlIdx++),
     pruneArtifacts: () => pruneImpl(),
   }));
-  ({ fulfillImageCall } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
+  ({ fulfillImageCall, imageFulfillmentTailSnapshot } = await import(`../../src/images/fulfill?fulfill=${Date.now()}`));
 });
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
 
@@ -247,5 +248,34 @@ describe("fulfillImageCall", () => {
     expect(r.markdown).toMatch(/^!\[image\]\(file:\/\//);
     expect(r.files[0]).toBe(r.path);
     expect(r.markdown).not.toContain("\\");
+  });
+
+  test("image fulfillment 65 returns busy before provider or artifact work and reports path bytes", async () => {
+    reset();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    materializeFn = async (i) => {
+      await gate;
+      return touchArtifact(`bounded-${i}.png`);
+    };
+    const calls = Array.from({ length: 64 }, (_, index) => fulfillImageCall(
+      { id: `call-${index}`, name: "image_gen", arguments: JSON.stringify({ prompt: `image-${index}` }) },
+      plan,
+      { spent: 0 },
+    ));
+    while (xaiCalls.length < 64) await Bun.sleep(1);
+    const snapshot = imageFulfillmentTailSnapshot();
+    expect(snapshot.active).toBe(64);
+    expect(snapshot.currentBytes).toBeGreaterThan(0);
+    const busy = await fulfillImageCall(
+      { id: "call-65", name: "image_gen", arguments: JSON.stringify({ prompt: "must-not-run" }) },
+      plan,
+      { spent: 0 },
+    );
+    expect(busy.error).toBe("image_fulfillment_busy");
+    expect(xaiCalls.length).toBe(64);
+    release();
+    await Promise.all(calls);
+    expect(imageFulfillmentTailSnapshot().active).toBe(0);
   });
 });

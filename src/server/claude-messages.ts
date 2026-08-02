@@ -33,6 +33,13 @@ import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, typ
 import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import type { AdmissionLease } from "../lib/admission";
+import {
+  createTranslatorBudget,
+  finalizeTranslatorBudgetResponse,
+  isTranslatorBudgetExceededError,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 
 type Rec = Record<string, unknown>;
 
@@ -62,10 +69,11 @@ function claudeInboundDisabled(config: OcxConfig): Response | null {
   return null;
 }
 
-async function readAnthropicBody(req: Request): Promise<unknown> {
+async function readAnthropicBody(req: Request, budget: TranslatorBudget): Promise<unknown> {
   try {
-    return await readJsonRequestBody(req);
+    return await readJsonRequestBody(req, budget);
   } catch (err) {
+    if (isTranslatorBudgetExceededError(err)) throw err;
     throw new AnthropicRequestError(err instanceof Error && err.message ? err.message : "Invalid JSON body");
   }
 }
@@ -511,7 +519,26 @@ export async function handleClaudeMessages(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: { requestId: string; start: number },
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+): Promise<Response> {
+  const translatorBudget = createTranslatorBudget();
+  try {
+    return finalizeTranslatorBudgetResponse(
+      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds),
+      translatorBudget,
+    );
+  } catch (error) {
+    translatorBudget.dispose();
+    throw error;
+  }
+}
+
+async function handleClaudeMessagesWithBudget(
+  req: Request,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  translatorBudget: TranslatorBudget,
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
 ): Promise<Response> {
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
@@ -525,7 +552,7 @@ export async function handleClaudeMessages(
   let cacheKeySource: ClaudeCacheKeySource = null;
   let effortOverride: ReturnType<typeof extractOcxEffortDirective> = null;
   try {
-    anthropicBody = await readAnthropicBody(req);
+    anthropicBody = await readAnthropicBody(req, translatorBudget);
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
     // marker themselves; the 1M signal we act on is the anthropic-beta header.
     // Case-insensitive — the CLI matches /\[1m\]/i (audit 021 #7).
@@ -575,11 +602,18 @@ export async function handleClaudeMessages(
     }
     const translation = anthropicToResponsesTranslation(anthropicBody, config.claudeCode);
     internalBody = translation.body;
+    translatorBudget.chargeRetained(new TextEncoder().encode(JSON.stringify(internalBody)).byteLength, { kind: "request_copies" });
     cacheKeySource = translation.cacheKeySource;
   } catch (err) {
-    const status = err instanceof AnthropicRequestError ? 400 : 500;
+    const overflow = isTranslatorBudgetExceededError(err);
+    const status = overflow ? 413 : err instanceof AnthropicRequestError ? 400 : 500;
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
-    return anthropicErrorResponse(status, err instanceof Error ? err.message : String(err));
+    return anthropicErrorResponse(
+      status,
+      overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
+      overflow ? "request_too_large" : undefined,
+      overflow ? "translation_buffer_limit" : undefined,
+    );
   }
 
   const requestedModel = (anthropicBody as Rec).model as string;
@@ -666,10 +700,12 @@ export async function handleClaudeMessages(
       headers.set("session_id", uuidFromHex(internalBody.prompt_cache_key));
     }
   }
+  const internalBodyJson = JSON.stringify(internalBody);
+  translatorBudget.chargeRetained(new TextEncoder().encode(internalBodyJson).byteLength, { kind: "request_copies" });
   const internalReq = new Request("http://localhost/v1/responses", {
     method: "POST",
     headers,
-    body: JSON.stringify(internalBody),
+    body: internalBodyJson,
   });
 
   // Request-log wiring mirrors the /v1/responses route: native passthrough finalizes
@@ -683,12 +719,14 @@ export async function handleClaudeMessages(
     addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
   };
   const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
+    ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     abortSignal: req.signal,
     promptCacheKeyIsSharedCohort: cacheKeySource === "system",
     // The body is Responses-shaped by now, but the client spoke Anthropic Messages.
     // Without this the replay would look native and a Responses-scoped wire default
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
+    translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
@@ -739,7 +777,7 @@ export async function handleClaudeMessages(
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const anthropicSse = responsesSseToAnthropicSse(response.body, requestedModel);
+    const anthropicSse = responsesSseToAnthropicSse(response.body, requestedModel, { translatorBudget });
     if (stream) {
       return new Response(anthropicSse, {
         status: 200,
@@ -750,8 +788,29 @@ export async function handleClaudeMessages(
         },
       });
     }
-    const message = await collectAnthropicMessage(anthropicSse, requestedModel);
+    let message: Rec;
+    try {
+      message = await collectAnthropicMessage(anthropicSse, requestedModel, translatorBudget);
+    } catch (error) {
+      if (isTranslatorBudgetExceededError(error)) {
+        return anthropicErrorResponse(413, error.message, "request_too_large", error.code);
+      }
+      return anthropicErrorResponse(502, error instanceof Error ? error.message : String(error), "api_error");
+    }
     const isError = (message as Rec).type === "error";
+    const translatedError = isError && typeof (message as Rec).error === "object"
+      ? (message as { error: { code?: unknown; message?: unknown } }).error
+      : undefined;
+    if (translatedError?.code === "translation_buffer_limit") {
+      return anthropicErrorResponse(
+        413,
+        typeof translatedError.message === "string"
+          ? translatedError.message
+          : "upstream translation buffer exceeded the safe limit",
+        "request_too_large",
+        "translation_buffer_limit",
+      );
+    }
     return new Response(JSON.stringify(message), {
       status: isError ? 502 : 200,
       headers: { "Content-Type": "application/json" },
@@ -767,7 +826,15 @@ export async function handleClaudeMessages(
   }
   const status = (json as Rec)?.status;
   if (status === "failed") {
-    const error = (json as { error?: { message?: string } }).error;
+    const error = (json as { error?: { message?: string; code?: string } }).error;
+    if (error?.code === "translation_buffer_limit") {
+      return anthropicErrorResponse(
+        413,
+        error.message ?? "upstream translation buffer exceeded the safe limit",
+        "request_too_large",
+        "translation_buffer_limit",
+      );
+    }
     return anthropicErrorResponse(502, error?.message ?? "upstream request failed", "api_error");
   }
   const message = responsesJsonToAnthropicMessage(json, requestedModel);
@@ -804,12 +871,13 @@ export async function handleClaudeCountTokens(req: Request, config: OcxConfig): 
   if (disabled) return disabled;
 
   let body: unknown;
+  const translatorBudget = createTranslatorBudget();
   try {
-    body = await readAnthropicBody(req);
+    body = await readAnthropicBody(req, translatorBudget);
   } catch (err) {
     if (err instanceof AnthropicRequestError) return anthropicErrorResponse(400, err.message);
     return anthropicErrorResponse(500, err instanceof Error ? err.message : String(err));
-  }
+  } finally { translatorBudget.dispose(); }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return anthropicErrorResponse(400, "request body must be a JSON object");
   }

@@ -4,6 +4,7 @@ import { bridgeToResponsesSSE } from "../src/bridge";
 import { responsesSseToAnthropicSse } from "../src/claude/outbound";
 import { pumpResponsesSseToWebSocket, type WsData } from "../src/server/ws-bridge";
 import type { AdapterEvent } from "../src/types";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 async function* burstGenerator(count: number): AsyncGenerator<AdapterEvent> {
   for (let i = 0; i < count; i++) {
@@ -51,6 +52,7 @@ describe("bridge live SSE delivery (issue #114 coalescing regression)", () => {
     const reader = responsesSseToAnthropicSse(
       bridgeToResponsesSSE(burstGenerator(1), "test/model"),
       "claude-test",
+      { translatorBudget: createTestTranslatorBudget() },
     ).getReader();
     let macrotaskRan = false;
     const timer = setTimeout(() => { macrotaskRan = true; }, 0);

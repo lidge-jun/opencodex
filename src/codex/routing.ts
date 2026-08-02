@@ -19,6 +19,9 @@ import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
+import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { retainedUtf8Bytes } from "../lib/admission";
 
 type ThreadAffinityEntry = {
   accountId: string;
@@ -104,6 +107,7 @@ const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
 ] as const;
 export const CODEX_THREAD_AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 export const CODEX_THREAD_AFFINITY_MAX_ENTRIES = 2048;
+const MAX_AFFINITY_COMPONENT_BYTES = 512;
 // Min interval between quota threshold re-evaluations for a single bound thread.
 // Well under the 5h/weekly quota windows, but enough to stop per-request flapping.
 export const CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS = 60_000;
@@ -115,6 +119,8 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
  * from account-wide Retry-After/default throttles and transient health.
  */
 const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
+let lastReconciledGeneration = 0;
+let liveHealthAccountIds = new Set<string>();
 
 export type CodexUpstreamOutcome = number | "connect_error" | "timeout";
 export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "unknown";
@@ -185,12 +191,23 @@ export type CodexUpstreamOutcomeMeta = {
    * again (which would advance a round-robin ring twice).
    */
   promoteAccountId?: string;
+  /** Generation captured when this routed account was selected. */
+  writerGeneration?: number;
 };
 
 function hasConfiguredPoolAccount(config: OcxConfig, accountId: string): boolean {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return isCodexAccountUsable(config, accountId);
   return (config.codexAccounts ?? [])
     .some(account => isSelectableCodexPoolAccount(account) && account.id === accountId);
+}
+
+export function listLiveCodexAccountIds(config: OcxConfig): ReadonlySet<string> {
+  const ids = new Set((config.codexAccounts ?? []).map(account => account.id));
+  const openai = config.providers.openai;
+  if (openai && openai.disabled !== true && isCanonicalOpenAiForwardProvider(openai)) {
+    ids.add(MAIN_CODEX_ACCOUNT_ID);
+  }
+  return ids;
 }
 
 export function clearThreadAccountMap(): void {
@@ -215,6 +232,24 @@ export function clearCodexUpstreamHealth(): void {
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
   quotaScopedHealth.delete(accountId);
+}
+
+export function reconcileCodexRoutingHealth(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  let removed = 0;
+  for (const accountId of upstreamHealth.keys()) {
+    if (context.codexAccountIds.has(accountId)) continue;
+    upstreamHealth.delete(accountId);
+    removed += 1;
+  }
+  for (const accountId of quotaScopedHealth.keys()) {
+    if (context.codexAccountIds.has(accountId)) continue;
+    quotaScopedHealth.delete(accountId);
+    removed += 1;
+  }
+  liveHealthAccountIds = new Set(context.codexAccountIds);
+  lastReconciledGeneration = context.generation;
+  return removed;
 }
 
 export function getCodexUpstreamHealth(
@@ -600,11 +635,17 @@ function threadAffinityScope(quotaScope?: CodexQuotaScope): ThreadAffinityScope 
   return quotaScope ?? LEGACY_THREAD_AFFINITY_SCOPE;
 }
 
+function admissibleAffinityComponent(value: string): boolean {
+  return retainedUtf8Bytes(value) <= MAX_AFFINITY_COMPONENT_BYTES;
+}
+
 function getThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): ThreadAffinityEntry | undefined {
+  if (!admissibleAffinityComponent(threadId)) return undefined;
   return threadAccountMap.get(threadId)?.get(threadAffinityScope(quotaScope));
 }
 
 function deleteThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): void {
+  if (!admissibleAffinityComponent(threadId)) return;
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   affinities.delete(threadAffinityScope(quotaScope));
@@ -613,6 +654,7 @@ function deleteThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): v
 
 /** Remove only the matching failed account's affinities for one thread. */
 function deleteThreadAffinitiesForAccount(threadId: string, accountId: string): void {
+  if (!admissibleAffinityComponent(threadId) || !admissibleAffinityComponent(accountId)) return;
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   for (const [scope, entry] of affinities) {
@@ -671,6 +713,7 @@ function bindThreadAffinity(
   now: number,
   quotaScope?: CodexQuotaScope,
 ): void {
+  if (!admissibleAffinityComponent(threadId) || !admissibleAffinityComponent(accountId)) return;
   const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
   if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return;
   pruneExpiredThreadAffinities(now);
@@ -1204,6 +1247,8 @@ export function recordCodexUpstreamOutcome(
   meta: CodexUpstreamOutcomeMeta = {},
 ): void {
   if (!accountId) return;
+  const writerGeneration = meta.writerGeneration ?? captureConfigGeneration();
+  if (writerGeneration < lastReconciledGeneration && !liveHealthAccountIds.has(accountId)) return;
   const now = meta.now ?? Date.now();
   const outcomeClass = classifyCodexUpstreamOutcome(outcome);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
@@ -1275,7 +1320,7 @@ export function recordCodexUpstreamOutcome(
       lastFailureAt: now,
     });
     quotaScopedHealth.delete(accountId);
-    markAccountNeedsReauth(accountId);
+    markAccountNeedsReauth(accountId, writerGeneration);
     clearThreadAccountMapForAccount(accountId);
     return;
   }

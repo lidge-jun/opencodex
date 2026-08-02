@@ -7,6 +7,11 @@ import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
+import {
+  captureConfigGeneration,
+  sweepExpiredOnWrite,
+  type GenerationContext,
+} from "../lib/state-store-sweeper";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -243,6 +248,8 @@ async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaRepor
   // Capture the account we intend to probe before awaiting — a mid-flight active
   // switch must not seed the wrong account's cache with this response.
   const probedAccountId = getAccountSet("anthropic")?.activeAccountId;
+  const probedAccountKey = probedAccountId ? accountCacheKey("anthropic", probedAccountId) : null;
+  const writerGeneration = captureConfigGeneration();
   let accessToken: string;
   try {
     accessToken = await getValidAccessToken("anthropic");
@@ -253,10 +260,10 @@ async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaRepor
   if (!quota) return null;
   // Share the active-account probe with the per-account cache so Providers-page
   // loads do not double-hit Anthropic's rate-limited usage endpoint.
-  if (probedAccountId) {
+  if (probedAccountId && probedAccountKey) {
     const stillOwnsToken = getAccountCredential("anthropic", probedAccountId)?.access === accessToken;
-    if (stillOwnsToken) {
-      accountQuotaCache.set(accountCacheKey("anthropic", probedAccountId), { ts: Date.now(), quota });
+    if (stillOwnsToken && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
     }
   }
   return report(provider, "anthropic:oauth-usage", quota);
@@ -284,6 +291,17 @@ type AccountQuotaCacheEntry = {
 };
 const accountQuotaCache = new Map<string, AccountQuotaCacheEntry>();
 const accountQuotaInflight = new Map<string, Promise<AccountQuotaCacheEntry>>();
+let lastReconciledGeneration = 0;
+let liveAccountQuotaKeys = new Set<string>();
+let liveProviderQuotaKeys = new Set<string>();
+
+function mayCommitAccountQuotaKey(key: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration || liveAccountQuotaKeys.has(key);
+}
+
+function mayCommitProviderQuotaKey(key: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration || liveProviderQuotaKeys.has(key);
+}
 
 export interface ProviderAccountQuota {
   accountId: string;
@@ -322,6 +340,35 @@ export function setCachedProviderAccountQuotaForTests(
     return;
   }
   accountQuotaCache.set(key, { ts: Date.now(), quota });
+}
+
+export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, entry] of accountQuotaCache) {
+    if (entry.ts + ACCOUNT_QUOTA_TTL_MS > now) continue;
+    accountQuotaCache.delete(key);
+    removed += 1;
+  }
+  return removed;
+}
+
+export function reconcileProviderAccountQuotaRows(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  let removed = 0;
+  for (const key of accountQuotaCache.keys()) {
+    if (context.oauthAccountKeys.has(key)) continue;
+    accountQuotaCache.delete(key);
+    removed += 1;
+  }
+  if (cache) {
+    const reports = cache.response.reports.filter(report => context.providerNames.has(report.provider));
+    removed += cache.response.reports.length - reports.length;
+    cache = { ...cache, response: { ...cache.response, reports } };
+  }
+  liveAccountQuotaKeys = new Set(context.oauthAccountKeys);
+  liveProviderQuotaKeys = new Set(context.providerNames);
+  lastReconciledGeneration = context.generation;
+  return removed;
 }
 
 /** Drop cached per-account rows (all, or just one provider's). */
@@ -369,6 +416,7 @@ async function fetchAccountQuota(
   forceRefresh: boolean,
 ): Promise<AccountQuotaCacheEntry> {
   const key = accountCacheKey(provider, accountId);
+  const writerGeneration = captureConfigGeneration();
   const cached = accountQuotaCache.get(key);
   if (!forceRefresh && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) return cached;
   const joinable = accountQuotaInflight.get(key);
@@ -386,11 +434,17 @@ async function fetchAccountQuota(
           quota: cached?.quota ?? null,
           unavailable: true,
         };
-        accountQuotaCache.set(key, entry);
+        if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+          accountQuotaCache.set(key, entry);
+          sweepExpiredOnWrite(entry.ts);
+        }
         return entry;
       }
       const entry: AccountQuotaCacheEntry = { ts: Date.now(), quota };
-      accountQuotaCache.set(key, entry);
+      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+        accountQuotaCache.set(key, entry);
+        sweepExpiredOnWrite(entry.ts);
+      }
       return entry;
     } catch {
       const entry: AccountQuotaCacheEntry = {
@@ -398,7 +452,10 @@ async function fetchAccountQuota(
         quota: cached?.quota ?? null,
         unavailable: true,
       };
-      accountQuotaCache.set(key, entry);
+      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+        accountQuotaCache.set(key, entry);
+        sweepExpiredOnWrite(entry.ts);
+      }
       return entry;
     }
   })().finally(() => {
@@ -861,6 +918,7 @@ async function maybeFetchProviderQuota(
 
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   const key = cacheKey(config);
+  const writerGeneration = captureConfigGeneration();
   const now = Date.now();
   // The cache fast path must not extend a preserved last-good row past its 30-minute bound:
   // a row preserved at age 29:59 plus a full 5-minute TTL would otherwise serve until ~35min.
@@ -893,7 +951,10 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
 
     const response = { generatedAt: Date.now(), reports: [...byProvider.values()] };
     // Commit only when this probe still holds authority (no clear/force superseded it).
-    if (epoch === invalidationEpoch) cache = { key, ts: Date.now(), response };
+    if (epoch === invalidationEpoch) {
+      const reports = response.reports.filter(item => mayCommitProviderQuotaKey(item.provider, writerGeneration));
+      cache = { key, ts: Date.now(), response: { ...response, reports } };
+    }
     return response;
   })();
 

@@ -15,6 +15,19 @@ import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
+import {
+  appOwnedBytesSnapshot,
+  configureAppOwnedMemoryBudget,
+  registerRetainedStore,
+  resetAppOwnedMemoryForTests,
+} from "../src/lib/app-owned-memory";
+import {
+  evictOldestUsageSummaryForBudget,
+  getUsageSummaryCacheEntry,
+  resetUsageSummaryCacheForTests,
+  setUsageSummaryCacheEntry,
+  usageSummaryRetainedStoreSnapshot,
+} from "../src/server/management/usage-summary-cache";
 
 let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
@@ -49,12 +62,16 @@ function getSettings(config: OcxConfig): Promise<Response | null> {
 }
 
 beforeEach(() => {
+  resetAppOwnedMemoryForTests();
+  resetUsageSummaryCacheForTests();
   invalidateStartupHealthCache();
   TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-settings-stream-"));
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
 
 afterEach(() => {
+  resetAppOwnedMemoryForTests();
+  resetUsageSummaryCacheForTests();
   invalidateStartupHealthCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -80,6 +97,11 @@ describe("GET /api/settings", () => {
     const config = { ...baseConfig(), streamMode: "eager-relay" as const };
     const body = await (await getSettings(config))!.json() as { streamMode?: string };
     expect(body.streamMode).toBe("eager-relay");
+  });
+
+  test("reports appOwnedMemoryBudgetMb with the 256 MiB default", async () => {
+    const body = await (await getSettings(baseConfig()))!.json() as { appOwnedMemoryBudgetMb?: number };
+    expect(body.appOwnedMemoryBudgetMb).toBe(256);
   });
 
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
@@ -149,6 +171,48 @@ describe("GET /api/settings", () => {
   });
 });
 
+describe("usage summary retained-store accounting", () => {
+  test("accounts cached summaries and centralized oldest eviction exactly", async () => {
+    for (const range of ["30d", "7d"]) {
+      const req = new Request(`http://127.0.0.1:10100/api/usage?range=${range}`);
+      expect((await handleManagementAPI(req, new URL(req.url), baseConfig()))!.status).toBe(200);
+    }
+    const before = usageSummaryRetainedStoreSnapshot();
+    expect(before.count).toBe(2);
+    expect(before.bytes).toBeGreaterThan(0);
+    const released = evictOldestUsageSummaryForBudget();
+    const after = usageSummaryRetainedStoreSnapshot();
+    expect(released).toBeGreaterThan(0);
+    expect(after.count).toBe(1);
+    expect(after.bytes).toBe(before.bytes - released);
+  });
+
+  test("oldest eviction follows revision read completion order, not generatedAt", async () => {
+    for (const range of ["30d", "7d"]) {
+      const req = new Request(`http://127.0.0.1:10100/api/usage?range=${range}`);
+      expect((await handleManagementAPI(req, new URL(req.url), baseConfig()))!.status).toBe(200);
+    }
+    const seed = getUsageSummaryCacheEntry("30d:all");
+    expect(seed).toBeDefined();
+    // Simulate an older-started slow read that COMPLETES last: its generatedAt
+    // is older than everything else, but its revisionReadAt is the newest.
+    setUsageSummaryCacheEntry("slow:stale-generated", {
+      revisionKey: "slow-read",
+      expiresAt: Date.now() + 60_000,
+      revisionReadAt: Date.now() + 10_000,
+      summary: { ...seed!.summary, generatedAt: 1 },
+    });
+    const before = usageSummaryRetainedStoreSnapshot();
+    expect(before.count).toBe(3);
+    // The slow-read entry has the minimum generatedAt; a generatedAt-keyed
+    // implementation would evict it first. Completion order must win instead.
+    const released = evictOldestUsageSummaryForBudget();
+    expect(released).toBeGreaterThan(0);
+    expect(getUsageSummaryCacheEntry("slow:stale-generated")).toBeDefined();
+    expect(usageSummaryRetainedStoreSnapshot().count).toBe(2);
+  });
+});
+
 describe("PUT /api/settings", () => {
   test("legacy codexAutoStart-only PUT still works (regression)", async () => {
     const config = baseConfig();
@@ -195,6 +259,37 @@ describe("PUT /api/settings", () => {
     const res = await putSettings(config, {});
     expect(res!.status).toBe(400);
   });
+
+  test("settings PUT rejects below above fractional and nonnumeric budget values", async () => {
+    for (const value of [63, 4097, 64.5, "64"]) {
+      const res = await putSettings(baseConfig(), { appOwnedMemoryBudgetMb: value });
+      expect(res!.status).toBe(400);
+      expect(await res!.json()).toMatchObject({ error: expect.stringContaining("appOwnedMemoryBudgetMb") });
+    }
+  });
+
+  test("settings PUT applies a valid budget change synchronously through enforcement", async () => {
+    let bytes = 70 * 1024 * 1024;
+    let evictions = 0;
+    registerRetainedStore({
+      id: "test_cache",
+      category: "caches",
+      snapshot: () => ({ count: bytes > 0 ? 1 : 0, bytes, evictableBytes: bytes, pinnedBytes: 0, oldestAt: bytes > 0 ? 1 : null }),
+      evictOldest: () => {
+        const released = bytes;
+        bytes = 0;
+        evictions += 1;
+        return released;
+      },
+    });
+    configureAppOwnedMemoryBudget(256 * 1024 * 1024);
+    const config = baseConfig();
+    const res = await putSettings(config, { appOwnedMemoryBudgetMb: 64 });
+    expect(res!.status).toBe(200);
+    expect(config.appOwnedMemoryBudgetMb).toBe(64);
+    expect(evictions).toBe(1);
+    expect(appOwnedBytesSnapshot()).toMatchObject({ budgetBytes: 64 * 1024 * 1024, retainedBytes: 0 });
+  });
 });
 
 describe("config.json schema resilience", () => {
@@ -215,6 +310,16 @@ describe("config.json schema resilience", () => {
     const config = { ...baseConfig(), streamMode: "legacy-tee" as const };
     saveConfig(config);
     expect(loadConfig().streamMode).toBe("legacy-tee");
+  });
+
+  test("malformed persisted appOwnedMemoryBudgetMb degrades to default without dropping providers", () => {
+    saveConfig({ ...baseConfig(), appOwnedMemoryBudgetMb: 128 });
+    const raw = JSON.parse(readFileSync(getConfigPath(), "utf-8")) as Record<string, unknown>;
+    raw.appOwnedMemoryBudgetMb = "huge";
+    writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
+    const reloaded = loadConfig();
+    expect(reloaded.appOwnedMemoryBudgetMb).toBe(256);
+    expect(reloaded.providers.openai?.apiKey).toBe("sk-secret-value");
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

@@ -1,117 +1,96 @@
 ---
 title: クイックスタート
-description: 最初のプロバイダーを設定し、3 つのコマンドで OpenAI Codex を opencodex 経由にルーティングします。
+description: 最初のプロバイダーを構成し、3 つのコマンドで OpenAI Codex を opencodex 経由でルーティングします。
 ---
 
-このガイドは新規インストール状態から非 OpenAI モデルで Codex を実行するまでを案内します。
+このガイドでは、新規インストールから非 OpenAI モデルに対して Codex を実行するまでを説明します。
 
-## 1. セットアップウィザードの実行
+## 1. セットアップウィザードを実行します
 
 ```bash
 ocx init
 ```
 
-`ocx init` は次の手順を案内します:
+`ocx init` では次の手順を説明します。
 
-1. **プロバイダー選択** — 組み込みレジストリのプリセット 62 個から一つを選ぶか、`custom` を選んで
-   base URL とアダプターを直接入力します。
+1. **プロバイダーを選択してください** — 66 の組み込みレジストリ プリセットのいずれか、または `custom` を選択してベースを入力します
+URLとアダプター。
 2. **API キー** — キーを貼り付けるか、`${ANTHROPIC_API_KEY}` のような環境変数を参照します。
-3. **デフォルトモデル** — API キー、ローカル、custom プロバイダーではプリセット値を使うかモデル ID を直接入力します。
-4. **プロキシポート** — デフォルトは `10100` です。
-5. **Codex に注入しますか?** — 一般的なローカル専用構成では
-   `$CODEX_HOME/config.toml`(デフォルト `~/.codex/config.toml`)のルートに `openai_base_url` を追加し、
-   Codex の組み込み `openai` プロバイダーがプロキシを見るようにします。LAN などの外部アドレスにバインドした
-   構成では API 認証ヘッダーを含む専用プロバイダーエントリを代わりに使います。
-6. **自動起動 shim をインストールしますか?** — オンにすると `codex` 実行時にまず `ocx ensure` が実行されます。
+3. **デフォルト モデル** — キー、ローカル、カスタム プロバイダーの場合は、プリセットを受け入れるか、モデル ID を入力します。
+4. **プロキシ ポート** — デフォルトは `10100` です。
+5. **Codex に挿入しますか?** - 通常のループバック設定では、opencodex はルート `openai_base_url` を
+`$CODEX_HOME/config.toml` (デフォルトは `~/.codex/config.toml`) なので、Codex の組み込み `openai` プロバイダーはプロキシをターゲットにします。リモート/LAN バインドでは、代わりに API 認証ヘッダーを持つ専用プロバイダー エントリを使用します。
+6. **自動起動シムをインストールしますか?** — 有効にすると、`codex` を起動すると、最初に `ocx ensure` が実行されます。
 
-結果は `$OPENCODEX_HOME/config.json`(デフォルト `~/.opencodex/config.json`)に保存されます。
+結果は `$OPENCODEX_HOME/config.json` (デフォルトは `~/.opencodex/config.json`) に保存されます。
 
-:::note[GPT-5.6 ロールアウト準備項目]
-安定版 v2.7.1 は ChatGPT パススルー、OpenAI API キー、OpenRouter、実験段階の Cursor アダプターに
-GPT-5.6 Sol/Terra/Luna 項目をデフォルトで提供します。実際に呼び出すには該当 upstream アカウントに利用権が必要です。
-OpenAI API キーと OpenRouter プリセットは 372,000 トークンの利用可能コンテキスト情報を
-Codex に提供し、Cursor はアダプターが提供する別のメタデータを使います。
+:::note[GPT-5.6 ロールアウト エントリ]
+現在の安定版リリースでは、ChatGPT パススルー、OpenAI API キー、OpenRouter、実験用 Cursor アダプター用に GPT-5.6 Sol/Terra/Luna をシードしています。これらは、上流アカウントがアクセス権を持っている場合にのみ機能します。 OpenAI API キーと OpenRouter プリセットは、372,000 トークンの使用可能なコンテキスト ウィンドウをアドバタイズします。カーソルは独自のアダプターのメタデータを保持します。
 :::
 
-## 2. プロキシの起動
+## 2.プロキシを開始します
 
 ```bash
-ocx start            # デフォルトポート 10100
+ocx start            # defaults to port 10100
 ocx start --port 8080
 ```
 
-起動時に opencodex は:
+開始時、opencodex:
 
-- PID を `~/.opencodex/ocx.pid` に記録し(二重起動を拒否)、
-- 対応プロバイダーではライブモデルを照会し、ネイティブおよびルーティング項目を **Codex モデル
-  カタログに同期**し、
-- `http://localhost:<port>/v1` で待機します。
+- PID を `~/.opencodex/ocx.pid` に書き込みます (そして 2 回起動を拒否します)。
+- プロバイダーがサポートするライブ モデルを検出し、**ネイティブ エントリとルーティングされたエントリを同期します
+Codex のモデル カタログ**、
+- `http://localhost:<port>/v1`で聴いています。
 
-要求したポートが既に使用中の場合は空きポートを探して `runtime-port.json` に記録し、Codex が実際の
-リスナーを使うように設定を更新します。
+要求されたポートがビジーの場合、`ocx start` は空きポートを選択し、それを `runtime-port.json` に記録し、ライブ リスナーを使用するように Codex を更新します。
 
-確認:
+確認してください:
 
 ```bash
 ocx status
-ocx gui       # 現在のポートでダッシュボードを開く
+ocx gui       # open the dashboard on the live port
 ```
 
-## 3. Codex の使用
+## 3.Codexを使用する
 
-これで Codex は opencodex と透過的に通信します:
+Codex は透過的に opencodex と通信するようになりました。
 
 ```bash
 codex "Refactor this function for readability"
 ```
 
-特定のルーティングモデルを指定するには、Codex のモデルピッカーに表示される `provider/model` 形式を使ってください:
+特定のルーティングされたモデルをターゲットにするには、Codex のモデル ピッカーに表示される `provider/model` フォームを使用します。
 
 ```bash
 codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
 
-GPT-5.6 の利用権がある場合、ネイティブ ChatGPT 経路は bare モデル名、API キーと OpenRouter 経路は明示的
-`provider/model` 形式を使ってください:
+## サブエージェント モデルの選択 (オプション)
+
+新しい設定には、Codex のサブエージェント ピッカーの 5 つのネイティブ モデル、`gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、および `gpt-5.4-mini` が含まれています。 `ocx gui` を開いて、最大 5 つのネイティブ モデルまたはルーティング モデルを置換または並べ替えます。ダッシュボードでは、優先サブエージェント モデルと推論負荷を 1 つ設定することもできます。 v1/base/v2 を選択し、ガイダンス、ネイティブのデフォルト、およびフォールバックがいつ適用されるかを理解するには、[サブエージェントサーフェス](/guides/sub-agent-surface/) を参照してください。
+
+## キーを貼り付ける代わりにログインする
+
+一部のプロバイダーはリアル アカウント ログイン (OAuth、自動更新) をサポートしています。
 
 ```bash
-codex -m "gpt-5.6-sol"                    "Plan a risky refactor"
-codex -m "openai-apikey/gpt-5.6-terra"    "Review this architecture"
-codex -m "openrouter/openai/gpt-5.6-luna" "Summarize this trace"
-```
-
-## サブエージェントモデルの選択(任意)
-
-新規構成では `gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.4-mini` が
-Codex のサブエージェントピッカーにデフォルトで表示されます。`ocx gui` でネイティブモデルとルーティングモデルを
-合わせて最大 5 つまで変更や並び替えができます。推奨サブエージェントモデルと推論負荷も指定でき、
-opencodex はこの値を v1 コラボリクエストのガイダンスメッセージに反映します。
-
-## キーを貼り付ける代わりにログイン
-
-一部のプロバイダーは実際のアカウントログインをサポートします(OAuth、自動更新):
-
-```bash
-ocx login xai          # または anthropic, kimi, kiro, google-antigravity, cursor
+ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
 ocx logout xai
 ```
 
-デフォルトの OpenAI 経路は**キー不要**です — 既存の `codex login` 認証情報をそのまま転送します。
-OpenAI API キーを別に使うには `openai-apikey` プロバイダーを追加してください。このプリセットには
-`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` が含まれますが、API キーに実際の利用権が必要です
-([プロバイダー](/ja/guides/providers/)参照)。
+OpenAI 自体には **キーは必要ありません**。デフォルトのプロバイダーは既存の `codex login` 認証情報をそのまま転送します ([プロバイダー](/guides/providers/) を参照)。
 
 ## 停止と復元
 
 ```bash
-ocx stop          # プロキシを停止しネイティブ Codex を復元
-ocx restore       # プロキシは残したままネイティブ Codex を復元(エイリアス: ocx eject)
-ocx restore back  # 実行中のプロキシに Codex を再接続
+ocx stop          # stop the proxy and restore native Codex
+ocx restore       # restore native Codex without stopping (alias: ocx eject)
+ocx restore back  # route Codex through the still-running proxy again
 ```
 
-## 次へ
+## 次
 
-- [仕組み](/ja/getting-started/how-it-works/) — 各リクエストで何が起きるか。
-- [プロバイダー](/ja/guides/providers/) — 認証のすべての方法。
-- [設定](/ja/reference/configuration/) — 完全な `config.json` リファレンス。
+- [仕組み](/getting-started/how-it-works/) — 各リクエストに何が起こるか。
+- [プロバイダー](/guides/providers/) — あらゆる認証方法。
+- [構成](/reference/configuration/) — `config.json` の完全なリファレンス。

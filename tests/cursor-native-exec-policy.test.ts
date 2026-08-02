@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createCursorAdapter } from "../src/adapters/cursor";
 import {
   cursorRequestDeclaresFullAccess,
@@ -11,12 +11,17 @@ import {
 } from "../src/adapters/cursor/exec-policy";
 import {
   AgentClientMessageSchema,
+  BackgroundShellSpawnArgsSchema,
   ExecServerMessageSchema,
   FetchArgsSchema,
   ReadArgsSchema,
   ShellArgsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import {
+  resetBackgroundShellStateForTests,
+  setBackgroundShellRuntimeForTests,
+} from "../src/adapters/cursor/native-exec-shell";
 import type { CursorTransportFactoryInput } from "../src/adapters/cursor/transport";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -52,6 +57,10 @@ const baseParsed: OcxParsedRequest = {
   stream: false,
   options: {},
 };
+
+afterEach(async () => {
+  await resetBackgroundShellStateForTests();
+});
 
 describe("Cursor native exec sandbox policy", () => {
   describe("full-access declaration detector", () => {
@@ -307,6 +316,67 @@ describe("Cursor native exec sandbox policy", () => {
     expect(captured.map(input => input.requestDeclaresFullAccess)).toEqual([true, false]);
   });
 
-  // LiveCursorTransport construction is credential/network-heavy in this suite. The context rule is
-  // covered by the effective-policy truth table and the adapter factory-input capture above.
+  test("default off and explicit off reject background spawn before the spawn spy", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy reached");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const request = execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "must-not-run" }),
+    });
+    for (const provider of [baseProvider, { ...baseProvider, nativeLocalExec: "off" as const }]) {
+      const reply = decode((await handleCursorNativeExec(request, {
+        unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow(provider, true),
+        sessionId: "policy-session",
+      }))[0]);
+      expect(reply.message.case).toBe("backgroundShellSpawnResult");
+      expect(reply.message.value.result.case).toBe("error");
+    }
+    expect(spawnCalls).toBe(0);
+  });
+
+  test("codex-sandbox rejects background spawn before the spawn spy", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy reached");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const reply = decode((await handleCursorNativeExec(execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "must-not-run" }),
+    }), {
+      unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow({ ...baseProvider, nativeLocalExec: "codex-sandbox" }, true),
+      sessionId: "policy-session",
+    }))[0]);
+    expect(reply.message.case).toBe("backgroundShellSpawnResult");
+    expect(reply.message.value.result.case).toBe("error");
+    expect(spawnCalls).toBe(0);
+  });
+
+  test("only explicit nativeLocalExec on reaches bounded shell admission", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy reached after admission");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const reply = decode((await handleCursorNativeExec(execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "admitted-spawn" }),
+    }), {
+      unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow({ ...baseProvider, nativeLocalExec: "on" }, false),
+      sessionId: "policy-session",
+    }))[0]);
+    expect(reply.message.case).toBe("backgroundShellSpawnResult");
+    expect(reply.message.value.result.case).toBe("error");
+    expect(spawnCalls).toBe(1);
+  });
+
 });

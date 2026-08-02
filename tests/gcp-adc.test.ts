@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { getVertexAccessToken, __resetVertexTokenCache } from "../src/lib/gcp-adc";
 import { createGoogleAdapter } from "../src/adapters/google";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { STATE_STORE_REGISTRATIONS } from "../src/lib/state-store-registrations";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 let tmp: string;
@@ -84,6 +85,16 @@ describe("gcp-adc resolver", () => {
     await getVertexAccessToken();
     await getVertexAccessToken();
     expect(oauthCalls).toBe(1);
+  });
+
+  test("expired GCP ADC token is removed by the periodic sweep registration", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    await getVertexAccessToken();
+    expect(oauthCalls).toBe(1);
+    const registration = STATE_STORE_REGISTRATIONS.find(row => row.name === "gcp-adc")!;
+    expect(registration.sweepExpired?.(Date.now() + 3_600_000)).toBe(1);
+    await getVertexAccessToken();
+    expect(oauthCalls).toBe(2);
   });
 
   test("concurrent callers share one in-flight token fetch", async () => {

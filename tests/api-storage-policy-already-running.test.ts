@@ -9,7 +9,7 @@ import {
   seedArchived,
   setStorageCleanupPolicyJobTestHooks,
   startServer,
-  stopStorageCleanupScheduler,
+  stopPolicyServer,
   uninstallPolicyApiHarness,
   waitForJobIdle,
   type PolicyApiHarness,
@@ -18,8 +18,8 @@ import {
 
 let harness: PolicyApiHarness;
 
-beforeEach(() => {
-  harness = installPolicyApiHarness("ocx-api-storage-policy-busy");
+beforeEach(async () => {
+  harness = await installPolicyApiHarness("ocx-api-storage-policy-busy");
 });
 
 afterEach(async () => {
@@ -60,8 +60,7 @@ test("POST run rejects when a job is already running", async () => {
 
     await waitForJobIdle(server.url, firstBody.job.startedAt);
   } finally {
-    await server.stop(true);
-    stopStorageCleanupScheduler();
+    await stopPolicyServer(server);
     await resetStorageCleanupPolicyJobForTestsAsync();
   }
 }, { timeout: 30_000 });

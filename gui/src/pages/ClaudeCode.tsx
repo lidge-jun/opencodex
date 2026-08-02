@@ -4,7 +4,7 @@ import { useI18n, useT, LOCALES } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import { backgroundHelperOptions } from "./claude-code-helper-options";
 import { reconcileAutoConnectState } from "./claude-autoconnect";
 import { buildManualEnv } from "./claude-manual-env";
@@ -22,16 +22,13 @@ export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-setting
 
 type CachedClaudeCode = { state: ClaudeCodeState; rows: MapRow[] };
 
-function seedClaudeCode(cacheKey: string): CachedClaudeCode | null {
-  return readSessionListCache<CachedClaudeCode>(cacheKey);
-}
-
 export default function ClaudeCode({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
   const { locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang ?? "en";
   const cacheKey = `ocx.claude-code.v1:${apiBase}`;
-  const cached = useMemo(() => seedClaudeCode(cacheKey), [cacheKey]);
+  const resourceKey = `claude-code:${apiBase}`;
+  const cached = useMemo(() => readSessionListCache<CachedClaudeCode>(cacheKey), [cacheKey]);
   const [draftState, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
   const [draftRows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
   const [hasDraftRows, setHasDraftRows] = useState(Boolean(cached));
@@ -72,10 +69,10 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   }, [apiBase, cacheKey, t]);
 
   const codeResource = useDataSurface<CachedClaudeCode>(
-    `claude-code:${apiBase}`,
+    resourceKey,
     [apiBase],
     fetchCode,
-    { isEmpty: () => false, enabled: active },
+    { isEmpty: () => false, enabled: active, initialData: cached ?? undefined },
   );
   const loadState = codeResource.state;
   const data = loadState.data ?? cached;
@@ -152,7 +149,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   }
   if (!state) return null;
 
-  const sections: Array<{ id: string; label: string; body: ReactNode }> = [
+  const sections: Array<{ id: string; label: string; meta?: string; body: ReactNode }> = [
     {
       id: "settings",
       label: t("claude.workspace.settings"),
@@ -185,6 +182,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     {
       id: "modelMap",
       label: t("claude.modelMap"),
+      meta: String(rows.length),
       body: <ClaudeCodeModelMapSection rows={rows} onRowsChange={(nextRows) => {
         setHasDraftRows(true);
         setRows(nextRows);
@@ -193,6 +191,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     {
       id: "aliases",
       label: t("claude.aliases"),
+      meta: String(state.aliases.length),
       body: <ClaudeCodeAliasesSection aliases={state.aliases} />,
     },
   ];
@@ -203,22 +202,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
 
   return (
     <div className="claudecode-workspace-shell">
-      <div className="page-head">
-        <h2>{t("claude.pageTitle")}</h2>
-        {sectionEditable && (
-          <div className="claudecode-workspace-save">
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => { void save(); }}>
-              {t("common.save")}
-            </button>
-          </div>
-        )}
-      </div>
-      <p className="page-sub">{t("claude.subtitle")}</p>
+      {/* Page title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
-      {loadState.refreshing && (
-        <DataSurfaceStatus live={!loadState.showError}>{t("claude.loading")}</DataSurfaceStatus>
-      )}
       <div className="claudecode-workspace-root">
         <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
           <div className="claudecode-workspace-rail-list">
@@ -236,6 +222,27 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
           </div>
         </aside>
         <section className="claudecode-workspace-main" aria-label={selected.label}>
+          <div className="ccw-main-head">
+            <h3 className="ccw-main-title">
+              {selected.label}
+              {selected.meta != null ? <span className="count">{selected.meta}</span> : null}
+            </h3>
+            <div
+              className="claudecode-workspace-save"
+              data-visible={sectionEditable ? "true" : "false"}
+            >
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!sectionEditable}
+                tabIndex={sectionEditable ? 0 : -1}
+                aria-hidden={!sectionEditable}
+                onClick={() => { void save(); }}
+              >
+                {t("common.save")}
+              </button>
+            </div>
+          </div>
           <div className="ccw-body">{selected.body}</div>
         </section>
       </div>

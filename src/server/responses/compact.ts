@@ -267,6 +267,9 @@ export async function handleResponsesCompact(
         modelId: selectedModelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
         probeQuotaScope: codexProbeQuotaScope(authCtx),
+        writerGeneration: authCtx.kind === "pool" || authCtx.kind === "main-pool"
+          ? authCtx.writerGeneration
+          : undefined,
       });
     };
     let upstream: Response;

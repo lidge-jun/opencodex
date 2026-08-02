@@ -1,22 +1,24 @@
 ---
 title: Codex 集成
-description: opencodex 如何将自身注入 Codex、同步模型目录、驱动 subagent 选择器，并干净地恢复。
+description: opencodex 如何将自身注入 Codex、同步模型目录、安装 shim，并干净地恢复。
 ---
 
-opencodex 通过编辑 Codex 读取的两样东西，让 Codex 经由 proxy 路由：它的配置（`$CODEX_HOME/config.toml`，默认 `~/.codex/config.toml`）和它的模型目录。每一次编辑都是幂等且可逆的。
+opencodex 通过修改 Codex 读取的两样东西，让 Codex 经由 proxy 路由：它的 config
+（`$CODEX_HOME/config.toml`，默认 `~/.codex/config.toml`）和它的 model catalog。每一次修改都
+是幂等且可逆的。
 
-OpenAI 提供一条 bare `openai` Codex 登录路径和 `openai-apikey/<model>` API 路径。
-`openai` 可选 Pool（默认，主账户加添加账户）或 Direct（当前 caller/主登录 bearer），模型 id
-保持不变。路径之间不会 fallback。shipped v1 配置迁移到 marker 2，并保留
+proxy 提供一条裸 `openai` Codex 登录路由，支持 Pool（默认）和 Direct 账号模式，另有
+`openai-apikey/<model>` 对应已配置的 API key。Pool 包含主账户加已添加账户；Direct 只使用调用方/
+主 bearer。这些路由之间不会互相 fallback。已发布的 v1 config 会迁移到 marker 2，并保留
 `config.json.pre-openai-tiers-v2.bak` 供手动恢复。
 
-## 配置注入
+## Config 注入
 
-`ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在默认的 loopback 绑定下，它会保留 Codex
-内置的 `openai` 提供商 id，并将该提供商指向 opencodex：
+`ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在默认的 loopback 绑定下，它会保留
+Codex 内置的 `openai` provider id，并将该 provider 指向 opencodex：
 
 ```toml
-# 位于第一个 table 之前的根级键
+# root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
@@ -25,52 +27,84 @@ openai_base_url = "http://127.0.0.1:10100/v1"
 fast_mode = true
 ```
 
-proxy 的默认端口为 `10100`，提供 `POST /v1/responses`、`POST /v1/responses/compact`、
-`POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/models`、`GET /healthz`
-以及 `/api/*` 管理 API。
+proxy 默认监听 `10100` 端口，并提供 `POST /v1/responses`、`POST /v1/responses/compact`、
+`POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/models`、`GET /healthz`，
+以及 `/api/*` 管理面。
 
 ### 内置图像生成（`image_gen`）
 
-Codex 的内置 `image_gen` 工具不经过 `/v1/responses`——codex-rs 扩展直接 POST
-`{base_url}/images/generations`（附带参考图像时为 `/images/edits`），使用与聊天相同的
-ChatGPT bearer 认证。由于注入的 `base_url` 指向 opencodex，proxy 会把这些调用中继到
-OpenAI 上游：
+Codex 内置的 `image_gen` 工具不会经过 `/v1/responses` —— codex-rs 扩展会直接 POST
+`{base_url}/images/generations`（附带参考图像时则为 `/images/edits`），并使用它在聊天时相同的
+ChatGPT bearer auth。由于注入的 `base_url` 指向 opencodex，proxy 会把这些调用中继到 OpenAI
+上游。
 
-- **单一、感知模式的 forward 候选：** Pool 选择合格的主账户或添加账户；Direct 使用 caller
-  OAuth bearer。图像请求遵循同一模式。
-- **OpenAI API key：** 仅当 forward 候选没有拥有认证失败时使用。不会用单独计费的 API 调用掩盖
-  损坏或过期的 Pool 凭证。
-- **显式自定义 provider：** 可将 `images.provider` 设为一个自定义 API-key
-  `openai-responses` provider；该 endpoint 必须实现 OpenAI Images API。显式选择失败时不会
-  fallback 到其他付费上游。内置 provider id 不适用于此字段；省略它即可使用默认 OpenAI 路径。
-- **Google Antigravity（CCA）回退：** 当 OpenAI forward 候选和 API key 提供商都不存在时，
-  `/v1/images/generations`（不含 `/images/edits`）会回退到 Antigravity **Cloud Code Assist**
-  端点，使用 `gemini-3.1-flash-image` 模型。当 OpenAI 认证解析失败（例如 ChatGPT 凭证过期或缺失）时，
-  该回退同样会触发，而不仅仅在没有任何 OpenAI 候选时。需要 `ocx login google-antigravity`；OAuth token
-  只发送到 CCA 注册端点，不会发送到配置中的 `baseUrl` 覆盖地址。返回格式与 Codex 期望的
-  `{created, data:[{b64_json}]}` 一致。
-- **以上都没有：** proxy 返回明确的错误而不是含糊的 404。其他路由提供商（Cursor、Gemini、
-  Kiro 等）无法提供图像生成；如果想完全关闭该工具，可在 Codex 中执行
-  `codex features disable image_generation`（即 `config.toml` 的
+这与 [Image Bridge](/guides/image-bridge/) 是分开的；后者只会在某个 **Responses** 回合列出
+托管的 `image_generation` 工具、且当前选中了非 OpenAI 模型时才会激活。单独的
+`/images/generations` 调用不会进入这个 bridge。
+
+- **单一、感知模式的 forward 候选：** Pool 会选择一个符合条件的主账户/已添加账户；Direct 使用
+  调用方 OAuth bearer。所配置的模式会一致地作用于图像请求。
+- **OpenAI API-key provider：** 只有在没有 forward 候选持有认证失败时才会使用它。损坏或过期的
+  Pool 凭据不会被单独计费的 API 用量遮盖。
+- **显式自定义 provider：** 将 `images.provider` 设为一个自定义 API-key
+  `openai-responses` provider 的 id，该 endpoint 必须实现 OpenAI Images API。显式选择会失败即关闭，
+  不会 fallback 到其他付费上游。这里不接受 registry 管理的 provider id；省略 `images.provider`
+  即可使用内置的 OpenAI tiers。
+- **Google Antigravity（CCA）fallback：** 当既没有 OpenAI forward 候选，也没有已配置的 keyed
+  provider 时，`/v1/images/generations`（不是 `/images/edits`）会 fallback 到 Antigravity
+  **Cloud Code Assist** endpoint，并使用 `gemini-3.1-flash-image` 模型。该 fallback 也会在
+  OpenAI auth 解析失败后触发（例如 ChatGPT 凭据过期或缺失），而不只是没有配置任何 OpenAI 候选时才触发。
+  这需要 `ocx login google-antigravity`；OAuth token 只会发送到固定的 CCA registry host，
+  不会发送到配置级别的 `baseUrl` override。响应会以 Codex 期望的同一
+  `{created, data:[{b64_json}]}` 形状返回。
+- **两者都不是：** proxy 会返回清晰的错误，而不是泛化的 404。路由型 provider（Cursor、Gemini、
+  Kiro 等）无法提供 `image_generation` 工具中继；如果你根本不想让这个工具被提供出来，可以在 Codex 中
+  用 `codex features disable image_generation` 关闭它（即 `config.toml` 中
   `[features] image_generation = false`）。
 
-工具声明仍会随模型的 Responses 请求一同发送。对于 API key 方式的 Responses 提供商，
-opencodex 会把 Codex 私有的 `image_gen` namespace 转换为上游安全的
-`image_gen__<inner-name>` alias（例如 `image_gen__imagegen`）。只有当这个可用 alias 替代了
-客户端声明时，才会移除重复的 hosted `image_generation` 声明。函数调用会在到达 Codex 前恢复为
-显式的 `image_gen` namespace，后续将历史记录重放到上游时再重新编码。因此，即使 OpenAI 兼容
-上游保留了该 namespace，或拒绝包含点号的函数名，客户端图像生成仍可正常调用。ChatGPT forward
-模式保持不变，并继续使用其原生 Responses Lite 格式。
+工具声明仍会随模型的 Responses 请求一同发送。对于 API-key Responses provider，opencodex 会把
+Codex 私有的 `image_gen` namespace 降级为上游安全的 `image_gen__<inner-name>` alias（例如
+`image_gen__imagegen`）。当这个可用 alias 取代客户端声明时，opencodex 会移除重复的 hosted
+`image_generation` 声明。它会在 Codex 看到之前把函数调用映射回显式的 `image_gen` namespace，
+并在之后将历史记录重放到上游时再次编码原生调用。这样即可让客户端侧图像生成在那些保留该 namespace，
+或拒绝带点号函数名的公有兼容上游上继续可调用。ChatGPT forward 模式保持不变，并维持其原生
+Responses Lite 形状。
 
-如果 `hostname` 不是 loopback 地址，Codex 必须发送自动生成的 API 认证请求头。此时注入器会改用
-专用提供商：
+对于 OpenAI-compatible 的自定义 gateway，请配置一个专用 provider，并只在独立的 Images 请求中选用它：
+
+```json
+{
+  "providers": {
+    "custom-images": {
+      "adapter": "openai-responses",
+      "baseUrl": "https://gateway.example.com/v1",
+      "authMode": "key",
+      "apiKey": "${IMAGE_GATEWAY_API_KEY}"
+    }
+  },
+  "images": {
+    "provider": "custom-images",
+    "timeoutMs": 300000
+  }
+}
+```
+
+该自定义 endpoint 必须接受 `POST /v1/images/generations` 和 `/v1/images/edits`，并返回 Codex 期望的
+OpenAI Images 响应形状。provider 配置的 key 会在上游请求前替换任何调用方 bearer。
+
+> **Note:** 这里仅指 Codex 的 `image_generation` 工具（`/images/generations` relay）。
+> 具备图像能力的 Gemini 模型会通过 `google` adapter（使用 `responseModalities: ["TEXT", "IMAGE"]`）
+> 原生生成内联图像，与这个 relay 无关 —— 参见 [Adapters](/reference/adapters/#google)。
+
+对于非 loopback 的 `hostname`，Codex 必须发送生成出来的 API auth header。因此注入器会改用一个
+专用 provider：
 
 ```toml
-# 根级键
+# root keys
 model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
-# 追加到文件末尾
+# appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
@@ -78,23 +112,23 @@ base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
 env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
-# supports_websockets = true   # 仅当 config.websockets 为 true
+# supports_websockets = true   # only when config.websockets is true
 ```
 
-当 OpenCodex 管理路由时，两种模式都会把 `$CODEX_HOME/opencodex.config.toml` 写成参考/回退配置。
-loopback 模式下，其中包含自动注入被移除时可手动合并的根级键；non-loopback 模式下，其中包含
-专用提供商配置。外部提供商模式不会修改此配置文件。
+当 OpenCodex 负责路由时，两种模式都会把 `$CODEX_HOME/opencodex.config.toml` 写成参考/回退配置。
+在 loopback 情况下，它包含可在自动注入被移除后手动合并的 root keys；在非 loopback 情况下，
+它包含专用 provider 形式。外部 provider 模式会保持这个 profile 不变。
 
 :::caution
-`openai_base_url`、`model_provider`、`model_catalog_json` 等根级键**必须**位于第一个 `[table]`
-头之前。注入器会保证这一位置，并清理自己留下的旧值和重复项。用户自己设置的根级
-`openai_base_url` 不会被覆盖；如果检测到该值，同步仍会更新模型目录，但会明确提示路由没有注入。
+像 `openai_base_url`、`model_provider` 和 `model_catalog_json` 这样的 root keys **必须** 位于第一个
+`[table]` 头之前。注入器会保证这一点，移除自己留下的陈旧/重复副本，并且绝不会覆盖用户拥有的 root
+`openai_base_url`；如果已经存在一个这样的值，sync 仍会更新 catalog，但会报告路由没有被注入。
 :::
 
 ## 共享模型目录
 
 Codex CLI、TUI、App 和 SDK 都读取同一个 Codex home。opencodex 会从 `CODEX_HOME` 解析该目录，
-未设置时回退到 `~/.codex`，并管理以下文件：
+回退到 `~/.codex`，并管理：
 
 ```text
 $CODEX_HOME/config.toml
@@ -103,104 +137,164 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧 `~/.codex/config.toml` 不存在，opencodex 还会检查
-`/mnt/c/Users/*/.codex/config.toml` 下的 Windows Codex Desktop home。只有候选项恰好为一个时才会
-使用该目录，让 WSL app-server mode 和 Windows Codex Desktop 共享同一份 config 与 auth 文件。要覆盖
-此检测，请显式设置 `CODEX_HOME`。
+在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex/config.toml` 不存在，opencodex 还会检查
+`/mnt/c/Users/*/.codex/config.toml` 下是否存在单一的 Windows Codex Desktop home。只要候选项恰好只有一个，
+它就会使用那个目录，让 WSL app-server mode 和 Windows Codex Desktop 共享同一份 config 与 auth 文件。
+如需覆盖这一检测，请显式设置 `CODEX_HOME`。
 
-在 Windows 上，Orca shell 可能同时把 `CODEX_HOME` 和 `ORCA_CODEX_HOME` 指向 Orca 的内置
-runtime home，而 ChatGPT/Codex App 仍读取 `%USERPROFILE%\\.codex`。`ocx status` 与
-`ocx doctor` 会检测这一明确的不一致，并以隐藏用户名的形式显示目标 home。如果后台服务是在原 Orca
-shell 中安装的，请先在原 shell 中卸载服务，再把 `CODEX_HOME` 设为 App home、取消
-`ORCA_CODEX_HOME`，重新同步/恢复并安装服务。
+在 Windows 上，Orca shell 可能会把 `CODEX_HOME` 和 `ORCA_CODEX_HOME` 都设置为 Orca 打包的 runtime home，
+而 ChatGPT/Codex app 仍然读取 `%USERPROFILE%\\.codex`。`ocx status` 和 `ocx doctor` 会提示这个确切的不一致，
+并打印经过脱敏的目标路径。如果某个后台服务是在那个 Orca shell 中安装的，请先在原始 shell 中卸载它，
+然后把 `CODEX_HOME` 设为 app home，取消 `ORCA_CODEX_HOME`，重新运行 sync/restore，再安装一次服务。
 
-在专用提供商模式下，`requires_openai_auth = true` 会让 Codex App/TUI 的账号门控界面与原生
-Codex 保持一致。opencodex 也提供 `/v1/responses` WebSocket。专用提供商仅在
-`"websockets": true` 时声明 `supports_websockets = true`；loopback 模式下，Codex 的内置提供商
-可能会先尝试 WebSocket，如果功能未启用，proxy 会返回 `426`，使 Codex 回退到 HTTP/SSE。
+在专用 provider 模式下，`requires_openai_auth = true` 会让 Codex App/TUI 中受账号门控的界面与原生 Codex 保持一致。
+opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有在 `"websockets": true` 时才会声明
+`supports_websockets = true`；在 loopback 情况下，Codex 的内置 provider 可能会先尝试 WebSocket，而关闭的 proxy
+会返回 `426`，从而让 Codex fallback 到 HTTP/SSE。
 
 ## 线程标识与历史记录
 
-默认 loopback 方式会让新线程继续使用 Codex 原生的 `openai` 提供商标识，因此普通的恢复历史无需
-重映射。第一次同步时，它还会把旧版 opencodex 改过标识的线程迁回 `openai`。non-loopback 的专用
-提供商模式会在运行期间把历史记录映射到 `opencodex`，退出时再恢复已备份的元数据。若希望完全不修改
-历史记录，请设置 `syncResumeHistory: false`。
+默认的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要
+重映射。首次 sync 时，它还会把旧版 opencodex 标记过的线程迁回 `openai`。非 loopback 的专用 provider 模式
+在运行期间仍会把历史记录镜像到 `opencodex` provider 名下，并在退出时恢复已备份的 metadata。
+如需保持历史记录完全不变，请设置 `syncResumeHistory: false`。
 
 ## 模型目录同步
 
-Codex 显示的模型来自一个磁盘上的目录（默认为 `$CODEX_HOME/opencodex-catalog.json`）。在启动时以及执行 `ocx sync` 时，opencodex 会：
+Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/opencodex-catalog.json`）。在启动时以及执行
+`ocx sync` 时，opencodex 会：
 
-1. **备份**一次原始目录到 `~/.opencodex/catalog-backup.json`（以便置顶操作可逆）。
-2. **获取**符合条件的提供商实时模型目录（缓存约 5 分钟；失败时先回退到上一份正常列表，再回退到
-   已配置的 `models[]`）。`forward` 认证没有模型端点；Cursor 使用 `GetUsableModels` RPC，而不是
-   `/models`。
-3. **合并**路由模型，作为带命名空间的条目（`provider/model`），从原生 Codex 目录模板克隆而来，以便 Codex 严格的解析器接受它们。
-4. **应用过滤**：`config.disabledModels`，以及每个提供商非空的 `selectedModels` allowlist。
-5. **重新排序**，使置顶模型排在最前（见下文），然后将合并后的目录写回。
+1. **备份**一次干净的 catalog 到 `~/.opencodex/catalog-backup.json`（这样 featuring 是可逆的）。
+2. **抓取**符合条件的 provider 的实时模型 catalog（缓存约 5 分钟；失败时先回退到上一个正常列表，再回退到
+   已配置的 `models[]`）。forward auth 没有模型 endpoint，而 Cursor 使用它自己的 `GetUsableModels` RPC，
+   不是 `/models`。
+3. **合并**路由模型，把它们作为带命名空间的条目（`provider/model`）加入，且从原生 Codex catalog 模板克隆，
+   以便 Codex 的严格 parser 能接受它们。
+4. **过滤** `config.disabledModels` 和每个 provider 的非空 `selectedModels` allowlist。
+5. **重新排序**，让 featured models 排在最前（见下文），然后把合并后的 catalog 写回去。
 
-克隆目录中的 `base_instructions` 身份行只会作为静态目录元数据改写为真实的上游模型名称。
-运行时请求的身份信息单独处理：路由适配器会把 Codex 实时发送的 GPT-5 身份行替换为与模型无关的编码代理说明。
-名称唯一时，默认的选择器标签使用原生模型 ID 的最后一段，因此在较窄的选择器中，提供商命名空间不会遮住模型名称。
-若 basename 冲突，则保留足以区分各行的原生路由信息；若多个提供商暴露同一个原生 ID，还会显示提供商名称。
-完整的目录 slug 仍保留在说明中。如果需要直观看出路由本身（例如
-`Claude Opus 5 (TeamClaude)`），请配置自定义显示名称；自定义名称仍然优先于默认标签。reasoning 选项会依据提供商和模型元数据，
+路由目录条目还会把 GPT-5 身份文案改为真实的上游模型名称。reasoning 选项会依据提供商和模型元数据，
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 档位；上游不支持的值会在发送请求前完成
 映射或下调。
 
-## 代理连接错误
+
+### 自定义模型显示名
+
+一个自定义模型可以带一个人类可读的 **display name**，覆盖 Codex 在模型选择器里显示的标签，而不会改变模型
+的路由方式。display name 只会映射到 catalog 条目的 `display_name` 字段——routing slug
+（`<provider>/<model>`）、alias 冲突顺序、provider，以及原生 OpenAI marketing names 都保持不变。
+
+可以通过 CLI 添加 display name（proxy 在线时会立即同步 catalog）：
+
+```bash
+ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
+```
+
+远程 Codex 客户端也可以通过管理 API 拉取同一个生成好的 catalog（与其他 `/api/*` 路由使用相同的 admission token）：
+
+```bash
+dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+tmp="$(mktemp "${dest}.XXXXXX")"
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
+  "https://proxy.example.com/api/catalog" > "$tmp" \
+  && mv "$tmp" "$dest"
+ocx sync-cache
+```
+
+响应就是原始的 `opencodex-catalog.json` 文档（不含 provider 凭据）。当可用时，
+`x-opencodex-codex-version` header 会报告服务器上的 Codex runtime 版本，方便客户端发现版本偏移。
+
+你也可以通过管理 API（`POST /api/custom-models`、带 `displayName` 字符串的 `PUT /api/custom-models/<id>`）
+以及 web dashboard 来设置或编辑它。因为会与路由 slug 分隔符冲突，所以 `/` 会被拒绝。
+
+display name 是 **仅用于显示且在重新生成时保持稳定的**。每一次 `ocx sync` 和 catalog refresh 都会从
+`config.json`（包括 `customModels`）重新派生路由条目，因此配置过的名称会重新应用，而不是漂回路由 slug。
+受管服务重启后也会在 proxy 绑定完成后不久尝试做这次 sync。如果这个尽力而为的启动 sync 失败了，比如在离线登录时，
+之前持久化下来的 catalog 会保留，而下一次成功的 `ocx sync` 会重新应用已配置的名称。真实的上游原生名称
+（例如 `gpt-5.6-sol` → "GPT-5.6-Sol"）来自固定的上游快照，绝不会被自定义 display name 覆盖。
+
+### 外部 provider 管理器
+
+如果 `config.toml` 已经选择了 `openai` 或 `opencodex` 之外的 provider，OpenCodex 会保持文件不变，
+并跳过 profile 写入、catalog/cache 刷新，以及立即和后台两种 Codex 历史迁移。管理自定义 provider 的工具
+通常会把现有会话标记为那个 provider id；如果替换活动 id，Codex 历史视图里那些完整会话可能会消失。
+同样的保护也适用于由旧版 root profile 选择的外部 provider。
+
+只保留一个工具作为 Codex provider 配置的 owner。若要在现有 provider 管理器之后使用 OpenCodex，
+请把那个 provider 指向 `http://127.0.0.1:10100/v1`，并使用 Responses passthrough（Codex TOML 中的
+`wire_api = "responses"`），而不是 Chat Completions translation。当启用 proxy API auth 时，也要像上面的非 loopback
+provider 形式一样，从 `OPENCODEX_API_AUTH_TOKEN` 传入 `x-opencodex-api-key`。如果要让 OpenCodex 直接注入路由，
+请先把 Codex 切回其内置的 `openai` provider，并移除任何用户拥有的 root `openai_base_url`，然后重新运行 `ocx start`。
+
+### 目录排障
+
+如果 Codex 里缺少某个模型，或者目录顺序/可见性看起来不对，请按下面顺序检查：
+
+1. **`selectedModels`** 在 provider 上的设置 - 非空 allowlist 只会把这些 id 暴露给 Codex；空或省略则会暴露
+   所有发现到的模型。一个不在 allowlist 里的 id 永远不会进入 catalog。
+2. **`disabledModels`**（顶层） - 会同时隐藏 catalog 和 `/v1/models` 中的模型，并把裸原生 GPT slug
+   切成 `visibility: "hide"`。
+3. **`liveModels: false` 且 `models` 为空** - 当 live discovery 关闭而 `models` 为空或省略时，opencodex
+   不会为那个 provider 暴露任何路由模型。
+4. **Cursor `GetUsableModels`** - Cursor adapter 通过它的 protobuf `GetUsableModels` RPC 发现模型，而不是
+   `/models`，所以 Cursor 侧的变动会独立于其他 provider 改变哪些 id 可见。
+5. **缓存和 `ocx sync`** - live catalog 的缓存时间大约是五分钟（`modelCacheTtlMs`，默认 `300000`）。
+   运行 `ocx sync` 可以强制立即重新抓取并重写 catalog。
+6. **正在运行的 Codex `app-server`** - 当长生命周期的 Codex `app-server`（Desktop / CLI 后台宿主）还在
+   内存中保留旧列表时，只重写磁盘上的 catalog 还不够。`ocx sync` 和 `ocx sync-cache` 会在检测到这些进程时给出
+   警告。请用 `ocx sync --restart-codex` 重新启动它们（或者你自己停掉匹配的 `app-server` 进程），然后让 Codex
+   重新创建它们，这样新列表才会出现。
+
+:::caution[其他本地写入者]
+在 opencodex 内部，catalog 写入（`opencodex-catalog.json`、`config.toml`）是原子的，这只能防止两个
+opencodex 所有的 writer 竞争时写出半截文件。它**不能**阻止其他本地进程、文件 watcher 或同步 agent 在
+opencodex 写入之后再次改写 catalog 的可见性或顺序。Codex 还有自己独立的 `models_cache.json`，并且可以独立刷新它，
+从而在不重写 `opencodex-catalog.json` 的情况下改变可见列表。如果 proxy 正在运行时模型突然翻转，请停掉或重新配置
+竞争中的写入者，然后运行 `ocx sync` —— 这是外部写入者风险，不是已确认的 opencodex 缺陷。
+:::
+
+## Proxy 连接错误
 
 如果 Codex 重试后报出类似
 `stream disconnected before completion: error sending request for url (http://127.0.0.1:10100/v1/responses)`
-的错误（或 Claude Code 出现类似的连接失败），说明 opencodex 代理没有在运行：
-配置端口上没有任何监听，客户端只能显示原始的连接错误。请重启代理：
+的错误——或者 Claude Code 报告类似的连接失败——说明 opencodex proxy 没有在运行：
+配置端口上没有任何监听，所以客户端只能自己渲染出那条原始连接错误。重启 proxy：
 
 ```bash
-ocx start              # 前台运行
-ocx service install    # 常驻：登录时自动启动，崩溃后自动重启
+ocx start              # foreground
+ocx service install    # persistent: auto-starts on login and respawns on crash
 ```
 
-`ocx status` 可查看代理是否在运行，未运行时也会给出同样的重启提示；
-`ocx doctor` 会报告重启安全性（service/shim 覆盖情况）。
+`ocx status` 会显示 proxy 是否在运行，并在未运行时打印相同的重启提示；`ocx doctor` 会报告
+重启安全性（service/shim 覆盖情况）。
 
-## subagent 选择器
+## sub-agent 选择器
 
-Codex 的 `spawn_agent` 会按优先级排序，然后展示**前 5 个在选择器中可见的目录模型**。
-`subagentModels` 最多接受五个 id，可以同时使用裸原生 GPT slug 和带命名空间的 `provider/model`
-路由；所选模型会按顺序获得 0–4 的优先级。
-
-```json
-{
-  "subagentModels": [
-    "gpt-5.5",
-    "gpt-5.6-sol",
-    "anthropic/claude-opus-5",
-    "xai/grok-4.5",
-    "cursor/gpt-5.6-terra"
-  ]
-}
-```
-
-优先级排序：置顶（0–4）< 其他路由（5）< 原生（9）。你也可以从 [web 仪表盘](/zh-cn/guides/web-dashboard/) 管理这一项。
+catalog sync 会让选中的 sub-agent 模型对 Codex 可用；关于 picker 排序，参见
+[Codex App 模型选择器](/guides/codex-app-models/#subagent-selection)；关于 v1/base/v2 的委派和
+fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 ## Codex 账号预热
 
-向 Codex 账号池添加 ChatGPT 账号时，opencodex 会在保存前向 Codex Responses 后端发送一个小型
-streaming 请求来验证凭据。输入使用真正的 Responses item 数组
-（`input: [{ type: "message", ... }]`），并等待 `response.completed`。默认模型为
-`gpt-5.4-mini`；若该模型返回 HTTP 400，则改用 `gpt-5.5` 重试。结构化的上游错误详情会显示给用户，
-但不会泄露原始响应正文。后台重新验证是独立功能，默认关闭；只有启用 Token Guardian、将 `chatgpt`
-刷新策略设为 `proactive`，并把 `tokenGuardian.codexWarmupEnabled` 设为 true 时才会运行。
+当把一个 ChatGPT 账号加入 Codex 账号池时，opencodex 会在持久化前向 Codex Responses backend
+发送一个小型 streaming 请求来验证它。该请求使用真正的 Responses item 数组
+（`input: [{ type: "message", ... }]`），等待 `response.completed`，并默认使用 `gpt-5.4-mini`。
+如果该模型返回 HTTP 400，则会改用 `gpt-5.5` 重试；结构化的上游错误详情会被展示给用户，但不会暴露
+原始响应正文。后台重新验证是独立功能，默认关闭；只有在启用 Token Guardian、将 `chatgpt` 刷新策略设为
+`proactive`，并且 `tokenGuardian.codexWarmupEnabled` 为 true 时才会运行。
 
 ## 恢复原生 Codex
 
-opencodex 绝不会把你困住。**`ocx stop` 是完全恢复原生 Codex 的单一命令** ——
-它会停止 proxy、停止后台服务（如已安装），并剥除所有注入的行和路由的目录条目，使普通的 `codex`
-完全像 opencodex 从未存在过一样工作：
+opencodex 绝不会把你困住。**`ocx stop` 是完全恢复原生 Codex 的单一命令** —— 它会停止 proxy、
+停止后台服务（如已安装），并剥除所有注入的行和路由的目录条目，使普通的 `codex` 完全像 opencodex
+从未存在过一样工作：
 
 ```bash
-ocx stop       # 停止 proxy + 服务，恢复原生 Codex
-ocx restore    # 不停止 proxy 仅恢复  (别名: ocx eject)
-ocx restore back # 让普通 Codex 重新指向仍在运行的 proxy
+ocx stop       # stop the proxy + service, restore native Codex
+ocx restore    # restore without stopping  (alias: ocx eject)
+ocx restore back # point plain Codex at the running proxy again
 ```
 
-当 opencodex 作为受管的 [后台服务](/zh-cn/reference/cli/#ocx-service) 运行时，它会设置 `OCX_SERVICE=1`，这样由服务驱动的重启**不会**反复改写 Codex 配置——只有显式的 `ocx stop` / `ocx service stop` 才会恢复原生 Codex。
+当 opencodex 作为受管的 [background service](/reference/cli/#ocx-service) 运行时，它会设置
+`OCX_SERVICE=1`，这样由服务驱动的重启**不会**反复改写 Codex config——只有显式的
+`ocx stop` / `ocx service stop` 才会恢复原生 Codex。

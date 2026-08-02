@@ -118,4 +118,9 @@ describe("port selection", () => {
     expect(isAddrInUse(null)).toBe(false);
     expect(isAddrInUse("EADDRINUSE")).toBe(false);
   });
+
+  test("isPortAvailable is false for non-EADDRINUSE listen errors (fail closed)", async () => {
+    // 192.0.2.1 is TEST-NET-1 — typically EADDRNOTAVAIL / not assignable on desktop stacks.
+    expect(await isPortAvailable(54321, "192.0.2.1")).toBe(false);
+  });
 });

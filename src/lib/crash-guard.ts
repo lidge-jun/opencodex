@@ -4,6 +4,8 @@ import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "./config-ownership";
 import { redactSecretString, redactUrlForLog } from "./redact";
 import { sidecarBreadcrumb, activityBreadcrumb } from "./sidecar-tracker";
+import { retainedUtf8Bytes, truncateRetainedUtf8 } from "./admission";
+import { enforceAppOwnedMemoryBudget } from "./app-owned-memory";
 
 /**
  * Process-level safety net for the long-running proxy daemon.
@@ -205,8 +207,42 @@ function record(kind: string, err: unknown, promise?: unknown): void {
 
 interface FetchTrace { url: string; at: number; origin: string; settled: boolean; rejected?: string }
 const FETCH_RING_MAX = 12;
+const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 const fetchRing: FetchTrace[] = [];
 let fetchInstrumented = false;
+let fetchRingBytes = 0;
+
+function fetchTraceBytes(trace: FetchTrace): number {
+  return retainedUtf8Bytes(trace.url) + retainedUtf8Bytes(trace.origin) + retainedUtf8Bytes(trace.rejected ?? "");
+}
+
+function removeOldestFetchTrace(): number {
+  const trace = fetchRing.shift();
+  if (!trace) return 0;
+  const bytes = fetchTraceBytes(trace);
+  fetchRingBytes -= bytes;
+  return bytes;
+}
+
+function setFetchTraceRejected(trace: FetchTrace, value: string): void {
+  const retained = fetchRing.includes(trace);
+  if (retained) fetchRingBytes -= retainedUtf8Bytes(trace.rejected ?? "");
+  trace.rejected = truncateRetainedUtf8(value, MAX_DIAGNOSTIC_VALUE_BYTES);
+  if (retained) fetchRingBytes += retainedUtf8Bytes(trace.rejected);
+}
+
+function appendFetchTrace(url: string, origin: string): FetchTrace {
+  const trace: FetchTrace = {
+    url: truncateRetainedUtf8(redactUrlForLog(url), MAX_DIAGNOSTIC_VALUE_BYTES),
+    at: Date.now(),
+    origin: truncateRetainedUtf8(origin, MAX_DIAGNOSTIC_VALUE_BYTES),
+    settled: false,
+  };
+  fetchRing.push(trace);
+  fetchRingBytes += fetchTraceBytes(trace);
+  while (fetchRing.length > FETCH_RING_MAX) removeOldestFetchTrace();
+  return trace;
+}
 
 /**
  * The recurring native-only rejection carries no source location, and every JS `await fetch(...)`
@@ -228,22 +264,46 @@ function instrumentFetch(): void {
       url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request)?.url ?? "";
     } catch { /* best-effort */ }
     const origin = (new Error().stack ?? "").split("\n").slice(2, 5).map(l => l.trim()).join(" <- ");
-    const trace: FetchTrace = { url: redactUrlForLog(url), at: Date.now(), origin, settled: false };
-    fetchRing.push(trace);
-    if (fetchRing.length > FETCH_RING_MAX) fetchRing.shift();
+    const trace = appendFetchTrace(url, origin);
+    enforceAppOwnedMemoryBudget();
     let p: ReturnType<typeof fetch>;
     try {
       p = original.apply(this, args);
     } catch (e) {
       trace.settled = true;
-      trace.rejected = redactDiagnosticText(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+      setFetchTraceRejected(trace, redactDiagnosticText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)));
       throw e;
     }
     return p.then(
       r => { trace.settled = true; return r; },
-      e => { trace.settled = true; trace.rejected = redactDiagnosticText(e instanceof Error ? `${e.name}: ${e.message}` : String(e)); throw e; },
+      e => { trace.settled = true; setFetchTraceRejected(trace, redactDiagnosticText(e instanceof Error ? `${e.name}: ${e.message}` : String(e))); throw e; },
     );
   } as typeof fetch;
+}
+
+export function crashRingMetrics(): { entries: number; bytes: number; oldestAt: number | null } {
+  return { entries: fetchRing.length, bytes: fetchRingBytes, oldestAt: fetchRing[0]?.at ?? null };
+}
+
+export function evictOldestCrashTraceForBudget(): number {
+  return removeOldestFetchTrace();
+}
+
+export function appendCrashTraceForTests(url: string, origin: string, rejected?: string): void {
+  const trace = appendFetchTrace(url, origin);
+  if (rejected !== undefined) {
+    trace.settled = true;
+    setFetchTraceRejected(trace, rejected);
+  }
+}
+
+export function crashRingEntriesForTests(): readonly Readonly<FetchTrace>[] {
+  return fetchRing.map(trace => ({ ...trace }));
+}
+
+export function resetCrashRingForTests(): void {
+  fetchRing.length = 0;
+  fetchRingBytes = 0;
 }
 
 /** Render the recent fetch ring (pending first) for the crash breadcrumb. */

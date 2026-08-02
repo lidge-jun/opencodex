@@ -6,11 +6,14 @@
  * recycle to reclaim RSS, not a teardown.
  *
  * Respawn policy (matches real supervisor configs in src/service.ts):
- * - Supervised child (`OCX_SERVICE=1` + service installed): exit(1) so
+ * - Supervised child (`OCX_SERVICE=1` + viable service): exit(1) so
  *   failure-only supervisors (systemd Restart=on-failure, WinSW onfailure,
  *   Task Scheduler ERRORLEVEL loop) bring the proxy back.
  * - Otherwise: detached `ocx start --port <live>` (bypasses ensure's
  *   codexAutoStart gate), mark recycle so exit cleanup keeps injection, exit(0).
+ *   Installed-but-stale/missing service assets are NOT treated as supervised —
+ *   exit(1) would leave the proxy dead with `Service: installed, stale or missing
+ *   service assets` and a /healthz timeout.
  * - If detached spawn fails (sync throw or pre-start `error`): exit(1) without
  *   markRecycling — after drain the listen socket is already closed, so a latch
  *   reset cannot recover serving. Clear inherited `OCX_SERVICE` so exit cleanup
@@ -27,7 +30,7 @@ import {
   markRecyclingForExit,
   setDraining,
 } from "../lifecycle";
-import { isServiceInstalled } from "../../service";
+import { isServiceViable } from "../../service";
 import { readRuntimePort } from "../../config";
 
 /** Fixed v1 drain window for the memory-card action (not config-driven). */
@@ -35,7 +38,8 @@ export const MEMORY_DRAIN_RESTART_MS = 60_000;
 
 export interface SystemRestartIo {
   drainAndShutdown?: typeof drainAndShutdown;
-  isServiceInstalled?: () => boolean;
+  /** True when a background service can actually respawn this process after exit(1). */
+  isServiceViable?: () => boolean;
   isSupervisedServiceChild?: () => boolean;
   /** Must resolve only after the replacement process has actually started. */
   spawnStart?: (port?: number) => void | Promise<void>;
@@ -66,8 +70,11 @@ function resolveListenPort(): number | undefined {
   return undefined;
 }
 
-function isSupervisedServiceChild(): boolean {
-  return process.env.OCX_SERVICE === "1" && isServiceInstalled();
+function isSupervisedServiceChild(io: SystemRestartIo = {}): boolean {
+  if (process.env.OCX_SERVICE !== "1") return false;
+  // Presence is not enough: stale/missing service assets report installed but will not
+  // respawn after exit(1). Dashboard status/recovery must fall through to detached start.
+  return (io.isServiceViable ?? isServiceViable)();
 }
 
 /** Stable, path-free spawn failure label for logs (never interpolate err.message). */
@@ -137,7 +144,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
     schedule(async () => {
       const drain = io.drainAndShutdown ?? drainAndShutdown;
       await drain(undefined, MEMORY_DRAIN_RESTART_MS);
-      const supervised = (io.isSupervisedServiceChild ?? isSupervisedServiceChild)();
+      const supervised = (io.isSupervisedServiceChild ?? (() => isSupervisedServiceChild(io)))();
       if (supervised) {
         // Failure-only supervisors ignore exit(0); intentional non-zero triggers respawn.
         (io.exitProcess ?? ((code: number) => { process.exit(code); }))(1);

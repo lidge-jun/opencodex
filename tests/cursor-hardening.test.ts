@@ -7,6 +7,7 @@ import {
 } from "../src/adapters/cursor/gen/agent_pb";
 import { fetchCursorUsableModels } from "../src/adapters/cursor/live-models";
 import { armTimeoutDestroyFallback, createLiveCursorTransport, createTerminalSettler } from "../src/adapters/cursor/live-transport";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import { gatherRoutedModels } from "../src/codex/catalog";
 import { clearModelCache, getProviderDiscoveryStatus } from "../src/codex/model-cache";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -135,6 +136,25 @@ describe("Cursor live-model discovery hardening", () => {
       fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
 
     expect(result).toEqual({ ok: false, error: "empty" });
+  });
+
+  test("Cursor model discovery rejects announced and streamed 4 MiB overflow before decode", async () => {
+    const announced = await withDiscoveryServer(stream => {
+      stream.respond({
+        ":status": 200,
+        "content-type": "application/proto",
+        "content-length": String(4 * 1024 * 1024 + 1),
+      });
+      stream.end();
+    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+    expect(announced).toMatchObject({ ok: false, error: "too_large" });
+
+    const streamed = await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/proto" });
+      stream.write(Buffer.alloc(4 * 1024 * 1024));
+      stream.end(Buffer.alloc(1));
+    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+    expect(streamed).toMatchObject({ ok: false, error: "too_large" });
   });
 
   test("catalog warns with the failure class before preserving its degradation order", async () => {
@@ -320,6 +340,7 @@ describe("Cursor live transport unexpected EOF", () => {
     }, async baseUrl => {
       const transport = createLiveCursorTransport({
         provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
         firstFrameTimeoutMs: 2_000,
       });
       let failure: Error | undefined;

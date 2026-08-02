@@ -21,10 +21,28 @@ import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
+import {
+  captureConfigGeneration,
+  type GenerationContext,
+} from "../lib/state-store-sweeper";
 import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 type AuthStore = Record<string, ProviderAccountSet>;
+let lastReconciledGeneration = 0;
+let liveOAuthAccountKeys = new Set<string>();
+
+function oauthAccountKey(provider: string, accountId: string): string {
+  return `${provider}\0${accountId}`;
+}
+
+export function reconcileOAuthReauthState(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  liveOAuthAccountKeys = new Set(context.oauthAccountKeys);
+  lastReconciledGeneration = context.generation;
+  return 0;
+}
 
 /** Providers whose account set is pinned to a single slot (see module doc). */
 const SINGLE_SLOT_PROVIDERS = new Set(["chatgpt"]);
@@ -41,7 +59,7 @@ export function getAuthRefreshIntentLockPath(provider: string, accountId: string
 export function getAuthRefreshIntentPath(provider: string, accountId: string): string {
   return `${getAuthRefreshIntentLockPath(provider, accountId)}.json`;
 }
-export interface OAuthRefreshIntent { version: 1; provider: string; accountId: string; generation: string; createdAt: number; uncertain?: true }
+export interface OAuthRefreshIntent { version: 1; provider: string; accountId: string; generation: string; createdAt: number; flightId?: string; staleOwner?: true; uncertain?: true }
 function parseOAuthRefreshIntent(
   provider: string,
   accountId: string,
@@ -54,6 +72,8 @@ function parseOAuthRefreshIntent(
     || value.accountId !== accountId
     || typeof value.generation !== "string"
     || typeof value.createdAt !== "number"
+    || (value.flightId !== undefined && typeof value.flightId !== "string")
+    || (value.staleOwner !== undefined && value.staleOwner !== true)
   ) {
     return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
   }
@@ -82,12 +102,18 @@ export function peekOAuthRefreshIntent(provider: string, accountId: string): OAu
     return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
   }
 }
-export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now()): void {
+export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId?: string): void {
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   hardenConfigDir();
-  const intent: OAuthRefreshIntent = { version: 1, provider, accountId, generation, createdAt };
+  const intent: OAuthRefreshIntent = { version: 1, provider, accountId, generation, createdAt, ...(flightId ? { flightId } : {}) };
   atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify(intent)}\n`);
+}
+export function markOAuthRefreshIntentStaleOwner(provider: string, accountId: string, generation: string, flightId: string): boolean {
+  const current = readOAuthRefreshIntent(provider, accountId);
+  if (current?.uncertain || current?.generation !== generation || current.flightId !== flightId) return false;
+  atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify({ ...current, staleOwner: true })}\n`);
+  return true;
 }
 export function clearOAuthRefreshIntent(provider: string, accountId: string, generation: string): boolean {
   const current = readOAuthRefreshIntent(provider, accountId);
@@ -294,15 +320,118 @@ function normalizeAuthStore(raw: unknown): { store: AuthStore; hadLegacy: boolea
  * a guardian refresh persisting a non-active account cannot roll back a concurrent
  * active-account switch (lost update). Cross-process races are accepted (single proxy).
  */
+const OAUTH_MUTATION_WAIT_MS = 30_000;
+const oauthMutationEncoder = new TextEncoder();
 let mutationTail: Promise<void> = Promise.resolve();
-function serializeMutation<T>(work:()=>Promise<T>):Promise<T>{const result=mutationTail.then(work,work);mutationTail=result.then(()=>undefined,()=>undefined);return result;}
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+let pendingMutations = 0;
+let mutationCurrentBytes = 0;
+let mutationHighWaterBytes = 0;
+interface QueuedOAuthMutation {
+  started: boolean;
+  settled: boolean;
+  timeout?: ReturnType<typeof setTimeout>;
+  run(): Promise<void>;
+}
+const mutationWaiters: QueuedOAuthMutation[] = [];
+let mutationRunning = false;
+
+export class OAuthMutationBusyError extends Error {
+  readonly code = "oauth_mutation_busy";
+  constructor(message = "OAuth mutation queue is busy") {
+    super(message);
+    this.name = "OAuthMutationBusyError";
+  }
+}
+
+export function oauthMutationTailSnapshot(): { currentBytes: number; highWaterBytes: number; active: number } {
+  return { currentBytes: mutationCurrentBytes, highWaterBytes: mutationHighWaterBytes, active: pendingMutations };
+}
+
+function retainedClosureStringBytes(values: readonly unknown[]): number {
+  const visit = (value: unknown): number => {
+    if (typeof value === "string") return oauthMutationEncoder.encode(value).byteLength;
+    if (Array.isArray(value)) return value.reduce((sum, entry) => sum + visit(entry), 0);
+    if (value && typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>)
+        .reduce((sum, [key, entry]) => sum + oauthMutationEncoder.encode(key).byteLength + visit(entry), 0);
+    }
+    return 0;
+  };
+  return values.reduce<number>((sum, value) => sum + visit(value), 0);
+}
+
+function drainOAuthMutations(): void {
+  if (mutationRunning) return;
+  const next = mutationWaiters.shift();
+  if (!next) return;
+  if (next.settled) {
+    drainOAuthMutations();
+    return;
+  }
+  next.started = true;
+  if (next.timeout) clearTimeout(next.timeout);
+  mutationRunning = true;
+  mutationTail = next.run().finally(() => {
+    mutationRunning = false;
+    drainOAuthMutations();
+  });
+}
+
+function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly unknown[], waitMs = OAUTH_MUTATION_WAIT_MS): Promise<T> {
+  if (pendingMutations >= MAX_PENDING_OAUTH_MUTATIONS) return Promise.reject(new OAuthMutationBusyError());
+  pendingMutations += 1;
+  const retainedBytes = retainedClosureStringBytes(retainedValues);
+  mutationCurrentBytes += retainedBytes;
+  mutationHighWaterBytes = Math.max(mutationHighWaterBytes, mutationCurrentBytes);
+
+  let resolveResult!: (value: T | PromiseLike<T>) => void;
+  let rejectResult!: (reason?: unknown) => void;
+  const result = new Promise<T>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  const entry: QueuedOAuthMutation = {
+    started: false,
+    settled: false,
+    async run() {
+      try {
+        resolveResult(await work());
+      } catch (error) {
+        rejectResult(error);
+      } finally {
+        release();
+      }
+    },
+  };
+  const release = () => {
+    if (entry.settled) return;
+    entry.settled = true;
+    pendingMutations -= 1;
+    mutationCurrentBytes = Math.max(0, mutationCurrentBytes - retainedBytes);
+  };
+  entry.timeout = setTimeout(() => {
+    if (entry.started || entry.settled) return;
+    const index = mutationWaiters.indexOf(entry);
+    if (index >= 0) mutationWaiters.splice(index, 1);
+    release();
+    rejectResult(new OAuthMutationBusyError("OAuth mutation queue wait timed out"));
+  }, waitMs);
+  // Only unref the long default wait. Short waitMs (tests) must stay ref'd:
+  // on Windows Bun under `bun test --isolate`, an unref'd timer can fail to
+  // fire while the head mutation holds an unresolved Promise, hanging the
+  // waiter forever (#827 / full admission queue hang on windows-latest).
+  if (waitMs >= OAUTH_MUTATION_WAIT_MS) entry.timeout.unref?.();
+  mutationWaiters.push(entry);
+  drainOAuthMutations();
+  return result;
+}
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const result = await fn(store);
     persist(store);
     return result;
-  }finally{guard.release();}});
+  }finally{guard.release();}}, retainedValues, options?.waitMs);
 }
 
 /** The ACTIVE account's credential for a provider (what requests should use). */
@@ -366,7 +495,7 @@ export async function saveCredential(
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
     }
-  });
+  }, [provider, safe]);
 }
 
 /** Remove the ACTIVE account; remaining accounts promote the first one. */
@@ -380,7 +509,7 @@ export async function removeCredential(provider: string): Promise<void> {
       return;
     }
     set.activeAccountId = set.accounts[0]!.id;
-  });
+  }, [provider]);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +522,17 @@ export function getAccountSet(provider: string): ProviderAccountSet | null {
 
 export function listAccounts(provider: string): ProviderAccount[] {
   return loadAuthStore()[provider]?.accounts ?? [];
+}
+
+export function listLiveOAuthAccountKeys(
+  providerNames: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const [provider, accountSet] of Object.entries(loadAuthStore())) {
+    if (!providerNames.has(provider)) continue;
+    for (const account of accountSet.accounts) keys.add(`${provider}\0${account.id}`);
+  }
+  return keys;
 }
 
 export function getAccountCredential(provider: string, accountId: string): OAuthCredentials | null {
@@ -408,7 +548,7 @@ export async function saveAccountCredential(provider: string, accountId: string,
     if (!account) return;
     account.credential = safe;
     delete account.needsReauth;
-  });
+  }, [provider, accountId, safe]);
 }
 
 export async function setActiveAccount(provider: string, accountId: string): Promise<boolean> {
@@ -417,7 +557,7 @@ export async function setActiveAccount(provider: string, accountId: string): Pro
     if (!set || !set.accounts.some(a => a.id === accountId)) return false;
     set.activeAccountId = accountId;
     return true;
-  });
+  }, [provider, accountId]);
 }
 
 export async function setAccountAlias(provider: string, accountId: string, alias: string | undefined): Promise<boolean> {
@@ -427,12 +567,12 @@ export async function setAccountAlias(provider: string, accountId: string, alias
     if (alias) account.alias = alias;
     else delete account.alias;
     return true;
-  });
+  }, [provider, accountId, alias]);
 }
 
 /** Remove one account by id; active removal promotes the first remaining account. */
 export async function removeAccount(provider: string, accountId: string): Promise<boolean> {
-  return await mutateStore(store => {
+  const removed = await mutateStore(store => {
     const set = store[provider];
     if (!set) return false;
     const before = set.accounts.length;
@@ -444,7 +584,8 @@ export async function removeAccount(provider: string, accountId: string): Promis
     }
     if (set.activeAccountId === accountId) set.activeAccountId = set.accounts[0]!.id;
     return true;
-  });
+  }, [provider, accountId]);
+  return removed;
 }
 
 /** Replace or clear a provider account set (used for transactional Kiro add-account rollback). */
@@ -467,17 +608,23 @@ export async function replaceProviderAccountSet(
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
       })),
     };
-  });
+  }, [provider, set]);
 }
 
-export async function markAccountNeedsReauth(provider: string, accountId: string, needsReauth: boolean): Promise<void> {
+export async function markAccountNeedsReauth(
+  provider: string,
+  accountId: string,
+  needsReauth: boolean,
+  writerGeneration = captureConfigGeneration(),
+): Promise<void> {
+  if (writerGeneration < lastReconciledGeneration && !liveOAuthAccountKeys.has(oauthAccountKey(provider, accountId))) return;
   await mutateStore(store => {
     const account = store[provider]?.accounts.find(a => a.id === accountId);
     if (!account) return;
     if (needsReauth) account.needsReauth = true;
     else delete account.needsReauth;
-  });
+  }, [provider, accountId]);
 }
 
-export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};account.credential=safe;delete account.needsReauth;return{superseded:false};});}
-export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string):Promise<boolean>{return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||credentialGeneration(account.credential)!==generation)return false;account.needsReauth=true;return true;});}
+export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};account.credential=safe;delete account.needsReauth;return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
+export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration()):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;account.needsReauth=true;return true;},[provider,accountId,generation]);}

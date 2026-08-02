@@ -12,6 +12,13 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import { selectEagerPath } from "../src/lib/bun-stream-caps";
 import type { OcxConfig } from "../src/types";
+import {
+  appOwnedBytesSnapshot,
+  registerRetainedStore,
+  resetAppOwnedMemoryForTests,
+} from "../src/lib/app-owned-memory";
+import { registerDefaultAppOwnedMemoryStores } from "../src/lib/app-owned-memory-stores";
+import { appendDebugLogLine, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 
 function config(): OcxConfig {
   return {
@@ -30,6 +37,8 @@ function config(): OcxConfig {
 
 afterEach(() => {
   getActiveMemoryWatchdog()?.stop();
+  resetAppOwnedMemoryForTests();
+  resetDebugLogBufferForTests();
 });
 
 function sampleAt(at: number, rssMb: number, externalMb = 1, arrayBuffersMb = 1): MemorySampleBase {
@@ -178,7 +187,12 @@ describe("GET /api/system/memory", () => {
 	      pid: number; bunVersion: string; platform: string; rss: number;
 	      heapUsed: number; external: number; arrayBuffers: number; observedBytes: number; observedMetric: string;
 	      jscHeap: { heapSize: number } | null;
-	      responseState: { count: number; totalBytes: number; largestBytes: number; oldestAgeMs: number };
+	      responseState: {
+	        count: number; residentCount: number; spillStubCount: number; tombstoneCount: number;
+	        totalBytes: number; spillPayloadBytes: number; largestBytes: number; oldestAgeMs: number;
+	        spillWrites: number; spillWriteFailures: number; spillReadFailures: number;
+	      };
+	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
 	      inspectionCounters: {
 	        frameBufferHighWaterBytes: number; completedItemsMaxCount: number; frameCapOverflows: number;
 	        itemCapEvictions: number; postCancelDrainStops: number;
@@ -198,11 +212,27 @@ describe("GET /api/system/memory", () => {
 	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
     // responseState is a scalar-only continuation-store attribution block: every field is a
     // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
-    expect(typeof body.responseState.count).toBe("number");
-    expect(typeof body.responseState.totalBytes).toBe("number");
-    expect(typeof body.responseState.largestBytes).toBe("number");
-    expect(typeof body.responseState.oldestAgeMs).toBe("number");
+    const responseStateValues = Object.values(body.responseState);
+    expect(responseStateValues).toHaveLength(11);
+    expect(responseStateValues.every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
+    expect(body.appOwnedBytes).toEqual({
+      budgetBytes: expect.any(Number),
+      retainedBytes: expect.any(Number),
+      evictableBytes: expect.any(Number),
+      pinnedBytes: expect.any(Number),
+      overBudgetBytes: expect.any(Number),
+      stores: expect.any(Object),
+      observedInFlight: expect.any(Object),
+      enforcement: {
+        runs: expect.any(Number),
+        entriesDemoted: expect.any(Number),
+        bytesReleased: expect.any(Number),
+        noEvictableCandidate: expect.any(Number),
+        snapshotFailures: expect.any(Number),
+        oldestAtContractViolations: expect.any(Number),
+      },
+    });
     expect(body.inspectionCounters).toEqual({
       frameBufferHighWaterBytes: expect.any(Number),
       completedItemsMaxCount: expect.any(Number),
@@ -229,6 +259,53 @@ describe("GET /api/system/memory", () => {
     const res = await handleManagementAPI(req, new URL(req.url), config());
     const body = await res!.json() as { watchdog: unknown };
     expect(body.watchdog).toBeNull();
+  });
+
+  test("GET system memory includes privacy-safe appOwnedBytes scalars", async () => {
+    registerDefaultAppOwnedMemoryStores();
+    const req = new Request("http://127.0.0.1:10100/api/system/memory");
+    const body = await (await handleManagementAPI(req, new URL(req.url), config()))!.json() as {
+      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
+    };
+    expect(Object.keys(body.appOwnedBytes.stores).sort()).toEqual([
+      "antigravity_replay", "claude_debug", "crash_ring", "cursor_blobs", "image_normalize",
+      "injection_debug", "model_cache", "provider_debug", "request_log", "responses_continuation",
+      "usage_summary", "vision_descriptions",
+    ]);
+    expect(Object.values(body.appOwnedBytes.stores).flatMap(snapshot => Object.values(snapshot))
+      .every(value => value === null || typeof value === "number")).toBe(true);
+    expect(body.appOwnedBytes.observedInFlight).toEqual({});
+  });
+
+  test("GET system memory does not load prune serialize or evict retained stores", async () => {
+    let snapshots = 0;
+    let evictions = 0;
+    registerRetainedStore({
+      id: "observe_only",
+      category: "logs",
+      snapshot: () => {
+        snapshots += 1;
+        return { count: 1, bytes: 1, evictableBytes: 1, pinnedBytes: 0, oldestAt: 1 };
+      },
+      evictOldest: () => { evictions += 1; return 1; },
+    });
+    const req = new Request("http://127.0.0.1:10100/api/system/memory");
+    await handleManagementAPI(req, new URL(req.url), config());
+    expect(snapshots).toBe(1);
+    expect(evictions).toBe(0);
+  });
+
+  test("payload contains no dynamic store keys paths ids or diagnostic text", async () => {
+    registerDefaultAppOwnedMemoryStores();
+    const privatePath = ["", "Users", "alice", "private"].join("/");
+    appendDebugLogLine(`secret-diagnostic ${privatePath} prompt-text model/provider-id`);
+    const req = new Request("http://127.0.0.1:10100/api/system/memory");
+    const response = await handleManagementAPI(req, new URL(req.url), config());
+    const wire = await response!.text();
+    expect(wire).not.toContain("secret-diagnostic");
+    expect(wire).not.toContain(privatePath);
+    expect(wire).not.toContain("prompt-text");
+    expect(wire).not.toContain("model/provider-id");
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

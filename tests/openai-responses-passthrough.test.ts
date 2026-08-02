@@ -1,14 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
+import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const provider = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.example/backend-api/codex",
   authMode: "forward" as const,
 };
+
+test("passthrough serialized-body observation releases after the request settles", () => {
+  const budget = createTranslatorBudget();
+  const request = createResponsesPassthroughAdapter(provider).buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers({ authorization: "Bearer token" }), translatorBudget: budget });
+  expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+  request.releaseBodyObservation?.();
+  expect(budget.snapshot().currentBytes).toBe(0);
+  budget.dispose();
+});
 
 function buildKeyAuthUrl(baseUrl: string, responsesPath?: string): string {
   const adapter = createResponsesPassthroughAdapter({

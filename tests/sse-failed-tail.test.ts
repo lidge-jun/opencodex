@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { relaySseWithFailedTail, relayWithAbort } from "../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../src/server/relay-eager";
 import { MAX_TAIL_ERROR_MESSAGE_CHARS } from "../src/server/relay";
+import { TranslatorBudgetExceededError } from "../src/lib/translator-budget";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -82,6 +83,18 @@ describe("relaySseWithFailedTail", () => {
     const out = await drain(relaySseWithFailedTail(src, upstream));
     expect(out).toContain("event: response.failed\ndata: ");
     expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  test("translator overflow failed tail preserves translation_buffer_limit", async () => {
+    const upstream = new AbortController();
+    const error = new TranslatorBudgetExceededError("live_transient", 32 * 1024 * 1024);
+    const out = await drain(relaySseWithFailedTail(sourceStream([], { failAfter: true, error }), upstream));
+    const payload = JSON.parse(out.split("event: response.failed\ndata: ")[1]!.split("\n")[0]!) as {
+      response: { error: { code: string } };
+    };
+    expect(payload.response.error.code).toBe("translation_buffer_limit");
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(upstream.signal.aborted).toBe(true);
   });
 
   test("client cancel aborts the upstream controller", async () => {

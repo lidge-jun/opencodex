@@ -40,30 +40,125 @@ on:
 permissions:
   contents: read
 
+# Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
 concurrency:
   group: cross-platform-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Which Windows runner this run is allowed to use.
+  #
+  # READ THIS BEFORE TREATING IT AS A SECURITY BOUNDARY: it is not one.
+  #
+  # On `pull_request` this workflow is loaded from the PR head, so the `case`
+  # below is owned by the proposed patch exactly like an `if:` guard would be.
+  # A hostile PR can delete the branch and hardcode the self-hosted labels into
+  # `$GITHUB_OUTPUT`, and `runs-on` will honour it. That this job runs on
+  # `ubuntu-latest` changes nothing — the untrusted part is its OUTPUT, not its
+  # host. `.github/workflows/ci.yml` is in this workflow's `pull_request.paths`,
+  # so such an edit triggers its own run.
+  #
+  # What actually keeps untrusted code off a self-hosted runner lives OUTSIDE
+  # this file, where a PR cannot reach it: the fork-PR approval policy
+  # (`all_external_contributors`) and the judgement of whoever clicks approve.
+  # Runner groups would be the other lever, but they are an organisation
+  # feature and this repository is user-owned, so the approval policy is the
+  # only one available here. GitHub's own guidance is to avoid self-hosted
+  # runners on public repositories for this reason.
+  #
+  # So read the routing below as a COST control that keeps honest pull requests
+  # on GitHub-hosted runners, not as a guarantee about hostile ones.
+  #
+  # `push` on dev/main/preview requires the push permission, and
+  # `workflow_dispatch` requires write access, so both carry a trusted author.
+  # A trusted author is not audited code: merging a contributor PR into `dev`
+  # fires `push`, and its dependencies and postinstall hooks then run here.
+  select-windows-runner:
+    name: select windows runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      label: ${{ steps.pick.outputs.label }}
+    steps:
+      - name: Pick runner
+        id: pick
+        env:
+          # Read through env rather than interpolating directly into the script:
+          # `github.event_name` is a fixed vocabulary, but keeping the habit means
+          # no future edit here can grow a script-injection sink.
+          EVENT_NAME: ${{ github.event_name }}
+          USE_SELF_HOSTED: ${{ vars.OCX_SELF_HOSTED_WINDOWS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted=no
+          case "$EVENT_NAME" in
+            push|workflow_dispatch) trusted=yes ;;
+          esac
+
+          # Repository variable OCX_SELF_HOSTED_WINDOWS is an OPERATIONAL switch,
+          # not a security control: a PR that rewrites this script ignores it for
+          # the same reason it ignores the event check above. Its job is to keep CI
+          # working when the box is off or busy. Anything other than `1` —
+          # including unset, the state before a runner exists — falls back to
+          # windows-latest.
+          if [ "$trusted" = "yes" ] && [ "${USE_SELF_HOSTED:-}" = "1" ]; then
+            echo 'runner=["self-hosted","Windows","X64","ocx-home"]' >> "$GITHUB_OUTPUT"
+            echo 'label=self-hosted (ocx-home)' >> "$GITHUB_OUTPUT"
+          else
+            echo 'runner="windows-latest"' >> "$GITHUB_OUTPUT"
+            echo 'label=windows-latest' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    needs: select-windows-runner
+    runs-on: ${{ matrix.runner }}
     # Windows dominates this matrix: on run 30459554635 the same suite took
     # ubuntu 4.6min / macos 5.6min / windows 11.8min. Against the previous
     # 12-minute ceiling that left ~12s of headroom, so runner variance decided
     # the result rather than the code under review — #711's rerun finished at
     # 11.8min and passed while #653's was killed at 12.0min (issue #717).
     # A cancelled job renders as `fail` in `gh pr checks`, so that flakiness
-    # reads as a broken PR. 20 minutes keeps a green Windows run green with
-    # real margin; it is not a licence for the suite to grow into it. If
-    # Windows approaches this ceiling too, fix the 2.5x platform gap instead
-    # of raising the number again.
-    timeout-minutes: 20
+    # reads as a broken PR. After the 2026-08-01 state-store admission merge,
+    # Windows under `bun test --isolate` on #827 hit the 20-minute kill while
+    # still green mid-suite (~19m of tests). 30 minutes is the margin for that
+    # tip — not a licence to absorb hung tests (see oauth mutation waitMs
+    # unref fix). Shrink the suite / close the platform gap rather than raising
+    # this again for ordinary variance.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # `name` is spelled out rather than derived from `runner`: a runner given
+        # as a label array renders as "self-hosted Windows X64 ocx-home", so the
+        # check name would change with the routing and break any branch
+        # protection rule that names it. Keeping `windows` fixed means the
+        # required check stays the same whichever machine served it.
+        include:
+          - name: ubuntu
+            runner: ubuntu-latest
+          - name: windows
+            runner: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
+          - name: macos
+            runner: macos-latest
     steps:
+      - name: Show selected runner
+        if: matrix.name == 'windows'
+        shell: bash
+        run: echo "windows leg on ${{ needs.select-windows-runner.outputs.label }}"
+
+      # A self-hosted runner keeps its working directory between jobs. Without an
+      # explicit wipe, a file deleted in the commit under test survives on disk
+      # and the suite passes against a tree that no longer exists in git.
+      # `--ephemeral` registration de-registers the runner after each job but does
+      # not clean the workspace, so this step is what makes the checkout honest.
+      - name: Clean workspace (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: git clean -xffd . || true
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
@@ -113,6 +208,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Deliberately NOT routed to the self-hosted box. This job runs
+        # `npm install -g`, which writes into the machine's global prefix and
+        # would leave an `ocx` on a maintainer's personal PATH. It is an
+        # 8-minute job, so there is nothing to win by moving it.
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout

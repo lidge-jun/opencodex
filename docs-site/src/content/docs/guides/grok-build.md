@@ -46,6 +46,21 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 # or in the TUI: /model ocx-anthropic-claude-opus-4-8
 ```
 
+## Reasoning effort
+
+Grok Build's `/effort` (and `--effort`) only works for models whose catalog entry
+advertises the ladder: its model list fetch reads the raw `GET /v1/models` response, and
+entries there must carry `supports_reasoning_effort` plus `reasoning_efforts` menu
+options. For routed model entries, opencodex mirrors the configured provider tiers
+(`reasoningEfforts` / `modelReasoningEfforts`, and the default from
+`modelDefaultReasoningEfforts`) onto that response. This metadata describes the
+proxy-configured routed ladder — it does not claim native upstream reasoning support,
+and adapters may emulate reasoning or map levels onto provider-specific fields. Routed
+models with a configured ladder show the effort control in Grok Build just like they do
+in Codex. Models with an empty tier list keep no effort control, matching Codex
+behavior. Native GPT-5.6 entries are separate: they preserve and expose their pinned
+upstream reasoning ladders rather than provider-configured routed metadata.
+
 ## Authentication note
 
 Grok Build requires a non-empty API key for custom models even on loopback. The injected

@@ -243,11 +243,9 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: c.type, activeId }, null, 2));
   else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
   if (c.type === "codex") {
-    console.error("Applies to new Codex sessions; running threads keep their current account.");
-    const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {
-      console.error(`Note: auto-switch (threshold ${active.json.autoSwitchThreshold}%) may override this pin.`);
-    }
+    console.error("Applies to the next request after clearing existing pool affinity; in-flight requests keep their captured account.");
+    console.error("Note: pool strategy, quota/cooldown/reauthentication state, and failure recovery may later select another eligible account.");
+    console.error("Conversation context is replayed after account changes, but the provider-side prompt cache may be cold.");
   }
   return 0;
 }

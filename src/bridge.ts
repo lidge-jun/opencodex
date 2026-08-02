@@ -4,6 +4,12 @@ import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
 import { resolveStallTimeoutSec } from "./stall-timeout";
 import { usageDisplayTotalTokens } from "./usage/totals";
+import {
+  isTranslatorBudgetExceededError,
+  releaseTranslatedEvent,
+  type TranslatorBudget,
+  type TranslatorBufferKind,
+} from "./lib/translator-budget";
 
 function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -150,6 +156,7 @@ export function bridgeToResponsesSSE(
      * from this callback instead of re-parsing the bridged SSE.
      */
     onUsage?: (usage: OcxUsage | undefined) => void;
+    translatorBudget?: TranslatorBudget;
     /**
      * Test seam for the wire/stall beat loop. Production omits this and uses the
      * global timers; injecting here must not change scheduling semantics.
@@ -201,6 +208,43 @@ export function bridgeToResponsesSSE(
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
   const encoder = new TextEncoder();
+  const budget = options?.translatorBudget;
+  const bytesOf = (value: string): number => Buffer.byteLength(value);
+  const appendString = (
+    previous: string,
+    previousBytes: number,
+    fragment: string,
+    kind: TranslatorBufferKind,
+    callId?: string,
+  ): { value: string; bytes: number } => {
+    const fragmentBytes = bytesOf(fragment);
+    const nextBytes = previousBytes + fragmentBytes;
+    if (!budget) return { value: previous + fragment, bytes: nextBytes };
+    const scope = { kind, ...(callId ? { callId } : {}) };
+    const reservation = budget.reserveTransient(nextBytes, scope);
+    try {
+      const value = previous + fragment;
+      reservation.commitRetained();
+      budget.releaseRetained(previousBytes, scope);
+      return { value, bytes: nextBytes };
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
+  const replaceRetainedString = (previousBytes: number, next: string, kind: TranslatorBufferKind): number => {
+    const nextBytes = bytesOf(next);
+    if (!budget) return nextBytes;
+    const reservation = budget.reserveTransient(nextBytes, { kind });
+    reservation.commitRetained();
+    budget.releaseRetained(previousBytes, { kind });
+    return nextBytes;
+  };
+  const chargeValue = (value: unknown, kind: TranslatorBufferKind): number => {
+    const bytes = bytesOf(JSON.stringify(value));
+    budget?.chargeRetained(bytes, { kind });
+    return bytes;
+  };
   const responseId = options?.responseId ?? `resp_${uuid()}`;
   let seq = 0;
   // Set once the client is gone (cancel) or an enqueue throws on a torn-down controller, so we
@@ -212,7 +256,7 @@ export function bridgeToResponsesSSE(
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported || clientCancelled || closed) return;
     terminalReported = true;
-    options?.onTerminal?.(status);
+    try { options?.onTerminal?.(status); } catch { /* terminal metrics must not break the stream */ }
   };
   // RC3 keep-alive: Codex's idle timer is timeout(idle_timeout, stream.next()) over an
   // eventsource_stream; ANY received event re-arms it, while an unknown type is ignored
@@ -226,22 +270,43 @@ export function bridgeToResponsesSSE(
   let emittedFrames = 0;
   let gated = false;
   let stepping = false;
-  const emit = (name: string, data: Record<string, unknown>) => {
+      let terminateForTranslatorOverflow: ((error: unknown) => void) | undefined;
+      const emit = (name: string, data: Record<string, unknown>) => {
         if (closed) return;
         wireActivity = true;
         try {
-          controller.enqueue(encoder.encode(sseEvent(name, { type: name, sequence_number: seq++, ...data })));
+          const frameText = sseEvent(name, { type: name, sequence_number: seq++, ...data });
+          const frameBytes = bytesOf(frameText);
+          const reservation = budget?.reserveTransient(frameBytes, { kind: "live_transient" });
+          const frame = encoder.encode(frameText);
+          reservation?.commitRetained();
+          controller.enqueue(frame);
+          budget?.releaseRetained(frameBytes, { kind: "live_transient" });
           emittedFrames++;
-        } catch {
+        } catch (error) {
+          if (isTranslatorBudgetExceededError(error)) {
+            terminateForTranslatorOverflow?.(error);
+            return;
+          }
           closed = true;
         }
       };
       const emitDone = () => {
         if (closed) return;
         try {
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          const done = "data: [DONE]\n\n";
+          const doneBytes = bytesOf(done);
+          const reservation = budget?.reserveTransient(doneBytes, { kind: "live_transient" });
+          const frame = encoder.encode(done);
+          reservation?.commitRetained();
+          controller.enqueue(frame);
+          budget?.releaseRetained(doneBytes, { kind: "live_transient" });
           emittedFrames++;
-        } catch {
+        } catch (error) {
+          if (isTranslatorBudgetExceededError(error)) {
+            terminateForTranslatorOverflow?.(error);
+            return;
+          }
           closed = true;
         }
       };
@@ -249,6 +314,13 @@ export function bridgeToResponsesSSE(
       const createdAt = Math.floor(Date.now() / 1000);
       let outputIndex = 0;
       const finishedItems: OutputItem[] = [];
+      const retainFinishedItem = (item: OutputItem, replacedBytes = 0, kind: TranslatorBufferKind = "retained_collectors") => {
+        const itemBytes = bytesOf(JSON.stringify(item));
+        const reservation = budget?.reserveTransient(itemBytes, { kind });
+        finishedItems.push(item);
+        reservation?.commitRetained();
+        if (replacedBytes > 0) budget?.releaseRetained(replacedBytes, { kind });
+      };
 
       const responseSnapshot = (status: string, output: OutputItem[], endTurn?: boolean) => ({
         id: responseId, object: "response", created_at: createdAt,
@@ -261,37 +333,48 @@ export function bridgeToResponsesSSE(
       const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
 
-      let currentMsg: { itemId: string; outputIndex: number; text: string; phase?: OcxMessagePhase } | null = null;
-      let currentReasoning: { itemId: string; outputIndex: number; text: string } | null = null;
-      let currentRawReasoning: { itemId: string; outputIndex: number; text: string } | null = null;
+      let currentMsg: { itemId: string; outputIndex: number; text: string; textBytes: number; phase?: OcxMessagePhase } | null = null;
+      let currentReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
+      let currentRawReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       // Anthropic extended-thinking round-trip state: the signature signs the CURRENT thinking
       // block; redacted blocks are opaque payloads replayed verbatim. Attached to the reasoning
       // item as an ocxr1 encrypted_content envelope on close. hiddenThinkingText collects the
       // suppressed text under hideThinkingSummary so the signed text still round-trips.
       let pendingSignature: string | undefined;
+      let pendingSignatureBytes = 0;
       let pendingRedacted: string[] = [];
       let hiddenThinkingText = "";
+      let hiddenThinkingBytes = 0;
       const takeReasoningEnvelope = (hiddenText?: string): string | undefined => {
         if (!pendingSignature && pendingRedacted.length === 0) return undefined;
         const envelope: ReasoningEnvelope = {};
         if (pendingSignature) envelope.sig = pendingSignature;
         if (pendingRedacted.length > 0) envelope.red = pendingRedacted;
         if (hiddenText) envelope.txt = hiddenText;
+        const previousBytes = pendingSignatureBytes
+          + pendingRedacted.reduce((sum, value) => sum + bytesOf(value), 0)
+          + (hiddenText ? hiddenThinkingBytes : 0);
+        const encoded = encodeReasoningEnvelope(envelope);
+        const reservation = budget?.reserveTransient(bytesOf(encoded), { kind: "reasoning" });
         pendingSignature = undefined;
+        pendingSignatureBytes = 0;
         pendingRedacted = [];
-        return encodeReasoningEnvelope(envelope);
+        reservation?.commitRetained();
+        budget?.releaseRetained(previousBytes, { kind: "reasoning" });
+        return encoded;
       };
       // hideThinkingSummary path: no visible reasoning item exists, but a signed thinking block
       // must still round-trip — emit an envelope-only reasoning item (empty summary, no text leak).
       const flushHiddenReasoningEnvelope = () => {
         const encrypted = takeReasoningEnvelope(hiddenThinkingText || undefined);
         hiddenThinkingText = "";
+        hiddenThinkingBytes = 0;
         if (!encrypted) return;
         const itemId = `rs_${uuid()}`;
         const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
         emit("response.output_item.added", { output_index: outputIndex, item });
         emit("response.output_item.done", { output_index: outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem, bytesOf(encrypted), "reasoning");
         outputIndex++;
       };
       // hideThinkingSummary for RAW reasoning (openai-chat reasoning_content, kiro tags): no
@@ -300,21 +383,28 @@ export function bridgeToResponsesSSE(
       // preserveReasoningContentModels replay (GLM interleaved thinking) keeps working. Direct
       // encodeReasoningEnvelope: takeReasoningEnvelope's sig/red guard would drop txt-only.
       let hiddenRawReasoningText = "";
+      let hiddenRawReasoningBytes = 0;
       const flushHiddenRawReasoning = () => {
         if (!hiddenRawReasoningText) return;
+        const previousBytes = hiddenRawReasoningBytes;
         const encrypted = encodeReasoningEnvelope({ txt: hiddenRawReasoningText });
+        const reservation = budget?.reserveTransient(bytesOf(encrypted), { kind: "reasoning" });
         hiddenRawReasoningText = "";
+        hiddenRawReasoningBytes = 0;
+        reservation?.commitRetained();
+        budget?.releaseRetained(previousBytes, { kind: "reasoning" });
         const itemId = `rs_${uuid()}`;
         const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
         emit("response.output_item.added", { output_index: outputIndex, item });
         emit("response.output_item.done", { output_index: outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem, bytesOf(encrypted), "reasoning");
         outputIndex++;
       };
       // Full assistant text of a compaction turn (across message boundaries) — becomes the
       // synthetic compaction item's payload on done.
       let compactionText = "";
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
+      let compactionTextBytes = 0;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -327,7 +417,12 @@ export function bridgeToResponsesSSE(
         const anns = pendingWebSources.map(s => ({
           type: "url_citation", url: s.url, ...(s.title ? { title: s.title } : {}), start_index: 0, end_index: 0,
         }));
+        const sourceBytes = pendingWebSources.reduce((sum, source) => sum + bytesOf(JSON.stringify(source)), 0);
+        const annotationBytes = bytesOf(JSON.stringify(anns));
+        const reservation = budget?.reserveTransient(annotationBytes, { kind: "retained_collectors" });
         pendingWebSources = [];
+        reservation?.commitRetained();
+        budget?.releaseRetained(sourceBytes, { kind: "tool_search_sources" });
         return anns;
       };
 
@@ -354,7 +449,7 @@ export function bridgeToResponsesSSE(
           ...(phase ? { phase } : {}),
         };
         emit("response.output_item.done", { output_index: currentMsg.outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem, currentMsg.textBytes + bytesOf(JSON.stringify(annotations)));
         outputIndex++;
         currentMsg = null;
       };
@@ -375,7 +470,7 @@ export function bridgeToResponsesSSE(
           ...(encrypted ? { encrypted_content: encrypted } : {}),
         };
         emit("response.output_item.done", { output_index: currentReasoning.outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem, currentReasoning.textBytes + bytesOf(encrypted ?? ""), "reasoning");
         outputIndex++;
         currentReasoning = null;
       };
@@ -387,7 +482,7 @@ export function bridgeToResponsesSSE(
           content: [{ type: "reasoning_text", text: currentRawReasoning.text }],
         };
         emit("response.output_item.done", { output_index: currentRawReasoning.outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem, currentRawReasoning.textBytes, "reasoning");
         outputIndex++;
         currentRawReasoning = null;
       };
@@ -429,7 +524,8 @@ export function bridgeToResponsesSSE(
               ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
             };
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem);
+        budget?.closeCall(currentToolCall.callId);
         outputIndex++;
         currentToolCall = null;
       };
@@ -462,8 +558,15 @@ export function bridgeToResponsesSSE(
               ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
             };
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem);
+        budget?.closeCall(currentToolCall.callId);
         outputIndex++;
+        currentToolCall = null;
+      };
+
+      const abortCurrentToolCallForTranslatorOverflow = () => {
+        if (!currentToolCall) return;
+        budget?.closeCall(currentToolCall.callId);
         currentToolCall = null;
       };
 
@@ -480,7 +583,7 @@ export function bridgeToResponsesSSE(
           ...(sources && sources.length > 0 ? { sources } : {}),
         };
         emit("response.output_item.done", { output_index: currentWebSearch.outputIndex, item });
-        finishedItems.push(item as OutputItem);
+        retainFinishedItem(item as OutputItem);
         outputIndex++;
         currentWebSearch = null;
       };
@@ -536,6 +639,52 @@ export function bridgeToResponsesSSE(
         }
         finishReturn();
       };
+      let upstreamCancelled = false;
+      const cancelUpstreamOnce = () => {
+        if (upstreamCancelled) return;
+        upstreamCancelled = true;
+        try { onCancel?.(); } catch { /* cancellation must not strand the client stream */ }
+        returnIterator();
+      };
+      let handlingTranslatorOverflow = false;
+      terminateForTranslatorOverflow = _error => {
+        if (handlingTranslatorOverflow || terminated || clientCancelled || closed) return;
+        handlingTranslatorOverflow = true;
+        abortCurrentToolCallForTranslatorOverflow();
+        currentWebSearch = null;
+        const failure = adapterFailureFromEvent({
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "translation_buffer_limit",
+          message: "upstream translation buffer exceeded the safe limit",
+        }).error;
+        const failedFrame = sseEvent("response.failed", {
+          type: "response.failed",
+          sequence_number: seq++,
+          response: {
+            ...responseSnapshot("failed", finishedItems),
+            error: failure,
+            last_error: failure,
+          },
+        });
+        try {
+          controller.enqueue(encoder.encode(failedFrame));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          emittedFrames += 2;
+        } catch {
+          /* client already tore down the stream */
+        }
+        reportTerminal("failed");
+        terminated = true;
+        cancelUpstreamOnce();
+        if (beat !== undefined) clearBeatInterval(beat);
+        beat = undefined;
+        try { controller.close(); } catch { /* already closed */ }
+        closed = true;
+        gated = true;
+        stepping = false;
+      };
       const step = async () => {
         if (stepping || closed) return;
         stepping = true;
@@ -559,7 +708,15 @@ export function bridgeToResponsesSSE(
           // expansion (rememberResponseState stores input + output). Codex ignores extra items but
           // its compaction UI renders nothing mid-turn, so nothing is lost visually.
           if (options?.compaction) {
-            if (event.type === "text_delta") { compactionText += event.text; continue; }
+            if (event.type === "text_delta") {
+              ({ value: compactionText, bytes: compactionTextBytes } = appendString(
+                compactionText,
+                compactionTextBytes,
+                event.text,
+                "retained_collectors",
+              ));
+              continue;
+            }
             if (event.type !== "done" && event.type !== "incomplete" && event.type !== "error") continue;
           }
           switch (event.type) {
@@ -596,9 +753,14 @@ export function bridgeToResponsesSSE(
                   item_id: itemId, output_index: outputIndex, content_index: 0,
                   part: { type: "output_text", text: "", annotations: [] },
                 });
-                currentMsg = { itemId, outputIndex, text: "", ...(event.phase ? { phase: event.phase } : {}) };
+                currentMsg = { itemId, outputIndex, text: "", textBytes: 0, ...(event.phase ? { phase: event.phase } : {}) };
               }
-              currentMsg.text += event.text;
+              ({ value: currentMsg.text, bytes: currentMsg.textBytes } = appendString(
+                currentMsg.text,
+                currentMsg.textBytes,
+                event.text,
+                "retained_collectors",
+              ));
               emit("response.output_text.delta", {
                 item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
                 content_index: 0, delta: event.text,
@@ -606,7 +768,15 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "thinking_delta": {
-              if (options?.hideThinkingSummary) { hiddenThinkingText += event.thinking; break; }
+              if (options?.hideThinkingSummary) {
+                ({ value: hiddenThinkingText, bytes: hiddenThinkingBytes } = appendString(
+                  hiddenThinkingText,
+                  hiddenThinkingBytes,
+                  event.thinking,
+                  "reasoning",
+                ));
+                break;
+              }
               if (currentMsg) closeCurrentMessage("commentary");
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
@@ -619,9 +789,14 @@ export function bridgeToResponsesSSE(
                   item_id: itemId, output_index: outputIndex, summary_index: 0,
                   part: { type: "summary_text", text: "" },
                 });
-                currentReasoning = { itemId, outputIndex, text: "" };
+                currentReasoning = { itemId, outputIndex, text: "", textBytes: 0 };
               }
-              currentReasoning.text += event.thinking;
+              ({ value: currentReasoning.text, bytes: currentReasoning.textBytes } = appendString(
+                currentReasoning.text,
+                currentReasoning.textBytes,
+                event.thinking,
+                "reasoning",
+              ));
               emit("response.reasoning_summary_text.delta", {
                 item_id: currentReasoning.itemId, output_index: currentReasoning.outputIndex,
                 summary_index: 0, delta: event.thinking,
@@ -629,6 +804,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "thinking_signature": {
+              pendingSignatureBytes = replaceRetainedString(pendingSignatureBytes, event.signature, "reasoning");
               pendingSignature = event.signature;
               // Signature arrives at the end of the thinking block. With a visible reasoning item
               // open, closeCurrentReasoning attaches the envelope; hidden/suppressed blocks flush
@@ -637,11 +813,20 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "redacted_thinking": {
+              budget?.chargeRetained(bytesOf(event.data), { kind: "reasoning" });
               pendingRedacted.push(event.data);
               break;
             }
             case "reasoning_raw_delta": {
-              if (options?.hideThinkingSummary) { hiddenRawReasoningText += event.text; break; }
+              if (options?.hideThinkingSummary) {
+                ({ value: hiddenRawReasoningText, bytes: hiddenRawReasoningBytes } = appendString(
+                  hiddenRawReasoningText,
+                  hiddenRawReasoningBytes,
+                  event.text,
+                  "reasoning",
+                ));
+                break;
+              }
               if (currentMsg) closeCurrentMessage("commentary");
               if (currentReasoning) closeCurrentReasoning();
               if (currentToolCall) closeCurrentToolCall();
@@ -649,9 +834,14 @@ export function bridgeToResponsesSSE(
                 const itemId = `rs_${uuid()}`;
                 const item = { type: "reasoning", id: itemId, summary: [] as never[], content: [] as { type: string; text: string }[] };
                 emit("response.output_item.added", { output_index: outputIndex, item });
-                currentRawReasoning = { itemId, outputIndex, text: "" };
+                currentRawReasoning = { itemId, outputIndex, text: "", textBytes: 0 };
               }
-              currentRawReasoning.text += event.text;
+              ({ value: currentRawReasoning.text, bytes: currentRawReasoning.textBytes } = appendString(
+                currentRawReasoning.text,
+                currentRawReasoning.textBytes,
+                event.text,
+                "reasoning",
+              ));
               emit("response.reasoning_text.delta", {
                 item_id: currentRawReasoning.itemId, output_index: currentRawReasoning.outputIndex,
                 content_index: 0, delta: event.text,
@@ -676,12 +866,19 @@ export function bridgeToResponsesSSE(
                 ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
                 : { type: "function_call", id: itemId, call_id: event.id, name: realName, arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}) };
               emit("response.output_item.added", { output_index: outputIndex, item });
-              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", namespace: ns, freeform, toolSearch };
+              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", argsBytes: 0, namespace: ns, freeform, toolSearch };
+              budget?.openCall(event.id);
               break;
             }
             case "tool_call_delta": {
               if (currentToolCall) {
-                currentToolCall.args += event.arguments;
+                ({ value: currentToolCall.args, bytes: currentToolCall.argsBytes } = appendString(
+                  currentToolCall.args,
+                  currentToolCall.argsBytes,
+                  event.arguments,
+                  "tool_args",
+                  currentToolCall.callId,
+                ));
                 if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
                   emit("response.function_call_arguments.delta", {
                     item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
@@ -771,7 +968,11 @@ export function bridgeToResponsesSSE(
               if (event.sources) {
                 const seen = new Set(pendingWebSources.map(s => s.url));
                 for (const s of event.sources) {
-                  if (!seen.has(s.url)) { seen.add(s.url); pendingWebSources.push(s); }
+                  if (!seen.has(s.url)) {
+                    seen.add(s.url);
+                    chargeValue(s, "tool_search_sources");
+                    pendingWebSources.push(s);
+                  }
                 }
               }
               break;
@@ -793,7 +994,7 @@ export function bridgeToResponsesSSE(
                   encrypted_content: encodeCompactionSummary(compactionText),
                 };
                 emit("response.output_item.done", { output_index: outputIndex, item });
-                finishedItems.push(item as OutputItem);
+                retainFinishedItem(item as OutputItem, compactionTextBytes);
                 outputIndex++;
               }
               if (event.stopReason === "max_tokens" || event.stopReason === "content_filter") {
@@ -849,6 +1050,10 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "error": {
+              if (event.code === "translation_buffer_limit") {
+                terminateForTranslatorOverflow(event);
+                return;
+              }
               if (currentMsg) closeCurrentMessage();
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
@@ -874,13 +1079,16 @@ export function bridgeToResponsesSSE(
             }
           }
           if (terminalEvent) {
-            onCancel?.();
+            cancelUpstreamOnce();
             terminated = true;
-            returnIterator();
             break;
           }
         }
       } catch (err) {
+        if (isTranslatorBudgetExceededError(err)) {
+          terminateForTranslatorOverflow(err);
+          return;
+        }
         if (!terminated) {
           flushHiddenRawReasoning();
           if (currentToolCall) failCurrentToolCall();
@@ -893,9 +1101,8 @@ export function bridgeToResponsesSSE(
             },
           });
           reportTerminal("failed");
-          onCancel?.();
+          cancelUpstreamOnce();
           terminated = true;
-          returnIterator();
         }
       }
 
@@ -962,9 +1169,8 @@ export function bridgeToResponsesSSE(
               },
             });
             reportTerminal("incomplete");
-            onCancel?.();
+            cancelUpstreamOnce();
             terminated = true;
-            returnIterator();
             emitDone();
             if (beat !== undefined) clearBeatInterval(beat);
             beat = undefined;
@@ -1000,8 +1206,7 @@ export function bridgeToResponsesSSE(
         clientCancelled = true;
         closed = true;
         if (beat !== undefined) clearBeatInterval(beat);
-        onCancel?.();
-        returnIterator();
+        cancelUpstreamOnce();
       },
     });
   }
@@ -1019,10 +1224,49 @@ export function buildResponseJSON(
     onProviderState?: (state: OcxProviderContinuationState) => void;
     /** Raw adapter-reported usage before wire normalization (see bridgeToResponsesSSE onUsage). */
     onUsage?: (usage: OcxUsage | undefined) => void;
+    translatorBudget?: TranslatorBudget;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
   const output: OutputItem[] = [];
+  const budget = options?.translatorBudget;
+  const encoder = new TextEncoder();
+  const bytesOf = (value: string): number => Buffer.byteLength(value);
+  const appendBatchString = (
+    previous: string,
+    previousBytes: number,
+    fragment: string,
+    kind: TranslatorBufferKind,
+    callId?: string,
+  ): { value: string; bytes: number } => {
+    const nextBytes = previousBytes + bytesOf(fragment);
+    if (!budget) return { value: previous + fragment, bytes: nextBytes };
+    const scope = { kind, ...(callId ? { callId } : {}) };
+    const reservation = budget.reserveTransient(nextBytes, scope);
+    try {
+      const value = previous + fragment;
+      reservation.commitRetained();
+      budget.releaseRetained(previousBytes, scope);
+      return { value, bytes: nextBytes };
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
+  const replaceBatchRetainedString = (previousBytes: number, next: string, kind: TranslatorBufferKind): number => {
+    const nextBytes = bytesOf(next);
+    if (!budget) return nextBytes;
+    const reservation = budget.reserveTransient(nextBytes, { kind });
+    reservation.commitRetained();
+    budget.releaseRetained(previousBytes, { kind });
+    return nextBytes;
+  };
+  const pushOutput = (item: OutputItem, replacedBytes = 0, kind: TranslatorBufferKind = "retained_collectors") => {
+    const reservation = budget?.reserveTransient(bytesOf(JSON.stringify(item)), { kind });
+    output.push(item);
+    reservation?.commitRetained();
+    if (replacedBytes > 0) budget?.releaseRetained(replacedBytes, { kind });
+  };
   let usage: OcxUsage | undefined;
   let errorEvent: Extract<AdapterEvent, { type: "error" }> | undefined;
   let incompleteEvent: Extract<AdapterEvent, { type: "incomplete" }> | undefined;
@@ -1030,17 +1274,24 @@ export function buildResponseJSON(
   let stopReason: string | undefined;
   let cleanDone = false;
   let compactionText = "";
+  let compactionTextBytes = 0;
 
   let currentText = "";
+  let currentTextBytes = 0;
   let currentTextPhase: OcxMessagePhase | undefined;
   let currentSummaryReasoning = "";
+  let currentSummaryReasoningBytes = 0;
   let currentRawReasoning = "";
+  let currentRawReasoningBytes = 0;
   // Anthropic extended-thinking round-trip (batch): see bridgeToResponsesSSE counterpart.
   let batchSignature: string | undefined;
+  let batchSignatureBytes = 0;
   let batchRedacted: string[] = [];
+  let batchRedactedBytes = 0;
   let currentToolCallId = "";
   let currentToolCallName = "";
   let currentToolCallArgs = "";
+  let currentToolCallArgsBytes = 0;
   // Web-search citations awaiting the next assistant message (attached as url_citation annotations).
   let pendingWebSources: { url: string; title?: string }[] = [];
 
@@ -1059,12 +1310,14 @@ export function buildResponseJSON(
       type: "url_citation", url: s.url, ...(s.title ? { title: s.title } : {}), start_index: 0, end_index: 0,
     }));
     pendingWebSources = [];
-    output.push({
+    const item = {
       type: "message", id: `msg_${uuid()}`, role: "assistant", status: "completed",
       content: [{ type: "output_text", text: currentText, annotations }],
       ...(phase ? { phase } : {}),
-    });
+    } as OutputItem;
+    pushOutput(item, currentTextBytes);
     currentText = "";
+    currentTextBytes = 0;
     currentTextPhase = undefined;
   };
   const flushSummaryReasoning = () => {
@@ -1075,32 +1328,44 @@ export function buildResponseJSON(
     const hidden = options?.hideThinkingSummary === true;
     if (hidden && currentSummaryReasoning && (envelope.sig || envelope.red)) envelope.txt = currentSummaryReasoning;
     const encrypted = envelope.sig || envelope.red || envelope.txt ? encodeReasoningEnvelope(envelope) : undefined;
+    const sourceBytes = currentSummaryReasoningBytes + batchSignatureBytes + batchRedactedBytes;
     batchSignature = undefined;
+    batchSignatureBytes = 0;
     batchRedacted = [];
-    if (hidden && !encrypted) { currentSummaryReasoning = ""; return; }
-    output.push({
+    batchRedactedBytes = 0;
+    if (hidden && !encrypted) {
+      budget?.releaseRetained(sourceBytes, { kind: "reasoning" });
+      currentSummaryReasoning = "";
+      currentSummaryReasoningBytes = 0;
+      return;
+    }
+    const item = {
       type: "reasoning", id: `rs_${uuid()}`,
       summary: !hidden && currentSummaryReasoning ? [{ type: "summary_text", text: currentSummaryReasoning }] : [],
       ...(encrypted ? { encrypted_content: encrypted } : {}),
-    });
+    } as OutputItem;
+    pushOutput(item, sourceBytes, "reasoning");
     currentSummaryReasoning = "";
+    currentSummaryReasoningBytes = 0;
   };
   const flushRawReasoning = () => {
     if (!currentRawReasoning) return;
     if (options?.hideThinkingSummary === true) {
       // Same contract as the streaming path: no visible reasoning, txt-only envelope round-trip.
-      output.push({
+      pushOutput({
         type: "reasoning", id: `rs_${uuid()}`, summary: [],
         encrypted_content: encodeReasoningEnvelope({ txt: currentRawReasoning }),
-      });
+      }, currentRawReasoningBytes, "reasoning");
       currentRawReasoning = "";
+      currentRawReasoningBytes = 0;
       return;
     }
-    output.push({
+    pushOutput({
       type: "reasoning", id: `rs_${uuid()}`, summary: [],
       content: [{ type: "reasoning_text", text: currentRawReasoning }],
-    });
+    }, currentRawReasoningBytes, "reasoning");
     currentRawReasoning = "";
+    currentRawReasoningBytes = 0;
   };
   const flushToolCall = (status: "completed" | "incomplete" = "completed") => {
     if (!currentToolCallId) return;
@@ -1110,28 +1375,30 @@ export function buildResponseJSON(
     const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
     const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
     if (toolSearch) {
-      output.push({
+      pushOutput({
         type: "tool_search_call", id: `tsc_${uuid()}`,
         call_id: currentToolCallId, execution: "client",
         arguments: parseArgsObj(currentToolCallArgs), status,
       });
     } else if (freeform) {
-      output.push({
+      pushOutput({
         type: "custom_tool_call", id: `ctc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
         input: freeformInput(currentToolCallArgs), status,
       });
     } else {
-      output.push({
+      pushOutput({
         type: "function_call", id: `fc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
         arguments: currentToolCallArgs || "{}", status,
         ...(ns ? { namespace: ns } : {}),
       });
     }
+    budget?.closeCall(currentToolCallId);
     currentToolCallId = "";
     currentToolCallName = "";
     currentToolCallArgs = "";
+    currentToolCallArgsBytes = 0;
   };
 
   for (const e of events) {
@@ -1151,32 +1418,52 @@ export function buildResponseJSON(
         if (currentToolCallId) flushToolCall();
         // Compaction turns keep the summary out of normal message output (replay dedup — see
         // bridgeToResponsesSSE); it ships only inside the synthetic compaction item below.
-        if (options?.compaction) compactionText += e.text;
+        if (options?.compaction) {
+          ({ value: compactionText, bytes: compactionTextBytes } = appendBatchString(
+            compactionText, compactionTextBytes, e.text, "retained_collectors",
+          ));
+        }
         else {
           if (e.phase !== undefined) currentTextPhase = e.phase;
-          currentText += e.text;
+          ({ value: currentText, bytes: currentTextBytes } = appendBatchString(
+            currentText, currentTextBytes, e.text, "retained_collectors",
+          ));
         }
         break;
       case "thinking_delta":
         if (currentText) flushText("commentary");
         if (currentRawReasoning) flushRawReasoning();
         if (currentToolCallId) flushToolCall();
-        currentSummaryReasoning += e.thinking;
+        {
+          ({ value: currentSummaryReasoning, bytes: currentSummaryReasoningBytes } = appendBatchString(
+            currentSummaryReasoning, currentSummaryReasoningBytes, e.thinking, "reasoning",
+          ));
+        }
         break;
       case "thinking_signature":
         // End of the current thinking block — flush it WITH the signature envelope so the
         // block/signature pairing survives multi-block turns.
+        batchSignatureBytes = replaceBatchRetainedString(batchSignatureBytes, e.signature, "reasoning");
         batchSignature = e.signature;
         flushSummaryReasoning();
         break;
       case "redacted_thinking":
+        {
+          const dataBytes = bytesOf(e.data);
+          budget?.chargeRetained(dataBytes, { kind: "reasoning" });
+          batchRedactedBytes += dataBytes;
+        }
         batchRedacted.push(e.data);
         break;
       case "reasoning_raw_delta":
         if (currentText) flushText("commentary");
         if (currentSummaryReasoning) flushSummaryReasoning();
         if (currentToolCallId) flushToolCall();
-        currentRawReasoning += e.text;
+        {
+          ({ value: currentRawReasoning, bytes: currentRawReasoningBytes } = appendBatchString(
+            currentRawReasoning, currentRawReasoningBytes, e.text, "reasoning",
+          ));
+        }
         break;
       case "tool_call_start":
         if (currentText) flushText("commentary");
@@ -1184,11 +1471,17 @@ export function buildResponseJSON(
         if (currentRawReasoning) flushRawReasoning();
         flushToolCall();
         currentToolCallId = e.id;
+        budget?.openCall(e.id);
         currentToolCallName = e.name;
         currentToolCallArgs = "";
+        currentToolCallArgsBytes = 0;
         break;
       case "tool_call_delta":
-        currentToolCallArgs += e.arguments;
+        {
+          ({ value: currentToolCallArgs, bytes: currentToolCallArgsBytes } = appendBatchString(
+            currentToolCallArgs, currentToolCallArgsBytes, e.arguments, "tool_args", currentToolCallId,
+          ));
+        }
         break;
       case "tool_call_end":
         if (!toolCallArgumentsUsable(currentToolCallArgs) && currentToolCallId) {
@@ -1219,7 +1512,7 @@ export function buildResponseJSON(
         if (currentSummaryReasoning) flushSummaryReasoning();
         if (currentRawReasoning) flushRawReasoning();
         flushToolCall();
-        output.push({
+        pushOutput({
           type: "web_search_call", id: `ws_${uuid()}`, status: e.status ?? "completed",
           action: webSearchAction(e.queries),
           ...(e.sources && e.sources.length > 0 ? { sources: e.sources } : {}),
@@ -1227,7 +1520,11 @@ export function buildResponseJSON(
         if (e.sources) {
           const seen = new Set(pendingWebSources.map(s => s.url));
           for (const s of e.sources) {
-            if (!seen.has(s.url)) { seen.add(s.url); pendingWebSources.push(s); }
+            if (!seen.has(s.url)) {
+              seen.add(s.url);
+              budget?.chargeRetained(bytesOf(JSON.stringify(s)), { kind: "tool_search_sources" });
+              pendingWebSources.push(s);
+            }
           }
         }
         break;
@@ -1249,6 +1546,7 @@ export function buildResponseJSON(
         if (e.stopReason === "max_tokens" || e.stopReason === "content_filter") stopReason = e.stopReason;
         break;
     }
+    if (budget) releaseTranslatedEvent(e, budget);
   }
   flushText(cleanDone && !errorEvent && !incompleteEvent ? "final_answer" : undefined);
   flushSummaryReasoning();
@@ -1264,7 +1562,7 @@ export function buildResponseJSON(
     && stopReason !== "max_tokens"
     && stopReason !== "content_filter"
   ) {
-    output.push({ type: "compaction", id: `cmp_${uuid()}`, encrypted_content: encodeCompactionSummary(compactionText) });
+    pushOutput({ type: "compaction", id: `cmp_${uuid()}`, encrypted_content: encodeCompactionSummary(compactionText) }, compactionTextBytes);
   }
 
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;

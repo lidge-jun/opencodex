@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  truncateSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
   atomicWriteFile,
   AtomicWriteResidualTempError,
   AtomicWriteSecretResidualError,
@@ -14,6 +28,7 @@ import {
 import { runOpenAiTierStartupMigration } from "../src/providers/openai-tier-startup";
 import { OpenAiTierMigrationCollisionError, projectOpenAiTierMigration } from "../src/providers/openai-tiers";
 import type { OcxConfig } from "../src/types";
+import * as windowsAcl from "../src/lib/windows-secret-acl";
 
 const config: OcxConfig = {
   port: 10100,
@@ -107,6 +122,32 @@ function virtualBackupIO(initial: Record<string, string>, fail: {
     },
   };
   return { io, files, calls };
+}
+
+function aclBackupIO(options: {
+  failTempUnlink?: () => boolean;
+  hideTempFromExists?: boolean;
+  vanishAfterHarden?: boolean;
+} = {}): OpenAiTierBackupIO {
+  return {
+    exists: path => options.hideTempFromExists && path.endsWith(".tmp") ? false : existsSync(path),
+    read: path => readFileSync(path),
+    createExclusive: path => { writeFileSync(path, new Uint8Array(), { flag: "wx", mode: 0o600 }); },
+    write: (path, bytes) => writeFileSync(path, bytes),
+    harden: path => {
+      chmodSync(path, 0o600);
+      windowsAcl.hardenSecretPath(path, { required: true });
+      if (options.vanishAfterHarden) unlinkSync(path);
+    },
+    publishNoReplace: (temp, backup) => linkSync(temp, backup),
+    truncate: path => truncateSync(path, 0),
+    unlink: path => {
+      if (path.endsWith(".tmp") && options.failTempUnlink?.()) {
+        throw Object.assign(new Error("injected temp unlink failure"), { code: "EPERM" });
+      }
+      unlinkSync(path);
+    },
+  };
 }
 
 describe("OpenAI provider option startup coordinator", () => {
@@ -248,6 +289,92 @@ describe("OpenAI provider option startup coordinator", () => {
     expect(new TextDecoder().decode(backup?.bytes)).toBe("original-secret");
     expect(backup?.hardened).toBe(true);
     expect([...state.files.keys()].filter(path => path.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("backup temp cleanup forgets successful ACL memos and retains failed removals", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-backup-acl-"));
+    const source = join(root, "config.json");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    windowsAcl.resetHardenedStateForTests();
+    windowsAcl.setPlatformForTests("win32");
+    windowsAcl.setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    try {
+      writeFileSync(source, "original-secret");
+      expect(backupConfigBeforeOpenAiTierMigration(source, aclBackupIO())).toBe("created");
+      expect(windowsAcl.hardenedSecretPathCountForTests()).toBe(0);
+
+      unlinkSync(`${source}.pre-openai-tiers-v2.bak`);
+      let failRemoval = true;
+      expect(() => backupConfigBeforeOpenAiTierMigration(source, aclBackupIO({
+        failTempUnlink: () => failRemoval,
+      }))).toThrow(OpenAiTierBackupCleanupError);
+      expect(windowsAcl.hardenedSecretPathCountForTests()).toBe(1);
+      failRemoval = false;
+      for (const name of readdirSync(root)) {
+        if (name.endsWith(".tmp")) unlinkSync(join(root, name));
+      }
+    } finally {
+      windowsAcl.setIcaclsRunnerForTests(null);
+      windowsAcl.setPlatformForTests(null);
+      windowsAcl.resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("backup unlink EPERM retains its ACL memo when exists falsely reports the temp absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-backup-hidden-acl-"));
+    const source = join(root, "config.json");
+    const backup = `${source}.pre-openai-tiers-v2.bak`;
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    windowsAcl.resetHardenedStateForTests();
+    windowsAcl.setPlatformForTests("win32");
+    windowsAcl.setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    try {
+      writeFileSync(source, "original-secret");
+      expect(() => backupConfigBeforeOpenAiTierMigration(source, aclBackupIO({
+        failTempUnlink: () => true,
+        hideTempFromExists: true,
+      }))).toThrow(OpenAiTierBackupCleanupError);
+      expect(existsSync(backup)).toBe(false);
+      const residuals = readdirSync(root).filter(name => name.endsWith(".tmp"));
+      expect(residuals).toHaveLength(1);
+      expect(existsSync(join(root, residuals[0]!))).toBe(true);
+      expect(windowsAcl.hardenedSecretPathCountForTests()).toBe(1);
+    } finally {
+      windowsAcl.setIcaclsRunnerForTests(null);
+      windowsAcl.setPlatformForTests(null);
+      windowsAcl.resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("backup confirmed-absent cleanup forgets a memo created before the temp vanished", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-backup-absent-acl-"));
+    const source = join(root, "config.json");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    windowsAcl.resetHardenedStateForTests();
+    windowsAcl.setPlatformForTests("win32");
+    windowsAcl.setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    try {
+      writeFileSync(source, "original-secret");
+      expect(() => backupConfigBeforeOpenAiTierMigration(source, aclBackupIO({ vanishAfterHarden: true })))
+        .toThrow();
+      expect(windowsAcl.hardenedSecretPathCountForTests()).toBe(0);
+    } finally {
+      windowsAcl.setIcaclsRunnerForTests(null);
+      windowsAcl.setPlatformForTests(null);
+      windowsAcl.resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("v2 backup creation never overwrites the historical v1 snapshot", () => {

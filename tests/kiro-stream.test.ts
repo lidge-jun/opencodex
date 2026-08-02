@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createKiroAdapter, isRetryableKiroStreamCatchError } from "../src/adapters/kiro";
+import {
+  createKiroAdapter as createKiroAdapterProduction,
+  isRetryableKiroStreamCatchError,
+  parseKiroStream,
+} from "../src/adapters/kiro";
 import {
   KIRO_COMPLETION_RETRY_MESSAGE,
   KIRO_COMPLETION_TOOL_NAME,
@@ -12,7 +16,13 @@ import { parseKiroEvent } from "../src/adapters/kiro-events";
 import { resetKiroThrottleStateForTests } from "../src/adapters/kiro-retry";
 import { encodeMessage } from "../src/lib/eventstream-decoder";
 import { estimateTokens } from "../src/lib/token-estimate";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 import type { OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+function createKiroAdapter(...args: Parameters<typeof createKiroAdapterProduction>) {
+  return withTestTranslatorBudget(createKiroAdapterProduction(...args));
+}
 
 const enc = new TextEncoder();
 const origHome = process.env.HOME;
@@ -323,6 +333,106 @@ describe("kiro adapter — parseStream", () => {
       endTurn: true,
       providerState: { kiro: { conversationId: "returned-conversation-42" } },
     });
+  });
+
+  test("large first-attempt text stays charged through fallback construction and releases after parse", async () => {
+    const budget = createTranslatorBudget();
+    const firstText = "x".repeat(10 * 1024 * 1024);
+    const fallbackText = "y".repeat(1024 * 1024);
+    try {
+      const events = await collectAdapterEvents(parseKiroStream(
+        new Response(streamOf(eventFrame({ content: firstText }))),
+        budget,
+        "claude-sonnet-4.5",
+        0,
+        undefined,
+        undefined,
+        "conversation-large-first",
+        "required",
+        async () => {
+          const chargedDuringFactory = budget.snapshot().currentBytes;
+          expect(chargedDuringFactory).toBeGreaterThanOrEqual(Buffer.byteLength(firstText));
+          await Promise.resolve();
+          expect(budget.snapshot().currentBytes).toBe(chargedDuringFactory);
+          return {
+            response: new Response(streamOf(eventFrame({ content: fallbackText }))),
+            inputTokens: 0,
+            contextInputEstimate: 0,
+            nameMap: new Map(),
+            conversationId: "conversation-small-fallback",
+          };
+        },
+      ));
+
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+      expect(events.some(event => event.type === "text_delta" && event.text.length === fallbackText.length)).toBe(true);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  }, 60_000);
+
+  test("production fallback charges its retry serialization before releasing first-attempt text", async () => {
+    const budget = createTranslatorBudget();
+    const firstText = "p".repeat(1024 * 1024);
+    const fallbackText = "final fallback";
+    try {
+      const adapter = createKiroAdapterProduction(provider);
+      await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]), {
+        headers: new Headers(),
+        translatorBudget: budget,
+      });
+      let chargedAtFetch = 0;
+      globalThis.fetch = (async () => {
+        chargedAtFetch = budget.snapshot().currentBytes;
+        return new Response(streamOf(eventFrame({ content: fallbackText })));
+      }) as typeof fetch;
+
+      const events = await collectAdapterEvents(adapter.parseStream(
+        new Response(streamOf(eventFrame({ content: firstText }))),
+        budget,
+      ));
+
+      expect(chargedAtFetch).toBeGreaterThan(2 * Buffer.byteLength(firstText));
+      expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  }, 60_000);
+
+  test("near-cap production fallback rejects before fetch with a typed translation overflow", async () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 308_000 });
+    const firstText = "x".repeat(100 * 1024);
+    let fetches = 0;
+    try {
+      const adapter = createKiroAdapterProduction(provider);
+      await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]), {
+        headers: new Headers(),
+        translatorBudget: budget,
+      });
+      globalThis.fetch = (async () => {
+        fetches++;
+        return new Response(streamOf(eventFrame({ content: "must not be fetched" })));
+      }) as typeof fetch;
+
+      const events = await collectAdapterEvents(adapter.parseStream(
+        new Response(streamOf(eventFrame({ content: firstText }))),
+        budget,
+      ));
+
+      expect(fetches).toBe(0);
+      expect(events.at(-1)).toMatchObject({
+        type: "error",
+        status: 502,
+        errorType: "upstream_error",
+        code: "translation_buffer_limit",
+      });
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
   });
 
   test("bounded fallback uses its rebuilt context estimate for the final absolute checkpoint", async () => {

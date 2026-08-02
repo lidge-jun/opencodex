@@ -530,10 +530,14 @@ export interface OcxApiKeyEntry {
 
 export interface OcxConfig {
   port: number;
+  /** Maximum usage-log bytes read for one management snapshot. */
+  managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
   openaiProviderTierVersion?: 1 | 2;
+  /** One-time migration marker for Antigravity's static catalog default. */
+  googleAntigravityStaticCatalogVersion?: 1;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
   /**
@@ -702,6 +706,8 @@ export interface OcxConfig {
   syncResumeHistory?: boolean;
   /** Freshness window (ms) for the per-provider live `/models` cache. Defaults to 5 min. */
   modelCacheTtlMs?: number;
+  /** Evictable retained app-state budget in MiB. Default 256; valid 64..4096. */
+  appOwnedMemoryBudgetMb?: number;
   /** Anthropic prompt-cache retention: "short" = 5-min ephemeral (default), "long" = 1-hour extended, "none" = disabled. */
   cacheRetention?: "none" | "short" | "long";
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
@@ -903,6 +909,10 @@ export interface ResponsesItemIdRepairConfig {
 
 export interface OcxProviderConfig {
   adapter: string;
+  /** Cursor MCP compatibility bounds; positive integers when configured. */
+  mcpMaxTools?: number;
+  mcpMaxSchemaBytes?: number;
+  mcpMaxResultBytes?: number;
   /**
    * Per-model wire override, keyed by the upstream native model id (after namespace
    * and combo resolution). A single gateway can front models that speak different

@@ -92,9 +92,7 @@ export interface CatalogModel {
   /**
    * Display-only Codex catalog `display_name` override. Relabels the picker row ONLY — it never
    * affects the routing slug, alias-collision order, native marketing-name precedence, or provider
-   * behavior. When unset, routed entries use the final segment of the native model id so the
-   * provider namespace does not crowd the picker; basename collisions retain enough route context
-   * to stay distinguishable, and aliased combo rows keep their public alias.
+   * behavior. When unset, the entry falls back to its Codex-facing slug (the historical behavior).
    * Native upstream entries (e.g. gpt-5.6-sol → "GPT-5.6-Sol") come from the pinned snapshot path
    * which carries no CatalogModel, so a configured displayName can never override a native name.
    */

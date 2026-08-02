@@ -1,4 +1,5 @@
 import type { ResponsesTerminalStatus } from "../bridge";
+import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
   addRequestLog,
@@ -78,11 +79,14 @@ export function relayWithAbort(
 }
 
 export function buildFailedTailPayload(err: unknown): string {
-  const message = `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`
+  const translatorOverflow = isTranslatorBudgetExceededError(err);
+  const message = (translatorOverflow
+    ? "upstream translation buffer exceeded the safe limit"
+    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
     .slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
-    code: "upstream_reset",
+    code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
     message,
   };
   return JSON.stringify({

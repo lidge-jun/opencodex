@@ -10,14 +10,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { drainAndShutdown } from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import {
-  resetStorageCleanupPolicyJobForTests,
   resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
 } from "../src/storage/policy-job";
 import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
+import { drainStorageWorkers } from "../src/storage/worker-lifecycle";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -53,19 +54,23 @@ function seedArchived(codexHome: string): void {
   db.close();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
+  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME.
+  stopStorageCleanupScheduler();
+  await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
   isolatedCodexHome = installIsolatedCodexHome("ocx-policy-job-responsive-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-policy-job-responsive-"));
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(baseConfig());
   stopStorageCleanupScheduler();
-  resetStorageCleanupPolicyJobForTests();
 });
 
 afterEach(async () => {
   stopStorageCleanupScheduler();
   await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
   setStorageCleanupPolicyJobTestHooks(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -139,8 +144,7 @@ describe("storage cleanup policy job responsiveness", () => {
         await Bun.sleep(50);
       }
     } finally {
-      await server.stop(true);
-      stopStorageCleanupScheduler();
+      await drainAndShutdown(server, 5_000);
       await resetStorageCleanupPolicyJobForTestsAsync();
     }
   }, { timeout: 30_000 });

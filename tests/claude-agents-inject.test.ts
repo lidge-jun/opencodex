@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeAgentDefs, injectClaudeAgentDefs, syncClaudeAgentDefs } from "../src/claude/agents-inject";
+import { buildClaudeContextWindows } from "../src/claude/context-windows";
+import { fetchProviderModels } from "../src/codex/catalog/provider-fetch";
+import { OAUTH_PROVIDERS } from "../src/oauth";
 import type { OcxConfig } from "../src/types";
 
 const dirs: string[] = [];
@@ -40,6 +43,105 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
     expect(defs).toHaveLength(3);
     // Dispatcher directive (live repro: model:"fable" override broke inherit).
     for (const d of defs) expect(d.description).toContain("`model` argument is ignored");
+  });
+
+  test("generated profiles retain catalog-derived 1M markers for Claude 4.6 and 4.7", async () => {
+    const anthropic = structuredClone(OAUTH_PROVIDERS.anthropic.providerConfig);
+    anthropic.liveModels = false;
+    const config = cfg({
+      defaultProvider: "anthropic",
+      providers: { anthropic },
+      subagentModels: [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-4-7",
+      ],
+    });
+    const catalog = await fetchProviderModels("anthropic", anthropic, 0);
+    const windows = buildClaudeContextWindows([], catalog);
+    const defs = buildClaudeAgentDefs(config, windows, tempDir());
+    const models = Object.fromEntries(defs.map(def => [def.name, def.model]));
+
+    expect(models).toEqual({
+      "ocx-claude-sonnet-4-6": "claude-sonnet-4-6[1m]",
+      "ocx-claude-opus-4-6": "claude-opus-4-6[1m]",
+      "ocx-claude-opus-4-7": "claude-opus-4-7[1m]",
+    });
+  });
+
+  test("generated profiles preserve registry-routed [1m] selector ids for roster and self", async () => {
+    const kimi = structuredClone(OAUTH_PROVIDERS.kimi.providerConfig);
+    kimi.liveModels = false;
+    const config = cfg({
+      defaultProvider: "kimi",
+      providers: { kimi },
+      subagentModels: ["kimi/k3[1m]"],
+    });
+    const catalog = await fetchProviderModels("kimi", kimi, 0);
+    const windows = buildClaudeContextWindows([], catalog);
+    const dir = tempDir();
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "claude-ocx-kimi--k3[1m]" }));
+    const defs = buildClaudeAgentDefs(config, windows, dir);
+    const models = Object.fromEntries(defs.map(def => [def.name, def.model]));
+
+    expect(windows["claude-ocx-kimi--k3"]).toBe(262_144);
+    expect(windows["claude-ocx-kimi--k3[1m]"]).toBe(1_048_576);
+    expect(models).toEqual({
+      "ocx-k3-1m": "claude-ocx-kimi--k3[1m]",
+      "ocx-self": "claude-ocx-kimi--k3[1m]",
+    });
+
+    const cappedCatalog = await fetchProviderModels("kimi", kimi, 0, 350_000);
+    const cappedWindows = buildClaudeContextWindows([], cappedCatalog);
+    const cappedDir = tempDir();
+    writeFileSync(join(cappedDir, "settings.json"), JSON.stringify({ model: "claude-ocx-kimi--k3[1m]" }));
+    const cappedDefs = buildClaudeAgentDefs(config, cappedWindows, cappedDir);
+
+    expect(cappedWindows["claude-ocx-kimi--k3[1m]"]).toBe(350_000);
+    expect(Object.fromEntries(cappedDefs.map(def => [def.name, def.model]))).toEqual({
+      "ocx-k3-1m": "claude-ocx-kimi--k3",
+      "ocx-self": "claude-ocx-kimi--k3",
+    });
+
+    const exactCapWins = { ...cappedWindows, "claude-ocx-kimi--k3": 1_048_576 };
+    const exactCapDefs = buildClaudeAgentDefs(config, exactCapWins, cappedDir);
+    expect(Object.fromEntries(exactCapDefs.map(def => [def.name, def.model]))).toEqual({
+      "ocx-k3-1m": "claude-ocx-kimi--k3",
+      "ocx-self": "claude-ocx-kimi--k3",
+    });
+  });
+
+  test("generated profiles normalize marker case before exact context lookup", async () => {
+    const kimi = structuredClone(OAUTH_PROVIDERS.kimi.providerConfig);
+    kimi.liveModels = false;
+    const config = cfg({
+      defaultProvider: "kimi",
+      providers: { kimi },
+      subagentModels: ["kimi/k3[1M]"],
+    });
+    const catalog = await fetchProviderModels("kimi", kimi, 0);
+    const windows = buildClaudeContextWindows([], catalog);
+    const dir = tempDir();
+    const upperSelector = "claude-ocx-kimi--k3[1M]";
+    const lowerSelector = "claude-ocx-kimi--k3[1m]";
+    const bareSelector = "claude-ocx-kimi--k3";
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: upperSelector }));
+    const modelMap = (contextWindows: Record<string, number>) => Object.fromEntries(
+      buildClaudeAgentDefs(config, contextWindows, dir).map(def => [def.name, def.model]),
+    );
+
+    expect(modelMap(windows)).toEqual({
+      "ocx-k3-1m": upperSelector,
+      "ocx-self": upperSelector,
+    });
+    expect(modelMap({ ...windows, [bareSelector]: 1_048_576, [lowerSelector]: 350_000 })).toEqual({
+      "ocx-k3-1m": bareSelector,
+      "ocx-self": bareSelector,
+    });
+    expect(modelMap({ ...windows, [upperSelector]: 350_000 })).toEqual({
+      "ocx-k3-1m": bareSelector,
+      "ocx-self": bareSelector,
+    });
   });
 
   test("placeholder guidance recommends haiku, never sonnet (issue #252)", () => {

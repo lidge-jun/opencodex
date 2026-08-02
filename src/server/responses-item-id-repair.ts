@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ResponsesItemIdRepairConfig } from "../types";
 import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
+import type { TranslatorBudget } from "../lib/translator-budget";
 
 type RepairableItemType = "message" | "reasoning";
 
@@ -9,6 +10,7 @@ interface ResponsesItemIdRepairState {
   readonly placeholders: Record<RepairableItemType, ReadonlySet<string>>;
   readonly outputIds: Record<RepairableItemType, Map<number, string>>;
   readonly scope: string;
+  readonly budget?: TranslatorBudget;
 }
 
 const REPAIRABLE_PREFIXES: Record<RepairableItemType, string> = {
@@ -48,8 +50,8 @@ function mintCanonicalId(type: RepairableItemType, scope: string, outputIndex: n
   return `${REPAIRABLE_PREFIXES[type]}ocx_${scope}_${outputIndex}`;
 }
 
-function createRepairState(config: ResponsesItemIdRepairConfig): ResponsesItemIdRepairState {
-  return {
+function createRepairState(config: ResponsesItemIdRepairConfig, budget?: TranslatorBudget): ResponsesItemIdRepairState {
+  const state = {
     repairMissingTerminalIds: config.repairMissingTerminalIds === true,
     placeholders: {
       message: new Set(config.message ?? []),
@@ -60,7 +62,14 @@ function createRepairState(config: ResponsesItemIdRepairConfig): ResponsesItemId
       reasoning: new Map<number, string>(),
     },
     scope: randomUUID().replace(/-/g, ""),
+    budget,
   };
+  budget?.chargeRetained(new TextEncoder().encode(JSON.stringify({
+    message: [...state.placeholders.message],
+    reasoning: [...state.placeholders.reasoning],
+    scope: state.scope,
+  })).byteLength, { kind: "item_ids" });
+  return state;
 }
 
 function rememberMappedId(
@@ -80,6 +89,7 @@ function rememberMappedId(
       ? rawId
       : null;
   if (!mapped) return null;
+  state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, rawId, mapped])).byteLength, { kind: "item_ids" });
   state.outputIds[type].set(outputIndex, mapped);
   return mapped;
 }
@@ -163,7 +173,13 @@ function repairEventPayload(
       changed = true;
     }
   }
-  return changed ? JSON.stringify(nextEvent) : payload;
+  if (!changed) return payload;
+  const rewritten = JSON.stringify(nextEvent);
+  const bytes = new TextEncoder().encode(rewritten).byteLength;
+  const reservation = state.budget?.reserveTransient(bytes, { kind: "item_ids" });
+  reservation?.commitRetained();
+  if (state.budget) queueMicrotask(() => state.budget?.releaseRetained(bytes, { kind: "item_ids" }));
+  return rewritten;
 }
 
 /**
@@ -187,16 +203,18 @@ function repairEventPayload(
 /** Stateful payload rewrite for composition with other client-facing SSE transforms. */
 export function createResponsesItemIdPayloadRewrite(
   config: ResponsesItemIdRepairConfig,
+  budget?: TranslatorBudget,
 ): SsePayloadRewrite {
-  const state = createRepairState(config);
+  const state = createRepairState(config, budget);
   return (payload) => repairEventPayload(payload, state);
 }
 
 export function relaySseWithResponsesItemIdRepair(
   body: ReadableStream<Uint8Array>,
   config: ResponsesItemIdRepairConfig,
+  budget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
-  return relaySseWithPayloadRewrite(body, createResponsesItemIdPayloadRewrite(config));
+  return relaySseWithPayloadRewrite(body, createResponsesItemIdPayloadRewrite(config, budget), budget);
 }
 
 export function hasResponsesItemIdRepair(config: ResponsesItemIdRepairConfig | undefined): boolean {

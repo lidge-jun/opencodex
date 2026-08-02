@@ -9,7 +9,7 @@ import {
   seedArchived,
   setArchivedCleanupJobTestHooks,
   startServer,
-  stopStorageCleanupScheduler,
+  stopPolicyServer,
   uninstallPolicyApiHarness,
   waitForJobIdle,
   type PolicyApiHarness,
@@ -18,8 +18,8 @@ import {
 
 let harness: PolicyApiHarness;
 
-beforeEach(() => {
-  harness = installPolicyApiHarness("ocx-api-storage-policy-mut-busy");
+beforeEach(async () => {
+  harness = await installPolicyApiHarness("ocx-api-storage-policy-mut-busy");
 });
 
 afterEach(async () => {
@@ -78,8 +78,7 @@ test("storage_mutation_busy clears inflight so a later policy run can start", as
     expect(retryDone.job.lastOutcome?.skipped).toBeUndefined();
     expect(retryDone.job.lastOutcome?.removed).toBe(1);
   } finally {
-    await server.stop(true);
-    stopStorageCleanupScheduler();
+    await stopPolicyServer(server);
     await resetStorageCleanupPolicyJobForTestsAsync();
   }
 }, { timeout: 30_000 });

@@ -47,9 +47,35 @@ describe("startup star prompt", () => {
     expect(guardIndex).toBeLessThan(markerIndex);
     // The agent path relays the question rather than selecting a choice.
     expect(prompt).toContain("printAgentDeferral");
-    expect(prompt).toContain("do not answer this yourself");
-    expect(prompt).toContain("Ask the user whether to star");
+    expect(prompt).toContain("Do not answer this on their behalf");
+    expect(prompt).toContain("Ask the user, in your reply, whether to star");
+    // The deferral must name the concrete command the agent may run only after a
+    // yes, so relaying the question does not turn into guesswork.
+    expect(prompt).toContain("gh api -X PUT /user/starred/");
     expect(prompt).not.toMatch(/isAgentDriven\(\)[\s\S]{0,80}starRepo\(\)/);
+  });
+
+  test("the management star endpoint refuses agent callers too", async () => {
+    const routes = await readText("src/server/management/sidebar-routes.ts");
+
+    // The CLI deferral is worthless if an agent can reach the same write over
+    // HTTP: it runs on the user's machine and can read the admin token from disk.
+    expect(routes).toContain("isAgentDriven()");
+    expect(routes).toContain("agent_consent_required");
+    // A dashboard click must still work when an agent started the proxy, so the
+    // refusal is conditioned on the absence of browser-session evidence.
+    expect(routes).toContain("hasBrowserSessionEvidence");
+    expect(routes).toMatch(/isAgentDriven\(\)\s*&&\s*!hasBrowserSessionEvidence\(req\)/);
+  });
+
+  test("the consent rule is written down where agents and users read it", async () => {
+    const agents = await readText("AGENTS.md");
+    const readme = await readText("README.md");
+
+    expect(agents).toContain("User-consent actions");
+    expect(agents).toContain("agent_consent_required");
+    expect(readme).toContain("agent_consent_required");
+    expect(readme.toLowerCase()).toContain("never an agent");
   });
 
   test("the star prompt only appears when gh can actually star", async () => {

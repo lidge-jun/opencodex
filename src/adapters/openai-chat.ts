@@ -10,6 +10,12 @@ import { contentPartsToText } from "./image";
 import { neutralizeIdentity } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
+import {
+  isTranslatorBudgetExceededError,
+  retainTranslatedEventBatch,
+  TRANSLATOR_MAX_SSE_EVENT_BYTES,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 
 // Providers may opt into stripping one trailing "[...]" group from the wire model id.
 // Z.AI needs this because its OpenAI path rejects glm-5.2[1m] with 400 code 1211;
@@ -676,7 +682,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       };
     },
 
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
@@ -684,7 +690,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      const budgetEncoder = new TextEncoder();
       let buffer = "";
+      let bufferBytes = 0;
       // Streamed tool calls are BUFFERED until a terminal signal, then flushed as atomic
       // start/delta/end sequences. The bridge treats text/reasoning deltas as barriers that
       // close an open tool-call item (bridge.ts closeCurrentToolCall on text_delta), so
@@ -693,7 +701,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // chunks, whole-chunk calls) cannot be represented live without overlapping sequences.
       // Keyed by `index` (OpenAI wire standard), falling back to `id`, falling back to the
       // last-seen call for providers that omit both on continuation chunks.
-      interface PendingToolCall { key: string; id: string; name: string; args: string }
+      interface PendingToolCall { key: string; id: string; name: string; args: string; argsBytes: number }
       const pendingToolCalls: PendingToolCall[] = [];
       let toolCallSeq = 0;
       const flushToolCalls = function* (): Generator<AdapterEvent> {
@@ -704,6 +712,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           yield { type: "tool_call_start", id: call.id, name: call.name };
           if (call.args.length > 0) yield { type: "tool_call_delta", arguments: call.args };
           yield { type: "tool_call_end" };
+          budget.closeCall(call.key);
         }
         pendingToolCalls.length = 0;
       };
@@ -803,12 +812,27 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               // splitting into two calls that share one call_id downstream.
               if (!call && tc.id) call = pendingToolCalls.find(c => c.id === tc.id);
               if (!call) {
-                call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "" };
+                call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "", argsBytes: 0 };
                 pendingToolCalls.push(call);
+                budget.openCall(call.key);
               }
               if (tc.id && !call.id) call.id = tc.id;
               if (tc.function?.name && !call.name) call.name = tc.function.name;
-              if (tc.function?.arguments) call.args += tc.function.arguments;
+              if (tc.function?.arguments) {
+                const previousBytes = call.argsBytes;
+                const nextBytes = previousBytes + budgetEncoder.encode(tc.function.arguments).byteLength;
+                const scope = { kind: "tool_args" as const, callId: call.key };
+                const reservation = budget.reserveTransient(nextBytes, scope);
+                try {
+                  call.args += tc.function.arguments;
+                  reservation.commitRetained();
+                  budget.releaseRetained(previousBytes, scope);
+                  call.argsBytes = nextBytes;
+                } catch (error) {
+                  reservation.release();
+                  throw error;
+                }
+              }
             }
           }
         }
@@ -825,10 +849,31 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          const decoded = decoder.decode(value, { stream: true });
+          const nextBufferBytes = bufferBytes + budgetEncoder.encode(decoded).byteLength;
+          if (nextBufferBytes > TRANSLATOR_MAX_SSE_EVENT_BYTES) {
+            throw new Error(`translation SSE event exceeded ${TRANSLATOR_MAX_SSE_EVENT_BYTES} bytes`, {
+              cause: { code: "translation_buffer_limit" },
+            });
+          }
+          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
+          try {
+            buffer += decoded;
+            appendReservation.commitRetained();
+            budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          } catch (error) {
+            appendReservation.release();
+            throw error;
+          }
+          bufferBytes = nextBufferBytes;
 
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
+          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
+          residualReservation.commitRetained();
+          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          bufferBytes = residualBytes;
 
           for (const line of lines) {
             if ((yield* handleDataLine(line)) === "terminate") return;
@@ -879,13 +924,32 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             ? "content_filter"
             : undefined;
         yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
+      } catch (error) {
+        if (isTranslatorBudgetExceededError(error)
+          || (error instanceof Error && (error.cause as { code?: unknown } | undefined)?.code === "translation_buffer_limit")) {
+          yield {
+            type: "error",
+            status: 502,
+            errorType: "upstream_error",
+            code: "translation_buffer_limit",
+            message: "upstream translation buffer exceeded the safe limit",
+          };
+          try { await reader.cancel(error); } catch { /* already closed */ }
+          return;
+        }
+        throw error;
       } finally {
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+        for (const call of pendingToolCalls) budget.closeCall(call.key);
         reader.releaseLock();
       }
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const json = await response.json() as Record<string, unknown>;
+      const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+      budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
+      try {
       if (json.error) {
         const upstreamError = json.error as { message?: unknown; code?: unknown; type?: unknown; status?: unknown };
         const message = typeof upstreamError.message === "string" ? upstreamError.message : "upstream error";
@@ -931,7 +995,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         type: "done",
         usage: usageFromOpenAIChat(usage),
       });
+      retainTranslatedEventBatch(events, budget);
       return events;
+      } finally {
+        budget.releaseRetained(responseBytes, { kind: "retained_collectors" });
+      }
     },
   };
 }

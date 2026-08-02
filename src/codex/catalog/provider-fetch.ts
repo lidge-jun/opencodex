@@ -53,6 +53,7 @@ import {
   type ProviderModelsApiItem,
 } from "../../providers/model-discovery";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
 
 
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
@@ -69,6 +70,21 @@ interface GatherFlightResult {
 }
 
 const gatherInflight = new Map<string, Promise<GatherFlightResult>>();
+const MAX_CONCURRENT_CATALOG_GATHERS = 8;
+const gatherGate = createAdmissionGate("catalog_gathers", MAX_CONCURRENT_CATALOG_GATHERS);
+
+export class CatalogGatherBusyError extends ResourceAdmissionError {
+  override readonly code = "catalog_busy";
+  readonly retryAfterSeconds = 1;
+  constructor() {
+    super("catalog_gathers", MAX_CONCURRENT_CATALOG_GATHERS);
+    this.name = "CatalogGatherBusyError";
+  }
+}
+
+export function catalogGatherAdmissionMetrics(): AdmissionMetrics {
+  return gatherGate.metrics();
+}
 
 function stableJson(value: unknown): string {
   return JSON.stringify(value, (_key, nested) => {
@@ -82,7 +98,9 @@ function stableJson(value: unknown): string {
 function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Record<string, unknown> {
   return {
     n: name,
-    live: prov.liveModels !== false,
+    // Preserve the persisted tri-state. Registry enrichment may turn an omitted value into
+    // `false` while an explicit `true` stays live, so those callers must not share a flight.
+    live: prov.liveModels ?? null,
     base: prov.baseUrl ?? "",
     adapter: prov.adapter ?? "",
     models: [...(prov.models ?? [])].sort(),
@@ -217,6 +235,15 @@ export function isDatedVariantId(liveId: string, configuredId: string): boolean 
 }
 
 export const lastDropWarnSignature = new Map<string, string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileProviderFetchWarnings(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = lastDropWarnSignature.size;
+  lastDropWarnSignature.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 
@@ -382,7 +409,6 @@ function boundedOwnedBy(value: unknown): string | undefined {
 
 export async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
-  const apiKey = await resolveModelsAuthToken(name, prov);
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
@@ -393,6 +419,13 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     provider: name,
     ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
   }));
+  // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
+  // discovery failure left by an older live configuration even when the account is logged out.
+  if (prov.liveModels === false) {
+    clearProviderDiscoveryStatus(name);
+    return configured;
+  }
+  const apiKey = await resolveModelsAuthToken(name, prov);
   // A configured default is a real callable selector and must remain discoverable when a
   // compatible provider's live /models request fails (issue #308). Keep this separate from the
   // explicit static list: `liveModels: false` + empty `models[]` intentionally publishes zero
@@ -411,10 +444,6 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       : models
   );
   if (prov.adapter === "cursor") {
-    if (prov.liveModels === false) {
-      clearProviderDiscoveryStatus(name);
-      return configured;
-    }
     if (!apiKey) return configured;
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
     // variants this PLAN can use. Keep the base-model UX (the request builder appends the effort
@@ -447,10 +476,6 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     // No usable token (logged out, or account marked needsReauth). Still surface the
     // configured static catalog so the GUI Models tab / rail counts are not empty —
     // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
-    return configured;
-  }
-  if (prov.liveModels === false) {
-    clearProviderDiscoveryStatus(name);
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
@@ -649,10 +674,13 @@ export async function gatherRoutedModels(
   const key = gatherFlightKey(config);
   let promise = gatherInflight.get(key);
   if (!promise) {
+    const lease = gatherGate.tryAcquire();
+    if (!lease) throw new CatalogGatherBusyError();
     // Claim the slot synchronously before any await so same-key callers join this flight.
     // Distinct keys keep their own entries — a second config must not evict the first.
     const flight = gatherRoutedModelsUncached(config).finally(() => {
       if (gatherInflight.get(key) === flight) gatherInflight.delete(key);
+      lease.release();
     });
     gatherInflight.set(key, flight);
     promise = flight;

@@ -4,6 +4,7 @@ import type { CodexAuthContext } from "../codex/auth-context";
 import { headersForCodexAuthContext } from "../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
+import type { AdmissionReservation } from "../lib/admission";
 
 const OPEN = 1;
 type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
@@ -38,6 +39,7 @@ export interface WsData {
   liveUpstreamHeaders?: Record<string, string>;
   livePending?: Array<string | Buffer>;
   liveOpened?: boolean;
+  admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
 }
 
 /**
@@ -48,10 +50,10 @@ export interface WsData {
  * A test that only asserts "the socket opened" would still pass if the admission
  * were dropped from the payload, so the payload itself is what gets asserted.
  */
-export function buildResponsesWsData(headers: Headers, admission: DataPlaneAdmission): WsData {
+export function buildResponsesWsData(headers: Headers, admission: DataPlaneAdmission, admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
-  return { headers, admission };
+  return { headers, admission, ...(admissionLease ? { admissionLease } : {}) };
 }
 
 export class WsSendDroppedError extends Error {

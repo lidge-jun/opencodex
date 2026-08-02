@@ -2,6 +2,16 @@ import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type OcxProviderConfig, type OcxUsage } from "../../types";
 import { CONNECT_FLAG_END_STREAM, decodeAvailableConnectFrames, encodeConnectFrame } from "./framing";
+import {
+  CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES,
+  CURSOR_MAX_CONNECT_FRAME_BYTES,
+  CURSOR_MAX_PENDING_FRAMES,
+  CURSOR_PENDING_FRAMES_RESUME,
+  CURSOR_TRANSPORT_MAX_BUFFERED_BYTES,
+  CURSOR_TRANSPORT_RESUME_BYTES,
+  TranslatorBudgetExceededError,
+  type TranslatorBudget,
+} from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
 import {
   createCursorContextUsageTracker,
@@ -41,7 +51,13 @@ import { debugProviderDiagnostic } from "../../lib/debug";
 import { classifyCursorError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
-import { handleCursorNativeExec, handleCursorNativeKv, type CursorNativeExecContext } from "./native-exec";
+import {
+  handleCursorNativeExec,
+  handleCursorNativeKv,
+  releaseCursorBlobRequestScope,
+  type CursorBlobRequestScopeToken,
+  type CursorNativeExecContext,
+} from "./native-exec";
 import { effectiveCursorNativeExecAllow } from "./exec-policy";
 import { resolveMcpServers } from "./mcp-config";
 import { CursorMcpManager } from "./mcp-manager";
@@ -58,6 +74,10 @@ import {
   requestedCursorToolUseCount,
 } from "./tool-definitions";
 import type { CursorNativeToolDeps } from "./native-exec-tools";
+import {
+  terminateBackgroundShellsForSession,
+  type BackgroundShellTerminationReport,
+} from "./native-exec-shell";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
 
@@ -394,9 +414,15 @@ class LiveCursorTransport implements CursorTransport {
   private activeClientToolFinalizeGraceMs: number;
   private readonly token: string;
   private readonly mcpManager?: CursorMcpManager;
+  private readonly translatorBudget: TranslatorBudget;
+  private pendingTransportFrames = 0;
+  private transportBufferedBytes = 0;
   private readonly desktopDeps: CursorNativeToolDeps;
   private execContext: CursorNativeExecContext = {};
   private mcpPrepared?: Promise<void>;
+  private releaseMcpObservation?: () => void;
+  private blobRequestScope?: CursorBlobRequestScopeToken;
+  private shellCleanup?: Promise<BackgroundShellTerminationReport>;
   // Per-turn diagnostic counters/timestamps when provider debug is on (`ocx debug provider on`). Stamped in open(), cleared on
   // close; safe to read after a stream failure because open() owns the only writer before run().
   private turnStartedAt = 0;
@@ -407,6 +433,7 @@ class LiveCursorTransport implements CursorTransport {
   private readonly sessionId = crypto.randomUUID();
 
   constructor(private readonly input: CursorTransportFactoryInput) {
+    this.translatorBudget = input.translatorBudget;
     this.token = resolveCursorToken(input.provider, input.headers);
     // Grace window before a drained client-tool turn is finalized. Small enough not to look like a
     // stall, large enough to catch a sibling tool call announced in the next receive chunk. Injectable
@@ -415,11 +442,18 @@ class LiveCursorTransport implements CursorTransport {
     this.activeClientToolFinalizeGraceMs = this.clientToolFinalizeGraceMs;
     // Desktop (computer-use / record-screen) executors are available even with no MCP servers.
     this.desktopDeps = desktopDepsFromConfig(input.provider.desktopExecutor);
-    this.execContext = { ...this.desktopDeps, unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow(input.provider, input.requestDeclaresFullAccess === true) };
+    this.execContext = {
+      ...this.desktopDeps,
+      sessionId: this.sessionId,
+      unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow(input.provider, input.requestDeclaresFullAccess === true),
+    };
     const servers = resolveMcpServers(input.provider);
     if (servers.length > 0) {
       this.mcpManager = new CursorMcpManager(servers, {
         log: message => console.warn(message),
+        maxTools: input.provider.mcpMaxTools,
+        maxSchemaBytes: input.provider.mcpMaxSchemaBytes,
+        maxResultBytes: input.provider.mcpMaxResultBytes,
       });
     }
   }
@@ -436,10 +470,16 @@ class LiveCursorTransport implements CursorTransport {
       this.mcpPrepared = (async () => {
         try {
           const mcpToolDefs = await buildMcpToolDefinitions(this.mcpManager!);
+          this.releaseMcpObservation?.();
+          this.releaseMcpObservation = this.translatorBudget.observeExternallyCapped(
+            "mcp_payload",
+            new TextEncoder().encode(JSON.stringify(mcpToolDefs)).byteLength,
+          );
           this.execContext = {
             ...this.desktopDeps,
             ...mcpDepsFromManager(this.mcpManager!),
             mcpToolDefs,
+            sessionId: this.sessionId,
             unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow(this.input.provider, this.input.requestDeclaresFullAccess === true),
           };
         } catch (err) {
@@ -455,11 +495,11 @@ class LiveCursorTransport implements CursorTransport {
   }
 
   async *run(request: CursorRunRequest, signal?: AbortSignal): AsyncIterable<CursorServerMessage> {
-    const queue: CursorServerMessage[] = [];
+    const queue: Array<{ message: CursorServerMessage; bytes: number }> = [];
     let notify: (() => void) | undefined;
     let done = false;
     let failure: Error | undefined;
-    let state = createCursorProtobufEventState();
+    let state = createCursorProtobufEventState({ translatorBudget: this.translatorBudget });
     let failureLogged = false;
     // One per-turn summary of the failure path (end-stream error, socket reset, abort) so the
     // operator can see how far the turn got and how it was classified without re-scanning every
@@ -488,7 +528,9 @@ class LiveCursorTransport implements CursorTransport {
     };
 
     const push = (message: CursorServerMessage) => {
-      queue.push(message);
+      const bytes = new TextEncoder().encode(JSON.stringify(message)).byteLength;
+      this.reserveTransportBytes(bytes);
+      queue.push({ message, bytes });
       wake();
     };
 
@@ -522,29 +564,40 @@ class LiveCursorTransport implements CursorTransport {
     const prepared = prepareCursorRunRequest(request, {
       estimateInputTokens: contextUsage.carryForwardTokens === undefined,
     });
-    state = createCursorProtobufEventState({
-      clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name),
-      parallelToolCalls: request.parallelToolCalls,
-      toolSchemas,
-      cursorToolNameMap,
-      contextUsage,
-      ...(prepared.estimatedInputTokens !== undefined
-        ? { estimatedInputTokens: prepared.estimatedInputTokens }
-        : {}),
-    });
-
-    this.open(prepared.bytes, signal, state, push, err => {
-      failure = err;
-      wake();
-    }, () => {
-      done = true;
-      wake();
-    });
+    this.blobRequestScope = prepared.blobRequestScope;
+    try {
+      state = createCursorProtobufEventState({
+        clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name),
+        parallelToolCalls: request.parallelToolCalls,
+        toolSchemas,
+        cursorToolNameMap,
+        translatorBudget: this.translatorBudget,
+        contextUsage,
+        ...(prepared.estimatedInputTokens !== undefined
+          ? { estimatedInputTokens: prepared.estimatedInputTokens }
+          : {}),
+      });
+      this.open(prepared.bytes, signal, state, push, err => {
+        this.releaseBlobRequestScope();
+        failure = err;
+        wake();
+      }, () => {
+        this.releaseBlobRequestScope();
+        done = true;
+        wake();
+      });
+    } catch (error) {
+      this.releaseBlobRequestScope();
+      throw error;
+    }
 
     while (!done || queue.length > 0) {
       while (queue.length > 0) {
-        const message = queue.shift();
-        if (message) yield message;
+        const queued = queue.shift();
+        if (queued) {
+          this.releaseTransportBytes(queued.bytes);
+          yield queued.message;
+        }
       }
       if (failure) {
         // A CANCEL is benign only on the client-tool suspend path (expectedClose); an
@@ -565,6 +618,35 @@ class LiveCursorTransport implements CursorTransport {
 
   writeClient(_message: CursorClientMessage): void {}
 
+  private reserveTransportBytes(bytes: number): void {
+    if (this.transportBufferedBytes + bytes > CURSOR_TRANSPORT_MAX_BUFFERED_BYTES) {
+      throw new TranslatorBudgetExceededError("cursor_transport", CURSOR_TRANSPORT_MAX_BUFFERED_BYTES);
+    }
+    this.translatorBudget.chargeRetained(bytes, { kind: "cursor_transport" });
+    this.transportBufferedBytes += bytes;
+    this.updateTransportFlowControl();
+  }
+
+  private releaseTransportBytes(bytes: number): void {
+    this.transportBufferedBytes = Math.max(0, this.transportBufferedBytes - bytes);
+    this.translatorBudget.releaseRetained(bytes, { kind: "cursor_transport" });
+    this.updateTransportFlowControl();
+  }
+
+  private updateTransportFlowControl(): void {
+    if (
+      this.transportBufferedBytes >= CURSOR_TRANSPORT_MAX_BUFFERED_BYTES
+      || this.pendingTransportFrames >= CURSOR_MAX_PENDING_FRAMES
+    ) {
+      this.stream?.pause();
+      return;
+    }
+    if (
+      this.transportBufferedBytes <= CURSOR_TRANSPORT_RESUME_BYTES
+      && this.pendingTransportFrames <= CURSOR_PENDING_FRAMES_RESUME
+    ) this.stream?.resume();
+  }
+
   requestCommitted(): boolean {
     return this.committed;
   }
@@ -576,13 +658,21 @@ class LiveCursorTransport implements CursorTransport {
     }
   }
 
-  close(): void {
+  private startShellCleanup(): Promise<BackgroundShellTerminationReport> {
+    return this.shellCleanup ??= terminateBackgroundShellsForSession(this.sessionId);
+  }
+
+  async close(): Promise<void> {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.clearPendingFinalize();
     this.clearFirstFrameTimer();
     this.stream?.close();
     this.session?.close();
+    this.releaseBlobRequestScope();
+    this.releaseMcpObservation?.();
+    this.releaseMcpObservation = undefined;
     void this.mcpManager?.dispose();
+    await this.startShellCleanup();
   }
 
   private cancelCursorRun(): void {
@@ -596,7 +686,18 @@ class LiveCursorTransport implements CursorTransport {
       this.stream?.destroy();
     }
     this.session?.close();
+    this.releaseBlobRequestScope();
+    this.releaseMcpObservation?.();
+    this.releaseMcpObservation = undefined;
     void this.mcpManager?.dispose();
+    void this.startShellCleanup().catch(() => { /* close() observes the same cleanup promise */ });
+  }
+
+  private releaseBlobRequestScope(): void {
+    const scope = this.blobRequestScope;
+    if (!scope) return;
+    this.blobRequestScope = undefined;
+    releaseCursorBlobRequestScope(scope);
   }
 
   private clearPendingFinalize(): void {
@@ -725,6 +826,71 @@ class LiveCursorTransport implements CursorTransport {
     }, this.input.firstFrameTimeoutMs ?? CURSOR_FIRST_FRAME_TIMEOUT_MS);
 
     let pending: Uint8Array<ArrayBufferLike> = new Uint8Array();
+    let frameWork: Promise<void> = Promise.resolve();
+    const reservePayloadCopy = (bytes: number) => {
+      if (this.transportBufferedBytes + bytes > CURSOR_TRANSPORT_MAX_BUFFERED_BYTES) {
+        throw new TranslatorBudgetExceededError("cursor_transport", CURSOR_TRANSPORT_MAX_BUFFERED_BYTES);
+      }
+      const reservation = this.translatorBudget.reserveTransient(bytes, { kind: "cursor_transport" });
+      this.transportBufferedBytes += bytes;
+      this.updateTransportFlowControl();
+      return {
+        commitRetained: () => reservation.commitRetained(),
+        release: () => {
+          reservation.release();
+          this.transportBufferedBytes = Math.max(0, this.transportBufferedBytes - bytes);
+          this.updateTransportFlowControl();
+        },
+      };
+    };
+    const handleFrame = async (frame: ReturnType<typeof decodeAvailableConnectFrames>["frames"][number]) => {
+      this.framesReceived++;
+      if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
+        const endError = parseConnectEndStreamError(frame.payload);
+        debugProviderDiagnostic("cursor", "connect-end-stream", endError ? {
+          code: cursorConnectErrorCode(frame.payload),
+          message: redactCursorForLog(endError.message),
+          classified: classifyCursorError(endError.message),
+          framesReceived: this.framesReceived,
+          elapsedMs: Date.now() - this.turnStartedAt,
+        } : { framesReceived: this.framesReceived, elapsedMs: Date.now() - this.turnStartedAt });
+        if (endError) failAndClear(endError);
+        return;
+      }
+      await this.handleServerMessage(fromBinary(AgentServerMessageSchema, frame.payload), state, push);
+    };
+    const drainPendingFrames = () => {
+      const availableSlots = CURSOR_MAX_PENDING_FRAMES - this.pendingTransportFrames;
+      if (availableSlots <= 0 || pending.byteLength === 0) {
+        this.updateTransportFlowControl();
+        return;
+      }
+      const previousPayloadBytes = connectBufferedPayloadBytes(pending);
+      // The decoder materializes payload and residual copies. Keep the aggregate pending owner
+      // charged until every replacement has been admitted and committed; a failed admission must
+      // leave that predecessor lease intact for deterministic cleanup.
+      const decoded = decodeAvailableConnectFrames(
+        pending,
+        CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES,
+        availableSlots,
+        reservePayloadCopy,
+      );
+      pending = decoded.remainder;
+      this.releaseTransportBytes(previousPayloadBytes);
+      for (const frame of decoded.frames) {
+        this.pendingTransportFrames += 1;
+        this.updateTransportFlowControl();
+        frameWork = frameWork
+          .then(() => handleFrame(frame))
+          .catch(err => failAndClear(err instanceof Error ? err : new Error(String(err))))
+          .finally(() => {
+            this.releaseTransportBytes(frame.payload.byteLength);
+            this.pendingTransportFrames = Math.max(0, this.pendingTransportFrames - 1);
+            this.updateTransportFlowControl();
+            drainPendingFrames();
+          });
+      }
+    };
     this.stream.on("data", chunk => {
       this.clearFirstFrameTimer();
       if (!this.firstFrameLogged) {
@@ -733,30 +899,26 @@ class LiveCursorTransport implements CursorTransport {
         debugProviderDiagnostic("cursor", "first-frame", { latencyMs: this.firstFrameAt - this.turnStartedAt });
       }
       const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-      pending = concatBytes(pending, bytes);
+      let incomingPayloadBytes = 0;
+      let incomingCharged = false;
+      let replacement: ReturnType<typeof reservePayloadCopy> | undefined;
       try {
-        const decoded = decodeAvailableConnectFrames(pending);
-        pending = decoded.remainder;
-        const frames = decoded.frames;
-        for (const frame of frames) {
-          this.framesReceived++;
-          if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
-            const endError = parseConnectEndStreamError(frame.payload);
-            debugProviderDiagnostic("cursor", "connect-end-stream", endError ? {
-              code: cursorConnectErrorCode(frame.payload),
-              message: redactCursorForLog(endError.message),
-              classified: classifyCursorError(endError.message),
-              framesReceived: this.framesReceived,
-              elapsedMs: Date.now() - this.turnStartedAt,
-            } : { framesReceived: this.framesReceived, elapsedMs: Date.now() - this.turnStartedAt });
-            if (endError) failAndClear(endError);
-            continue;
-          }
-          void this.handleServerMessage(fromBinary(AgentServerMessageSchema, frame.payload), state, push).catch(err => {
-            failAndClear(err instanceof Error ? err : new Error(String(err)));
-          });
-        }
+        const previousPendingPayloadBytes = connectBufferedPayloadBytes(pending);
+        const nextPendingPayloadBytes = connectBufferedPayloadBytesAcross(pending, bytes);
+        incomingPayloadBytes = Math.max(0, nextPendingPayloadBytes - previousPendingPayloadBytes);
+        this.reserveTransportBytes(incomingPayloadBytes);
+        incomingCharged = true;
+        replacement = reservePayloadCopy(nextPendingPayloadBytes);
+        const nextPending = concatBytes(pending, bytes);
+        pending = nextPending;
+        replacement.commitRetained();
+        replacement = undefined;
+        this.releaseTransportBytes(previousPendingPayloadBytes + incomingPayloadBytes);
+        incomingCharged = false;
+        drainPendingFrames();
       } catch (err) {
+        replacement?.release();
+        if (incomingCharged) this.releaseTransportBytes(incomingPayloadBytes);
         failAndClear(err instanceof Error ? err : new Error(String(err)));
       }
     });
@@ -824,7 +986,7 @@ class LiveCursorTransport implements CursorTransport {
     if (!this.stream) return;
     debugProviderDiagnostic("cursor", "frame", describeCursorServerFrame(message));
     if (message.message.case === "kvServerMessage") {
-      this.stream.write(encodeConnectFrame(handleCursorNativeKv(message.message.value)));
+      this.stream.write(encodeConnectFrame(handleCursorNativeKv(message.message.value, this.blobRequestScope)));
       return;
     }
     if (message.message.case === "execServerMessage") {
@@ -983,6 +1145,40 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(a);
   out.set(b, a.length);
   return out;
+}
+
+function connectBufferedPayloadBytes(input: Uint8Array): number {
+  let offset = 0;
+  let payloadBytes = 0;
+  while (input.byteLength - offset >= 5) {
+    const length = new DataView(input.buffer, input.byteOffset + offset, input.byteLength - offset).getUint32(1, false);
+    const available = Math.min(length, input.byteLength - offset - 5);
+    payloadBytes += available;
+    if (available < length) break;
+    offset += 5 + length;
+  }
+  return payloadBytes;
+}
+
+/** Payload-byte count for a virtual concatenation, without allocating the concatenated buffer. */
+function connectBufferedPayloadBytesAcross(first: Uint8Array, second: Uint8Array): number {
+  const totalBytes = first.byteLength + second.byteLength;
+  const byteAt = (index: number): number => index < first.byteLength
+    ? first[index]!
+    : second[index - first.byteLength]!;
+  let offset = 0;
+  let payloadBytes = 0;
+  while (totalBytes - offset >= 5) {
+    const length = (byteAt(offset + 1) * 0x1000000)
+      + (byteAt(offset + 2) << 16)
+      + (byteAt(offset + 3) << 8)
+      + byteAt(offset + 4);
+    const available = Math.min(length, totalBytes - offset - 5);
+    payloadBytes += available;
+    if (available < length) break;
+    offset += 5 + length;
+  }
+  return payloadBytes;
 }
 
 /** Host-only label for Cursor transport diagnostics — never leaks path/query/credentials. */

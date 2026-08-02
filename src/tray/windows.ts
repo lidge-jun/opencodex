@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { durableBunPath } from "../lib/bun-runtime";
-import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -218,18 +218,45 @@ function readState(): WindowsTrayState | null {
   }
 }
 
-function replaceOwnedFile(path: string, contents: string | Buffer): void {
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(temporary, contents, { mode: 0o600 });
-  try {
-    try { chmodSync(temporary, 0o600); } catch { /* best-effort */ }
-    if (process.platform === "win32") {
-      const hardened = hardenSecretPath(temporary, { required: true });
+export interface WindowsTrayOwnedFileIO {
+  write(path: string, contents: string | Buffer): void;
+  harden(path: string): void;
+  rename(source: string, destination: string): void;
+  unlink(path: string): void;
+}
+
+export function replaceWindowsTrayOwnedFile(
+  path: string,
+  contents: string | Buffer,
+  io: WindowsTrayOwnedFileIO = {
+    write: (target, value) => writeFileSync(target, value, { mode: 0o600 }),
+    harden: target => {
+      try { chmodSync(target, 0o600); } catch { /* best-effort */ }
+      if (process.platform !== "win32") return;
+      const hardened = hardenSecretPath(target, { required: true });
       if (!hardened.ok) throw new Error("Windows tray ACL hardening did not complete; refusing to persist executable state.");
-    }
-    renameSync(temporary, path);
+    },
+    rename: renameSync,
+    unlink: unlinkSync,
+  },
+): void {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  io.write(temporary, contents);
+  let renamed = false;
+  try {
+    io.harden(temporary);
+    io.rename(temporary, path);
+    renamed = true;
+    forgetHardenedSecretPath(temporary);
   } finally {
-    try { if (existsSync(temporary)) unlinkSync(temporary); } catch { /* best-effort */ }
+    if (!renamed) {
+      try {
+        io.unlink(temporary);
+        forgetHardenedSecretPath(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") forgetHardenedSecretPath(temporary);
+      }
+    }
   }
 }
 
@@ -239,7 +266,7 @@ function writeState(
   runCommand: string,
 ): void {
   const path = trayStatePath();
-  replaceOwnedFile(path, JSON.stringify({ version: TRAY_STATE_VERSION, ...entry, runValue, runCommand }, null, 2) + "\n");
+  replaceWindowsTrayOwnedFile(path, JSON.stringify({ version: TRAY_STATE_VERSION, ...entry, runValue, runCommand }, null, 2) + "\n");
 }
 
 export function parseWindowsTrayRunValue(output: string, runValue: string): string | null {
@@ -580,21 +607,21 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   ]));
   const restorePreviousInstall = () => {
     try {
-      if (previousScriptBytes) replaceOwnedFile(entry.script, previousScriptBytes);
+      if (previousScriptBytes) replaceWindowsTrayOwnedFile(entry.script, previousScriptBytes);
       else if (existsSync(entry.script)) unlinkSync(entry.script);
     } catch { /* rollback best-effort */ }
     try {
-      if (previousLauncherBytes) replaceOwnedFile(launcherPath, previousLauncherBytes);
+      if (previousLauncherBytes) replaceWindowsTrayOwnedFile(launcherPath, previousLauncherBytes);
       else if (existsSync(launcherPath)) unlinkSync(launcherPath);
     } catch { /* rollback best-effort */ }
     for (const [path, contents] of previousIconBytes) {
       try {
-        if (contents) replaceOwnedFile(path, contents);
+        if (contents) replaceWindowsTrayOwnedFile(path, contents);
         else if (existsSync(path)) unlinkSync(path);
       } catch { /* rollback best-effort */ }
     }
     try {
-      if (previousStateBytes) replaceOwnedFile(trayStatePath(), previousStateBytes);
+      if (previousStateBytes) replaceWindowsTrayOwnedFile(trayStatePath(), previousStateBytes);
       else if (existsSync(trayStatePath())) unlinkSync(trayStatePath());
     } catch { /* rollback best-effort */ }
     try {
@@ -612,9 +639,9 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   try {
     const hardenedDir = hardenSecretDir(getConfigDir(), { required: true });
     if (!hardenedDir.ok) throw new Error("Windows tray directory ACL hardening did not complete; refusing to install persistence.");
-    replaceOwnedFile(entry.script, readFileSync(sourceScript));
-    for (const pair of iconPairs) replaceOwnedFile(pair.installed, readFileSync(pair.source));
-    replaceOwnedFile(launcherPath, Buffer.from("\uFEFF" + buildWindowsTrayLauncherScript(entry), "utf16le"));
+    replaceWindowsTrayOwnedFile(entry.script, readFileSync(sourceScript));
+    for (const pair of iconPairs) replaceWindowsTrayOwnedFile(pair.installed, readFileSync(pair.source));
+    replaceWindowsTrayOwnedFile(launcherPath, Buffer.from("\uFEFF" + buildWindowsTrayLauncherScript(entry), "utf16le"));
     runRegistry(["add", RUN_KEY, "/v", runValue, "/t", "REG_SZ", "/d", runCommand, "/f", "/reg:64"]);
     writeState(entryWithLauncher, runValue, runCommand);
   } catch (error) {

@@ -9,6 +9,8 @@ import {
   checkAccountIdCollision, getMainChatgptAccountId,
   markAccountNeedsReauth, isAccountNeedsReauth, clearAccountNeedsReauth, clearAccountQuota,
   clearMainAccountInfoCache, maskEmail,
+  clearCodexQuotaPrimeState, primeCodexPoolQuotas, seedCodexAuthAdmissionForTests,
+  type CodexAuthAccountDto,
 } from "../src/codex/auth-api";
 import {
   getCodexAccountCredential,
@@ -44,6 +46,12 @@ import {
   saveConfig,
   setPersistedConfigMutationBeforeCommitForTests,
 } from "../src/config";
+import { captureConfigGeneration, registerStateStore } from "../src/lib/state-store-sweeper";
+import {
+  reconcileLiveStateStores,
+  setLiveStateStoreConfig,
+  STATE_STORE_REGISTRATIONS,
+} from "../src/lib/state-store-registrations";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -243,6 +251,136 @@ afterEach(() => {
 });
 
 describe("codex-auth API", () => {
+  test("pool-quota flight 17 total across accounts rejects before request creation while compatible generation joins", async () => {
+    const clearLoginOwners = seedCodexAuthAdmissionForTests({ loginFlows: 32 });
+    try {
+      const login = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "capacity-login" }),
+      });
+      const response = await handleCodexAuthAPI(login, new URL(login.url), makeConfig());
+      expect(response?.status).toBe(503);
+      expect(await response?.json()).toMatchObject({ code: "server_busy" });
+    } finally {
+      clearLoginOwners();
+    }
+
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "quota-a", email: "a@example.test" });
+    seedPoolAccount(config, { id: "quota-b", email: "b@example.test" });
+    const clearQuotaOwners = seedCodexAuthAdmissionForTests({ quotaFlights: 15 });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let requestCount = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/wham/usage")) {
+        requestCount += 1;
+        await gate;
+        return Response.json({ rate_limit: { primary_window: { used_percent: 1 } } });
+      }
+      return previousFetch(input);
+    }) as typeof fetch;
+    try {
+      const request = () => {
+        const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+        return handleCodexAuthAPI(req, new URL(req.url), config);
+      };
+      const first = request();
+      const joiner = request();
+      for (let attempt = 0; attempt < 20 && requestCount === 0; attempt++) await Promise.resolve();
+      expect(requestCount).toBe(1);
+      release();
+      const bodies = await Promise.all([first, joiner].map(async pending => {
+        const response = await pending;
+        return response?.json() as Promise<{ accounts: CodexAuthAccountDto[] }>;
+      }));
+      expect(bodies[0].accounts.find(account => account.id === "quota-b")?.quotaProbeSkipped).toBe(true);
+      expect(bodies[1].accounts.find(account => account.id === "quota-a")?.quotaProbeSkipped).not.toBe(true);
+    } finally {
+      release();
+      clearQuotaOwners();
+    }
+  });
+
+  test("Codex login state row 33 rejects before browser work and terminal TTL deletes only its owner", async () => {
+    const cleanup = seedCodexAuthAdmissionForTests({ loginFlows: 32 });
+    try {
+      const request = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "capacity-login-owner" }),
+      });
+      const response = await handleCodexAuthAPI(request, new URL(request.url), makeConfig());
+      expect(response?.status).toBe(503);
+      expect(await response?.json()).toMatchObject({ code: "server_busy" });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("busy pool-quota probe leaves management GET 200 with cached quota and per-account quotaProbeSkipped", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "quota-skipped", email: "skip@example.test" });
+    updateAccountQuota("quota-skipped", 42);
+    const cleanup = seedCodexAuthAdmissionForTests({ quotaFlights: 16 });
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+      const response = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const body = await response?.json() as { accounts: CodexAuthAccountDto[] };
+      expect(response?.status).toBe(200);
+      expect(body.accounts.find(account => account.id === "quota-skipped")).toMatchObject({
+        quotaProbeSkipped: true,
+        quota: { weeklyPercent: 42 },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("busy pool-quota probe maps reset-credit refresh to 503 server_busy with Retry-After 1", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "quota-reset-busy", email: "busy@example.test" });
+    const cleanup = seedCodexAuthAdmissionForTests({ quotaFlights: 16 });
+    globalThis.fetch = (async (input: RequestInfo | URL) => String(input).includes("/consume")
+      ? Response.json({ code: "reset" })
+      : previousFetch(input)) as typeof fetch;
+    try {
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountId: "quota-reset-busy" }),
+      });
+      const response = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(response?.status).toBe(503);
+      expect(response?.headers.get("Retry-After")).toBe("1");
+      expect(await response?.json()).toMatchObject({ code: "server_busy" });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("busy pool-quota probe is swallowed by startup priming like other priming failures", async () => {
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+    });
+    seedPoolAccount(config, { id: "prime-busy", email: "prime@example.test" });
+    const cleanup = seedCodexAuthAdmissionForTests({ quotaFlights: 16 });
+    try {
+      await expect(primeCodexPoolQuotas(config, "test")).resolves.toBeUndefined();
+    } finally {
+      clearCodexQuotaPrimeState();
+      cleanup();
+    }
+  });
+
   test("GET /api/codex-auth/accounts returns array with main", async () => {
     const req = new Request("http://localhost/api/codex-auth/accounts", { method: "GET" });
     const url = new URL(req.url);
@@ -2393,6 +2531,10 @@ describe("codex-auth API", () => {
       expiresAt: Date.now() + 5 * 60_000,
       chatgptAccountId: "acct-delete",
     });
+    for (const registration of STATE_STORE_REGISTRATIONS) registerStateStore(registration);
+    setLiveStateStoreConfig(config);
+    reconcileLiveStateStores();
+    const preDeletionWriterGeneration = captureConfigGeneration();
     updateAccountQuota("pool-delete", 70);
     expect(resolveCodexAccountForThread("delete-thread", config)).toBe("pool-delete");
     recordCodexUpstreamOutcome(config, "pool-delete", 500);
@@ -2425,6 +2567,7 @@ describe("codex-auth API", () => {
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
 
     expect(resp!.status).toBe(200);
+    expect(captureConfigGeneration()).toBeGreaterThan(preDeletionWriterGeneration);
     expect(config.codexAccounts).toEqual([]);
     expect(config.activeCodexAccountId).toBeUndefined();
     expect(config.pausedCodexAccountIds).toBeUndefined();
@@ -2436,6 +2579,24 @@ describe("codex-auth API", () => {
     expect(cancelled).toBe(true);
     expect(closed).toEqual([{ code: 4001, reason: "Codex account invalidated" }]);
     expect(getTrackedCodexWebSocketCountForAccount("pool-delete")).toBe(0);
+
+    updateAccountQuota(
+      "pool-delete",
+      99,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      preDeletionWriterGeneration,
+    );
+    recordCodexUpstreamOutcome(config, "pool-delete", 429, {
+      now: Date.now(),
+      writerGeneration: preDeletionWriterGeneration,
+    });
+    markAccountNeedsReauth("pool-delete", preDeletionWriterGeneration);
+    expect(getAccountQuota("pool-delete")).toBeNull();
+    expect(getCodexUpstreamHealth("pool-delete")).toBeNull();
+    expect(isAccountNeedsReauth("pool-delete")).toBe(false);
   });
 
   test.each([

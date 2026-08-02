@@ -107,7 +107,12 @@ afterEach(async () => {
 
 async function mountHarness(): Promise<Harness> {
   const activeResponses: Array<Promise<Response> | Response> = [
-    Response.json({ activeCodexAccountId: null, autoSwitchThreshold: 80 }),
+    Response.json({
+      activeCodexAccountId: null,
+      autoSwitchThreshold: 80,
+      accountPoolStrategy: "quota",
+      accountPoolStickyLimit: 1,
+    }),
   ];
   const putResponses: Array<Promise<Response> | Response> = [];
   const writes: number[] = [];
@@ -179,14 +184,14 @@ async function mountHarness(): Promise<Harness> {
   });
   await act(flush);
 
-  const input = container.querySelector<HTMLInputElement>('input[aria-label="Switch threshold, percent"]');
+  const input = container.querySelector<HTMLInputElement>('input[aria-label="Usage threshold, percent"]');
   expect(input).not.toBeNull();
   expect(input?.value).toBe("80");
   expect(input?.readOnly).toBe(false);
   expect(refreshCallback).not.toBeNull();
 
   const currentInput = (): HTMLInputElement | null => (
-    container.querySelector<HTMLInputElement>('input[aria-label="Switch threshold, percent"]')
+    container.querySelector<HTMLInputElement>('input[aria-label="Usage threshold, percent"]')
   );
   const currentToggle = (): HTMLButtonElement => {
     const toggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
@@ -216,6 +221,55 @@ async function mountHarness(): Promise<Harness> {
 }
 
 describe("Codex auto-switch controller interactions", () => {
+  test("defers strategy-specific switching controls until the persisted strategy resolves", async () => {
+    const active = deferred<Response>();
+    let activeReads = 0;
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+        if (url.endsWith("/api/codex-auth/accounts") && method === "GET") {
+          return Response.json({ accounts: [] });
+        }
+        if (url.endsWith("/api/codex-auth/active") && method === "GET") {
+          activeReads += 1;
+          return (await active.promise).clone();
+        }
+        throw new Error(`unexpected fetch: ${method} ${url}`);
+      },
+    });
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const { createRoot } = await import("react-dom/client");
+    mountedRoot = createRoot(container);
+    await act(async () => {
+      mountedRoot?.render(
+        <LanguageProvider>
+          <CodexAccountPool apiBase="http://localhost" />
+        </LanguageProvider>,
+      );
+      await flush();
+    });
+
+    expect(activeReads).toBeGreaterThan(0);
+    expect(container.querySelector(".codex-auto-switch-card")).toBeNull();
+
+    active.resolve(Response.json({
+      activeCodexAccountId: null,
+      autoSwitchThreshold: 80,
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+    }));
+    await act(flush);
+
+    const card = container.querySelector<HTMLElement>(".codex-auto-switch-card");
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain("Round-robin");
+    expect(card?.querySelector<HTMLInputElement>('input[aria-label="Usage threshold, percent"]')?.readOnly).toBe(false);
+  });
+
   test("blocks writes while /active is still pending", async () => {
     const active = deferred<Response>();
     const activeResponses: Array<Promise<Response> | Response> = [active.promise];
@@ -284,13 +338,7 @@ describe("Codex auto-switch controller interactions", () => {
     });
 
     const toggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
-    expect(toggle).not.toBeNull();
-    expect(toggle?.disabled).toBe(true);
-
-    await act(async () => {
-      toggle?.click();
-      await flush();
-    });
+    expect(toggle).toBeNull();
     expect(writes).toEqual([]);
 
     await act(async () => {
@@ -305,7 +353,7 @@ describe("Codex auto-switch controller interactions", () => {
 
     const readyToggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
     expect(readyToggle?.disabled).toBe(false);
-    expect(container.querySelector<HTMLInputElement>('input[aria-label="Switch threshold, percent"]')?.value).toBe("55");
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Usage threshold, percent"]')?.value).toBe("55");
     expect(writes).toEqual([]);
     expect(refreshCallback).not.toBeNull();
   });
@@ -418,7 +466,7 @@ describe("Codex auto-switch controller interactions", () => {
     expect(harness.writes).toEqual([0]);
     expect(harness.currentInput()).toBeNull();
     expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("false");
-    expect(harness.container.textContent).toContain("Automatic account switching is off");
+    expect(harness.container.textContent).toContain("Usage-based proactive switching is off");
     expect(harness.container.querySelector('[role="alert"]')).toBeNull();
 
     await act(async () => {
@@ -455,7 +503,7 @@ describe("Codex auto-switch controller interactions", () => {
     expect(harness.writes).toEqual([0]);
     expect(harness.currentInput()).toBeNull();
     expect(harness.currentToggle().getAttribute("aria-pressed")).toBe("false");
-    expect(harness.container.textContent).toContain("Automatic account switching is off");
+    expect(harness.container.textContent).toContain("Usage-based proactive switching is off");
     expect(harness.container.querySelector('[role="alert"]')).toBeNull();
 
     await act(async () => {

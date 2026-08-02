@@ -40,6 +40,49 @@ async function withStarDeps<T>(deps: StarDeps, run: () => Promise<T>): Promise<T
   }
 }
 
+/** Runs `fn` with the given env vars set, restoring the previous values after. */
+async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const previous = new Map(Object.keys(vars).map(name => [name, process.env[name]]));
+  for (const [name, value] of Object.entries(vars)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+/** The env this suite must neutralize: the test runner itself is agent/CI-driven. */
+const NO_AGENT_ENV = {
+  CI: undefined,
+  GITHUB_ACTIONS: undefined,
+  CLAUDECODE: undefined,
+  CLAUDE_CODE_ENTRYPOINT: undefined,
+  CLAUDE_CODE_SSE_PORT: undefined,
+  CODEX_THREAD_ID: undefined,
+  CODEX_SHELL: undefined,
+  CODEX_CI: undefined,
+  CODEX_SANDBOX: undefined,
+  CODEX_SANDBOX_NETWORK_DISABLED: undefined,
+  CURSOR_TRACE_ID: undefined,
+  CURSOR_SESSION_TOKEN: undefined,
+  CURSOR_AGENT: undefined,
+  AIDER_CHAT: undefined,
+  OPENCODE_BIN_PATH: undefined,
+  GEMINI_CLI: undefined,
+  REPL_ID: undefined,
+  GITLAB_CI: undefined,
+  BUILDKITE: undefined,
+  JENKINS_URL: undefined,
+  TEAMCITY_VERSION: undefined,
+  CODESPACES: undefined,
+} as const;
+
 // Why there is no per-test timeout here any more.
 //
 // 600ef52f2 raised these two tests to a 20s budget, and the diagnosis behind it was
@@ -114,6 +157,58 @@ describe("GET /api/github/star", () => {
 });
 
 describe("route surface", () => {
+  test("an agent-driven POST is refused and told to ask the user", async () => {
+    const calls: string[][] = [];
+    await withEnv({ ...NO_AGENT_ENV, CODEX_THREAD_ID: "019fbc94" }, () => withStarDeps({
+      nowMs: () => 0,
+      async runGh(args) { calls.push(args); return { status: 0 }; },
+    }, async () => {
+      invalidateStarStatusCache();
+      const { status, body } = await call("POST", "/api/github/star");
+      expect(status).toBe(403);
+      const refusal = body as Record<string, unknown>;
+      expect(refusal.ok).toBe(false);
+      expect(refusal.code).toBe("agent_consent_required");
+      expect(String(refusal.message)).toContain("ask the user");
+    }));
+    // The decisive assertion: `gh` was never invoked, so no star was written with
+    // the user's identity. A refusal that still spawned the write would be useless.
+    expect(calls).toEqual([]);
+  });
+
+  test("a dashboard click still stars even when an agent started the proxy", async () => {
+    const calls: string[][] = [];
+    await withEnv({ ...NO_AGENT_ENV, CODEX_THREAD_ID: "019fbc94" }, () => withStarDeps({
+      nowMs: () => 0,
+      async runGh(args) { calls.push(args); return { status: 0 }; },
+    }, async () => {
+      invalidateStarStatusCache();
+      // Browser-session evidence: same-origin Origin plus the minted CSRF/GUI-origin
+      // headers the management auth gate has already verified before dispatch.
+      const { status, body } = await call("POST", "/api/github/star", {
+        origin: "http://127.0.0.1:10100",
+        "x-opencodex-gui-origin": "http://127.0.0.1:10100",
+        "x-opencodex-csrf-token": "csrf-token",
+      });
+      expect(status).toBe(200);
+      expect((body as Record<string, unknown>).ok).toBe(true);
+    }));
+    expect(calls.some(args => args.includes("PUT"))).toBe(true);
+  });
+
+  test("a hand-typed run is not blocked by the agent guard", async () => {
+    const calls: string[][] = [];
+    await withEnv(NO_AGENT_ENV, () => withStarDeps({
+      nowMs: () => 0,
+      async runGh(args) { calls.push(args); return { status: 0 }; },
+    }, async () => {
+      invalidateStarStatusCache();
+      const { status } = await call("POST", "/api/github/star");
+      expect(status).toBe(200);
+    }));
+    expect(calls.some(args => args.includes("PUT"))).toBe(true);
+  });
+
   test("an unknown method never reaches the badge reader", async () => {
     const { status, raw } = await call("DELETE", "/api/update/badge");
     // Whatever the dispatcher decides (405/404), it must not answer with badge data.

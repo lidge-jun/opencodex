@@ -193,7 +193,9 @@ test("successful key delete keeps last-good keys visible when follow-up refresh 
 
     expect(container.textContent).toContain("existing-key");
 
-    const keyRow = [...container.querySelectorAll<HTMLButtonElement>(".apikeys-workspace-rail-row")]
+    // Retargeted from the rail to the key table; the invariant under test —
+    // last-good keys survive a failed post-delete refresh — is unchanged.
+    const keyRow = [...container.querySelectorAll<HTMLButtonElement>(".awi-keylist-name")]
       .find((button) => button.textContent?.includes("existing-key"));
     expect(keyRow).toBeTruthy();
     await act(async () => {

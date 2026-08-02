@@ -6,9 +6,11 @@ import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
 import { durableBunPath } from "../lib/bun-runtime";
 import type { OcxConfig } from "../types";
+import { truncateRetainedUtf8 } from "../lib/admission";
 
 const CACHE_TTL_MS = 30_000;
 const PROBE_TIMEOUT_MS = 5_000;
+const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 let cached: { timestamp: number; value: StartupHealth } | null = null;
 let inflight: Promise<StartupHealth> | null = null;
 let generation = 0;
@@ -63,7 +65,18 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
           try {
             const parsed = JSON.parse(lines[index]) as StartupHealth;
             if (["native", "protected", "at-risk"].includes(parsed.status) && typeof parsed.rebootSafe === "boolean") {
-              resolve({ ...parsed, diagnosticStale: false });
+              resolve({
+                ...parsed,
+                recommendedCommand: parsed.recommendedCommand === null
+                  ? null
+                  : truncateRetainedUtf8(parsed.recommendedCommand, MAX_DIAGNOSTIC_VALUE_BYTES),
+                commands: {
+                  installService: truncateRetainedUtf8(parsed.commands.installService, MAX_DIAGNOSTIC_VALUE_BYTES),
+                  installShim: truncateRetainedUtf8(parsed.commands.installShim, MAX_DIAGNOSTIC_VALUE_BYTES),
+                  restoreNative: truncateRetainedUtf8(parsed.commands.restoreNative, MAX_DIAGNOSTIC_VALUE_BYTES),
+                },
+                diagnosticStale: false,
+              });
               return;
             }
           } catch { /* scan earlier output; config repair messages may precede JSON */ }

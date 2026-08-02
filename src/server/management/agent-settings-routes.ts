@@ -7,6 +7,7 @@ import {
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
+  loadConfig,
   multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
@@ -58,16 +59,68 @@ import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels, fetchGrokCandidateModels, buildClaudeDesktopState } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
+import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
-let grokApplyChain: Promise<unknown> = Promise.resolve();
-/**
- * Serializes Grok applies: injectGrokConfig is read-modify-write over a single file,
- * so two concurrent clicks must not interleave two cycles.
- */
-function queueGrokApply<T>(run: () => Promise<T>): Promise<T> {
-  const next = grokApplyChain.then(run, run);
-  grokApplyChain = next.catch(() => {});
-  return next;
+const GROK_APPLY_JOIN_MS = 120_000;
+export const GROK_APPLY_TERMINAL_MS = 10 * 60_000;
+const grokApplyEncoder = new TextEncoder();
+let grokApplyFlight: { startedAt: number; promise: Promise<unknown>; bytes: number } | null = null;
+let grokApplyHighWaterBytes = 0;
+let grokApplyTestHooks: { now?: () => number; run?: () => Promise<unknown> } | null = null;
+
+class GrokApplyBusyError extends Error {}
+
+export function grokApplyFlightSnapshot(): { currentBytes: number; highWaterBytes: number; active: number } {
+  return {
+    currentBytes: grokApplyFlight?.bytes ?? 0,
+    highWaterBytes: grokApplyHighWaterBytes,
+    active: grokApplyFlight ? 1 : 0,
+  };
+}
+
+function runGrokApplyFlight(): Promise<unknown> {
+  const at = grokApplyTestHooks?.now?.() ?? Date.now();
+  const current = grokApplyFlight;
+  if (current) {
+    const age = at - current.startedAt;
+    if (age < GROK_APPLY_JOIN_MS) return current.promise;
+    if (age <= GROK_APPLY_TERMINAL_MS) return Promise.reject(new GrokApplyBusyError("grok_apply_busy"));
+    // A permanently hung operation must not monopolize the singleton forever. Its
+    // eventual finally is identity-checked, so it cannot clear a replacement flight.
+    if (grokApplyFlight === current) grokApplyFlight = null;
+  }
+
+  const flight = { startedAt: at, promise: Promise.resolve() as Promise<unknown>, bytes: 0 };
+  flight.promise = (grokApplyTestHooks?.run ?? (async () => {
+    const [{ syncGrokConfig }, { readRuntimePort }] = await Promise.all([
+      import("../../grok/sync"),
+      import("../../config"),
+    ]);
+    const currentConfig = loadConfig();
+    const runtime = readRuntimePort(process.pid);
+    const port = runtime?.port ?? currentConfig.port;
+    const hostname = runtime?.hostname ?? currentConfig.hostname;
+    flight.bytes = grokApplyEncoder.encode(JSON.stringify(currentConfig)).byteLength
+      + grokApplyEncoder.encode(hostname ?? "").byteLength;
+    grokApplyHighWaterBytes = Math.max(grokApplyHighWaterBytes, flight.bytes);
+    return syncGrokConfig(port, currentConfig, hostname !== undefined ? { hostname } : {});
+  }))().finally(() => {
+    if (grokApplyFlight === flight) grokApplyFlight = null;
+  });
+  grokApplyFlight = flight;
+  return flight.promise;
+}
+
+export function runGrokApplyFlightForTests(): Promise<unknown> {
+  return runGrokApplyFlight();
+}
+
+export function setGrokApplyFlightTestHooks(
+  hooks: { now?: () => number; run?: () => Promise<unknown> } | null,
+): void {
+  grokApplyTestHooks = hooks;
+  grokApplyFlight = null;
+  grokApplyHighWaterBytes = 0;
 }
 import type { ManagementContext } from "./context";
 
@@ -131,7 +184,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxDepth?: unknown;
       subagentDeveloperInstructions?: unknown;
     };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const wantsFlag = body.enabled !== undefined;
     const wantsThreads = body.maxConcurrentThreadsPerSession !== undefined;
     const wantsMode = body.multiAgentMode !== undefined;
@@ -275,7 +328,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/injection-model" && req.method === "PUT") {
     let parsedBody: unknown;
-    try { parsedBody = await req.json(); } catch {
+    try { parsedBody = await readManagementJsonBody(req); } catch (error) {
+      rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
     if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
@@ -374,7 +428,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/effort-caps" && req.method === "PUT") {
     let body: { effortCap?: unknown; subagentEffortCap?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const { isCodexReasoningEffort } = await import("../../reasoning-effort");
     for (const key of ["effortCap", "subagentEffortCap"] as const) {
       if (!(key in body)) continue;
@@ -410,7 +464,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
     let body: { models?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const chosen = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string").slice(0, 5) : [];
     config.subagentModels = chosen;
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
@@ -444,8 +498,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   if (url.pathname === "/api/subagent-model-fallback" && req.method === "PUT") {
     let body: { models?: unknown; pollMs?: unknown };
     try {
-      body = await req.json();
-    } catch {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
     if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -513,7 +568,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // injectGrokConfig, through the apply route below — this route cannot touch that file.
   if (url.pathname === "/api/grok/selection" && req.method === "PUT") {
     let body: { excluded?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const raw = body.excluded;
     if (!Array.isArray(raw) || raw.some(entry => typeof entry !== "string" || entry.length === 0)) {
       return jsonResponse({ error: "excluded must be an array of model ids" }, 400);
@@ -533,20 +588,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // duplicated here. Accepts no body: every input comes from persisted state.
   if (url.pathname === "/api/grok/apply" && req.method === "POST") {
     try {
-      const { syncGrokConfig } = await import("../../grok/sync");
-      const { readRuntimePort } = await import("../../config");
-      // The host/port the proxy ACTUALLY bound — not the request authority (caller-
-      // influenced) and not config.hostname, which sync.ts warns may have drifted.
-      // `ocx ensure` passes live.hostname for the same reason; the runtime-port record
-      // is the in-process equivalent, written at startup.
-      const runtime = readRuntimePort(process.pid);
-      const port = runtime?.port ?? config.port;
-      const hostname = runtime?.hostname ?? config.hostname;
-      const result = await queueGrokApply(() => syncGrokConfig(
-        port,
-        config,
-        hostname !== undefined ? { hostname } : {},
-      ));
+      const result = await runGrokApplyFlight() as Awaited<ReturnType<typeof import("../../grok/sync")["syncGrokConfig"]>>;
       // A policy skip (non-loopback, no ~/.grok) is not a server error: report it as a
       // result the page can explain rather than a 500 the user cannot act on.
       return jsonResponse({
@@ -556,6 +598,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         ...(result.skippedReason ? { skippedReason: result.skippedReason } : {}),
       }, result.ok ? 200 : 500);
     } catch (error) {
+      if (error instanceof GrokApplyBusyError) return jsonResponse({ error: "grok_apply_busy" }, 409);
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
   }
@@ -572,7 +615,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/claude-desktop" && req.method === "PUT") {
     let body: { profile?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     try {
       const { parseDesktopProfile, reconcileDesktopProfile } = await import("../../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
@@ -770,7 +813,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // regardless on 2.1.207). PUT keeps validating them so hand-written configs
     // and older GUIs stay safe; GUI saves omit them and the spread preserves them.
     let parsedBody: unknown;
-    try { parsedBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { parsedBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const isPlainObject = (value: unknown): value is Record<string, unknown> => {
       if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
       const prototype = Object.getPrototypeOf(value);

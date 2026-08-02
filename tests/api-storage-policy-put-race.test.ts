@@ -9,7 +9,7 @@ import {
   seedArchived,
   setStorageCleanupPolicyJobTestHooks,
   startServer,
-  stopStorageCleanupScheduler,
+  stopPolicyServer,
   uninstallPolicyApiHarness,
   waitForJobIdle,
   type PolicyApiHarness,
@@ -18,8 +18,8 @@ import {
 
 let harness: PolicyApiHarness;
 
-beforeEach(() => {
-  harness = installPolicyApiHarness("ocx-api-storage-policy-put-race");
+beforeEach(async () => {
+  harness = await installPolicyApiHarness("ocx-api-storage-policy-put-race");
 });
 
 afterEach(async () => {
@@ -109,8 +109,7 @@ test("blocked worker completion preserves concurrent policy PUT edits", async ()
     expect(typeof body.lastRun?.at).toBe("number");
     expect(typeof body.nextRun).toBe("number");
   } finally {
-    await server.stop(true);
-    stopStorageCleanupScheduler();
+    await stopPolicyServer(server);
     await resetStorageCleanupPolicyJobForTestsAsync();
   }
 }, { timeout: 30_000 });

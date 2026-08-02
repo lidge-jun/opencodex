@@ -75,45 +75,31 @@ flowchart LR
 
 ## クイックスタート
 
+### 人間向け
+
 ```bash
-# インストール(Bun ランタイムを自動バンドル — Node 18+ のみ必要)
-# ユーザー所有の Node(nvm/fnm)を推奨 — `sudo npm install -g …` は避けてください
+npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
+ocx start                            # or `ocx service` to run it in the background
+```
+
+**http://localhost:10100** を開き、Web ダッシュボードですべてを設定します。40 以上の組み込みプロバイダーまたは OpenAI 互換エンドポイントの追加、モデルの選択、アカウントの管理ができます。`ocx gui` を実行すれば、いつでもダッシュボードを開き直せます。
+
+### エージェント向け
+
+```bash
 npm install -g @bitkyc08/opencodex
-
-# 対話型セットアップ(config の書き出し + Codex への注入 + 自動起動 shim のインストールを提案)
-ocx init
-
-# プロキシを起動
-ocx start
-
-# init でスキップした場合は、後からオンデマンド自動起動 shim をインストール
-ocx codex-shim install
-
-# Codex をいつも通り使う — opencodex 経由でルーティングされます
-codex "Write a hello world in Rust"
+ocx start     # or `ocx service`
+ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```
 
-<details>
-<summary><b>"bundled Bun runtime is missing" エラー / npm が Bun インストールスクリプトをブロックした?</b></summary>
+`ocx init` 自体はプロキシを起動しません。先に起動しても後から起動しても構いませんが、`ocx provider add` や `ocx combo set` などのヘッドレスコマンドは**稼働中の**プロキシと通信し、接続できない場合は非ゼロで終了します。`ocx status` / `ocx doctor` / `ocx health` で稼働状態を確認できます。
 
-<br/>
+> **GitHub のスタープロンプトはユーザーが判断するものであり、エージェントが判断するものではありません。** 対話型の `ocx start`
+> または `ocx service install` では、このリポジトリにスターを付けるかどうかを一度だけ尋ねる場合があります。エージェントは
+> このプロンプトに決して回答せず、ユーザーに代わって `gh`、GitHub の Star API、`POST /api/github/star` のいずれも呼び出してはいけません。
+> CLI はエージェント主導の実行ではプロンプトを抑止し、API は `403 agent_consent_required` で拒否します。
+> ユーザーには返答内で一度だけ確認し、明示的な同意が得られた場合にのみ実行してください。同意がない場合は何もせず、再度尋ねないでください。
 
-opencodex は Bun ランタイムを依存関係としてバンドルし、Node ランチャー経由で実行するため、Bun を自分でインストールする必要は**ありません**。"bundled Bun runtime is missing" エラーが出る場合、インストール時にライフサイクルスクリプト(npm が `allowScripts` で bun の postinstall をブロックした場合を含む)やオプション依存がスキップされています。bun のインストールスクリプトを許可して再インストールしてください:
-
-```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex   # --ignore-scripts, --omit=optional なしで
-
-# 最初に sudo でインストールした場合は sudo を維持してください:
-sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
-```
-
-npm の警告が提案する省略コマンドにはパッケージ名が含まれておらず、
-現在のディレクトリを再インストールしてしまいます。常に `@bitkyc08/opencodex` を明示してください。
-
-sudo で root 所有のプレフィックスにインストールした場合、上の sudo 再インストールでそのプレフィックスの
-ブロックが解除されますが、可能な場合はユーザー所有の Node(nvm、fnm、ユーザー npm プレフィックス)への移行を推奨します。
-
-</details>
 
 ## プロバイダーを追加
 

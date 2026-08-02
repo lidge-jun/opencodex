@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../src/bridge";
 import {
   chatCompletionsErrorBody,
   chatCompletionsErrorResponse,
-  responsesSseToChatCompletionsSse,
+  responsesSseToChatCompletionsSse as responsesSseToChatCompletionsSseProduction,
 } from "../src/chat/outbound";
 import { comboFailureDecision } from "../src/combos/failover";
 import {
@@ -16,6 +16,19 @@ import {
 import { formatPassthroughUpstreamError } from "../src/server/responses/passthrough-error";
 import { consumeComboFailure } from "../src/server/responses/core";
 import type { AdapterEvent } from "../src/types";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
+  withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
+
+function responsesSseToChatCompletionsSse(
+  upstream: ReadableStream<Uint8Array>,
+  model: string,
+) {
+  return responsesSseToChatCompletionsSseProduction(upstream, model, {
+    translatorBudget: createTestTranslatorBudget(),
+  });
+}
 
 /** Cursor agent transcript (2026-07-24): mangled provider prefix + OpenAI cyber flag copy. */
 const CURSOR_SESSION_CYBER_MESSAGE =

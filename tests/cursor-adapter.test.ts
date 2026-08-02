@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  createCursorAdapter,
+  createCursorAdapter as createCursorAdapterProduction,
   cursorExecDeniedMessage,
 } from "../src/adapters/cursor";
 import {
@@ -9,6 +9,10 @@ import {
 } from "../src/adapters/cursor/thread-continuity";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createCursorAdapter = (...args: Parameters<typeof createCursorAdapterProduction>) =>
+  withTestTranslatorBudget(createCursorAdapterProduction(...args));
 
 const provider: OcxProviderConfig = {
   adapter: "cursor",

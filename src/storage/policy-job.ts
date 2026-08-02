@@ -8,9 +8,9 @@
 import type { CleanupMode, CleanupResult } from "./cleanup";
 import { resolveCodexHomeDir } from "../codex/home";
 import {
-  endStorageMutation,
   tryBeginStorageMutation,
 } from "./storage-mutation-coordinator";
+import type { AdmissionLease } from "../lib/admission";
 import {
   isPolicyDue,
   readStorageCleanupPolicyFromConfig,
@@ -21,8 +21,9 @@ import {
 import {
   cancelQueuedStorageWorkerSpawns,
   drainStorageWorkers,
-  registerStorageWorker,
+  StorageWorkerAdmissionBusyError,
   terminateStorageWorker,
+  tryReserveStorageWorker,
   withStorageWorkerSpawnGate,
 } from "./worker-lifecycle";
 
@@ -84,12 +85,11 @@ let cancelActiveRun: (() => void) | null = null;
 /** Bumped on abort/reset so a late worker completion cannot clobber newer job state. */
 let runGeneration = 0;
 /** CODEX_HOME whose mutation slot this job holds (parent thread only). */
-let heldMutationHome: string | undefined;
+let heldMutationLease: AdmissionLease | undefined;
 
 function releaseHeldMutationSlot(): void {
-  if (heldMutationHome === undefined) return;
-  endStorageMutation(heldMutationHome);
-  heldMutationHome = undefined;
+  heldMutationLease?.release();
+  heldMutationLease = undefined;
 }
 
 export function setStorageCleanupPolicyJobLiveApply(
@@ -131,8 +131,16 @@ function disownActiveRun(): void {
   cancel?.();
 }
 
+/**
+ * Fire-and-forget reset. Prefer {@link resetStorageCleanupPolicyJobForTestsAsync}
+ * from test beforeEach/afterEach — sync terminate races Windows
+ * `bun test --isolate` reclaim when the next case spawns immediately.
+ */
 export function resetStorageCleanupPolicyJobForTests(): void {
   disownActiveRun();
+  // Invalidate spawnGate callbacks that have not created a Worker yet — otherwise
+  // they can still spawn after this sync path releases the mutation slot.
+  cancelQueuedStorageWorkerSpawns();
   if (activeWorker) {
     void terminateStorageWorker(activeWorker);
     activeWorker = null;
@@ -176,6 +184,7 @@ export async function resetStorageCleanupPolicyJobForTestsAsync(): Promise<void>
 /** Terminate an in-flight worker during process shutdown. */
 export function abortStorageCleanupPolicyJob(): void {
   disownActiveRun();
+  cancelQueuedStorageWorkerSpawns();
   if (activeWorker) {
     void terminateStorageWorker(activeWorker);
     activeWorker = null;
@@ -284,11 +293,20 @@ function applyMutationBusy(): void {
 }
 
 function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Promise<PolicyRunResult> {
+  const reservation = tryReserveStorageWorker();
+  if (!reservation) return Promise.reject(new StorageWorkerAdmissionBusyError());
   return withStorageWorkerSpawnGate(() => new Promise<PolicyRunResult>((resolve, reject) => {
     const requestId = crypto.randomUUID();
     let settled = false;
-    const worker = new Worker(new URL("./policy-worker.ts", import.meta.url).href);
-    registerStorageWorker(worker);
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./policy-worker.ts", import.meta.url).href);
+      reservation.bind(worker);
+    } catch (error) {
+      reservation.release();
+      reject(error);
+      return;
+    }
     activeWorker = worker;
 
     const finish = (fn: () => void) => {
@@ -344,7 +362,10 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
         ...(process.env.OPENCODEX_HOME ? { OPENCODEX_HOME: process.env.OPENCODEX_HOME } : {}),
       },
     });
-  }));
+  })).catch(error => {
+    reservation.release();
+    throw error;
+  });
 }
 
 async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
@@ -357,7 +378,7 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
     }
     return;
   }
-  heldMutationHome = codexHome;
+  heldMutationLease = gate.lease;
   try {
     const blockMs = testHooks?.blockMs;
     let result: PolicyRunResult;
@@ -384,7 +405,8 @@ async function executeJob(opts: RequestPolicyRunOptions): Promise<void> {
     applyFinished(result);
   } catch (err) {
     if (generation !== runGeneration) return;
-    applyFailed(err instanceof Error ? err.message : "worker_failed");
+    if (err instanceof StorageWorkerAdmissionBusyError) applyMutationBusy();
+    else applyFailed(err instanceof Error ? err.message : "worker_failed");
   } finally {
     releaseHeldMutationSlot();
   }

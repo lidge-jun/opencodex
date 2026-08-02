@@ -135,7 +135,10 @@ export default function ProviderSettings({
     setSaving(true);
     setMsg(null);
     try {
-      const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork, liveModels };
+      const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork };
+      // Keep omitted legacy values omitted unless the user actually changes this toggle.
+      // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
+      if (liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
       if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
       else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
       const res = await onUpdateProvider(item.name, patch);

@@ -23,6 +23,11 @@ import { compileGoogleWireBody } from "./google-wire-compiler";
 import { neutralizeIdentity } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
+import {
+  isTranslatorBudgetExceededError,
+  retainTranslatedEventBatch,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { mapReasoningEffort } from "../reasoning-effort";
 
@@ -408,7 +413,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },
 
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
@@ -420,7 +425,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      const budgetEncoder = new TextEncoder();
       let buffer = "";
+      let bufferBytes = 0;
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
@@ -529,7 +536,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          const nextBuffer = buffer + decoder.decode(value, { stream: true });
+          const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
+          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
+          buffer = nextBuffer;
+          appendReservation.commitRetained();
+          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          bufferBytes = nextBufferBytes;
           // Cap incomplete frames before waiting for a newline — otherwise a single
           // unterminated data: payload can grow without bound.
           if (buffer.length > MAX_SSE_FRAME_BYTES) {
@@ -540,6 +553,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
+          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
+          residualReservation.commitRetained();
+          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          bufferBytes = residualBytes;
 
           let sawLiveness = false;
           let sawContentEvent = false;
@@ -587,12 +605,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           usage: pendingUsage,
           ...(stopReason ? { stopReason } : {}),
         };
+      } catch (error) {
+        if (!isTranslatorBudgetExceededError(error)) throw error;
+        try { await reader.cancel(error); } catch { /* already closed */ }
+        yield {
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "translation_buffer_limit",
+          message: "upstream translation buffer exceeded the safe limit",
+        };
       } finally {
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
         reader.releaseLock();
       }
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       // Reject oversized responses before JSON parse. Prefer Content-Length when
       // present and truthful; always stream-read with a hard byte cap so a missing
       // or lying Content-Length cannot force a full in-memory buffer + parse.
@@ -602,6 +631,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return [{ type: "error", message: `google response too large (content-length ${contentLength} exceeds ${MAX_RESPONSE_BYTES} bytes)` }];
       }
       let rawText: string;
+      let rawTextBytes = 0;
       try {
         const reader = response.body?.getReader();
         if (!reader) return [{ type: "error", message: "google response had no body" }];
@@ -616,38 +646,58 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               await reader.cancel().catch(() => {});
               return [{ type: "error", message: `google response too large (exceeded ${MAX_RESPONSE_BYTES} bytes)` }];
             }
+            budget.chargeRetained(value.byteLength, { kind: "retained_collectors" });
             chunks.push(value);
           }
         } finally {
           try { await reader.cancel(); } catch { /* ignore */ }
           reader.releaseLock();
         }
+        const bytesReservation = budget.reserveTransient(total, { kind: "retained_collectors" });
         const bytes = new Uint8Array(total);
         let offset = 0;
         for (const chunk of chunks) {
           bytes.set(chunk, offset);
           offset += chunk.byteLength;
         }
+        bytesReservation.commitRetained();
+        budget.releaseRetained(total, { kind: "retained_collectors" });
         rawText = new TextDecoder().decode(bytes);
+        rawTextBytes = new TextEncoder().encode(rawText).byteLength;
+        const textReservation = budget.reserveTransient(rawTextBytes, { kind: "retained_collectors" });
+        textReservation.commitRetained();
+        budget.releaseRetained(total, { kind: "retained_collectors" });
       } catch (err) {
         return [{ type: "error", message: err instanceof Error ? err.message : "failed to read google response body" }];
       }
       let raw: Record<string, unknown>;
+      let rawBytes = 0;
       try {
         raw = JSON.parse(rawText) as Record<string, unknown>;
+        rawBytes = new TextEncoder().encode(JSON.stringify(raw)).byteLength;
+        const rawReservation = budget.reserveTransient(rawBytes, { kind: "retained_collectors" });
+        rawReservation.commitRetained();
+        budget.releaseRetained(rawTextBytes, { kind: "retained_collectors" });
       } catch {
+        budget.releaseRetained(rawTextBytes, { kind: "retained_collectors" });
         return [{ type: "error", message: "google response was not valid JSON" }];
       }
+      const finish = (events: AdapterEvent[]): AdapterEvent[] => {
+        retainTranslatedEventBatch(events, budget);
+        budget.releaseRetained(rawBytes, { kind: "retained_collectors" });
+        rawBytes = 0;
+        return events;
+      };
       if (raw.error) {
         const err = raw.error as { message?: string };
-        return [{ type: "error", message: err.message ?? "upstream error" }];
+        return finish([{ type: "error", message: err.message ?? "upstream error" }]);
       }
       // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.
       let json = raw;
       if (provider.googleMode === "cloud-code-assist") {
         const wrapped = raw.response;
         if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-          return [{ type: "error", message: "google-antigravity response missing response wrapper" }];
+          return finish([{ type: "error", message: "google-antigravity response missing response wrapper" }]);
         }
         json = wrapped as Record<string, unknown>;
       }
@@ -655,7 +705,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] }; finishReason?: string }[] | undefined;
       if (!candidates?.length) {
-        return [{ type: "error", message: "google response contained no candidates" }];
+        return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
       let toolCallsStarted = 0;
       const imageBudget = createImageBudget();
@@ -694,7 +744,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
       if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
         && toolCallsStarted > 0 && isVertexTruncationReason(candidates?.[0]?.finishReason)) {
-        return [{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }];
+        return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
@@ -702,7 +752,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         type: "done",
         usage: usageFromGemini(usage),
       });
-      return events;
+      return finish(events);
     },
   };
 }

@@ -8,6 +8,31 @@ import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../src/chat/inbound";
 import { chatCompletionsUsage } from "../src/chat/outbound";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import type { TranslatorBudget } from "../src/lib/translator-budget";
+
+function budgetedChatOutbound(module: typeof import("../src/chat/outbound")) {
+  const translatorBudget = createTestTranslatorBudget();
+  return {
+    ...module,
+    responsesSseToChatCompletionsSse(
+      upstream: ReadableStream<Uint8Array>,
+      model: string,
+      opts?: { translatorBudget?: TranslatorBudget },
+    ) {
+      return module.responsesSseToChatCompletionsSse(upstream, model, {
+        translatorBudget: opts?.translatorBudget ?? translatorBudget,
+      });
+    },
+    collectChatCompletion(
+      stream: ReadableStream<Uint8Array>,
+      model: string,
+      budget?: TranslatorBudget,
+    ) {
+      return module.collectChatCompletion(stream, model, budget ?? translatorBudget);
+    },
+  };
+}
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -124,7 +149,7 @@ type ChatStreamChunk = {
 };
 
 async function convertResponsesFrames(frames: string[], model = "gpt-test") {
-  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const stream = responsesSseToChatCompletionsSse(new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
@@ -225,7 +250,7 @@ test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwa
   // which is why the injected Grok config pins api_backend = "chat_completions". This
   // regression pins the safety property: heartbeats never surface as raw frames here —
   // at most a valid role chunk is emitted.
-  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const upstream = new Response([
     `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
     `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "hi" })}\n\n`,
@@ -387,7 +412,7 @@ test("responsesSseToChatCompletionsSse emits parallel tool calls once with stabl
 });
 
 test("responsesSseToChatCompletionsSse bounds upstream reads until the chat client pulls", async () => {
-  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const encoder = new TextEncoder();
   let pulls = 0;
   const upstream = new ReadableStream<Uint8Array>({
@@ -408,7 +433,7 @@ test("responsesSseToChatCompletionsSse bounds upstream reads until the chat clie
 });
 
 test("responsesSseToChatCompletionsSse delivers the first frame before a macrotask turn", async () => {
-  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const encoder = new TextEncoder();
   const upstream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -582,7 +607,7 @@ test("POST /v1/chat/completions finalizes native passthrough request logs", asyn
 
 
 test("responsesSseToChatCompletionsSse reconciles done-frame final arguments (last-write-wins)", async () => {
-  const { responsesSseToChatCompletionsSse, collectChatCompletion } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse, collectChatCompletion } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const frames = [
     `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "alpha", arguments: "" } })}\n\n`,
     `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"q":"partial' })}\n\n`,
@@ -605,7 +630,7 @@ test("responsesSseToChatCompletionsSse reconciles done-frame final arguments (la
 });
 
 test("responsesSseToChatCompletionsSse emits error frame on response.failed (no clean DONE)", async () => {
-  const { responsesSseToChatCompletionsSse, collectChatCompletion, ChatCompletionsStreamError } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse, collectChatCompletion, ChatCompletionsStreamError } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const frames = [
     `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: "resp_fail" } })}\n\n`,
     `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}\n\n`,
@@ -636,8 +661,51 @@ test("responsesSseToChatCompletionsSse emits error frame on response.failed (no 
   await expect(collectChatCompletion(stream2, "mock/test-model")).rejects.toBeInstanceOf(ChatCompletionsStreamError);
 });
 
+test("responsesSseToChatCompletionsSse preserves translator overflow and cancels upstream", async () => {
+  const { responsesSseToChatCompletionsSse, collectChatCompletion, isChatCompletionsStreamError } =
+    budgetedChatOutbound(await import("../src/chat/outbound"));
+  const frame = `event: response.failed\ndata: ${JSON.stringify({
+    type: "response.failed",
+    response: {
+      status: "failed",
+      error: {
+        message: "upstream translation buffer exceeded the safe limit",
+        type: "upstream_error",
+        code: "translation_buffer_limit",
+      },
+    },
+  })}\n\n`;
+  let cancelled = false;
+  const source = () => new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(frame));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+
+  const text = await new Response(responsesSseToChatCompletionsSse(source(), "mock/test-model")).text();
+  expect(text).toContain('"code":"translation_buffer_limit"');
+  expect(text).not.toContain("data: [DONE]");
+  expect(cancelled).toBe(true);
+
+  try {
+    await collectChatCompletion(
+      responsesSseToChatCompletionsSse(source(), "mock/test-model"),
+      "mock/test-model",
+    );
+    throw new Error("expected translator overflow");
+  } catch (error) {
+    expect(isChatCompletionsStreamError(error)).toBe(true);
+    if (isChatCompletionsStreamError(error)) {
+      expect(error).toMatchObject({ status: 413, code: "translation_buffer_limit" });
+    }
+  }
+});
+
 test("responsesSseToChatCompletionsSse emits error frame on truncated stream", async () => {
-  const { responsesSseToChatCompletionsSse, collectChatCompletion, ChatCompletionsStreamError } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse, collectChatCompletion, ChatCompletionsStreamError } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const frames = [
     `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: "resp_trunc" } })}\n\n`,
     `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "half" })}\n\n`,
@@ -785,7 +853,7 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
 
 
 test("responsesSseToChatCompletionsSse emits one complete named tool call", async () => {
-  const { responsesSseToChatCompletionsSse, collectChatCompletion } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse, collectChatCompletion } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const frames = [
     `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "exec_command", arguments: "" } })}\n\n`,
     `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_a", delta: '{"cmd":' })}\n\n`,
@@ -943,7 +1011,7 @@ test("chatCompletionsToResponsesBody recovers tool_calls function.name from earl
 // CRLF framing and a terminal event without a trailing blank line must not be reported
 // as truncation now that the shared SSE decoder drives the converter.
 test("responsesSseToChatCompletionsSse accepts CRLF-framed SSE with terminal event at EOF", async () => {
-  const { responsesSseToChatCompletionsSse, collectChatCompletion } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse, collectChatCompletion } = budgetedChatOutbound(await import("../src/chat/outbound"));
   const raw = [
     `event: response.created\r\ndata: ${JSON.stringify({ type: "response.created", response: { id: "resp_crlf" } })}\r\n\r\n`,
     `event: response.output_text.delta\r\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "hello" })}\r\n\r\n`,
@@ -971,7 +1039,7 @@ test("responsesSseToChatCompletionsSse accepts CRLF-framed SSE with terminal eve
 });
 
 test("responsesSseToChatCompletionsSse cancel promptly cancels an idle upstream", async () => {
-  const { responsesSseToChatCompletionsSse } = await import("../src/chat/outbound");
+  const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../src/chat/outbound"));
   let upstreamCancelled = false;
   // Never-ending upstream: enqueues one partial frame then goes silent.
   const idleUpstream = new ReadableStream<Uint8Array>({
@@ -1041,7 +1109,7 @@ test("content_filter incomplete still maps to finish_reason content_filter with 
 
 test("collectChatCompletion throws ChatCompletionsStreamError on a stall incomplete (WP3)", async () => {
   const { responsesSseToChatCompletionsSse, collectChatCompletion, isChatCompletionsStreamError } =
-    await import("../src/chat/outbound");
+    budgetedChatOutbound(await import("../src/chat/outbound"));
   const frames = [
     `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "upstream_stall_timeout" } } })}\n\n`,
   ];

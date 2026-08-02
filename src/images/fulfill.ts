@@ -8,11 +8,32 @@ import {
   pruneArtifacts,
   type ImageBudget,
 } from "./artifacts";
+import { MAX_PENDING_IMAGE_FULFILLMENTS } from "../lib/translator-budget";
+
+const fulfillmentEncoder = new TextEncoder();
+let pendingFulfillments = 0;
+let fulfillmentCurrentBytes = 0;
+let fulfillmentHighWaterBytes = 0;
+
+function addFulfillmentBytes(bytes: number): void {
+  fulfillmentCurrentBytes += bytes;
+  fulfillmentHighWaterBytes = Math.max(fulfillmentHighWaterBytes, fulfillmentCurrentBytes);
+}
+
+function releaseFulfillmentBytes(bytes: number): void {
+  fulfillmentCurrentBytes = Math.max(0, fulfillmentCurrentBytes - bytes);
+}
+
+export function imageFulfillmentTailSnapshot(): { currentBytes: number; highWaterBytes: number; active: number } {
+  return { currentBytes: fulfillmentCurrentBytes, highWaterBytes: fulfillmentHighWaterBytes, active: pendingFulfillments };
+}
 
 /** Serialize write→prune→retain across concurrent fulfillments sharing artifacts/. */
 let retentionTail: Promise<void> = Promise.resolve();
 
 async function retainAfterBatch(paths: string[], keepCount?: number): Promise<string[]> {
+  const retainedBytes = paths.reduce((total, path) => total + fulfillmentEncoder.encode(path).byteLength, 0);
+  addFulfillmentBytes(retainedBytes);
   const run = retentionTail.then(() => {
     pruneArtifacts(keepCount);
     return paths.filter((p) => existsSync(p));
@@ -21,7 +42,11 @@ async function retainAfterBatch(paths: string[], keepCount?: number): Promise<st
     () => undefined,
     () => undefined,
   );
-  return run;
+  try {
+    return await run;
+  } finally {
+    releaseFulfillmentBytes(retainedBytes);
+  }
 }
 
 /**
@@ -35,6 +60,15 @@ export async function fulfillImageCall(
   budget: ImageBudget,
   signal?: AbortSignal,
 ): Promise<ImageCallResult> {
+  if (pendingFulfillments >= MAX_PENDING_IMAGE_FULFILLMENTS) {
+    return { ok: false, model: plan.model, prompt: "", files: [], count: 0, error: "image_fulfillment_busy" };
+  }
+  pendingFulfillments += 1;
+  const callBytes = fulfillmentEncoder.encode(call.id).byteLength
+    + fulfillmentEncoder.encode(call.name).byteLength
+    + fulfillmentEncoder.encode(call.arguments).byteLength;
+  addFulfillmentBytes(callBytes);
+  try {
   let args: unknown;
   try {
     args = JSON.parse(call.arguments || "{}");
@@ -108,4 +142,8 @@ export async function fulfillImageCall(
     // backslashes are not treated as escapes by renderers.
     markdown: `![image](${pathToFileURL(primary).href})`,
   };
+  } finally {
+    releaseFulfillmentBytes(callBytes);
+    pendingFulfillments -= 1;
+  }
 }

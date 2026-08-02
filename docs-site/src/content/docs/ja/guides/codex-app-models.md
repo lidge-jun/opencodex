@@ -1,58 +1,34 @@
 ---
-title: Codex App モデルピッカー
-description: 共有 Codex カタログ経由で opencodex モデルが Codex App、Codex CLI、Codex TUI に表示される方式。
+title: Codex App モデル ピッカー
+description: opencodex モデルが、共有 Codex カタログを通じて Codex App、Codex CLI、Codex TUI にどのように表示されるか。
 ---
 
-opencodex は Codex App にパッチを当てません。Codex CLI/TUI が既に使う設定とモデルカタログを
-同じ位置に書き込みます。Codex App もこの状態を共有するため、ルーティングモデルが通常の Codex カタログ
-項目のように App のモデルピッカーに現れます。
+opencodex は Codex アプリにパッチを適用しません。 Codex CLI/TUI が既に使用しているのと同じ Codex 設定とモデル カタログを書き込みます。 Codex アプリはその共有状態を読み取るため、ルーティングされたモデルは通常の Codex カタログ エントリとしてアプリのモデル ピッカーに表示されます。
 
-OpenAI ID は 2 種類に固定されます。bare native ID は `codexAccountMode` で Pool(デフォルト)/Direct を
-選ぶ単一 `openai` グループで、`openai-apikey/<model>` は API キーです。モードを変えてもモデル
-ID は変わりません。API GPT-5.6 は context 1,050,000 / max input 922,000 で、
-`*-pro` ピッカー ID は公開状態を維持しつつ wire でベースモデル + `reasoning.mode: "pro"` になります。
+OpenAI エントリには 2 つの安定した ID があります。1 つはプール (デフォルト) または直接アカウントの選択が `codexAccountMode` によって制御されるベア ネイティブ `openai` グループ、もう 1 つは名前空間付きの `openai-apikey/<model>` API キー トランスポートです。アカウント モードを変更してもピッカー ID は変更されません。 API GPT-5.6 エントリは 1,050,000 コンテキスト / 922,000 最大入力を使用し、`*-pro` ピッカー ID は `reasoning.mode: "pro"` のベース ワイヤ モデルに解決されますが、ログ、使用状況、およびピッカー状態は仮想 ID を保持します。 API カタログは、`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、およびそれらの 3 つの Pro 仮想 ID の 8 つの ID に固定されています。汎用の `gpt-5.6-pro` エイリアスはありません。コンパクト リクエストは、選択された層を保持しますが、推論オブジェクトなしで基本モデルを送信します。
 
-## 統合経路
-
-`ocx init`、`ocx start`、`ocx sync` は解決された `CODEX_HOME` の下のファイルを合わせます。
+資格情報ルートを明示的に選択します。 [プロバイダー] ページで [プール/ダイレクト] を変更します。
 
 ```text
-$CODEX_HOME/config.toml
-$CODEX_HOME/opencodex.config.toml
-$CODEX_HOME/opencodex-catalog.json
-$CODEX_HOME/models_cache.json
+gpt-5.6-sol                         # openai (Pool or Direct option)
+openai-apikey/gpt-5.6-sol           # API key
 ```
 
-デフォルトのループバックバインドでは Codex の組み込み `openai` プロバイダー ID をそのまま残します。代わりに次のルート
-キーでプロバイダーとモデルカタログを opencodex につなぎます。
+新規インストールと保存モードのない設定は、デフォルトでプールになります。現在の設定はマーカー 2 を使用し、出荷された v1 ソースを `~/.opencodex/config.json.pre-openai-tiers-v2.bak` に保持します。次のようにして復元します。
 
-```toml
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-openai_base_url = "http://127.0.0.1:10100/v1"
+```sh
+cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 ```
 
-ループバック以外の hostname を使うと Codex が生成された API 認証ヘッダーも送る必要があります。このときルートの
-`model_provider = "opencodex"` と Responses 互換専用プロバイダーを使います。
+以前の v1 の 3 プロバイダー設定は、単一のオプション対応行に自動的に移行されます。
 
-```toml
-[model_providers.opencodex]
-name = "OpenCodex Proxy"
-base_url = "http://your-host:10100/v1"
-wire_api = "responses"
-requires_openai_auth = true
-env_http_headers = { "x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN" }
-```
+## 統合パス
 
-`websockets` はデフォルトでオフです。専用プロバイダーとカタログ項目は
-`"websockets": true` のときのみ `supports_websockets = true` を宣言します。ループバックでは Codex の
-組み込みプロバイダーが先に WebSocket を試みる可能性があり、機能オフのプロキシは `426` を返して
-HTTP/SSE にフォールバックさせます。注入と復元の全体流は
-[Codex 連携](/ja/guides/codex-integration/)を参照してください。
+`ocx init`、`ocx start`、および `ocx sync` は、共有 Codex 設定とカタログをプロキシに接続します。設定の挿入、カタログの同期、シム、WebSocket フォールバック、および復元の仕組みについては、[Codexの統合](/guides/codex-integration/) を参照してください。
 
-## ルーティングモデルが表示される理由
+## 配線されたモデルが表示される理由
 
-Codex モデルピッカーは Codex 形式のカタログ項目を要求します。opencodex はネイティブ Codex モデル
-テンプレートを複製した後、ルーティングモデルの識別情報を差し替えます。
+Codex のモデル ピッカーは、Codex の形をしたカタログ エントリを想定しています。 opencodex は、ネイティブ Codex モデル テンプレートを複製し、ルーティングされたモデル ID を置き換えることによって、ルーティングされたエントリを構築します。
 
 ```text
 slug = "anthropic/claude-sonnet-..."
@@ -60,78 +36,48 @@ display_name = "anthropic/claude-sonnet-..."
 visibility = "list"
 ```
 
-複製には推論段階、shell 型、API サポートフラグ、base instructions のように厳密パーサーが
-要求するフィールドが残ります。その後 OpenAI service tier メタデータのように該当ルートが処理できない
-ネイティブ専用機能は削除します。
+クローンは、推論レベル、シェル タイプ、API サポート フラグ、基本命令などの厳密なパーサー フィールドを保持します。次に、opencodex は、OpenAI サービス層メタデータなど、ルートが尊重できないネイティブのみの機能を削除します。
 
-## v2.7.1 モデル範囲
+## 現在の安定したモデルの範囲
 
-ネイティブフォールバックリストには `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、
-`gpt-5.3-codex-spark`、GPT-5.6 Sol/Terra/Luna が含まれます。GPT-5.5/5.4 系はインストール済み
-Codex カタログのより豊富なライブ項目を保ち、欠けている項目のみ合成します。バンドル上流
-スナップショットは GPT-5.6 にのみ使います。古いテンプレートで近似するのではなく、モデル別の実際の識別情報と
-メタデータを適用するためです。
+ネイティブ フォールバック セットには、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.3-codex-spark`、および GPT-5.6 Sol/Terra/Luna が含まれます。 GPT-5.5/5.4 ファミリの場合、opencodex は、インストールされている Codex カタログの豊富なライブ エントリを保存し、欠落しているエントリのみを合成します。バンドルされたアップストリーム スナップショットは GPT-5.6 でのみ使用され、古いテンプレートの近似値の代わりに実際のモデルごとの ID とメタデータが提供されます。
 
-| ルート | ピッカー ID とカタログメタデータ |
- --- | --- |
-| Codex ログイン(Pool または Direct) | `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`(372,000 トークン) |
-| OpenAI(API キー) | `openai-apikey/gpt-5.6-*` と `openai-apikey/gpt-5.6-*-pro`(1,050,000; max input 922,000) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna`(1,050,000) |
-| Cursor | 静的フォールバックに `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna`(1,000,000)と `cursor/grok-4.5`、`cursor/grok-4.5-fast`(500,000)が含まれます。実際の表示一覧はアカウント別ライブ探索結果で絞ります。 |
-| xAI | ライブ探索結果が優先です。フォールバックカタログのデフォルトはコンテキスト 500,000 と `low` / `medium` / `high` 推論を持つ `xai/grok-4.5` です。 |
+|ルート |ピッカー ID とカタログのメタデータ |
+| --- | --- |
+| Codex ログイン (プールまたは直接) | `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` (372,000 トークンのカタログ ウィンドウ) |
+| OpenAI (API キー) |正確に 8 つの名前空間行: `gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、および 3 つの `*-pro` 仮想 ID (コンテキスト 1,050,000、8 つすべての最大入力 922,000) |
+|オープンルーター | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` (1,050,000) |
+|カーソル |静的フォールバックには、`cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、および `cursor/gpt-5.6-luna` (1,000,000)、さらに `cursor/grok-4.5` および `cursor/grok-4.5-fast` (500,000) が含まれます。ライブアカウントの検出により、どれが表示されたままになるかが決まります。 |
+|かおるライブディスカバリーには信頼性があります。フォールバック カタログのデフォルトは、500,000 トークン ウィンドウと `low` / `medium` / `high` 推論制御を備えた `xai/grok-4.5` です。 |
 
-固定 GPT-5.6 項目は上流推論段階をそのまま保存します。Sol と Terra は `low` から
-`ultra` まで、Luna は `max` まで公開します。デフォルトは Sol が `low`、Terra と Luna が `medium` です。
-`ultra` は最大推論と能動的委任をまとめたクライアント選択肢でバックエンドには `max` として
-渡されます。モデルがピッカーに見えても接続されたアカウントや API キーに実際の利用権が必要です。
+固定された GPT-5.6 エントリは、正確な上流ラダーを保存します。 Sol と Terra は `low` から `ultra` を公開します。ルナは`max`で止まります。 Sol のデフォルトは `low`、Terra と Luna のデフォルトは `medium` です。 `ultra` は、最大限の推論とプロアクティブな委任を目的としたクライアント向けの選択肢であり、`max` としてバックエンドに到達します。ピッカーのエントリは、カタログの準備ができていることを意味するだけです。接続されたアカウントまたは API キーには、そのモデルを使用する資格がまだある必要があります。
 
-## ネイティブとルーティングモデルの切り替え
+## ネイティブモデルとルーティングモデルの切り替え
 
-ダッシュボード Models ページは両モデル系統とも `disabledModels` で管理します。
+ダッシュボードの「モデル」ページでは、両方のモデル ファミリで `disabledModels` を使用します。
 
-- ルーティング ID は `provider/model` 形式です。オフにすると同期カタログと `/v1/models` から除外されます。
-- ネイティブ GPT ID は `/` のないスラッグです。オフにしても項目は残し `visibility` だけ `hide` に
-  切り替えます。後でオンにしたとき元の項目をそのまま復元するためです。無効状態では OpenAI
-  一覧形式からも外れます。
-- ネイティブ行は対応する静的一覧から取るため、モデルをオフにした後もダッシュボードから再びオンにできます。
+- ルーティング ID は名前空間 (`provider/model`) です。いずれかを無効にすると、同期されたカタログから除外されます
+そして`/v1/models`。
+- ネイティブ GPT ID は裸のナメクジです。無効にすると、カタログ エントリは保持されますが、変更されます。
+`visibility` から `hide` へ。後で再度有効にするために正確なエントリを保存します。裸の OpenAI リスト形状は、無効になっている間は省略されます。
+- ネイティブ行はサポートされている静的セットから取得されるため、無効になったネイティブ モデルは引き続き表示されます。
+ダッシュボードに戻り、再びオンにすることができます。
 
-表示可否の処理はスナップショットアップグレードより後に実行されます。管理 API はトグル後にカタログを書き直し Codex モデルキャッシュを強制的に古い状態にします。
+可視性パスはスナップショットのアップグレード後に実行され、管理 API はカタログを更新し、切り替え後に Codex のモデル キャッシュを強制的に無効にします。
 
 ## マルチエージェントサーフェスモード
 
-opencodex は全カタログ項目の `multi_agent_version` を制御する 3 段階 override を提供します。
+モデル ページ v1/base/v2 コントロールは、各ピッカー エントリが使用する Codex コラボレーション サーフェスを変更します。正規モード、委任、継承、フォールバック、および暗号化されたタスクの動作については、[サブエージェントサーフェス](/guides/sub-agent-surface/) を参照してください。
 
-| モード | 動作 |
- --- | --- |
-| **v1** | 上流 pin より優先し全モデルを v1 マルチエージェントサーフェスに強制します(Sol/Terra 含む)。 |
-| **base**(インストール時デフォルト) | 上流 pin を復元します。Sol/Terra は v2、Luna は v1 を使い、pin のないモデルは Codex `multi_agent_v2` フィーチャーフラグに従います。 |
-| **v2** | 上流 pin より優先し全モデルを v2 マルチエージェントサーフェスに強制します(Luna 含む)。 |
+## 上位層の推論
 
-ダッシュボードや Models ページ、`ocx v2 mode v1|default|v2`、または
-`PUT /api/v2` と `{ "multiAgentMode": "v1" }` で設定できます。変更は新しい Codex
-セッションから適用されます。
+推論層の可視性は、v1/base/v2 サーフェス モードから独立しています。生成された推論可能なエントリは `max` をアドバタイズするため、サブエージェントの直接の作業が検証をオーバーライドします。現在生成されているルーテッド エントリと古いネイティブ GPT エントリも `ultra` をアドバタイズします。上流の GPT-5.6 ラダーは正確に保存されているため、Luna には `max` がありますが、`ultra` はありません。
 
-:::caution
-v2(`multi_agent_v2`)サーフェスでは、モデルを明示しないスポーンは親セッションのモデルを継承できます。
-OpenCodex ガイダンスは選択したモデル/強度を明示的に渡すよう Codex に指示でき、別のネイティブデフォルト設定は
-sync/restart 後に既定値を提供できます。どちらもプロキシ側のスポーン単位ルーターではありません。正確な動作は
-[サブエージェントサーフェス](/ja/guides/sub-agent-surface/)を参照してください。
-:::
+回線上では、ルーティングされたアダプターがサポートされていない層をマップまたはクランプします。実際のラダーが `xhigh` で停止する古いネイティブ モデルの場合、`nativeEffortClamp` は直接 `max` または `ultra` 選択を `xhigh` にマップします (GPT-5.5 など)。ソル、テラ、ルナは本物の `max` ラングを持っています。
 
-## 最上位推論段階
+## 高速層のルール
 
-カタログにどの推論段階を表示するかは v1/base/v2 サーフェスモードと無関係です。生成される
-推論サポート項目にはサブエージェントが直接指定した強度を検証できるよう `max` が含まれます。
-現在生成されるルーティング項目と以前の世代のネイティブ GPT 項目には `ultra` も含まれます。ただし GPT-5.6 の
-正確な上流段階はそのまま維持するため Luna は `max` で終わります。
-
-実際のリクエストではルーティングアダプターがサポートしない段階をマッピングまたは制限します。実際の最上位段階が
-`xhigh` の以前のネイティブモデルは `nativeEffortClamp` が直接指定された `max` または `ultra` 選択を
-`xhigh` に切り替えます(例: GPT-5.5)。Sol、Terra、Luna には実際の `max` 段階があります。
-
-## Fast tier ルール
-
-Codex 設定ファイルは fast モードを次のように保存します。
+Codex は高速モードを次のように保存します。
 
 ```toml
 service_tier = "fast"
@@ -140,27 +86,20 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-一方モデルカタログとランタイムリクエストの tier ID は `priority` です。opencodex はこの差を維持します。
-ネイティブ OpenAI パススルーモデルは fast サポートを保存し、ルーティングされた非 OpenAI モデルでは service-tier
-メタデータを消して処理できない fast オプションが表示されないようにします。
+ただし、モデル カタログとランタイム リクエスト層 ID は `priority` を使用します。 opencodex はその分割を保持します。ネイティブ OpenAI パススルー モデルは高速サポートを維持します。ルーティングされた非 OpenAI モデルはサービス層メタデータを削除するため、高速オプションが受け入れられない場合はアドバタイズされません。
 
 ## サブエージェントの選択
 
-Codex はピッカーに表示されるカタログ項目を `priority` 昇順でソートした後、最初の 5 つを
-`spawn_agent` モデルオーバーライドとして公開します。`subagentModels` やダッシュボード Subagents ページで
-ネイティブ ID または `provider/model` ID を最大 5 つ選ぶと opencodex が選択順に priority 0-4 を
-付与します。残りのモデルも正確な ID で直接呼び出し可能です。
+Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。 `subagentModels` またはダッシュボードのサブエージェント ページを通じて、最大 5 つのベア ネイティブ ID または名前空間付き `provider/model` ID を選択します。 opencodex は、これらのエントリに選択された順序で優先度 0 ～ 4 を与えます。他のモデルは引き続き正確な ID で呼び出すことができます。
 
-フィーチャー済みモデル一覧はダッシュボードの **Sub-agent delegation** 選択とは別物です。Codex が最初に提示する
-オーバーライドを決めるだけで、モデルの選択や委任の開始は行いません。
+注目モデルのリストは、ダッシュボードの **サブエージェント委任** の選択とは別のものです。 Codex が提供するものを最初にオーバーライドするものを制御します。モデルを選択したり、委任をトリガーしたりすることはありません。
 
-## モデル状態のリフレッシュ
+## モデルの状態を更新しています
 
-ピッカーに古い項目が残っている場合はカタログを書き直し対象 Codex 画面を再度開いてください。
+ピッカーに古いエントリがまだ表示されている場合は、カタログを更新し、ターゲットの Codex サーフェスを再起動します。
 
 ```bash
 ocx sync
 ```
 
-opencodex はカタログの表示可否、priority、メタデータが変わるたびに `models_cache.json` を意図的に
-古いキャッシュラッパーで書き直します。次回の Codex モデルリフレッシュが新しいカタログを読むようにするためです。
+opencodex は、カタログの可視性、優先度、またはメタデータが変更されるたびに、意図的に古いキャッシュ ラッパーで `models_cache.json` を書き換えるため、次回の Codex モデルの更新で新しいカタログが読み取られます。
