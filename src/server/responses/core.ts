@@ -151,6 +151,10 @@ import {
   hasResponsesItemIdRepair,
 } from "../responses-item-id-repair";
 import {
+  createResponsesSnapshotPayloadRewrite,
+  hasResponsesSnapshotRepair,
+} from "../responses-snapshot-repair";
+import {
   createImageGenCallRestoreRewrite,
   imageGenToolCallAliases,
   restoreImageGenCallsInJson,
@@ -1750,25 +1754,33 @@ async function handleResponsesInner(
     // native relay, never enters JS Sink.write); branch[1] is consumed in the
     // background for terminal-outcome/quota inspection only.
     // #314 alternative shape: win32 no-rewrite traffic follows the runtime/config
-    // gate; darwin no-rewrite traffic joins it only for explicit
-    // `streamMode: "eager-relay"` opt-in. Darwin `auto` always stays tee. The
+    // gate; Darwin traffic joins it only for explicit `streamMode: "eager-relay"`
+    // opt-in and may compose a client-facing rewrite after the single reader.
+    // Darwin `auto` always stays tee. The
     // eager shape skips tee and uses one bounded reader with inline inspection
     // (src/server/relay-eager.ts; policy:
     // devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
     // The bundled known-bad runtime remains on tee by default on both platforms.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
-      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
+      const snapshotRepair = route.provider.responsesSnapshotRepair;
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
+        hasResponsesSnapshotRepair(snapshotRepair)
+          ? createResponsesSnapshotPayloadRewrite()
+          : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      const needsClientRewrite = payloadRewrites.length > 0;
+      const payloadRewrite = needsClientRewrite
+        ? composeSsePayloadRewrites(...payloadRewrites)
+        : undefined;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
-      // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
-      // lost). The eager single reader applies the same rewrites inline.
+      // (Bun#32111 JS-sink segfault). Darwin's explicit eager mode uses the
+      // same single-reader relay so snapshot repair cannot reintroduce tee
+      // retention on the third-party Responses path.
       const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
       const eagerPath = selectEagerPath(
         process.platform,
@@ -1812,9 +1824,7 @@ async function handleResponsesInner(
           finishInspection: () => inspector.finish(),
           disposeInspection: () => inspector.dispose(),
           sawTerminal: () => inspector.reported(),
-          ...(win32EagerRewrite
-            ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
-            : {}),
+          ...(payloadRewrite ? { rewritePayload: payloadRewrite } : {}),
           onSynthetic: kind => {
             if (!reportNativeTerminal) return;
             if (kind === "incomplete") {
@@ -1828,10 +1838,9 @@ async function handleResponsesInner(
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
-        }, win32EagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
-        // selectEagerPath admits only no-rewrite traffic on both eligible platforms;
-        // win32 rewrite traffic reaches this relay too, but with the payload rewrite
-        // applied inline — never via an image/item-id JS pull wrapper (#32111, #864).
+        }, payloadRewrite ? { rewriteBudget: translatorBudget } : undefined);
+        // win32 rewrite traffic and Darwin's explicit eager mode apply client
+        // rewrites inline after raw inspection, never through tee()+JS pull.
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
         return markEagerRelaySseResponse(
           markNativePassthroughSseResponse(new Response(eagerBody, {
@@ -1901,8 +1910,9 @@ async function handleResponsesInner(
       // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
       // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
       // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
+      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const rewrittenBody = payloadRewrites.length > 0
-        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
+        ? relaySseWithPayloadRewrite(nativeBody, payloadRewrite!, translatorBudget)
         : nativeBody;
       const clientBody = process.platform === "win32" && !needsClientRewrite
         ? nativeBody

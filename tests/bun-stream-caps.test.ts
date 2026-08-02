@@ -122,8 +122,13 @@ describe("selectEagerPath (platform policy matrix)", () => {
     expect(selectEagerPath("darwin", false, "auto", "1.4.0", "1.4.0")).toBeNull();
   });
 
-  test("darwin + rewrite + config-eager → tee", () => {
-    expect(selectEagerPath("darwin", true, "eager-relay", "1.3.14", null)).toBeNull();
+  test("darwin + rewrite + config-eager → eager single-reader relay", () => {
+    expect(selectEagerPath("darwin", true, "eager-relay", "1.3.14", null))
+      .toEqual({ useEagerRelay: true, reason: "config-eager" });
+  });
+
+  test("win32 + rewrite + config-eager → tee", () => {
+    expect(selectEagerPath("win32", true, "eager-relay", "1.3.14", null)).toBeNull();
   });
 
   test("linux + config-eager → tee", () => {

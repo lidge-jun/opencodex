@@ -292,6 +292,35 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     expect(rec.dones).toBe(1);
   });
 
+  test("rewrites client-facing SSE inline while inspection keeps the raw upstream bytes", async () => {
+    const { hooks, rec } = makeHooks();
+    const inspected: string[] = [];
+    const rawInspect = hooks.inspectChunk;
+    hooks.inspectChunk = chunk => {
+      inspected.push(new TextDecoder().decode(chunk));
+      rawInspect(chunk);
+    };
+    hooks.rewritePayload = payload => {
+      const event = JSON.parse(payload) as Record<string, unknown>;
+      return JSON.stringify({ ...event, client_repaired: true });
+    };
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    const created = sse(JSON.stringify({ type: "response.created", response: {} }));
+    const completed = sse(COMPLETED);
+    up.push(created.slice(0, 17));
+    up.push(created.slice(17));
+    up.push(completed);
+    up.close();
+
+    const text = await readAll(relayed);
+    await settle();
+    expect(text).toContain('"client_repaired":true');
+    expect(inspected.join("")).not.toContain("client_repaired");
+    expect(rec.terminals).toEqual([{ status: "completed", httpStatus: undefined }]);
+    expect(rec.dones).toBe(1);
+  });
+
   test("eager relay backfills missing completed output before passthrough persistence (#334)", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();

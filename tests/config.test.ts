@@ -648,6 +648,36 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("responsesItemIdRepair");
   });
 
+  test("accepts only a boolean responsesSnapshotRepair opt-in", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          responsesSnapshotRepair: true,
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+    expect(readConfigDiagnostics().config.providers.custom.responsesSnapshotRepair).toBe(true);
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          responsesSnapshotRepair: { enabled: true },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("responsesSnapshotRepair");
+  });
+
   test("accepts a relative responsesPath", () => {
     writeResponsesPathConfig("/responses");
 

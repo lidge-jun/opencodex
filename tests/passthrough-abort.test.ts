@@ -50,8 +50,9 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     // win32 must receive the tee'd body untouched when no client rewrite is required — no JS pull
     // wrapper on the default path (Bun#32111 segfault).
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
-    expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
-    expect(sseBranch).toContain("new Response(eagerBody");
+    expect(sseBranch).toContain("const snapshotRepair = route.provider.responsesSnapshotRepair;");
+    expect(sseBranch).toContain("const needsClientRewrite = payloadRewrites.length > 0;");
+    expect(sseBranch).toContain("rewritePayload: payloadRewrite");
     expect(sseBranch).toContain("const rewrittenBody = payloadRewrites.length > 0");
     expect(sseBranch).toContain('process.platform === "win32"');
     expect(sseBranch).toContain("&& !needsClientRewrite");
@@ -60,7 +61,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     // reader with the payload rewrite applied inline — never the tee()+JS-pull
     // chain that loses the terminal block on Windows (Bun#32111).
     expect(sseBranch).toContain("win32EagerRewrite");
-    expect(sseBranch).toContain("rewritePayload: composeSsePayloadRewrites(...payloadRewrites)");
+    expect(sseBranch).toContain("...(payloadRewrite ? { rewritePayload: payloadRewrite } : {})");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
     expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
     expect(sseBranch).toContain("new Response(clientBody");
