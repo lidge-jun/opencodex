@@ -39,7 +39,7 @@ import { extractKiroImages, normalizeKiroImages, type KiroImage } from "./kiro-i
 import { sniffImageDimensions } from "./anthropic-image-guard";
 import { fetchKiroWithRetry, noteKiroTransientThrottle } from "./kiro-retry";
 import { convertKiroToolContext } from "./kiro-tools";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeFromNames } from "./tool-catalog-nudge";
 import {
   KIRO_COMPLETION_INSTRUCTIONS,
@@ -431,9 +431,10 @@ export function buildKiroPayload(
   const nameMap = toolContext.nameMap;
   const systemParts: string[] = [];
   const injectedChars = { value: 0 };
-  // Neutralize Codex's GPT-5 identity line so a routed Kiro model never misreports as GPT-5/OpenAI
-  // and the proxy identity never leaks upstream.
-  if (parsed.context.systemPrompt?.length) systemParts.push(neutralizeIdentity(parsed.context.systemPrompt.join("\n\n")));
+  // Name the Kiro model id actually sent on the wire without leaking the proxy identity upstream.
+  if (parsed.context.systemPrompt?.length) {
+    systemParts.push(identifyRoutedModel(parsed.context.systemPrompt.join("\n\n"), modelId));
+  }
   for (const addition of toolContext.systemAdditions) {
     const boundedAddition = boundedInjectedInstruction(addition, injectedChars);
     if (boundedAddition) systemParts.push(boundedAddition);

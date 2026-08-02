@@ -20,7 +20,7 @@ import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./g
 import { isVertexTruncationReason, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { compileGoogleWireBody } from "./google-wire-compiler";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedModel } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import {
@@ -122,15 +122,18 @@ function geminiToolResultText(content: string | OcxContentPart[]): string {
   return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
 }
 
-function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?: unknown; contents: unknown[] } {
+function messagesToGeminiFormat(
+  parsed: OcxParsedRequest,
+  routedModelId = parsed.modelId,
+): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
-  const systemText = neutralizeIdentity([
+  const systemText = identifyRoutedModel([
     ...(parsed.context.systemPrompt ?? []),
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
     GOOGLE_BREVITY_INSTRUCTION,
-  ].join("\n\n"));
+  ].join("\n\n"), routedModelId);
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
@@ -292,7 +295,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       : {}),
 
     async buildRequest(parsed: OcxParsedRequest) {
-      const { systemInstruction, contents } = messagesToGeminiFormat(parsed);
+      const routedModelId = provider.googleMode === "cloud-code-assist"
+        ? resolveAntigravityEffortWireModel(
+            parsed.modelId,
+            mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
+          ).wireModelId
+        : parsed.modelId;
+      const { systemInstruction, contents } = messagesToGeminiFormat(parsed, routedModelId);
       const tools = toolsToGeminiFormat(parsed);
 
       const body: Record<string, unknown> = { contents };

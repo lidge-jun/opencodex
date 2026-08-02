@@ -1,5 +1,5 @@
 /**
- * Central identity neutralization.
+ * Central routed-model identity repair.
  *
  * Codex sends the SAME GPT-5 identity line to EVERY model at request time (the per-model catalog
  * `base_instructions` is ignored on the wire). For routed, non-OpenAI providers that line is both
@@ -8,10 +8,11 @@
  * into the upstream payload — a signature no first-party client (Claude Code, Gemini CLI, Kiro) ever
  * sends, and a likely ToS trigger.
  *
- * The neutral replacement keeps ONLY the necessary instruction (don't misreport as GPT-5/OpenAI)
- * and names no proxy. Provider-native identity blocks (e.g. the anthropic OAuth "You are a Claude
- * agent..." prefix) are layered on TOP of this by the individual adapters; this module never claims
- * to be a specific first-party client.
+ * The replacement keeps the necessary instruction (don't misreport as GPT-5/OpenAI), names the
+ * model id that is actually sent on the wire when it is safe to interpolate, and names no proxy.
+ * Provider-native identity blocks (e.g. the anthropic OAuth "You are a Claude agent..." prefix)
+ * are layered on TOP of this by the individual adapters; this module never claims to be a specific
+ * first-party client.
  */
 
 /** Historical exact identity line Codex injected for every model. */
@@ -37,32 +38,39 @@ export const NEUTRAL_IDENTITY_LINE = "You are a coding agent. Do not claim to be
  * the leak can't reappear in one adapter while being fixed in another.
  */
 export function neutralizeIdentity(systemText: string): string {
-  return systemText.replace(CODEX_GPT5_IDENTITY_RE, NEUTRAL_IDENTITY_LINE);
+  // A callback avoids `$&`, `$'`, and other replacement-string substitutions if this constant ever
+  // becomes configurable. Keep the same safe form in identifyRoutedModel below.
+  return systemText.replace(CODEX_GPT5_IDENTITY_RE, () => NEUTRAL_IDENTITY_LINE);
 }
 
-function safeRoutedModelIdentity(modelName: string): string {
+function safeRoutedModelIdentity(modelName: string): string | null {
+  // Callers pass the model id after adapter-specific wire normalization. Brackets remain valid for
+  // providers that intentionally send a suffix such as `[1m]`; the OpenAI-chat adapter strips that
+  // suffix before calling us only when modelSuffixBracketStrip is enabled.
   const trimmed = modelName.trim();
-  if (trimmed.length === 0 || trimmed.length > 128) return "configured model";
-  const allowedPunctuation = "._/@:+-[]";
+  if (trimmed.length === 0 || trimmed.length > 128) return null;
+  const allowedPunctuation = "._/@:+-[]~";
   for (const char of trimmed) {
     const code = char.charCodeAt(0);
     const isAsciiAlphaNumeric = (code >= 48 && code <= 57)
       || (code >= 65 && code <= 90)
       || (code >= 97 && code <= 122);
-    if (!isAsciiAlphaNumeric && !allowedPunctuation.includes(char)) return "configured model";
+    if (!isAsciiAlphaNumeric && !allowedPunctuation.includes(char)) return null;
   }
   return trimmed;
 }
 
 /**
- * Catalog identity for a routed model. Unlike the generic adapter-time neutralizer, the catalog
- * already knows the concrete upstream model id, so identity questions can name it instead of
- * falling back to Codex/GPT identity inherited from the native template.
+ * Identity for a routed model. Callers pass the concrete model id that will be sent upstream, so
+ * identity questions can name it instead of falling back to Codex/GPT identity inherited from the
+ * native template.
  */
-export function identifyRoutedCatalogModel(systemText: string, modelName: string): string {
+export function identifyRoutedModel(systemText: string, modelName: string): string {
   const identity = safeRoutedModelIdentity(modelName);
-  const replacement = `You are a coding agent powered by the ${identity}. If asked which model you are, identify as ${identity}. Do not claim to be GPT-5 or made by OpenAI.`;
-  return systemText.replace(CODEX_GPT5_IDENTITY_RE, replacement);
+  const replacement = identity
+    ? `You are a coding agent powered by the ${identity}. If asked which model you are, identify as ${identity}. Do not claim to be a different model or to have a different creator.`
+    : "You are a coding agent powered by the configured model. If asked which model you are, identify as configured model. Do not claim to be GPT-5 or made by OpenAI.";
+  return systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement);
 }
 
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */

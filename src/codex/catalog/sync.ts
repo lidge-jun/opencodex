@@ -14,7 +14,7 @@ import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../..
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
-import { identifyRoutedCatalogModel } from "../../adapters/identity";
+import { identifyRoutedModel } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -194,7 +194,7 @@ export function deriveEntry(
       if (typeof e.base_instructions === "string") {
         // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
-        e.base_instructions = identifyRoutedCatalogModel(e.base_instructions, modelName);
+        e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
       }
       applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);

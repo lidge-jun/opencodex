@@ -18,7 +18,7 @@ import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPr
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedModel } from "./identity";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
@@ -441,7 +441,7 @@ function messagesToAnthropicFormat(
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
   const system = systemParts.length
-    ? neutralizeIdentity(systemParts.join("\n\n")) || undefined
+    ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
     : undefined;
   const messages: unknown[] = [];
 
