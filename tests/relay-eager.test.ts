@@ -67,8 +67,10 @@ function controlledUpstream(): {
   close: () => void;
   fail: (err: Error) => void;
   pullCount: () => number;
+  cancelCount: () => number;
 } {
   let pulls = 0;
+  let cancels = 0;
   const pending: Array<{ resolve: (r: ReadableStreamReadResult<Uint8Array>) => void }> = [];
   const queue: Array<{ kind: "chunk"; value: Uint8Array } | { kind: "close" } | { kind: "fail"; err: Error }> = [];
   const controllerQueue: Uint8Array[] = [];
@@ -84,6 +86,7 @@ function controlledUpstream(): {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) { controllerRef = controller; flush(); },
     pull() { pulls += 1; },
+    cancel() { cancels += 1; },
   }, { highWaterMark: 0 });
   return {
     stream,
@@ -91,6 +94,7 @@ function controlledUpstream(): {
     close: () => { closed = true; flush(); },
     fail: err => { failure = err; flush(); },
     pullCount: () => pulls,
+    cancelCount: () => cancels,
   };
 }
 
@@ -493,6 +497,30 @@ describe("relaySseEagerBounded — #44 cancel semantics", () => {
 });
 
 describe("relaySseEagerBounded — error paths", () => {
+  test("rewrite overflow after a raw terminal emits a client failed tail", async () => {
+    const { hooks, rec } = makeHooks();
+    hooks.rewritePayload = payload => payload;
+    const budget = createTranslatorBudget({ maxTurnBytes: 32 });
+    const up = controlledUpstream();
+    const upstreamAc = new AbortController();
+    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
+      rewriteBudget: budget,
+    });
+    up.push(sse(COMPLETED));
+
+    const out = await readAll(relayed);
+    await settle();
+    expect(rec.terminals).toEqual([{ status: "completed", httpStatus: undefined }]);
+    expect(out).toContain(FAILED_EVENT_MARKER);
+    expect(out).toContain("data: [DONE]");
+    expect(rec.synthetics).toEqual([]);
+    expect(rec.dones).toBe(1);
+    expect(upstreamAc.signal.aborted).toBe(true);
+    expect(up.cancelCount()).toBe(1);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+  });
+
   test("(e/090-1) mid-stream upstream error → clean failed tail + onSynthetic/onDone once", async () => {
     const { hooks, rec } = makeHooks();
     const inspectChunk = hooks.inspectChunk;

@@ -153,6 +153,7 @@ import {
 import {
   createResponsesSnapshotPayloadRewrite,
   hasResponsesSnapshotRepair,
+  repairResponsesSnapshotJson,
 } from "../responses-snapshot-repair";
 import {
   createImageGenCallRestoreRewrite,
@@ -1770,7 +1771,7 @@ async function handleResponsesInner(
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
         hasResponsesSnapshotRepair(snapshotRepair)
-          ? createResponsesSnapshotPayloadRewrite()
+          ? createResponsesSnapshotPayloadRewrite(parsed._rawBody, translatorBudget)
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const needsClientRewrite = payloadRewrites.length > 0;
@@ -1930,7 +1931,11 @@ async function handleResponsesInner(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
+      const restoredText = restoreImageGenCallsInJson(text, imageGenCallAliases);
+      const clientText = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
+        ? repairResponsesSnapshotJson(restoredText, parsed._rawBody)
+        : restoredText;
+      return new Response(clientText, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,

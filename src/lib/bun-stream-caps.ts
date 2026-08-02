@@ -92,10 +92,10 @@ export function decideEagerRelay(
  * Apply the two-platform eager-relay policy to the runtime/config capability.
  * Windows preserves the decision for no-rewrite traffic. Darwin permits only
  * explicit config opt-in; `auto` remains tee even on a future fixed runtime.
- * Returns the normalized effective decision, or null when platform policy or a Darwin
- * non-config-eager mode selects tee. Windows rewrites remain on tee because the extra JS pull
- * wrapper is part of the Bun#32111 crash shape; Darwin's explicit eager mode may compose a
- * client-facing rewrite after the single-reader relay.
+ * Returns the normalized effective decision, or null when platform policy, a Windows rewrite,
+ * or a Darwin non-config-eager mode excludes this path. Windows rewrites are forced onto the
+ * eager single-reader path separately by `isWin32EagerRewrite`; Darwin's explicit eager mode may
+ * compose a client-facing rewrite after the single-reader relay.
  */
 export function selectEagerPath(
   platform: NodeJS.Platform,

@@ -1084,7 +1084,8 @@ export interface OcxProviderConfig {
   /**
    * Provider-local repair for Responses gateways whose response.created / response.in_progress
    * snapshots omit required canonical fields such as output, tools, and tool_choice.
-   * Disabled by default and applied only to the client-facing SSE branch.
+   * Disabled by default and applied only to client-facing SSE/JSON; raw inspection and
+   * persistence remain authoritative.
    */
   responsesSnapshotRepair?: boolean;
   /** Model ids whose tool_choice only accepts `auto` or `none`; forced/named choices are downgraded. */

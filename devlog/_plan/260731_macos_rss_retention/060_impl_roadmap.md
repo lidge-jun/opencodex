@@ -34,7 +34,7 @@ the user for this unit's commits.
 | `070_harness_warm_fix.md` | wp2 | Apply 050's harness diff (monotonic pause clamp, child-exit/duration split) + post-patch remote smoke calibration | — |
 | `080_inspection_bounds.md` | wp3 | relay.ts inspector caps + clear points + disconnect cancel (both consumers) + parse-once + observability counters on `/api/system/memory` | — |
 | `090_eager_failed_tail.md` | wp4 | relay-eager.ts synthetic `response.failed` tail on mid-stream reset | 080 (dispose hook touches the eager producer finally) |
-| `100_darwin_eager_optin.md` | wp5 | core.ts gate: darwin joins win32 for explicit `eager-relay` no-rewrite traffic; `auto` stays tee; local darwin abort-stress gate | 090 (tail must exist before opt-in is reachable) |
+| `100_darwin_eager_optin.md` | wp5 | core.ts gate: darwin joins win32 for explicit `eager-relay`, including inline client rewrites; `auto` stays tee; local darwin abort-stress gate | 090 (tail must exist before opt-in is reachable) |
 | `110_verify_and_push.md` | wp6 | full-suite/typecheck/privacy gates, devlog closeout, push | 070–100 |
 
 Ordering rationale: 070 is independent and unblocks any future macmini re-run.

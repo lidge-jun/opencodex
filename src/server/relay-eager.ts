@@ -161,6 +161,10 @@ export function relaySseEagerBounded(
   let queuedBytes = 0;
   let cancelled = false;
   let done = false;
+  // Raw inspection can observe a terminal before an inline rewrite succeeds.
+  // Track client delivery separately so a rewrite failure cannot leave the
+  // client with an empty/truncated stream while persistence records success.
+  let clientTerminalEnqueued = false;
   // Pause gate: resolved by client pull, client cancel, or upstream abort so a
   // paused producer ALWAYS resumes (audit blocker 2 — no deadlock; onDone and
   // turn unregistration stay reachable, drainAndShutdown never hangs).
@@ -192,6 +196,7 @@ export function relaySseEagerBounded(
 
   const producer = async () => {
     let syntheticKind: "incomplete" | "failed" | null = null;
+    let clientRelayFailed = false;
     // reader.read() is not intrinsically tied to the upstream AbortController
     // (a fetch body usually rejects on abort, but that coupling is the fetch
     // implementation's, not the stream's). Race every read against the abort
@@ -212,7 +217,10 @@ export function relaySseEagerBounded(
             const tail = flushRewriteTail();
             if (tail.byteLength > 0 && !cancelled) {
               queuedBytes += tail.byteLength;
-              try { controllerRef?.enqueue(tail); } catch { /* client already gone */ }
+              try {
+                controllerRef?.enqueue(tail);
+                if (hooks.sawTerminal()) clientTerminalEnqueued = true;
+              } catch { /* client already gone */ }
             }
           }
           if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
@@ -235,6 +243,7 @@ export function relaySseEagerBounded(
         queuedBytes += outbound.byteLength;
         try {
           controllerRef?.enqueue(outbound);
+          if (hooks.sawTerminal()) clientTerminalEnqueued = true;
         } catch {
           // Controller already torn down (client went away without cancel()).
           cancelled = true;
@@ -249,7 +258,7 @@ export function relaySseEagerBounded(
     } catch (err) {
       // Upstream read failure. Distinguish genuine mid-stream reset from
       // abort-driven teardown (shutdown/cancel-expiry) — audit M3.
-      if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
+      if (!clientTerminalEnqueued && !cancelled && !upstream.signal.aborted) {
         // Serializing `err` can run user-defined accessors (Error.message
         // getters, toString) that re-entrantly cancel the client or abort the
         // upstream. Build the tail FIRST, then re-check eligibility before
@@ -257,8 +266,11 @@ export function relaySseEagerBounded(
         const tail = new TextEncoder().encode(
           `\n\nevent: response.failed\ndata: ${buildFailedTailPayload(err)}\n\ndata: [DONE]\n\n`,
         );
-        if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
-          syntheticKind = "failed";
+        if (!clientTerminalEnqueued && !cancelled && !upstream.signal.aborted) {
+          // If raw inspection already recorded a real terminal, the failed
+          // tail is client-only. Do not overwrite raw terminal accounting.
+          if (!hooks.sawTerminal()) syntheticKind = "failed";
+          clientRelayFailed = true;
           queuedBytes += tail.byteLength;
           try { controllerRef?.enqueue(tail); } catch { /* client already torn down */ }
           try { controllerRef?.close(); } catch { /* client already torn down */ }
@@ -276,7 +288,7 @@ export function relaySseEagerBounded(
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
       }
-      if (cancelled || upstream.signal.aborted || syntheticKind === "failed") {
+      if (cancelled || upstream.signal.aborted || syntheticKind === "failed" || clientRelayFailed) {
         upstream.abort();
         reader.cancel().catch(() => {});
       }
@@ -284,6 +296,7 @@ export function relaySseEagerBounded(
         try { controllerRef?.close(); } catch { /* already closed/errored */ }
       }
       try { hooks.disposeInspection?.(); } catch { /* inspection teardown must not block lifecycle cleanup */ }
+      try { rewrite?.dispose?.(); } catch { /* rewrite teardown must not block lifecycle cleanup */ }
       fireDone();
     }
   };

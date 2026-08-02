@@ -7,7 +7,10 @@ import type { TranslatorBudget } from "../lib/translator-budget";
  * parse/stringify pass so a tee'd stream is not re-framed twice per event.
  */
 
-export type SsePayloadRewrite = (payload: string) => string;
+export type SsePayloadRewrite = ((payload: string) => string) & {
+  /** Release state retained across events when the stream ends or is cancelled. */
+  dispose?: () => void;
+};
 
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
@@ -54,11 +57,26 @@ export function replaceSseDataPayload(block: string, payload: string): string {
 export function composeSsePayloadRewrites(...rewrites: SsePayloadRewrite[]): SsePayloadRewrite {
   if (rewrites.length === 0) return (payload) => payload;
   if (rewrites.length === 1) return rewrites[0]!;
-  return (payload) => {
+  const composed = ((payload: string): string => {
     let next = payload;
     for (const rewrite of rewrites) next = rewrite(next);
     return next;
+  }) as SsePayloadRewrite;
+  let disposed = false;
+  composed.dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    let firstError: unknown;
+    for (const rewrite of rewrites) {
+      try {
+        rewrite.dispose?.();
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (firstError !== undefined) throw firstError;
   };
+  return composed;
 }
 
 /**
@@ -122,6 +140,12 @@ export function relaySseWithPayloadRewrite(
     buffer = "";
     bufferBytes = 0;
   };
+  let rewriteDisposed = false;
+  const disposeRewrite = (): void => {
+    if (rewriteDisposed) return;
+    rewriteDisposed = true;
+    try { rewrite.dispose?.(); } catch { /* rewrite teardown must not block stream cleanup */ }
+  };
 
   const emitProcessedBlocks = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -156,6 +180,7 @@ export function relaySseWithPayloadRewrite(
           appendBuffer(decoder.decode());
           emitProcessedBlocks(controller, true);
           releaseBuffer();
+          disposeRewrite();
           controller.close();
           return;
         }
@@ -163,12 +188,14 @@ export function relaySseWithPayloadRewrite(
         emitProcessedBlocks(controller);
       } catch (error) {
         releaseBuffer();
+        disposeRewrite();
         try { await reader.cancel(error); } catch { /* already closed */ }
         controller.error(error);
       }
     },
     cancel(reason) {
       releaseBuffer();
+      disposeRewrite();
       reader.cancel(reason).catch(() => {});
     },
   });

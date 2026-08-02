@@ -1,3 +1,8 @@
+import type { TranslatorBudget } from "../lib/translator-budget";
+import {
+  MAX_COMPLETED_OUTPUT_ITEMS,
+  MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES,
+} from "./relay";
 import type { SsePayloadRewrite } from "./sse-payload-rewrite";
 
 const RESPONSE_EVENT_STATUSES: Readonly<Record<string, string>> = {
@@ -9,13 +14,47 @@ const RESPONSE_EVENT_STATUSES: Readonly<Record<string, string>> = {
   "response.queued": "queued",
 };
 
+type RequestDefaults = {
+  parallelToolCalls: boolean;
+  toolChoice: unknown;
+  tools: unknown[];
+};
+
+type RetainedOutputItem = {
+  item: Record<string, unknown>;
+  sourceBytes: number;
+};
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function isStructurallyValidToolChoice(value: unknown): boolean {
+  return (typeof value === "string" && value.trim().length > 0)
+    || (isPlainObject(value) && typeof value.type === "string" && value.type.trim().length > 0);
+}
+
+function requestDefaults(requestBody: unknown): RequestDefaults {
+  const request = isPlainObject(requestBody) ? requestBody : {};
+  return {
+    parallelToolCalls: typeof request.parallel_tool_calls === "boolean"
+      ? request.parallel_tool_calls
+      : true,
+    toolChoice: isStructurallyValidToolChoice(request.tool_choice) ? request.tool_choice : "auto",
+    tools: Array.isArray(request.tools) ? request.tools : [],
+  };
+}
+
 function repairOutputTextPart(part: Record<string, unknown>): Record<string, unknown> {
-  if (part.type !== "output_text" || Array.isArray(part.annotations)) return part;
-  return { ...part, annotations: [] };
+  if (part.type !== "output_text") return part;
+  const needsText = typeof part.text !== "string";
+  const needsAnnotations = !Array.isArray(part.annotations);
+  if (!needsText && !needsAnnotations) return part;
+  return {
+    ...part,
+    ...(needsText ? { text: "" } : {}),
+    ...(needsAnnotations ? { annotations: [] } : {}),
+  };
 }
 
 function repairSummaryPart(part: Record<string, unknown>): Record<string, unknown> {
@@ -23,38 +62,56 @@ function repairSummaryPart(part: Record<string, unknown>): Record<string, unknow
   return { ...part, text: "" };
 }
 
-function repairOutputItem(item: Record<string, unknown>): Record<string, unknown> {
-  if (item.type === "reasoning") {
-    return Array.isArray(item.summary) ? item : { ...item, summary: [] };
-  }
-  if (item.type !== "message") return item;
-
+function repairOutputItem(
+  item: Record<string, unknown>,
+  inferredStatus?: string,
+): Record<string, unknown> {
+  let repaired = item;
   let changed = false;
-  const content = Array.isArray(item.content)
-    ? item.content.map((part) => {
-      if (!isPlainObject(part)) return part;
-      const repaired = repairOutputTextPart(part);
-      changed = changed || repaired !== part;
-      return repaired;
-    })
-    : [];
-  changed = changed || !Array.isArray(item.content);
-  const role = item.role === "assistant" ? item.role : "assistant";
-  changed = changed || role !== item.role;
-  return changed ? { ...item, content, role } : item;
+
+  if (item.type === "reasoning") {
+    const rawSummary = item.summary;
+    const summary = Array.isArray(rawSummary)
+      ? rawSummary.map((part) => isPlainObject(part) ? repairSummaryPart(part) : part)
+      : [];
+    changed = !Array.isArray(rawSummary)
+      || summary.some((part, index) => part !== rawSummary[index]);
+    if (changed) repaired = { ...repaired, summary };
+  } else if (item.type === "message") {
+    const rawContent = item.content;
+    const content = Array.isArray(rawContent)
+      ? rawContent.map((part) => isPlainObject(part) ? repairOutputTextPart(part) : part)
+      : [];
+    changed = !Array.isArray(rawContent)
+      || content.some((part, index) => part !== rawContent[index]);
+    const role = item.role === "assistant" ? item.role : "assistant";
+    changed = changed || role !== item.role;
+    if (changed) repaired = { ...repaired, content, role };
+  }
+
+  if (inferredStatus && typeof repaired.status !== "string") {
+    repaired = { ...repaired, status: inferredStatus };
+  }
+  return repaired;
 }
 
 function repairResponseSnapshot(
   response: Record<string, unknown>,
   defaultStatus: string,
+  defaults: RequestDefaults,
+  reconstructedOutput?: Record<string, unknown>[],
 ): Record<string, unknown> {
   const repaired = { ...response };
   let changed = false;
+  const outputStatus = defaultStatus === "completed" ? "completed" : undefined;
 
-  if (Array.isArray(repaired.output)) {
+  if (reconstructedOutput) {
+    repaired.output = reconstructedOutput;
+    changed = true;
+  } else if (Array.isArray(repaired.output)) {
     const output = repaired.output.map((item) => {
       if (!isPlainObject(item)) return item;
-      const next = repairOutputItem(item);
+      const next = repairOutputItem(item, outputStatus);
       changed = changed || next !== item;
       return next;
     });
@@ -64,15 +121,15 @@ function repairResponseSnapshot(
     changed = true;
   }
   if (typeof repaired.parallel_tool_calls !== "boolean") {
-    repaired.parallel_tool_calls = true;
+    repaired.parallel_tool_calls = defaults.parallelToolCalls;
     changed = true;
   }
-  if (repaired.tool_choice === undefined || repaired.tool_choice === null) {
-    repaired.tool_choice = "auto";
+  if (!isStructurallyValidToolChoice(repaired.tool_choice)) {
+    repaired.tool_choice = defaults.toolChoice;
     changed = true;
   }
   if (!Array.isArray(repaired.tools)) {
-    repaired.tools = [];
+    repaired.tools = defaults.tools;
     changed = true;
   }
   if (typeof repaired.status !== "string") {
@@ -88,8 +145,64 @@ function repairResponseSnapshot(
  * Existing upstream values remain authoritative; only absent or structurally invalid fields are
  * backfilled.
  */
-export function createResponsesSnapshotPayloadRewrite(): SsePayloadRewrite {
-  return (payload) => {
+export function createResponsesSnapshotPayloadRewrite(
+  requestBody?: unknown,
+  budget?: TranslatorBudget,
+): SsePayloadRewrite {
+  const defaults = requestDefaults(requestBody);
+  const completedItems = new Map<number, RetainedOutputItem>();
+  const encoder = new TextEncoder();
+  let aggregateItemBytes = 0;
+  let reconstructionTainted = false;
+
+  const clearCompletedItems = (): void => {
+    if (aggregateItemBytes > 0) {
+      budget?.releaseRetained(aggregateItemBytes, { kind: "retained_collectors" });
+    }
+    completedItems.clear();
+    aggregateItemBytes = 0;
+    reconstructionTainted = false;
+  };
+
+  const retainCompletedItem = (
+    index: number,
+    item: Record<string, unknown>,
+    sourceBytes: number,
+  ): void => {
+    const previous = completedItems.get(index);
+    if (sourceBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES) {
+      if (previous) {
+        completedItems.delete(index);
+        aggregateItemBytes -= previous.sourceBytes;
+        budget?.releaseRetained(previous.sourceBytes, { kind: "retained_collectors" });
+      }
+      reconstructionTainted = true;
+      return;
+    }
+    const retainedDelta = sourceBytes - (previous?.sourceBytes ?? 0);
+    if (retainedDelta > 0) {
+      budget?.chargeRetained(retainedDelta, { kind: "retained_collectors" });
+    } else if (retainedDelta < 0) {
+      budget?.releaseRetained(-retainedDelta, { kind: "retained_collectors" });
+    }
+    completedItems.set(index, { item, sourceBytes });
+    aggregateItemBytes += retainedDelta;
+    while (completedItems.size > MAX_COMPLETED_OUTPUT_ITEMS
+      || aggregateItemBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES) {
+      let highestIndex = -1;
+      for (const retainedIndex of completedItems.keys()) {
+        if (retainedIndex > highestIndex) highestIndex = retainedIndex;
+      }
+      const evicted = completedItems.get(highestIndex);
+      if (!evicted) break;
+      completedItems.delete(highestIndex);
+      aggregateItemBytes -= evicted.sourceBytes;
+      budget?.releaseRetained(evicted.sourceBytes, { kind: "retained_collectors" });
+      reconstructionTainted = true;
+    }
+  };
+
+  const rewrite = ((payload: string): string => {
     let event: unknown;
     try {
       event = JSON.parse(payload);
@@ -101,23 +214,58 @@ export function createResponsesSnapshotPayloadRewrite(): SsePayloadRewrite {
     let nextEvent = event;
     let changed = false;
 
-    const responseStatus = RESPONSE_EVENT_STATUSES[type];
+    if ((type === "response.output_item.added" || type === "response.output_item.done")
+      && isPlainObject(event.item)) {
+      const itemStatus = type === "response.output_item.done" ? "completed" : "in_progress";
+      const item = repairOutputItem(event.item, itemStatus);
+      if (item !== event.item) {
+        nextEvent = { ...nextEvent, item };
+        changed = true;
+      }
+      if (type === "response.output_item.done") {
+        if (Number.isInteger(event.output_index)
+          && (event.output_index as number) >= 0
+          && typeof item.type === "string") {
+          retainCompletedItem(
+            event.output_index as number,
+            item,
+            encoder.encode(JSON.stringify(item)).byteLength,
+          );
+        } else {
+          reconstructionTainted = true;
+        }
+      }
+    }
+
+    const responseStatus = Object.prototype.hasOwnProperty.call(RESPONSE_EVENT_STATUSES, type)
+      ? RESPONSE_EVENT_STATUSES[type]
+      : undefined;
     if (responseStatus && isPlainObject(event.response)) {
-      const response = repairResponseSnapshot(event.response, responseStatus);
+      const hasAuthoritativeOutput = Array.isArray(event.response.output)
+        && event.response.output.length > 0;
+      const reconstructedOutput = type === "response.completed"
+        && !hasAuthoritativeOutput
+        && !reconstructionTainted
+        && completedItems.size > 0
+        ? [...completedItems.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([, retained]) => retained.item)
+        : undefined;
+      const response = repairResponseSnapshot(
+        event.response,
+        responseStatus,
+        defaults,
+        reconstructedOutput,
+      );
       if (response !== event.response) {
         nextEvent = { ...nextEvent, response };
         changed = true;
       }
     }
 
-    if ((type === "response.output_item.added" || type === "response.output_item.done")
-      && isPlainObject(event.item)) {
-      const item = repairOutputItem(event.item);
-      if (item !== event.item) {
-        nextEvent = { ...nextEvent, item };
-        changed = true;
-      }
-    }
+    const clearsCompletedItems = type === "response.completed"
+      || type === "response.failed"
+      || type === "response.incomplete";
 
     if ((type === "response.content_part.added" || type === "response.content_part.done")
       && isPlainObject(event.part)) {
@@ -143,8 +291,25 @@ export function createResponsesSnapshotPayloadRewrite(): SsePayloadRewrite {
       changed = true;
     }
 
-    return changed ? JSON.stringify(nextEvent) : payload;
-  };
+    const result = changed ? JSON.stringify(nextEvent) : payload;
+    if (clearsCompletedItems) clearCompletedItems();
+    return result;
+  }) as SsePayloadRewrite;
+  rewrite.dispose = clearCompletedItems;
+  return rewrite;
+}
+
+/** Repair a non-streaming Responses JSON object without changing the raw persisted payload. */
+export function repairResponsesSnapshotJson(payload: string, requestBody?: unknown): string {
+  let response: unknown;
+  try {
+    response = JSON.parse(payload);
+  } catch {
+    return payload;
+  }
+  if (!isPlainObject(response)) return payload;
+  const repaired = repairResponseSnapshot(response, "completed", requestDefaults(requestBody));
+  return repaired === response ? payload : JSON.stringify(repaired);
 }
 
 export function hasResponsesSnapshotRepair(enabled: boolean | undefined): enabled is true {

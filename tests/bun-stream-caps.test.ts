@@ -127,6 +127,10 @@ describe("selectEagerPath (platform policy matrix)", () => {
       .toEqual({ useEagerRelay: true, reason: "config-eager" });
   });
 
+  test("darwin + rewrite + auto known-bad runtime → tee", () => {
+    expect(selectEagerPath("darwin", true, "auto", "1.3.14", null)).toBeNull();
+  });
+
   test("win32 + rewrite + config-eager → tee", () => {
     expect(selectEagerPath("win32", true, "eager-relay", "1.3.14", null)).toBeNull();
   });

@@ -90,6 +90,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `noPenaltyModels?` | `string[]` | Модели, отвергающие penalty presence/frequency. |
 | `parallelToolCalls?` | `boolean` | Переключатель parallel tool call'ов. Для OpenAI Chat по умолчанию включено; не-chat adapter'ы рекламируют это только при явном `true`. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | По умолчанию выключенная downstream SSE-repair для exact placeholder-id и отсутствующих terminal-id. Function-call id никогда не переписываются. |
+| `responsesSnapshotRepair?` | `boolean` | По умолчанию выключенная клиентская repair для неполных lifecycle snapshot'ов Responses в SSE и JSON. Добавляет отсутствующие status, output и tool metadata, не меняя raw inspection и persistence. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Модели, у которых `tool_choice` принимает только `auto` или `none`; forced choice понижается. |
 | `preserveReasoningContentModels?` | `string[]` | Модели, которым нужен предыдущий assistant `reasoning_content` в chat history. |
 | `thinkingToggleModels?` | `string[]` | Chat-модели, использующие `thinking.enabled` вместо effort-ladder. |
@@ -240,7 +241,8 @@ Beijing, а `alibaba-token-plan-intl` обслуживает междунаро�
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
         "repairMissingTerminalIds": true
-      }
+      },
+      "responsesSnapshotRepair": true
     }
   }
 }

@@ -139,8 +139,9 @@ gate execution record is authoritative.
 
 ## Not changed
 
-- Rewrite traffic (image-gen aliases / item-id repair) stays on tee on both
-  platforms (`needsClientRewrite` guard intact).
+- Darwin `auto` rewrite traffic stays on tee. An explicit
+  `streamMode: "eager-relay"` may compose a client-facing rewrite inline on
+  the single reader; raw inspection still receives the original bytes.
 - `decideEagerRelay` itself unchanged — the darwin restriction lives at the
   call site because it is platform policy, not runtime capability.
 - Linux unchanged (no opt-in until asked; smallest honest scope).
@@ -159,7 +160,7 @@ extraction is preferred for clarity, not necessity. Test matrix:
 2. win32 + no-rewrite + auto/known-bad → tee (unchanged).
 3. darwin + no-rewrite + config-eager → eager (NEW).
 4. darwin + no-rewrite + auto (even with minFixed satisfied) → tee.
-5. darwin + rewrite + config-eager → tee.
+5. darwin + rewrite + config-eager → eager single-reader inline rewrite.
 6. linux + anything → tee.
 
 Plus one DIRECT `handleResponses` integration test gated to darwin only
@@ -251,3 +252,21 @@ Confirmed by the same round: C1-1 ack chain sound, C1-2 stall detection and
 all-or-nothing unreachable classification internally sound, C1-3 single
 normalized selector contract with darwin-auto never eager and win32
 unchanged.
+
+## 2026-08-02 client-rewrite amendment
+
+An opt-in Responses snapshot repair exposed a contradiction in the original
+wp5 scope: keeping Darwin rewrite traffic on tee would reintroduce the second
+reader and its retention cost precisely when a provider needs client-facing
+compatibility repair. Explicit Darwin eager mode now permits inline payload
+rewrites after raw inspection; Darwin `auto` and every Linux mode remain
+unchanged.
+
+The handler-level regression test uses `streamMode: "eager-relay"` together
+with an active snapshot rewrite and asserts the eager-path marker plus the
+repaired terminal. Relay tests separately prove fragmented SSE framing,
+client-only failed-tail behavior, upstream abort/cancel on rewrite failure,
+and raw-terminal accounting. The 2026-08-01 abort-stress record above did not
+exercise payload rewriting, so it remains evidence for the shared
+single-reader transport rather than a separate rewrite-stress claim; the
+feature remains explicit opt-in with `legacy-tee` as rollback.

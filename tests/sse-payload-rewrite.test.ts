@@ -103,6 +103,50 @@ describe("SSE payload rewrite composition", () => {
     expect(composeSsePayloadRewrites()('{"a":1}')).toBe('{"a":1}');
   });
 
+  test("composed rewrite teardown disposes every child exactly once", async () => {
+    const disposals = [0, 0];
+    const first = Object.assign((payload: string) => payload, {
+      dispose: () => { disposals[0] += 1; },
+    });
+    const second = Object.assign((payload: string) => payload, {
+      dispose: () => { disposals[1] += 1; },
+    });
+    const composed = composeSsePayloadRewrites(first, second);
+    const budget = createTestTranslatorBudget();
+
+    await readAll(relaySseWithPayloadRewrite(streamFromText("data: {}\n\n"), composed, budget));
+    composed.dispose?.();
+
+    expect(disposals).toEqual([1, 1]);
+    budget.dispose();
+  });
+
+  test("teardown attempts every child and cannot block upstream cancellation", async () => {
+    let secondDisposals = 0;
+    const throwing = Object.assign((payload: string) => payload, {
+      dispose: () => { throw new Error("dispose boom"); },
+    });
+    const second = Object.assign((payload: string) => payload, {
+      dispose: () => { secondDisposals += 1; },
+    });
+    const composed = composeSsePayloadRewrites(throwing, second);
+    expect(() => composed.dispose?.()).toThrow("dispose boom");
+    expect(secondDisposals).toBe(1);
+
+    let upstreamCancels = 0;
+    const upstream = new ReadableStream<Uint8Array>({
+      cancel() { upstreamCancels += 1; },
+    });
+    const rewrite = Object.assign((payload: string) => payload, {
+      dispose: () => { throw new Error("dispose boom"); },
+    });
+    const budget = createTestTranslatorBudget();
+    const reader = relaySseWithPayloadRewrite(upstream, rewrite, budget).getReader();
+    await reader.cancel("test cancel");
+    expect(upstreamCancels).toBe(1);
+    budget.dispose();
+  });
+
   test("unterminated rewrite accumulation closes through a typed failed tail", async () => {
     const budget = createTestTranslatorBudget({ maxTurnBytes: 64 });
     const upstream = new AbortController();
