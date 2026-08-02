@@ -314,7 +314,7 @@ export default function ProviderWorkspaceShell({
   const duplicateDisplayNames = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of allItems) {
-      const label = formatProviderDisplayName(item.name);
+      const label = formatProviderDisplayName(item.name, t);
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
     const dups = new Set<string>();
@@ -322,7 +322,7 @@ export default function ProviderWorkspaceShell({
       if (n > 1) dups.add(label);
     }
     return dups;
-  }, [allItems]);
+  }, [allItems, t]);
 
   if (allItems.length === 0) {
     return <WorkspaceEmptyState onAddProvider={onAddProvider} />;
@@ -485,7 +485,7 @@ export default function ProviderWorkspaceShell({
                       tabbable={railTabbableName === item.name}
                       modelCount={modelCounts[item.name]}
                       isDefault={defaultProvider === item.name}
-                      showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name))}
+                      showConfigId={duplicateDisplayNames.has(formatProviderDisplayName(item.name, t))}
                       onClick={() => onSelect(item.name)}
                       onFocus={() => setRailFocusName(item.name)}
                     />
@@ -538,7 +538,7 @@ export default function ProviderWorkspaceShell({
             onRetryModels: retryModels,
           }) ?? (
             <div className="pws-detail-placeholder">
-              <h3>{formatProviderDisplayName(selectedItem.name)}</h3>
+              <h3>{formatProviderDisplayName(selectedItem.name, t)}</h3>
               <p className="muted">{t("pws.detailComingSoon")}</p>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSelect(null)}>
                 {t("modal.back")}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { captureClaudeInbound, clearClaudeInboundDebug, getClaudeInboundDebugEntries } from "../src/claude/inbound-debug";
+import { captureClaudeInbound, claudeInboundDebugMetrics, clearClaudeInboundDebug, evictOldestClaudeInboundForBudget, getClaudeInboundDebugEntries } from "../src/claude/inbound-debug";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 
 afterEach(() => {
@@ -19,6 +19,19 @@ const body = {
 };
 
 describe("claude inbound debug capture (devlog 130 B1)", () => {
+  test("Claude inbound metadata key 65 and aggregate row overflow are visibly capped and wp5 hooks account exact bytes", () => {
+    setDebugSettings({ claude: true });
+    const metadata = Object.fromEntries(Array.from({ length: 65 }, (_, index) => [`${index}-${"한".repeat(3000)}`, true]));
+    captureClaudeInbound("messages", { ...body, metadata }, "x".repeat(20_000), "y".repeat(20_000));
+    const [entry] = getClaudeInboundDebugEntries();
+    expect(entry?.rowTruncated).toBe(true);
+    expect(entry?.metadataKeysDropped).toBeGreaterThanOrEqual(1);
+    expect(Buffer.byteLength(JSON.stringify(entry))).toBeLessThanOrEqual(32 * 1024);
+    const before = claudeInboundDebugMetrics();
+    expect(before.bytes).toBe(Buffer.byteLength(JSON.stringify(entry)));
+    expect(evictOldestClaudeInboundForBudget()).toBe(before.bytes);
+    expect(claudeInboundDebugMetrics()).toMatchObject({ entries: 0, bytes: 0 });
+  });
   test("OFF (default): captures nothing", () => {
     captureClaudeInbound("messages", body);
     expect(getClaudeInboundDebugEntries()).toHaveLength(0);

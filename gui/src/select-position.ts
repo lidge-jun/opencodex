@@ -21,6 +21,8 @@ const VIEWPORT_PAD_PX = 8;
 const MAX_MENU_HEIGHT_PX = 280;
 const MIN_MENU_HEIGHT_PX = 120;
 const BESIDE_MIN_WIDTH_PX = 160;
+/** Gap past the trigger's right edge for beside-placement (clears sidebar padding/border). */
+const BESIDE_GAP_PX = 12;
 
 function viewportHeight() {
   return typeof window !== "undefined" ? window.innerHeight : 800;
@@ -42,7 +44,7 @@ export function computeSelectMenuStyle(
     const spaceBelow = vh - trigger.top - VIEWPORT_PAD_PX;
     const spaceAbove = trigger.top - VIEWPORT_PAD_PX;
     const openAbove = measuredHeight + FLIP_GAP_PX > spaceBelow && spaceAbove > spaceBelow;
-    const left = Math.max(VIEWPORT_PAD_PX, Math.min(trigger.right + 6, vw - BESIDE_MIN_WIDTH_PX - VIEWPORT_PAD_PX));
+    const left = Math.max(VIEWPORT_PAD_PX, Math.min(trigger.right + BESIDE_GAP_PX, vw - BESIDE_MIN_WIDTH_PX - VIEWPORT_PAD_PX));
 
     if (openAbove) {
       return {

@@ -30,15 +30,20 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
-  test("native passthrough SSE keeps win32 on the pure native relay (Bun#32111)", async () => {
-    const source = await readSource("src/server/index.ts");
-    const sseBranch = source.slice(
-      source.indexOf("if (isEventStream && upstreamResponse.body)"),
-      source.indexOf("const body = relayWithAbort(upstreamResponse.body, upstream);"),
+  test("native passthrough SSE keeps the real platform gate and pure native relay invariants", async () => {
+    const coreSource = await readSource("src/server/responses/core.ts");
+    const relaySource = await readSource("src/server/relay.ts");
+    const capsSource = await readSource("src/lib/bun-stream-caps.ts");
+    const sseBranch = coreSource.slice(
+      coreSource.indexOf("if (isEventStream && upstreamResponse.body)"),
+      coreSource.indexOf("const body = relayWithAbort(upstreamResponse.body, upstream);"),
     );
-    const logWrapper = source.slice(
-      source.indexOf("function responseWithDeferredRequestLog"),
-      source.indexOf("export function relaySseWithHeartbeat"),
+    const logWrapper = relaySource.slice(
+      relaySource.indexOf("export function responseWithDeferredRequestLog"),
+      relaySource.indexOf("export function relaySseWithHeartbeat"),
+    );
+    const selector = capsSource.slice(
+      capsSource.indexOf("export function selectEagerPath"),
     );
 
     expect(sseBranch).toContain("upstreamResponse.body.tee()");
@@ -47,18 +52,20 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
     expect(sseBranch).toContain("new Response(eagerBody");
-    expect(sseBranch).toContain("const repairedBody = hasResponsesItemIdRepair(repairConfig)");
+    expect(sseBranch).toContain("const rewrittenBody = payloadRewrites.length > 0");
     expect(sseBranch).toContain('process.platform === "win32"');
     expect(sseBranch).toContain("&& !needsClientRewrite");
     expect(sseBranch).toContain("? nativeBody");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
-    expect(sseBranch).toContain("relaySseWithFailedTail(repairedBody, upstream)");
+    expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");
-    // #314 two-shape contract: the eager bounded relay exists ONLY behind the
-    // decideEagerRelay gate on the win32-no-repair branch (default OFF on the
-    // bundled known-bad runtime); the tee shape above remains the default.
-    expect(sseBranch).toContain("decideEagerRelay(config.streamMode ?? \"auto\")");
+    // #314/phase 100 two-platform contract: the real core gate delegates to the
+    // selector, whose darwin branch admits only explicit config-eager decisions.
+    expect(sseBranch).toContain("const eagerPath = selectEagerPath(");
+    expect(sseBranch).toContain("config.streamMode ?? \"auto\",");
+    expect(selector).toContain('platform !== "win32" && platform !== "darwin"');
+    expect(selector).toContain('decision.reason === "config-eager"');
     expect(sseBranch).toContain("relaySseEagerBounded(upstreamResponse.body, turnAc,");
     expect(sseBranch).not.toContain("relaySseWithHeartbeat(");
     expect(sseBranch).not.toContain("trackStreamLifetime(");

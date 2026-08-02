@@ -129,11 +129,28 @@ async function mountPage(): Promise<{ container: HTMLDivElement; root: Root }> {
   return { container, root };
 }
 
+/**
+ * Retargeted from the workspace rail to the key table: the rail was replaced by a
+ * pinned section strip plus a table in the Keys section. The contract these tests
+ * protect — navigation locks while a mutation is in flight and unlocks after it
+ * settles — is unchanged; only the control that navigates moved.
+ */
 function railRows(container: HTMLDivElement): HTMLButtonElement[] {
-  return [...container.querySelectorAll<HTMLButtonElement>(".apikeys-workspace-rail-row")];
+  return [...container.querySelectorAll<HTMLButtonElement>(".awi-keylist-name")];
 }
 
-/** Row 0 is Overview; the keys follow. */
+/**
+ * The control that leaves the open key. With the rail gone the key table is not
+ * rendered beside the detail pane, so "is navigation locked?" is asked of Back —
+ * the only way out of a detail view — instead of a list of sibling rows. Asking
+ * the old way would have been vacuous: an empty node list makes `every` true and
+ * `some` false regardless of the lock.
+ */
+function backButton(container: HTMLDivElement): HTMLButtonElement {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent?.includes("Back"))!;
+}
+
 async function openKey(container: HTMLDivElement, name: string): Promise<void> {
   const row = railRows(container).find(candidate => candidate.textContent?.includes(name));
   expect(row).toBeTruthy();
@@ -160,14 +177,14 @@ test("a delete that never answers gives navigation back instead of locking it", 
 
     // While it is in flight the lock is correct: another key must not receive
     // the result of this one.
-    expect(railRows(container).every(row => row.disabled)).toBe(true);
+    expect(backButton(container).disabled).toBe(true);
 
     // The bound fires and the page is usable again — no reload required.
     await tick(120);
     await tick();
 
     expect(seen.aborted).toBe(true);
-    expect(railRows(container).some(row => !row.disabled)).toBe(true);
+    expect(backButton(container).disabled).toBe(false);
     // A timed-out delete is not a confirmed delete, so the pane stays on the
     // key it was about rather than claiming success.
     expect(container.textContent).toContain("alpha");
@@ -203,13 +220,13 @@ test("a rename that never answers releases the lock and keeps the draft", async 
     await act(async () => { save!.click(); });
     await tick();
 
-    expect(railRows(container).every(row => row.disabled)).toBe(true);
+    expect(backButton(container).disabled).toBe(true);
 
     await tick(120);
     await tick();
 
     expect(seen.aborted).toBe(true);
-    expect(railRows(container).some(row => !row.disabled)).toBe(true);
+    expect(backButton(container).disabled).toBe(false);
     // What was typed survives the failure; retyping it would be the second
     // penalty for one dropped connection.
     expect(container.querySelector<HTMLInputElement>(".awi-rename input")?.value).toBe("renamed-draft");

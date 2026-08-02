@@ -10,7 +10,12 @@ import {
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
-import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
+import {
+  expandPreviousResponseInput,
+  previousResponseProviderState,
+  previousResponseReplayFailure,
+  rememberResponseState,
+} from "../../responses/state";
 import { routeModel, type RouteResult } from "../../router";
 import {
   advanceComboAfterFailure,
@@ -82,6 +87,7 @@ import {
 } from "../../codex/routing";
 import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
+import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
@@ -89,6 +95,7 @@ import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../provid
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
+import type { InboundWire } from "../../providers/registry";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
@@ -96,6 +103,7 @@ import type { WsData } from "../ws-bridge";
 import { registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
 import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
@@ -127,13 +135,16 @@ import {
   consumeForInspection,
   consumeForResponseLogMetadata,
   createSseInspector,
+  isEagerRelaySseResponse,
+  isNativePassthroughSseResponse,
+  markEagerRelaySseResponse,
   markNativePassthroughSseResponse,
   relaySseWithFailedTail,
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "../relay";
 import { relaySseEagerBounded } from "../relay-eager";
-import { decideEagerRelay } from "../../lib/bun-stream-caps";
+import { selectEagerPath } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import {
   createResponsesItemIdPayloadRewrite,
@@ -168,6 +179,7 @@ export function sidecarOutcomeRecorder(
     ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
       threadId,
       probeLeaseId: authCtx.probeLeaseId,
+      writerGeneration: authCtx.writerGeneration,
     })
     : undefined;
 }
@@ -248,6 +260,11 @@ interface CodexPoolAccountRetryArgs {
     abortSignal?: AbortSignal;
     onCodexAuthContextResolved?: (ctx: CodexAuthContext) => void;
     deferCodexResetDerivedCooldown?: boolean;
+    // Narrowed subset of HandleResponsesOptions: the retry rebuilds the adapter, so it
+    // needs the inbound scope or the retry could land on a different wire than the
+    // first attempt.
+    inboundWire?: InboundWire;
+    translatorBudget: TranslatorBudget;
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
@@ -309,6 +326,7 @@ async function retryCodexPoolOnAlternateAccount(
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
   } = args;
+  const inboundWire = options.inboundWire ?? "responses";
   let retryAuthCtx: CodexAuthContext | undefined;
   try {
     retryAuthCtx = await resolveCodexAuthContext(
@@ -331,7 +349,11 @@ async function retryCodexPoolOnAlternateAccount(
   const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
   if (outcomeStatus === 429 || outcomeStatus === 402) {
     const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-    applyAccountQuotaFromUpstreamHeaders(firstAuthCtx.accountId, firstResponse.headers);
+    applyAccountQuotaFromUpstreamHeaders(
+      firstAuthCtx.accountId,
+      firstResponse.headers,
+      firstAuthCtx.writerGeneration,
+    );
   }
   if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
@@ -340,6 +362,7 @@ async function retryCodexPoolOnAlternateAccount(
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      writerGeneration: firstAuthCtx.writerGeneration,
       // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
       ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
     });
@@ -352,10 +375,13 @@ async function retryCodexPoolOnAlternateAccount(
     "pool",
   );
   const retryAdapter = resolveAdapter(
-    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider),
+    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
     config.cacheRetention,
   );
-  const request = await retryAdapter.buildRequest(parsed, { headers: retryHeaders });
+  const request = await retryAdapter.buildRequest(parsed, {
+    headers: retryHeaders,
+    translatorBudget: options.translatorBudget,
+  });
   recordAdapterReasoning(logCtx, request);
 
   await firstResponse.body?.cancel().catch(() => undefined);
@@ -391,6 +417,8 @@ async function retryCodexPoolOnAlternateAccount(
   } catch (error) {
     // Attribute the transport failure to the alternate account (already selected).
     return { kind: "transport", error, authCtx: retryAuthCtx };
+  } finally {
+    request.releaseBodyObservation?.();
   }
 }
 
@@ -415,6 +443,7 @@ export function codexForwardTerminalOutcomeRecorder(
         modelId,
         probeLeaseId: codexProbeLeaseId(authCtx),
         probeQuotaScope: codexProbeQuotaScope(authCtx),
+        writerGeneration: authCtx.writerGeneration,
       });
       return;
     }
@@ -435,6 +464,7 @@ export function codexForwardTerminalOutcomeRecorder(
       modelId,
       probeLeaseId: codexProbeLeaseId(authCtx),
       probeQuotaScope: codexProbeQuotaScope(authCtx),
+      writerGeneration: authCtx.writerGeneration,
     });
   };
 }
@@ -442,6 +472,11 @@ export function codexForwardTerminalOutcomeRecorder(
 
 
 export function decodeRequestErrorResponse(err: unknown, label: string): Response {
+  if (isTranslatorBudgetExceededError(err)) {
+    return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+      code: "translation_buffer_limit",
+    });
+  }
   if (err instanceof UnsupportedContentEncodingError) {
     return formatErrorResponse(415, "invalid_request_error", err.message);
   }
@@ -479,6 +514,7 @@ export interface ConsumedComboFailure {
 
 
 export interface HandleResponsesOptions {
+  turnAdmissionLease?: AdmissionLease;
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
@@ -493,12 +529,22 @@ export interface HandleResponsesOptions {
    * (system/tools hash), not a per-session id — do not use it for Anthropic pool affinity.
    */
   promptCacheKeyIsSharedCohort?: boolean;
+  /**
+   * Wire protocol the ORIGINAL client spoke. The Chat and Anthropic surfaces translate
+   * their body into a Responses shape and replay through this function, so without an
+   * explicit value the replay would look like a native Responses request and an
+   * inbound-scoped registry wire default would fire for a client that never asked for
+   * it. Omitted means a genuine Responses inbound.
+   */
+  inboundWire?: InboundWire;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
+  /** Caller-owned for Chat/Claude replay; omitted only at genuine Responses ingress. */
+  translatorBudget?: TranslatorBudget;
 }
 
 
@@ -729,8 +775,9 @@ async function applyFinalRouteRequestNormalization(args: {
   config: OcxConfig;
   req: Request;
   logCtx: RequestLogContext;
+  inboundWire: InboundWire;
 }): Promise<void> {
-  const { parsed, route, config, req, logCtx } = args;
+  const { parsed, route, config, req, logCtx, inboundWire } = args;
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -741,7 +788,7 @@ async function applyFinalRouteRequestNormalization(args: {
   }
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
-  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
+  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
@@ -978,7 +1025,7 @@ export async function handleComboResponses(
       );
       (logCtx.attempts ??= []).push(attempt);
       attemptRetained = true;
-      noteComboSuccess(comboId, combo, pick.target);
+      noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
       Object.assign(logCtx, childLog, {
         requestedModel,
         model: requestedModel,
@@ -1051,15 +1098,81 @@ export async function handleComboResponses(
 
 
 
+function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBudget): Response {
+  if (!response.body) {
+    budget.dispose();
+    return response;
+  }
+  const reader = response.body.getReader();
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+    budget.dispose();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          finalize();
+          controller.close();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        finalize();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try { await reader.cancel(reason); } finally { finalize(); }
+    },
+  });
+  const finalizedResponse = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  if (isNativePassthroughSseResponse(response)) {
+    markNativePassthroughSseResponse(finalizedResponse);
+  }
+  if (isEagerRelaySseResponse(response)) {
+    markEagerRelaySseResponse(finalizedResponse);
+  }
+  return finalizedResponse;
+}
+
 export async function handleResponses(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
   options: HandleResponsesOptions = {},
 ): Promise<Response> {
+  const ownsBudget = options.translatorBudget === undefined;
+  const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
+  try {
+    const response = await handleResponsesInner(req, config, logCtx, { ...options, translatorBudget });
+    return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+  } catch (error) {
+    if (ownsBudget) translatorBudget.dispose();
+    throw error;
+  }
+}
+
+async function handleResponsesInner(
+  req: Request,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
+): Promise<Response> {
+  // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
+  // so an omitted value means a genuine Responses inbound.
+  const inboundWire = options.inboundWire ?? "responses";
+  const translatorBudget = options.translatorBudget;
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req);
+    body = await readJsonRequestBody(req, translatorBudget);
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
   }
@@ -1072,6 +1185,13 @@ export async function handleResponses(
   );
   const originalBody = body;
   body = expandPreviousResponseInput(body);
+  if (previousResponseReplayFailure(body)) {
+    return formatErrorResponse(
+      400,
+      "previous_response_not_found",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+    );
+  }
   const previousResponseInputExpanded = body !== originalBody;
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
@@ -1090,14 +1210,21 @@ export async function handleResponses(
   }
 
   let parsed;
+  let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
     parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
     parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
     const clientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim();
     if (clientThreadId) parsed._clientThreadId = clientThreadId;
   } catch (err) {
+    if (isTranslatorBudgetExceededError(err)) {
+      return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+        code: "translation_buffer_limit",
+      });
+    }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
@@ -1220,7 +1347,7 @@ export async function handleResponses(
     );
   }
 
-  await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx });
+  await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx, inboundWire });
 
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
@@ -1310,7 +1437,7 @@ export async function handleResponses(
     parsed.options.promptCacheKey,
     route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
   );
-  const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider);
+  const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   logCtx.providerAdapter = adapter.name;
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
@@ -1353,11 +1480,18 @@ export async function handleResponses(
   const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
-    await describeImagesInPlace(parsed, visionPlan, openAiSidecar?.headers ?? selectedForwardHeaders, options.abortSignal, recordSidecarOutcome);
+    await describeImagesInPlace(
+      parsed,
+      visionPlan,
+      openAiSidecar?.headers ?? selectedForwardHeaders,
+      options.abortSignal,
+      recordSidecarOutcome,
+      translatorBudget,
+    );
   } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
-    stripImagesInPlace(parsed);
+    stripImagesInPlace(parsed, translatorBudget);
   }
 
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
@@ -1407,7 +1541,7 @@ export async function handleResponses(
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
-      : imageGenToolCallAliases(buildToolBridgeMaps(parsed).toolNsMap, parsed._rawBody);
+      : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
     // Local continuation cache for the ChatGPT passthrough. Codex WS turns chain with
     // previous_response_id, ocx converts them to internal HTTP requests, and the ChatGPT Codex
     // REST backend rejects the parameter — the adapter strips it in forward mode, so the ONLY
@@ -1429,7 +1563,7 @@ export async function handleResponses(
         + `(model ${parsed.modelId}); forwarding without it — earlier turns may be missing from this request`,
       );
     }
-    let request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+    let request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     recordAdapterReasoning(logCtx, request);
     const passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
       ? request.usageLog.inputTokens
@@ -1454,6 +1588,7 @@ export async function handleResponses(
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
           probeQuotaScope: codexProbeQuotaScope(authCtx),
+          writerGeneration: authCtx.writerGeneration,
         });
       }
       const msg = outcome === "timeout"
@@ -1478,6 +1613,8 @@ export async function handleResponses(
       );
     } catch (err) {
       return transportFailureResponse(err);
+    } finally {
+      request.releaseBodyObservation?.();
     }
 
     if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
@@ -1550,7 +1687,11 @@ export async function handleResponses(
       // Prefer primary when present, fall back to secondary for compatibility.
       const quotaMeta = codexQuotaOutcomeMeta(upstreamResponse);
       const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-      applyAccountQuotaFromUpstreamHeaders(authCtx.accountId, upstreamResponse.headers);
+      applyAccountQuotaFromUpstreamHeaders(
+        authCtx.accountId,
+        upstreamResponse.headers,
+        authCtx.writerGeneration,
+      );
       if (terminalBodyWillRecord) {
         options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
           terminalRecorder(status, httpStatusOverride);
@@ -1582,6 +1723,7 @@ export async function handleResponses(
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
           probeQuotaScope: codexProbeQuotaScope(authCtx),
+          writerGeneration: authCtx.writerGeneration,
         });
       }
     }
@@ -1607,21 +1749,25 @@ export async function handleResponses(
     // async-pull segfault on Windows. Branch[0] goes directly to the Response (Bun
     // native relay, never enters JS Sink.write); branch[1] is consumed in the
     // background for terminal-outcome/quota inspection only.
-    // #314 alternative shape: on win32 (no repair) with a runtime carrying the
-    // Bun#32111 fix — or explicit `streamMode: "eager-relay"` opt-in — the tee
-    // is skipped entirely and relaySseEagerBounded provides a single eager
-    // bounded reader with inline inspection (see src/server/relay-eager.ts and
-    // devlog/_plan/260723_win_mem_safestream/020). Default on the bundled
-    // known-bad runtime remains the tee path below.
+    // #314 alternative shape: win32 no-rewrite traffic follows the runtime/config
+    // gate; darwin no-rewrite traffic joins it only for explicit
+    // `streamMode: "eager-relay"` opt-in. Darwin `auto` always stays tee. The
+    // eager shape skips tee and uses one bounded reader with inline inspection
+    // (src/server/relay-eager.ts; policy:
+    // devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
+    // The bundled known-bad runtime remains on tee by default on both platforms.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
-      const winNoClientRewrite = process.platform === "win32" && !needsClientRewrite;
-      const eagerDecision = winNoClientRewrite ? decideEagerRelay(config.streamMode ?? "auto") : null;
-      if (eagerDecision?.useEagerRelay) {
+      const eagerPath = selectEagerPath(
+        process.platform,
+        needsClientRewrite,
+        config.streamMode ?? "auto",
+      );
+      if (eagerPath?.useEagerRelay) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
-        registerTurn(turnAc);
+        registerTurn(turnAc, options.turnAdmissionLease);
         const reportNativeTerminal = recordTerminalOutcomes
           ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
             terminalRecorder?.(status, httpStatusOverride);
@@ -1653,6 +1799,7 @@ export async function handleResponses(
         const eagerBody = relaySseEagerBounded(upstreamResponse.body, turnAc, {
           inspectChunk: chunk => inspector.feed(chunk),
           finishInspection: () => inspector.finish(),
+          disposeInspection: () => inspector.dispose(),
           sawTerminal: () => inspector.reported(),
           onSynthetic: kind => {
             if (!reportNativeTerminal) return;
@@ -1668,18 +1815,26 @@ export async function handleResponses(
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
         });
-        // The eager branch is reachable only through winNoClientRewrite, so it must stay a pure
-        // native relay without an image-gen or item-id JS pull wrapper on win32 (Bun#32111).
+        // selectEagerPath admits only no-rewrite traffic, so this stays a pure native relay on
+        // both eligible platforms; win32 must never enter an image/item-id JS pull wrapper (#32111).
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
-        return markNativePassthroughSseResponse(new Response(eagerBody, {
-          status: upstreamResponse.status,
-          headers,
-        }));
+        return markEagerRelaySseResponse(
+          markNativePassthroughSseResponse(new Response(eagerBody, {
+            status: upstreamResponse.status,
+            headers,
+          })),
+        );
       }
       const [nativeBody, inspectBody] = upstreamResponse.body.tee();
       const turnAc = new AbortController();
+      const clientGone = new AbortController();
       linkAbortSignal(upstream, turnAc.signal);
-      registerTurn(turnAc);
+      registerTurn(turnAc, options.turnAdmissionLease);
+      const inspectionConsumerOptions = {
+        clientGoneSignal: clientGone.signal,
+        drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
+        upstream,
+      };
       if (recordTerminalOutcomes) {
         // A real terminal was parsed from the (teed) inspection stream — record it as the outcome
         // even if the client has already disconnected: the turn genuinely reached that terminal, so
@@ -1714,6 +1869,7 @@ export async function handleResponses(
           () => options.onNativePassthroughCancel?.(),
           rememberPassthroughResponse,
           options.onFirstOutput,
+          inspectionConsumerOptions,
         );
       } else {
         consumeForResponseLogMetadata(
@@ -1723,6 +1879,7 @@ export async function handleResponses(
           () => unregisterTurn(turnAc),
           rememberPassthroughResponse,
           options.onFirstOutput,
+          inspectionConsumerOptions,
         );
       }
       if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
@@ -1733,15 +1890,15 @@ export async function handleResponses(
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
-          ? createResponsesItemIdPayloadRewrite(repairConfig!)
+          ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const rewrittenBody = payloadRewrites.length > 0
-        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites))
+        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
         : nativeBody;
       const clientBody = process.platform === "win32" && !needsClientRewrite
         ? nativeBody
-        : relaySseWithFailedTail(rewrittenBody, upstream);
+        : relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
@@ -1763,7 +1920,7 @@ export async function handleResponses(
     }
     const body = relayWithAbort(upstreamResponse.body, upstream);
     const turnAc = new AbortController();
-    const tracked = body ? trackStreamLifetime(body, turnAc) : null;
+    const tracked = body ? trackStreamLifetime(body, turnAc, undefined, options.turnAdmissionLease) : null;
     return new Response(tracked, {
       status: upstreamResponse.status,
       headers,
@@ -1837,6 +1994,7 @@ export async function handleResponses(
     }
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
+      incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: selectedForwardHeaders,
@@ -1875,7 +2033,7 @@ export async function handleResponses(
         if (!rotated) return null;
         route.provider = rotated;
         return resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
       },
@@ -1891,7 +2049,7 @@ export async function handleResponses(
     });
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc), {
+      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, undefined, options.turnAdmissionLease), {
         status: imgResponse.status,
         headers: imgResponse.headers,
       });
@@ -1910,6 +2068,7 @@ export async function handleResponses(
     noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
+      incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,
@@ -1942,7 +2101,7 @@ export async function handleResponses(
         if (!rotated) return null;
         route.provider = rotated;
         return resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
       },
@@ -1951,7 +2110,7 @@ export async function handleResponses(
     // in-flight web-search turns instead of skipping them during graceful shutdown.
     if (wsResponse.body) {
       const wsTurnAc = new AbortController();
-      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc), {
+      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, undefined, options.turnAdmissionLease), {
         status: wsResponse.status,
         headers: wsResponse.headers,
       });
@@ -1970,7 +2129,7 @@ export async function handleResponses(
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
         await adapter.runTurn?.(
           parsed,
-          { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal },
+          { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal, translatorBudget },
           queue.push,
         );
       } catch (err) {
@@ -1988,7 +2147,7 @@ export async function handleResponses(
       }
     };
 
-    const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
+    const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
@@ -2009,6 +2168,7 @@ export async function handleResponses(
           queue.close();
         }, 2_000,
         {
+          translatorBudget,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -2035,7 +2195,7 @@ export async function handleResponses(
         },
       );
       const bridgeTurnAc = new AbortController();
-      const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc);
+      const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, undefined, options.turnAdmissionLease);
       return new Response(trackedSse, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" },
       });
@@ -2054,6 +2214,7 @@ export async function handleResponses(
     }
     let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
+      translatorBudget,
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       freeformToolNames,
@@ -2084,7 +2245,7 @@ export async function handleResponses(
   const connectMs = config.connectTimeoutMs ?? 200_000;
   let activeAdapter = adapter;
 
-  const request = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders });
+  const request = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
   recordAdapterReasoning(logCtx, request);
   const inputTokenEstimate = typeof request.usageLog?.inputTokens === "number"
     ? request.usageLog.inputTokens
@@ -2118,6 +2279,8 @@ export async function handleResponses(
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const msg = describeUpstreamConnectFailure(err, connectMs);
     return formatErrorResponse(502, "upstream_error", msg);
+  } finally {
+    request.releaseBodyObservation?.();
   }
 
   if (!upstreamResponse.ok) {
@@ -2134,6 +2297,7 @@ export async function handleResponses(
     ): Promise<Response | { failed: Response }> => {
       const retryRequest = await activeAdapter.buildRequest(parsed, {
         headers: selectedForwardHeaders,
+        translatorBudget,
         ...(imageTierBias > 0 ? { imageTierBias } : {}),
       });
       recordAdapterReasoning(logCtx, retryRequest);
@@ -2145,11 +2309,15 @@ export async function handleResponses(
       sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
       noteAttemptSend(logCtx.activeAttempt, retryEstimate, recovery);
       try {
-        return activeAdapter.fetchResponse
-          ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
-          : await fetchWithHeaderTimeout(retryRequest.url, {
+        try {
+          return activeAdapter.fetchResponse
+            ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
+            : await fetchWithHeaderTimeout(retryRequest.url, {
               method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
             }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+        } finally {
+          retryRequest.releaseBodyObservation?.();
+        }
       } catch (err) {
         cleanupUpstreamAbort();
         upstream.abort();
@@ -2188,7 +2356,7 @@ export async function handleResponses(
         );
         route.provider = refreshedProvider;
         activeAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider),
+          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
           config.cacheRetention,
         );
         const result = await rebuildAndRefetch("oauth-401");
@@ -2213,7 +2381,7 @@ export async function handleResponses(
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
         activeAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
         const result = await rebuildAndRefetch("key-429");
@@ -2245,7 +2413,7 @@ export async function handleResponses(
           promoteAnthropicActiveAccount(nextAccountId);
           logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
           activeAdapter = resolveAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
@@ -2320,6 +2488,7 @@ export async function handleResponses(
       try {
         const continuationRequest = await activeAdapter.buildRequest(nextParsed, {
           headers: selectedForwardHeaders,
+          translatorBudget,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
         recordAdapterReasoning(logCtx, continuationRequest);
@@ -2327,15 +2496,16 @@ export async function handleResponses(
           ? continuationRequest.usageLog.inputTokens
           : undefined;
         if (continuationEstimate !== undefined) logCtx.usageLogInputTokens = continuationEstimate;
-        if (activeAdapter.fetchResponse) {
-          noteAttemptSend(logCtx.activeAttempt, continuationEstimate);
-          response = await activeAdapter.fetchResponse(continuationRequest, {
+        try {
+          if (activeAdapter.fetchResponse) {
+            noteAttemptSend(logCtx.activeAttempt, continuationEstimate);
+            response = await activeAdapter.fetchResponse(continuationRequest, {
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
               stream: nextParsed.stream,
             });
-        } else {
-          response = await fetchWithResetRetry(
+          } else {
+            response = await fetchWithResetRetry(
               recovery => {
                 noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery);
                 return fetchWithHeaderTimeout(
@@ -2352,7 +2522,10 @@ export async function handleResponses(
                 );
               },
               { abortSignal: upstream.signal, label: safeHostLabel(continuationRequest.url) },
-            );
+              );
+          }
+        } finally {
+          continuationRequest.releaseBodyObservation?.();
         }
       } catch (error) {
         if (options.abortSignal?.aborted) {
@@ -2374,7 +2547,7 @@ export async function handleResponses(
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           route.provider = rotated;
           activeAdapter = resolveAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
           continue;
@@ -2402,7 +2575,7 @@ export async function handleResponses(
             promoteAnthropicActiveAccount(nextAccountId);
             logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
             activeAdapter = resolveAdapter(
-              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
               config.cacheRetention,
             );
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name);
@@ -2442,9 +2615,9 @@ export async function handleResponses(
       const detachContinuationBodyGuard = cancelBodyOnAbort(response.body, upstream.signal);
       try {
         if (nextParsed.stream) {
-          yield* activeAdapter.parseStream(response);
+          yield* activeAdapter.parseStream(response, translatorBudget);
         } else if (activeAdapter.parseResponse) {
-          yield* await activeAdapter.parseResponse(response);
+          yield* await activeAdapter.parseResponse(response, translatorBudget);
         } else {
           yield { type: "error", message: "Provider continuation does not support response parsing" };
         }
@@ -2461,7 +2634,7 @@ export async function handleResponses(
   };
 
   if (parsed.stream) {
-    const initialEventStream = activeAdapter.parseStream(upstreamResponse);
+    const initialEventStream = activeAdapter.parseStream(upstreamResponse, translatorBudget);
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
@@ -2471,11 +2644,12 @@ export async function handleResponses(
           continuation: fetchTerminalGuardContinuation,
         })
       : initialEventStream;
-    const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
+    const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     const sseStream = bridgeToResponsesSSE(
       eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
       {
+        translatorBudget,
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -2504,7 +2678,7 @@ export async function handleResponses(
       },
     );
     const bridgeTurnAc = new AbortController();
-    const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, cleanupUpstreamAbort);
+    const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, cleanupUpstreamAbort, options.turnAdmissionLease);
     return new Response(trackedSse, {
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" },
     });
@@ -2513,7 +2687,7 @@ export async function handleResponses(
   if (activeAdapter.parseResponse) {
     let events: AdapterEvent[];
     try {
-      const initialEvents = await activeAdapter.parseResponse(upstreamResponse);
+      const initialEvents = await activeAdapter.parseResponse(upstreamResponse, translatorBudget);
       if (terminalGuardEnabled) {
         events = [];
         for await (const event of guardTerminalEventStream({
@@ -2529,9 +2703,10 @@ export async function handleResponses(
     } finally {
       cleanupUpstreamAbort();
     }
-    const { toolNsMap, freeformToolNames, toolSearchToolNames } = buildToolBridgeMaps(parsed);
+    const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed.modelId, {
+      translatorBudget,
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       freeformToolNames,

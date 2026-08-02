@@ -119,7 +119,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 61 個含まれています。キー方式 50、OAuth 7、ローカル 3、
+opencodex には組み込みプリセットが 66 個含まれています。キー方式 55、OAuth 7、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します。主な項目は以下のとおりです:
 
@@ -137,6 +137,8 @@ opencodex には組み込みプリセットが 61 個含まれています。キ
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
+| Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -147,19 +149,43 @@ opencodex には組み込みプリセットが 61 個含まれています。キ
 | Qwen Cloud | トークンプラン(デフォルト): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 従量課金: `https://dashscope.aliyuncs.com/compatible-mode/v1` · またはカスタム |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
+| Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
-| GitHub Copilot · GitLab Duo | `https://api.githubcopilot.com` · `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
+| GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …その他多数 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
 
 大半は bearer キーと共に `openai-chat` アダプターを使い、Anthropic 互換エンドポイントのみを公開する一部
 (例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
+Volcengine Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。
+
+> **Volcengine の 3 つの課金経路:** `volcengine` は従量課金 Ark API、
+> `volcengine-coding-plan` は Coding Plan の割り当て、`volcengine-agent-plan` は Agent Plan
+> の割り当てを使用します。同じ製品で発行されたキーとエンドポイントを組み合わせてください。
+> Plan 契約があっても通常の `/api/v3` 呼び出しには従量課金が発生する場合があります。
+> 3 つの preset は選別済みの静的モデルカタログを使用します。Ark の `/models` はテキストに加えて
+> Embedding、画像、動画、3D リソースも返し、Coding ゲートウェイも同じ広範なカタログを返します。
+> Agent Plan ゲートウェイには `/models` リソースがありません。従量課金のデフォルトは
+> `doubao-seed-2-1-pro-260628` で、静的カタログには現在の DeepSeek と GLM のテキストモデルも
+> 含まれます。Coding Plan のデフォルトは `ark-code-latest`、Agent Plan は
+> `deepseek-v4-pro` です。
 
 **DeepInfra の discovery:** キー方式の OpenAI Chat Completions プロバイダー `deepinfra` は、
 `openai-chat` アダプターと Bearer API キーを使います。registry が所有する DeepInfra のモデル一覧 URL から
 `chat` タグを持つ行だけを残し、スラッシュを含むネイティブモデル ID を保持します。live discovery は
 512 KiB、raw 512 行に制限します。キーは [DeepInfra dashboard](https://deepinfra.com/dash/api_keys) で作成します。
+
+**Hyperbolic の discovery:** preset は設定済みの bearer キーで `/v1/models` を読み、スラッシュを含む
+ネイティブモデル ID を保持し、live discovery を 256 KiB と raw 256 行に制限します。serverless text /
+vision-language chat のみを対象とし、別系統の image、audio、GPU endpoint は対象外です。キーは
+[Hyperbolic](https://app.hyperbolic.ai) で作成します。
+
+> **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
+> のみを対象とします。ローカル利用では個人の [API キー](https://docs.baseten.co/organization/api-keys)を、
+> 共有/本番利用では **Call Model APIs** 権限を持つチームキーを使用してください。専用 Truss `predict`
+> エンドポイントはホストとスキーマが異なるため、このプリセットではルーティングされません。
+> このプリセットのライブディスカバリーは、レスポンス 1 MiB、モデルの生行 256 件が上限です。
 
 > **Tencent Cloud Coding Plan の利用制限:** Tencent はこのサブスクリプションを対話型
 > コーディングツール専用としています。一般的な API 自動化、カスタムアプリのバックエンド、
@@ -213,7 +239,7 @@ Gateway** は URL にアカウント + ゲートウェイ ID を埋める必要�
 Cursor は別の実験的アダプターとして追跡します。`adapter: "cursor"` は `ocx init` とダッシュボード Add
 Provider ピッカーに実験的 local config 項目として表示され、Cursor の静的フォールバックモデルカタログ
 メタデータを保存します。Cursor アクセストークンを設定すると opencodex は Cursor ライブ HTTP/2 トランスポートを
-使います。v2.7.1 フォールバックリストには 1M コンテキストの `gpt-5.6-sol` / `terra` / `luna`、500K コンテキストの
+使います。バンドル済みフォールバックリストには 1M コンテキストの `gpt-5.6-sol` / `terra` / `luna`、500K コンテキストの
 `grok-4.5` / `grok-4.5-fast`、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
 アカウントに表示するモデルを決定します。Cursor は Kimi K3 を effort サフィックス付きの wire id
 としてのみ提供するため、`cursor/kimi-k3` は `low` / `high` / `max` のラダーを公開し、既定値はモデル

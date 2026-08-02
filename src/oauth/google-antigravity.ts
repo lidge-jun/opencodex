@@ -32,7 +32,8 @@ const SCOPES = [
 ];
 const CALLBACK_PORT = 51121;
 const CALLBACK_PATH = "/callback";
-const REFRESH_SKEW_MS = 50 * 60 * 1000; // refresh proactively ~50min before nominal 1h expiry
+// Keep provider-side margins small: the shared OAuth freshness gate applies an additional minute.
+const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const ONBOARD_ATTEMPTS = 5;
 const ONBOARD_POLL_MS = 2_000;

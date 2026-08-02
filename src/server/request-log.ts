@@ -32,6 +32,7 @@ import {
   type UsageDebugBodyKind,
 } from "../usage/debug";
 import { matchesLogConversationId } from "./request-log-conversation";
+import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
 export interface RequestLogContext {
   model: string;
@@ -149,9 +150,47 @@ export interface RequestLogEntry {
 
 const requestLog: RequestLogEntry[] = [];
 const MAX_LOG_SIZE = 2000;
+const requestLogEntryBytes = new WeakMap<RequestLogEntry, number>();
+let requestLogBytes = 0;
 let requestLogSeq = 0;
 /** True after hydrateRequestLogsFromDisk ran once in this process. */
 let requestLogsHydratedFromDisk = false;
+
+function retainedRequestLogBytes(entry: RequestLogEntry): number {
+  return Buffer.byteLength(JSON.stringify(entry), "utf8");
+}
+
+function removeOldestRequestLogEntry(): number {
+  const entry = requestLog.shift();
+  if (!entry) return 0;
+  const bytes = requestLogEntryBytes.get(entry) ?? retainedRequestLogBytes(entry);
+  requestLogEntryBytes.delete(entry);
+  requestLogBytes = Math.max(0, requestLogBytes - bytes);
+  return bytes;
+}
+
+function retainRequestLogEntry(entry: RequestLogEntry): void {
+  const bytes = retainedRequestLogBytes(entry);
+  requestLog.push(entry);
+  requestLogEntryBytes.set(entry, bytes);
+  requestLogBytes += bytes;
+  while (requestLog.length > MAX_LOG_SIZE) removeOldestRequestLogEntry();
+  enforceAppOwnedMemoryBudget();
+}
+
+export function requestLogRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  return {
+    count: requestLog.length,
+    bytes: requestLogBytes,
+    evictableBytes: requestLogBytes,
+    pinnedBytes: 0,
+    oldestAt: requestLog[0]?.timestamp ?? null,
+  };
+}
+
+export function evictOldestRequestLogForBudget(): number {
+  return removeOldestRequestLogEntry();
+}
 
 function asTerminalStatus(value: string | undefined): ResponsesTerminalStatus | undefined {
   if (value === "completed" || value === "failed" || value === "incomplete") return value;
@@ -230,7 +269,7 @@ export function hydrateRequestLogsFromDisk(
     const slice = persisted.length > MAX_LOG_SIZE
       ? persisted.slice(persisted.length - MAX_LOG_SIZE)
       : persisted;
-    for (const entry of slice) requestLog.push(requestLogEntryFromPersistedUsage(entry));
+    for (const entry of slice) retainRequestLogEntry(requestLogEntryFromPersistedUsage(entry));
     return slice.length;
   } catch (err) {
     requestLogsHydratedFromDisk = true;
@@ -242,8 +281,7 @@ export function hydrateRequestLogsFromDisk(
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
-  requestLog.push(entry);
-  if (requestLog.length > MAX_LOG_SIZE) requestLog.shift();
+  retainRequestLogEntry(entry);
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
     // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
@@ -534,14 +572,26 @@ export function inspectResponseLogJson(logCtx: RequestLogContext, text: string):
 
 export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload: string | null): void {
   if (!payload || payload.trim() === "[DONE]") return;
-  const debugEnabled = isUsageDebugEnabled();
-  const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
+  let parsed: unknown | undefined;
   try {
-    applyResponseLogMetadata(logCtx, JSON.parse(payload));
+    parsed = JSON.parse(payload);
   } catch {
     /* SSE block payload may not be JSON; metadata inspection is best-effort */
   }
-  captureUpstreamError(logCtx, payload);
+  inspectResponseLogSsePayloadParsed(logCtx, payload, parsed);
+}
+
+/** Inspect an SSE payload using the caller's single best-effort JSON parse. */
+export function inspectResponseLogSsePayloadParsed(
+  logCtx: RequestLogContext,
+  payload: string | null,
+  parsed: unknown | undefined,
+): void {
+  if (!payload || payload.trim() === "[DONE]") return;
+  const debugEnabled = isUsageDebugEnabled();
+  const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
+  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
+  captureUpstreamErrorParsed(logCtx, payload, parsed);
   if (debugEnabled) {
     if (!sseAlreadyMarked) {
       logCtx.usageDebugBodyKind = "sse";
@@ -563,8 +613,22 @@ export function inspectResponseLogSsePayload(logCtx: RequestLogContext, payload:
  */
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
   if (!text) return;
+  let parsed: unknown | undefined;
   try {
-    const json = JSON.parse(text) as {
+    parsed = JSON.parse(text);
+  } catch {
+    /* retain the raw malformed payload for the bounded fallback below */
+  }
+  captureUpstreamErrorParsed(logCtx, text, parsed);
+}
+
+function captureUpstreamErrorParsed(
+  logCtx: RequestLogContext,
+  text: string,
+  parsed: unknown | undefined,
+): void {
+  if (parsed !== undefined && parsed !== null) {
+    const json = parsed as {
       type?: unknown;
       error?: { message?: unknown };
       last_error?: { message?: unknown };
@@ -596,12 +660,12 @@ function captureUpstreamError(logCtx: RequestLogContext, text: string | null): v
     if (typeof reason === "string" && reason.trim()) {
       logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
     }
-  } catch {
-    if (logCtx.upstreamError) return;
-    const trimmed = text.trim();
-    if (trimmed) {
-      logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
-    }
+    return;
+  }
+  if (logCtx.upstreamError) return;
+  const trimmed = text.trim();
+  if (trimmed) {
+    logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
   }
 }
 
@@ -976,6 +1040,7 @@ export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
 /** Test-only process-state reset for isolated integration harnesses. */
 export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
+  requestLogBytes = 0;
   requestLogSeq = 0;
   requestLogsHydratedFromDisk = false;
 }

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { FORWARD_HEADERS, createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
+import { FORWARD_HEADERS, createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const accountA = {
   accountId: "pool-a",

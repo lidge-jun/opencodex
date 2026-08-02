@@ -26,6 +26,18 @@ export interface DecodedConnectFrames {
   remainder: Uint8Array;
 }
 
+interface CopyReservation {
+  commitRetained(): void;
+  release(): void;
+}
+
+interface InspectedConnectFrame {
+  flags: number;
+  length: number;
+  payloadStart: number;
+  readBytes: number;
+}
+
 export class ConnectFrameError extends Error {
   constructor(
     public readonly code: ConnectFrameErrorCode,
@@ -65,27 +77,33 @@ export function encodeConnectFrame(
   return frame;
 }
 
-export function tryDecodeConnectFrame(input: Uint8Array, offset = 0): DecodedConnectFrame | null {
+export function tryDecodeConnectFrame(
+  input: Uint8Array,
+  offset = 0,
+  maxPayloadBytes = MAX_CONNECT_FRAME_PAYLOAD_BYTES,
+  reservePayloadCopy?: (bytes: number) => CopyReservation | undefined,
+): DecodedConnectFrame | null {
   assertOffset(input, offset);
-  if (input.length - offset < CONNECT_FRAME_HEADER_BYTES) return null;
-
-  const view = new DataView(input.buffer, input.byteOffset + offset, input.byteLength - offset);
-  const flags = view.getUint8(0);
-  const length = view.getUint32(1, false);
-  const readBytes = CONNECT_FRAME_HEADER_BYTES + length;
-  if (input.length - offset < readBytes) return null;
-
-  const payloadStart = offset + CONNECT_FRAME_HEADER_BYTES;
-  const payloadEnd = payloadStart + length;
-  const payload = input.slice(payloadStart, payloadEnd);
+  const inspected = inspectConnectFrame(input, offset, maxPayloadBytes);
+  if (!inspected) return null;
+  const payloadEnd = inspected.payloadStart + inspected.length;
+  const reservation = reservePayloadCopy?.(inspected.length);
+  let payload: Uint8Array;
+  try {
+    payload = input.slice(inspected.payloadStart, payloadEnd);
+    reservation?.commitRetained();
+  } catch (error) {
+    reservation?.release();
+    throw error;
+  }
   return {
     frame: {
-      flags,
+      flags: inspected.flags,
       payload,
-      compressed: isConnectFrameCompressed(flags),
-      endStream: isConnectFrameEndStream(flags),
+      compressed: isConnectFrameCompressed(inspected.flags),
+      endStream: isConnectFrameEndStream(inspected.flags),
     },
-    readBytes,
+    readBytes: inspected.readBytes,
   };
 }
 
@@ -108,19 +126,76 @@ export function decodeConnectFrames(input: Uint8Array): ConnectFrame[] {
   return frames;
 }
 
-export function decodeAvailableConnectFrames(input: Uint8Array): DecodedConnectFrames {
-  const frames: ConnectFrame[] = [];
+export function decodeAvailableConnectFrames(
+  input: Uint8Array,
+  maxPayloadBytes = MAX_CONNECT_FRAME_PAYLOAD_BYTES,
+  availableFrameSlots = Number.POSITIVE_INFINITY,
+  reservePayloadCopy?: (bytes: number) => CopyReservation | undefined,
+): DecodedConnectFrames {
+  const planned: Array<InspectedConnectFrame & { reservation?: CopyReservation }> = [];
   let offset = 0;
-  while (offset < input.length) {
-    const decoded = tryDecodeConnectFrame(input, offset);
-    if (!decoded) break;
-    frames.push(decoded.frame);
-    offset += decoded.readBytes;
+  let remainderReservation: CopyReservation | undefined;
+  try {
+    while (offset < input.length && planned.length < availableFrameSlots) {
+      const inspected = inspectConnectFrame(input, offset, maxPayloadBytes);
+      if (!inspected) break;
+      const reservation = reservePayloadCopy?.(inspected.length);
+      planned.push({ ...inspected, reservation });
+      offset += inspected.readBytes;
+    }
+    const remainderBytes = offset === input.length ? 0 : bufferedPayloadBytes(input, offset);
+    remainderReservation = reservePayloadCopy?.(remainderBytes);
+
+    // Keep every reservation transient until every batch allocation succeeds. A later admission
+    // failure can then roll the entire batch back without needing ownership of unreturned frames.
+    const frames = planned.map(({ flags, length, payloadStart }) => {
+      const payload = input.slice(payloadStart, payloadStart + length);
+      return {
+        flags,
+        payload,
+        compressed: isConnectFrameCompressed(flags),
+        endStream: isConnectFrameEndStream(flags),
+      };
+    });
+    const remainder = offset === input.length ? new Uint8Array() : input.slice(offset);
+    for (const entry of planned) entry.reservation?.commitRetained();
+    remainderReservation?.commitRetained();
+    return { frames, remainder };
+  } catch (error) {
+    for (const entry of planned) entry.reservation?.release();
+    remainderReservation?.release();
+    throw error;
   }
-  return {
-    frames,
-    remainder: offset === input.length ? new Uint8Array() : input.slice(offset),
-  };
+}
+
+function inspectConnectFrame(
+  input: Uint8Array,
+  offset: number,
+  maxPayloadBytes: number,
+): InspectedConnectFrame | null {
+  if (input.length - offset < CONNECT_FRAME_HEADER_BYTES) return null;
+  const view = new DataView(input.buffer, input.byteOffset + offset, input.byteLength - offset);
+  const flags = view.getUint8(0);
+  const length = view.getUint32(1, false);
+  if (length > maxPayloadBytes) {
+    throw new ConnectFrameError("payload_too_large", `Connect frame payload too large: ${length}`);
+  }
+  const readBytes = CONNECT_FRAME_HEADER_BYTES + length;
+  if (input.length - offset < readBytes) return null;
+  return { flags, length, payloadStart: offset + CONNECT_FRAME_HEADER_BYTES, readBytes };
+}
+
+function bufferedPayloadBytes(input: Uint8Array, start: number): number {
+  let offset = start;
+  let payloadBytes = 0;
+  while (input.byteLength - offset >= CONNECT_FRAME_HEADER_BYTES) {
+    const length = new DataView(input.buffer, input.byteOffset + offset, input.byteLength - offset).getUint32(1, false);
+    const available = Math.min(length, input.byteLength - offset - CONNECT_FRAME_HEADER_BYTES);
+    payloadBytes += available;
+    if (available < length) break;
+    offset += CONNECT_FRAME_HEADER_BYTES + length;
+  }
+  return payloadBytes;
 }
 
 function assertOffset(input: Uint8Array, offset: number): void {

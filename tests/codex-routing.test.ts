@@ -127,6 +127,8 @@ describe("codex routing", () => {
   test("usage score treats unknown quota conservatively", () => {
     expect(computeCodexUsageScore(null)).toBe(CODEX_UNKNOWN_USAGE_SCORE);
     expect(computeCodexUsageScore({})).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    expect(computeCodexUsageScore({ weeklyPercent: 100 })).toBe(100);
+    expect(CODEX_UNKNOWN_USAGE_SCORE).toBeGreaterThan(100);
   });
 
   test("bulk pause exhaustion requires an explicit 100% relevant window", () => {
@@ -144,6 +146,25 @@ describe("codex routing", () => {
     updateAccountQuota("a", 85);
     updateAccountQuota("b", 20);
     expect(resolveCodexAccountForThread("new-thread", config)).toBe("b");
+  });
+
+  test("known 100% weekly usage is exhausted, not unknown, and switches accounts", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("known-100-weekly", config)).toBe("b");
+  });
+
+  test("known 100% Go monthly usage follows threshold switching", () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "a", email: "a@test", plan: "go", isMain: false },
+        { id: "b", email: "b@test", plan: "go", isMain: false },
+      ],
+    });
+    updateAccountQuota("a", 1, undefined, 100);
+    updateAccountQuota("b", 99, undefined, 20);
+    expect(resolveCodexAccountForThread("known-100-go-monthly", config)).toBe("b");
   });
 
   test("missing OpenAI mode defaults to pool and rotates from hot main to a cool added account", () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../src/web-search";
-import { runWithWebSearch } from "../src/web-search/loop";
+import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../src/web-search/loop";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
@@ -9,6 +9,19 @@ import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base";
 import type { OcxMessage, OcxParsedRequest } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+
+function runWithWebSearch(
+  deps: Omit<WebSearchLoopDeps, "incomingMeta"> & { incomingMeta?: WebSearchLoopDeps["incomingMeta"] },
+): Promise<Response> {
+  return runWithWebSearchProduction({
+    ...deps,
+    incomingMeta: deps.incomingMeta ?? {
+      headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget(),
+    },
+  });
+}
 
 const routedProvider: OcxProviderConfig = {
   adapter: "openai-chat",
@@ -273,6 +286,39 @@ function scriptedAdapter(firstPass: AdapterEvent[]): ProviderAdapter {
 }
 
 describe("BUG-R86 routed web-search timeout semantics", () => {
+  test("translator overflow remains typed through the sidecar loop and bridge", async () => {
+    const adapter: ProviderAdapter = {
+      name: "overflow",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        yield {
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "translation_buffer_limit",
+          message: "upstream translation buffer exceeded the safe limit",
+        };
+      },
+    };
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+
+    const frames = await collectSse(response.body!);
+    const failed = frames.filter(frame => frame.event === "response.failed");
+    expect(failed).toHaveLength(1);
+    expect((failed[0]?.data.response as { error?: { code?: string } }).error?.code)
+      .toBe("translation_buffer_limit");
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+
   test("Kiro-style commentary streams before the iteration finishes", async () => {
     let releaseIteration: () => void = () => {};
     const iterationGate = new Promise<void>(resolve => { releaseIteration = resolve; });

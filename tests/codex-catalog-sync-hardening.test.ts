@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -7,13 +7,41 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-function runScript(codexHome: string, opencodexHome: string, script: string): { stdout: string; status: number; stderr: string } {
+function runScript(
+  codexHome: string,
+  opencodexHome: string,
+  script: string,
+  extraEnv: Record<string, string> = {},
+): { stdout: string; status: number; stderr: string } {
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome },
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome, ...extraEnv },
     encoding: "utf8",
   });
   return { stdout: result.stdout?.trim() ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
+}
+
+function createCodexCatalogFixture(dir: string): string {
+  const scriptPath = join(dir, "codex-catalog-fixture.js");
+  const bundled = JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] });
+  writeFileSync(scriptPath, [
+    'if (process.argv.includes("--version")) {',
+    '  console.log("codex-cli 0.999.0");',
+    '} else {',
+    `  process.stdout.write(${JSON.stringify(bundled)});`,
+    '}',
+  ].join("\n"), "utf8");
+
+  if (process.platform === "win32") {
+    const commandPath = join(dir, "codex-catalog-fixture.cmd");
+    writeFileSync(commandPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
+    return commandPath;
+  }
+
+  const commandPath = join(dir, "codex-catalog-fixture");
+  writeFileSync(commandPath, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, "utf8");
+  chmodSync(commandPath, 0o755);
+  return commandPath;
 }
 
 function nativeEntry(slug: string, priority: number): Record<string, unknown> {
@@ -116,6 +144,35 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("kiro/claude-opus-4.8");   // routed preserved despite empty fetch
     expect(slugs).toContain("opencode-go/glm-5.2");
     expect(slugs).toContain("gpt-5.5");
+  });
+
+  test("default catalog path merges from disk instead of replacing it with bundled rows", () => {
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'openai_base_url = "http://127.0.0.1:10100/v1"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        nativeEntry("user-native", 4),
+        routedEntry("kiro/claude-opus-4.8", 5),
+        routedEntry("opencode-go/glm-5.2", 6),
+      ],
+    }, null, 2) + "\n");
+
+    // Force the default-path bundled shortcut to succeed. The fixture intentionally returns only
+    // a native row so this test fails if sync uses the bundled catalog as its merge input.
+    const codexCliPath = createCodexCatalogFixture(opencodexHome);
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({ providers: {} }).then(res => console.log(JSON.stringify(res)));
+    `, { CODEX_CLI_PATH: codexCliPath });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
+
+    const slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
+    expect(slugs).toContain("gpt-5.5");
+    expect(slugs).toContain("user-native");
+    expect(slugs).toContain("kiro/claude-opus-4.8");
+    expect(slugs).toContain("opencode-go/glm-5.2");
   });
 
   test("empty routed refresh drops compatibility-excluded rows while preserving other routed entries", () => {

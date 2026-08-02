@@ -36,9 +36,12 @@ test("ApiKeys workspace avoids nested main and stacks via container query", asyn
 
   expect(src).toContain('<section className="apikeys-workspace-main"');
   expect(src).not.toContain('<main className="apikeys-workspace-main"');
-  expect(src).toContain('t("api.workspace.overview")');
   expect(src).toContain('t("api.workspace.details")');
   expect(src).toContain("showKeyList={false}");
+  // The side rail is gone: a pinned section strip selects, and the page scrolls.
+  expect(src).toContain("<SectionTabs");
+  expect(src).toContain('scope="api"');
+  expect(src).not.toContain("apikeys-workspace-rail");
   expect(page).toContain("creatingRef");
   expect(page).toContain("if (creatingRef.current) return false");
   // Cold paint: seed Endpoints from apiBase only when it has a usable origin/host.
@@ -141,7 +144,10 @@ test("the page owns vertical scroll; the model catalog is the only capped region
   // is right for all of them except this one: a clipping ancestor eats the
   // wheel event at the end of the table instead of handing it to the page.
   // Verified in a browser — the handoff was dead until this override existed.
-  const modelsPanel = css.slice(css.indexOf(".awi-overview-right > .api-models-panel"));
+  // Retargeted from `.awi-overview-right >` when the overview collapsed to one
+  // column; the rule itself is unchanged, and the selector must keep matching
+  // the panel or the browser-measured fix silently stops applying.
+  const modelsPanel = css.slice(css.indexOf(".awi-overview-section > .api-models-panel"));
   expect(modelsPanel.slice(0, modelsPanel.indexOf("}"))).toContain("overflow: visible");
 
   // Cross-unit contract with 260731_client_config_export: its JSON block reuses
@@ -153,7 +159,49 @@ test("the page owns vertical scroll; the model catalog is the only capped region
   expect(css).not.toContain(".awi-usage-fold");
 });
 
-test("usage examples are document content, and the left column keeps its order", async () => {
+test("the overview is a single column and the catalog actions no longer wrap", async () => {
+  const css = await Bun.file(new URL("../src/styles-apikeys-workspace.css", import.meta.url)).text();
+  const workspace = await Bun.file(new URL("../src/components/apikeys-workspace/ApiKeysWorkspace.tsx", import.meta.url)).text();
+
+  // The three-band split is gone. Two side-by-side tracks left each band near
+  // 340px inside a 708px main track (1280px viewport minus the 232px app
+  // sidebar), which is what clipped the four-column auth matrix and pushed the
+  // catalog's action chips onto four lines per row.
+  const overview = css.slice(css.indexOf(".awi-overview {"));
+  const overviewBlock = overview.slice(0, overview.indexOf("}"));
+  expect(overviewBlock).toContain("grid-template-columns: minmax(0, 1fr)");
+  expect(overviewBlock).not.toMatch(/grid-template-columns:[^;]*1fr\)[^;]*1(\.\d+)?fr/);
+  // Both stylesheets, not just the scoped one. The column-scoped selectors were
+  // split across two files, and checking only `styles-apikeys-workspace.css`
+  // left three live rules in `styles.css` pointing at a class the markup no
+  // longer renders — dead in the served bundle and invisible to this test.
+  const shared = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+  for (const sheet of [css, shared]) {
+    expect(sheet).not.toContain(".awi-overview-left");
+    expect(sheet).not.toContain(".awi-overview-right");
+  }
+  expect(workspace).not.toContain("awi-overview-left");
+  expect(workspace).not.toContain("awi-overview-right");
+
+  // The mechanism is `flex-wrap`, not `flex-direction`: the old rule never set a
+  // column direction, so asserting its absence would have passed against the
+  // pre-change tree and proved nothing. Driven red before this change landed.
+  const actions = css.slice(css.indexOf(".api-model-actions {"));
+  const actionsBlock = actions.slice(0, actions.indexOf("}"));
+  expect(actionsBlock).toContain("flex-wrap: nowrap");
+  expect(actionsBlock).not.toContain("flex-wrap: wrap");
+
+  // Cascade guard. `.api-model-actions` is declared in BOTH stylesheets, and
+  // styles.css is concatenated after this one, so a `flex-wrap` there wins
+  // regardless of what the block above says. That is exactly what happened:
+  // the served bundle carried `nowrap` and then `wrap`, and every source-text
+  // assertion still passed. Only one stylesheet may own this property.
+  expect(shared).toContain(".api-model-actions {");
+  const sharedActions = shared.slice(shared.indexOf(".api-model-actions {"));
+  expect(sharedActions.slice(0, sharedActions.indexOf("}"))).not.toContain("flex-wrap");
+});
+
+test("usage examples are document content, and the overview keeps its reading order", async () => {
   const panels = await Bun.file(new URL("../src/pages/api-keys-panels.tsx", import.meta.url)).text();
   const workspace = await Bun.file(new URL("../src/components/apikeys-workspace/ApiKeysWorkspace.tsx", import.meta.url)).text();
 
@@ -164,9 +212,17 @@ test("usage examples are document content, and the left column keeps its order",
   expect(panels).toContain('t("api.usageResponsesTitle")');
   expect(panels).toContain('t("api.usageMessagesTitle")');
 
-  // 260731_client_config_export inserts into this column; its position depends
-  // on these three staying in this order.
-  const order = ["ApiKeysManagePanel", "ApiKeysEndpointsPanel", "ApiKeysUsagePanel"]
+  // Reading order in the single column: identity (generate a key) → transport
+  // (where to point a client) → reference (what the endpoints accept) →
+  // inventory (what to call) → examples. Each step is a precondition of the
+  // next, so the order is a contract rather than an arrangement.
+  const order = [
+    "ApiKeysManagePanel",
+    "ClientConfigPanel",
+    "ApiKeysEndpointsPanel",
+    "ApiKeysModelsPanel",
+    "ApiKeysUsagePanel",
+  ]
     .map(name => workspace.indexOf(`<${name}`));
   expect(order.every(index => index > -1)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);

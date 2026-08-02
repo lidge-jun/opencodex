@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, readFileSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
+import {
+  ConfigMutationLockError,
+  getConfigDir,
+  atomicWriteFile,
+  backupInvalidConfig,
+  hardenConfigDir,
+  hardenExistingSecret,
+  withConfigMutationLockSync,
+} from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 
@@ -121,44 +129,50 @@ export function getCodexAccountCredential(id: string): CodexAccountCredentials |
 }
 
 export function saveCodexAccountCredential(id: string, cred: CodexAccountCredentials): void {
-  const store = loadCodexAccountRecordStore();
-  const current = store[id];
-  const refreshGrantFingerprint = current?.credential?.refreshToken === cred.refreshToken
-    ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
-    : refreshGrantFingerprintForToken(cred.refreshToken);
-  store[id] = {
-    credential: cred,
-    generation: (current?.generation ?? 0) + 1,
-    refreshGrantFingerprint,
-    replacedAt: current ? Date.now() : undefined,
-    ...preservedValidationMetadata(current),
-  };
-  persist(store);
+  withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    const current = store[id];
+    const refreshGrantFingerprint = current?.credential?.refreshToken === cred.refreshToken
+      ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
+      : refreshGrantFingerprintForToken(cred.refreshToken);
+    store[id] = {
+      credential: cred,
+      generation: (current?.generation ?? 0) + 1,
+      refreshGrantFingerprint,
+      replacedAt: current ? Date.now() : undefined,
+      ...preservedValidationMetadata(current),
+    };
+    persist(store);
+  });
 }
 
 export function markCodexAccountValidated(id: string, atMs: number = Date.now()): void {
-  const store = loadCodexAccountRecordStore();
-  const current = store[id];
-  if (!current || current.deletedAt != null || !current.credential) return;
-  store[id] = {
-    ...current,
-    lastCodexValidatedAt: atMs,
-    lastCodexValidationStatus: "ok",
-    lastCodexValidationError: undefined,
-  };
-  persist(store);
+  withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    const current = store[id];
+    if (!current || current.deletedAt != null || !current.credential) return;
+    store[id] = {
+      ...current,
+      lastCodexValidatedAt: atMs,
+      lastCodexValidationStatus: "ok",
+      lastCodexValidationError: undefined,
+    };
+    persist(store);
+  });
 }
 
 export function markCodexAccountValidationFailed(id: string, reason: string): void {
-  const store = loadCodexAccountRecordStore();
-  const current = store[id];
-  if (!current || current.deletedAt != null || !current.credential) return;
-  store[id] = {
-    ...current,
-    lastCodexValidationStatus: "failed",
-    lastCodexValidationError: reason,
-  };
-  persist(store);
+  withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    const current = store[id];
+    if (!current || current.deletedAt != null || !current.credential) return;
+    store[id] = {
+      ...current,
+      lastCodexValidationStatus: "failed",
+      lastCodexValidationError: reason,
+    };
+    persist(store);
+  });
 }
 
 export function removeCodexAccountCredential(id: string): void {
@@ -183,32 +197,36 @@ export function saveCodexAccountCredentialIfGeneration(
   generation: number,
   cred: CodexAccountCredentials,
 ): boolean {
-  const store = loadCodexAccountRecordStore();
-  const current = store[id];
-  if (!current || current.generation !== generation || current.deletedAt != null || !current.credential) {
-    return false;
-  }
-  const refreshGrantFingerprint = current.credential.refreshToken === cred.refreshToken
-    ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
-    : refreshGrantFingerprintForToken(cred.refreshToken);
-  store[id] = {
-    credential: cred,
-    generation: generation + 1,
-    refreshGrantFingerprint,
-    replacedAt: current.replacedAt,
-    ...preservedValidationMetadata(current),
-  };
-  persist(store);
-  return true;
+  return withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    const current = store[id];
+    if (!current || current.generation !== generation || current.deletedAt != null || !current.credential) {
+      return false;
+    }
+    const refreshGrantFingerprint = current.credential.refreshToken === cred.refreshToken
+      ? current.refreshGrantFingerprint ?? refreshGrantFingerprintForToken(cred.refreshToken)
+      : refreshGrantFingerprintForToken(cred.refreshToken);
+    store[id] = {
+      credential: cred,
+      generation: generation + 1,
+      refreshGrantFingerprint,
+      replacedAt: current.replacedAt,
+      ...preservedValidationMetadata(current),
+    };
+    persist(store);
+    return true;
+  });
 }
 
 export function tombstoneCodexAccount(id: string): number {
-  const store = loadCodexAccountRecordStore();
-  const current = store[id];
-  const generation = (current?.generation ?? 0) + 1;
-  store[id] = { generation, deletedAt: Date.now() };
-  persist(store);
-  return generation;
+  return withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    const current = store[id];
+    const generation = (current?.generation ?? 0) + 1;
+    store[id] = { generation, deletedAt: Date.now() };
+    persist(store);
+    return generation;
+  });
 }
 
 const CHATGPT_TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -237,17 +255,66 @@ export class CodexCredentialRefreshLockTimeoutError extends Error {
   }
 }
 
+export class CodexCredentialRefreshBusyError extends Error {
+  readonly code = "CODEX_REFRESH_BUSY";
+  readonly retryable = true;
+
+  constructor() {
+    super("Codex credential refresh capacity reached");
+    this.name = "CodexCredentialRefreshBusyError";
+  }
+}
+
+export class CodexCredentialRefreshStaleError extends Error {
+  readonly code = "CODEX_REFRESH_STALE";
+  readonly retryable = true;
+
+  constructor() {
+    super("Codex credential refresh owner became stale");
+    this.name = "CodexCredentialRefreshStaleError";
+  }
+}
+
+/** Credential writers share the config mutation coordinator; contention is transient, not reauth. */
+function withCredentialMutationLockSync<T>(fn: () => T): T {
+  try {
+    return withConfigMutationLockSync(fn);
+  } catch (error) {
+    if (error instanceof ConfigMutationLockError) throw new CodexCredentialRefreshLockTimeoutError();
+    throw error;
+  }
+}
+
 type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
 type CodexRefreshResult = CodexTokenResult & { credential?: CodexAccountCredentials };
-const refreshLocks = new Map<string, Promise<CodexRefreshResult>>();
+const MAX_CODEX_REFRESH_FLIGHTS = 32;
+const CODEX_REFRESH_FLIGHT_STALE_MS = 120_000;
+interface RefreshFlight {
+  promise: Promise<CodexRefreshResult>;
+  startedAt: number;
+  abort: AbortController;
+}
+const refreshLocks = new Map<string, RefreshFlight>();
 
 function codexRefreshLockPath(lockKey: string): string {
   const digest = createHash("sha256").update(lockKey).digest("hex").slice(0, 32);
   return join(getConfigDir(), `codex-refresh-${digest}.lock`);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise(resolve => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function errCode(err: unknown): string | undefined {
@@ -264,7 +331,7 @@ function isRefreshLockStale(path: string): boolean {
   }
 }
 
-async function withCodexRefreshFileLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+async function withCodexRefreshFileLock<T>(lockKey: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
   hardenConfigDir();
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -273,6 +340,7 @@ async function withCodexRefreshFileLock<T>(lockKey: string, fn: () => Promise<T>
   const deadline = Date.now() + REFRESH_LOCK_WAIT_MS;
   let fd: number | null = null;
   while (fd == null) {
+    if (signal.aborted) throw signal.reason;
     try {
       fd = openSync(path, "wx", 0o600);
       writeFileSync(fd, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
@@ -288,7 +356,7 @@ async function withCodexRefreshFileLock<T>(lockKey: string, fn: () => Promise<T>
         continue;
       }
       if (Date.now() >= deadline) throw new CodexCredentialRefreshLockTimeoutError();
-      await sleep(REFRESH_LOCK_POLL_MS);
+      await sleep(REFRESH_LOCK_POLL_MS, signal);
     }
   }
 
@@ -331,28 +399,39 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
 
   const existing = refreshLocks.get(refreshGrantFingerprint);
   if (existing) {
-    const refreshed = await existing;
-    const current = readCodexAccountRecord(id);
-    const currentCred = current?.deletedAt == null ? current?.credential : undefined;
-    if (
-      current &&
-      currentCred &&
-      refreshed.credential &&
-      recordGrantFingerprint(current) === refreshGrantFingerprint
-    ) {
-      if (!saveCodexAccountCredentialIfGeneration(id, current.generation, refreshed.credential)) {
-        throw new CodexCredentialGenerationConflictError();
+    if (Date.now() - existing.startedAt > CODEX_REFRESH_FLIGHT_STALE_MS) {
+      existing.abort.abort(new CodexCredentialRefreshStaleError());
+      if (refreshLocks.get(refreshGrantFingerprint) === existing) refreshLocks.delete(refreshGrantFingerprint);
+    } else {
+      const refreshed = await existing.promise;
+      const current = readCodexAccountRecord(id);
+      const currentCred = current?.deletedAt == null ? current?.credential : undefined;
+      if (
+        current &&
+        currentCred &&
+        refreshed.credential &&
+        recordGrantFingerprint(current) === refreshGrantFingerprint
+      ) {
+        if (!saveCodexAccountCredentialIfGeneration(id, current.generation, refreshed.credential)) {
+          throw new CodexCredentialGenerationConflictError();
+        }
+        return {
+          accessToken: refreshed.credential.accessToken,
+          chatgptAccountId: refreshed.credential.chatgptAccountId,
+          generation: current.generation + 1,
+        };
       }
-      return {
-        accessToken: refreshed.credential.accessToken,
-        chatgptAccountId: refreshed.credential.chatgptAccountId,
-        generation: current.generation + 1,
-      };
+      return getValidCodexToken(id);
     }
-    return getValidCodexToken(id);
   }
 
-  const refreshPromise = withCodexRefreshFileLock(refreshGrantFingerprint, async (): Promise<CodexRefreshResult> => {
+  if (refreshLocks.size >= MAX_CODEX_REFRESH_FLIGHTS) throw new CodexCredentialRefreshBusyError();
+
+  const abort = new AbortController();
+  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]);
+  let flight!: RefreshFlight;
+  const refreshPromise = withCodexRefreshFileLock(refreshGrantFingerprint, signal, async (): Promise<CodexRefreshResult> => {
+    const current = readCodexAccountRecord(id);
     const lockedRecord = readCodexAccountRecord(id);
     const lockedCred = lockedRecord?.deletedAt == null ? lockedRecord?.credential : undefined;
     if (!lockedRecord || !lockedCred) throw new CodexCredentialGenerationConflictError();
@@ -397,7 +476,7 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
         client_id: CHATGPT_CLIENT_ID,
         refresh_token: lockedCred.refreshToken,
       }).toString(),
-      signal: AbortSignal.timeout(30_000),
+      signal,
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
@@ -424,10 +503,11 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
     }
     return { accessToken: updated.accessToken, chatgptAccountId: updated.chatgptAccountId, generation: startGeneration + 1, credential: updated };
   }).finally(() => {
-    refreshLocks.delete(refreshGrantFingerprint);
+    if (refreshLocks.get(refreshGrantFingerprint) === flight) refreshLocks.delete(refreshGrantFingerprint);
   });
 
-  refreshLocks.set(refreshGrantFingerprint, refreshPromise);
+  flight = { promise: refreshPromise, startedAt: Date.now(), abort };
+  refreshLocks.set(refreshGrantFingerprint, flight);
   const result = await refreshPromise;
   return {
     accessToken: result.accessToken,

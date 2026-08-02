@@ -152,6 +152,15 @@ function configuredOriginForLog(url: string): string {
 // `routedProviderConfig` runs per request, so warn once per (provider, discarded, effective) triple.
 // Keyed by the URLs too: editing config.json to a different wrong value warns again.
 const discardedBaseUrlWarnings = new Set<string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileRouterWarningMemos(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = discardedBaseUrlWarnings.size;
+  discardedBaseUrlWarnings.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 /**
  * A pinned registry entry — non-template `baseUrl`, no `allowBaseUrlOverride` — outranks a saved
@@ -247,6 +256,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...provider,
     adapter: registryEntry.adapter,
     baseUrl,
+    ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
+      ? { responsesPath: registryEntry.responsesPath }
+      : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
     // Backfill the Google wire mode + Vertex project/location from the registry when the user
@@ -303,8 +315,13 @@ export class NoEnabledOpenAiProviderError extends Error {
   }
 }
 
+// Codex uses a small number of control-plane model ids that are not part of the public GPT/o
+// naming families. Keep this exact: a broad `codex-*` rule could capture a third-party model.
+const CODEX_INTERNAL_OPENAI_MODELS = new Set(["codex-auto-review"]);
+
 function isBareOpenAiFamilyModel(modelId: string): boolean {
-  return !modelId.includes("/") && /^(?:gpt-|o1-|o3-|o4-)/.test(modelId);
+  return !modelId.includes("/")
+    && (/^(?:gpt-|o1-|o3-|o4-)/.test(modelId) || CODEX_INTERNAL_OPENAI_MODELS.has(modelId));
 }
 
 function routeResult(providerName: string, provider: OcxProviderConfig, modelId: string): RouteResult {

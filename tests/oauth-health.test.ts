@@ -25,6 +25,7 @@ import { formatOAuthHealthForStatus } from "../src/cli/status-oauth";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
+const origAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
 let tmp: string;
 
 beforeEach(() => {
@@ -40,6 +41,8 @@ afterEach(() => {
   else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = origOcxHome;
+  if (origAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = origAdminToken;
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   rmSync(tmp, { recursive: true, force: true });
@@ -170,10 +173,13 @@ describe("collectOAuthHealthEntries", () => {
 describe("collectOAuthHealthEntriesForCli", () => {
   test("uses management API Codex health and does not read CLI process maps", async () => {
     markCodexAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    let authorization: string | null = null;
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
       findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
-      fetchImpl: async () =>
-        new Response(JSON.stringify({
+      fetchImpl: async (_input, init) => {
+        authorization = new Headers(init?.headers).get("authorization");
+        return new Response(JSON.stringify({
           accounts: [{
             id: "proxy-codex-acct",
             health: {
@@ -182,8 +188,10 @@ describe("collectOAuthHealthEntriesForCli", () => {
               reason: "rate_limit",
             },
           }],
-        }), { status: 200 }),
+        }), { status: 200 });
+      },
     });
+    expect(authorization).toBe("Bearer ocx-admin-health-test");
     expect(report.codexHealthSource).toBe("management-api");
     expect(report.entries.some(e => e.accountId === MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     const remote = report.entries.find(e => e.accountId === "proxy-codex-acct");
@@ -205,6 +213,29 @@ describe("collectOAuthHealthEntriesForCli", () => {
     const text = formatOAuthHealthForStatus(report);
     expect(text).toContain(CODEX_HEALTH_UNAVAILABLE_NOTE);
     expect(text).not.toContain(MAIN_CODEX_ACCOUNT_ID);
+  });
+
+  test("distinguishes management authentication failure from a stopped proxy", async () => {
+    const report = await collectOAuthHealthEntriesForCli(Date.now(), {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      fetchImpl: async () => new Response("unauthorized", { status: 401 }),
+    });
+    expect(report.codexHealthSource).toBe("management-auth-failed");
+    const text = formatOAuthHealthForStatus(report);
+    expect(text).toContain("proxy running");
+    expect(text).toContain("management authentication failed");
+    expect(text).not.toContain("proxy not running");
+  });
+
+  test("distinguishes an invalid management response from a stopped proxy", async () => {
+    const report = await collectOAuthHealthEntriesForCli(Date.now(), {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      fetchImpl: async () => new Response("upstream error", { status: 500 }),
+    });
+    expect(report.codexHealthSource).toBe("management-api-unavailable");
+    const text = formatOAuthHealthForStatus(report);
+    expect(text).toContain("proxy running");
+    expect(text).toContain("management API did not return account health");
   });
 
   test("malformed remote health is re-derived instead of rendering undefined", async () => {

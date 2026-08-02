@@ -12,7 +12,7 @@ import {
   reasoningSummaryDeliveryRecordConfigError,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
-import { getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport } from "../providers/registry";
+import { getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
@@ -70,22 +70,23 @@ export function isSameOriginAsRequest(req: Request, origin: string): boolean {
 }
 
 export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean {
-  function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
-    if (!cfg.corsAllowOrigins?.length) return false;
-    return cfg.corsAllowOrigins.some(allowed => {
-      try {
-        return new URL(allowed).origin === new URL(origin).origin;
-      } catch {
-        return allowed === origin;
-      }
-    });
-  }
   const origin = req.headers.get("Origin");
   if (!isApiAuthRequired(config)) {
     if (!isLoopbackRequestHost(req.headers.get("Host"))) return false;
     return !origin || isLoopbackOriginValue(origin) || isExtraAllowedOrigin(origin, config);
   }
   return !origin || isLoopbackOriginValue(origin) || isSameOriginAsRequest(req, origin) || isExtraAllowedOrigin(origin, config);
+}
+
+function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
+  if (!cfg.corsAllowOrigins?.length) return false;
+  return cfg.corsAllowOrigins.some(allowed => {
+    try {
+      return new URL(allowed).origin === new URL(origin).origin;
+    } catch {
+      return allowed === origin;
+    }
+  });
 }
 
 export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
@@ -106,7 +107,9 @@ export function isAllowedManagementOrigin(req: Request, config: OcxConfig): bool
   const requestOrigin = managementRequestOrigin(req, config);
   if (!requestOrigin) return false;
   const origin = req.headers.get("Origin");
-  return !origin || origin === requestOrigin;
+  // Exact match against the process-derived origin, or an operator-listed corsAllowOrigins
+  // entry (covers TLS-terminator https://… when the process observes http://…).
+  return !origin || origin === requestOrigin || isExtraAllowedOrigin(origin, config);
 }
 
 export function browserSecurityHeaders(): Record<string, string> {
@@ -504,9 +507,13 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
-    const registryNote = providerMatchesRegistryTransport(name, provider)
-      ? getProviderRegistryEntry(name)?.note
-      : undefined;
+    // Resolve the note by DESTINATION, not by name. A preset saved under a custom name is
+    // still pointed at the same vendor route, and a usage restriction the user needs to see
+    // must not disappear because the row was renamed. Prefer the same-name entry so an
+    // unrenamed provider keeps its exact registry note.
+    const registryNote = (providerMatchesRegistryTransport(name, provider)
+      ? getProviderRegistryEntry(name)
+      : registryEntryForProviderDestination(provider))?.note;
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
     const codexAccountMode = providerCodexAccountMode(name, provider);
     if (codexAccountMode) dto.codexAccountMode = codexAccountMode;

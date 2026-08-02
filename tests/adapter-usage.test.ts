@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
-import { createGoogleAdapter } from "../src/adapters/google";
-import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
+import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
+import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
+const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
+  withTestTranslatorBudget(createGoogleAdapterProduction(...args));
+const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
+  withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
 

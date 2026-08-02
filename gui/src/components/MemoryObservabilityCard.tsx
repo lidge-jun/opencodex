@@ -26,9 +26,16 @@ type MemoryMetric = "rss" | "external" | "arrayBuffers";
 
 interface ResponseState {
   count: number;
+  residentCount: number;
+  spillStubCount: number;
+  tombstoneCount: number;
   totalBytes: number;
+  spillPayloadBytes: number;
   largestBytes: number;
   oldestAgeMs: number;
+  spillWrites: number;
+  spillWriteFailures: number;
+  spillReadFailures: number;
 }
 
 interface SystemMemory {

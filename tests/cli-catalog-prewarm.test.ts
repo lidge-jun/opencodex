@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { OcxConfig } from "../src/types";
 import { scheduleCatalogPrewarm } from "../src/cli/catalog-prewarm";
 
@@ -36,6 +36,21 @@ describe("catalog prewarm on handleStart bind", () => {
     expect(gatherRoutedModels).toHaveBeenCalledTimes(1);
   });
 
+  test("catalog busy maps startup prewarm to warn-skip", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      scheduleCatalogPrewarm({
+        loadConfig: () => ({ port: 9_003, providers: {}, defaultProvider: "fixture" }) as OcxConfig,
+        importCatalog: async () => ({ gatherRoutedModels: async () => { throw Object.assign(new Error("busy"), { code: "catalog_busy" }); } }),
+      });
+      await Bun.sleep(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain("skipped");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("handleStart schedules catalog prewarm immediately after a successful bind", async () => {
     const cli = (await readText("src/cli/index.ts")).replace(/\r\n/g, "\n");
     const bindIdx = cli.indexOf("server = startServer(port);");
@@ -51,4 +66,3 @@ describe("catalog prewarm on handleStart bind", () => {
     expect(cli).not.toContain('void import("../codex/catalog").then(({ gatherRoutedModels })');
   });
 });
-

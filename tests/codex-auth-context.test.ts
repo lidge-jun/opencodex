@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,12 +21,23 @@ import {
 import {
   CodexCredentialGenerationConflictError,
   CodexCredentialRefreshLockTimeoutError,
+  CodexCredentialRefreshBusyError,
+  CodexCredentialRefreshStaleError,
   getCodexAccountCredential,
+  getValidCodexToken,
+  readCodexAccountRecord,
   removeCodexAccountCredential,
   saveCodexAccountCredential,
 } from "../src/codex/account-store";
+import { ConfigMutationLockError, getConfigPath } from "../src/config";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
-import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../src/codex/auth-api";
+import {
+  clearAccountNeedsReauth,
+  clearAccountQuota,
+  handleCodexAuthAPI,
+  isAccountNeedsReauth,
+} from "../src/codex/auth-api";
+import { __resetGuardianState, guardianSweep } from "../src/oauth/token-guardian";
 import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   CODEX_QUOTA_PROBE_INTERVAL_MS,
@@ -50,6 +61,8 @@ beforeEach(() => {
   process.env.CODEX_HOME = testDir;
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
+  clearAccountQuota();
+  __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
 });
@@ -58,6 +71,8 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
+  clearAccountQuota();
+  __resetGuardianState();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -80,6 +95,66 @@ function config(): OcxConfig {
       { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool_acc" },
     ],
   };
+}
+
+function guardianConfig(): OcxConfig {
+  const cfg = config();
+  cfg.defaultProvider = "openai";
+  cfg.providers = {
+    openai: {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      codexAccountMode: "pool",
+      refreshPolicy: "proactive",
+    },
+  };
+  cfg.tokenGuardian = {
+    enabled: true,
+    tickSeconds: 60,
+    leadSeconds: 0,
+    failureBackoffBaseSeconds: 1,
+    failureBackoffMaxSeconds: 60,
+  };
+  writeFileSync(getConfigPath(), JSON.stringify(cfg));
+  return cfg;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error("condition did not become true");
+}
+
+async function occupyCodexRefreshCapacity(): Promise<{
+  pending: Promise<unknown>[];
+  release: () => void;
+  fetches: () => number;
+}> {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let fetches = 0;
+  globalThis.fetch = (async () => {
+    fetches += 1;
+    await gate;
+    return Response.json({ access_token: "capacity-fresh", expires_in: 3600 });
+  }) as typeof fetch;
+  const pending: Promise<unknown>[] = [];
+  for (let index = 0; index < 32; index += 1) {
+    const id = `capacity-${index}`;
+    saveCodexAccountCredential(id, {
+      accessToken: `old-${index}`,
+      refreshToken: `refresh-${index}`,
+      expiresAt: 0,
+      chatgptAccountId: `account-${index}`,
+    });
+    pending.push(getValidCodexToken(id));
+  }
+  await waitFor(() => fetches === 32);
+  for (let index = 0; index < 32; index += 1) removeCodexAccountCredential(`capacity-${index}`);
+  return { pending, release, fetches: () => fetches };
 }
 
 const forwardProvider: OcxProviderConfig = {
@@ -516,10 +591,220 @@ describe("Codex auth context", () => {
     }
   });
 
-  test("reauth marking is reserved for real token failures", () => {
+  test("Codex transient refresh errors are classified as retryable", () => {
     expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(new CodexCredentialGenerationConflictError())).toBe(false);
     expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(new CodexCredentialRefreshLockTimeoutError())).toBe(false);
+    expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(new CodexCredentialRefreshBusyError())).toBe(false);
+    expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(new CodexCredentialRefreshStaleError())).toBe(false);
+    expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(new ConfigMutationLockError("busy"))).toBe(false);
     expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(new Error("bad token"))).toBe(true);
+  });
+
+  test("busy and stale Codex refresh failures do not mark the auth-context account for reauth", async () => {
+    const originalFetch = globalThis.fetch;
+    let releaseBusy!: () => void;
+    const busyGate = new Promise<void>(resolve => { releaseBusy = resolve; });
+    let busyFetches = 0;
+    globalThis.fetch = (async () => {
+      busyFetches += 1;
+      await busyGate;
+      return Response.json({ access_token: "busy-fresh", expires_in: 3600 });
+    }) as typeof fetch;
+
+    const admitted: Promise<unknown>[] = [];
+    let clock: ReturnType<typeof spyOn> | undefined;
+    try {
+      for (let index = 0; index < 32; index += 1) {
+        const id = `busy-${index}`;
+        saveCodexAccountCredential(id, {
+          accessToken: `old-${index}`,
+          refreshToken: `refresh-${index}`,
+          expiresAt: 0,
+          chatgptAccountId: `account-${index}`,
+        });
+        admitted.push(getValidCodexToken(id));
+      }
+      await Promise.resolve();
+      expect(busyFetches).toBe(32);
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-old",
+        refreshToken: "pool-refresh",
+        expiresAt: 0,
+        chatgptAccountId: "pool_acc",
+      });
+
+      const busyError = await resolveCodexAuthContext(new Headers(), config(), "pool").catch(error => error);
+      expect(busyError).toBeInstanceOf(CodexAuthContextError);
+      expect((busyError as Error).cause).toBeInstanceOf(CodexCredentialRefreshBusyError);
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+
+      releaseBusy();
+      await Promise.all(admitted);
+
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "stale-old",
+        refreshToken: "stale-refresh",
+        expiresAt: 0,
+        chatgptAccountId: "pool_acc",
+      });
+      let staleFetches = 0;
+      globalThis.fetch = (async (_input, init) => {
+        staleFetches += 1;
+        if (staleFetches === 1) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          });
+        }
+        return Response.json({ access_token: "stale-replacement", expires_in: 3600 });
+      }) as typeof fetch;
+
+      const staleOwner = resolveCodexAuthContext(new Headers(), config(), "pool");
+      while (staleFetches === 0) await Promise.resolve();
+      clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120_001);
+      const replacement = resolveCodexAuthContext(new Headers(), config(), "pool");
+      const staleError = await staleOwner.catch(error => error);
+      expect(staleError).toBeInstanceOf(CodexAuthContextError);
+      expect((staleError as Error).cause).toBeInstanceOf(CodexCredentialRefreshStaleError);
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+      await expect(replacement).resolves.toMatchObject({ accessToken: "stale-replacement" });
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+    } finally {
+      clock?.mockRestore();
+      releaseBusy();
+      await Promise.allSettled(admitted);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("guardian and quota consumers back off and retry a busy credential refresh without reauth", async () => {
+    const originalFetch = globalThis.fetch;
+    const now = Date.now();
+    const capacity = await occupyCodexRefreshCapacity();
+    const cfg = guardianConfig();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-old",
+      refreshToken: "pool-refresh",
+      expiresAt: 0,
+      chatgptAccountId: "pool_acc",
+    });
+
+    try {
+      const guardian = await guardianSweep(now);
+      expect(guardian.skippedBackoff).toContain("codex:pool-a");
+      expect(guardian.failed).not.toContain("codex:pool-a");
+      expect(readCodexAccountRecord("pool-a")?.lastCodexValidationStatus).not.toBe("failed");
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+
+      const request = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+      const response = await handleCodexAuthAPI(request, new URL(request.url), cfg);
+      expect(response?.status).toBe(200);
+      const body = await response?.json() as { accounts: Array<{ id: string; needsReauth: boolean; quotaProbeSkipped?: boolean }> };
+      expect(body.accounts.find(account => account.id === "pool-a")).toMatchObject({
+        needsReauth: false,
+        quotaProbeSkipped: true,
+      });
+
+      capacity.release();
+      await Promise.allSettled(capacity.pending);
+      globalThis.fetch = (async () => Response.json({ access_token: "retry-fresh", expires_in: 3600 })) as typeof fetch;
+      const retry = await guardianSweep(now + 1_001);
+      expect(retry.refreshed).toContain("codex:pool-a");
+      expect(retry.skippedBackoff).not.toContain("codex:pool-a");
+    } finally {
+      capacity.release();
+      await Promise.allSettled(capacity.pending);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("guardian and quota consumers back off and retry a stale credential refresh without reauth", async () => {
+    const originalFetch = globalThis.fetch;
+    const now = Date.now();
+    const cfg = guardianConfig();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "stale-old",
+      refreshToken: "stale-refresh",
+      expiresAt: 0,
+      chatgptAccountId: "pool_acc",
+    });
+    let refreshFetches = 0;
+    let releaseReplacement!: () => void;
+    const replacementGate = new Promise<void>(resolve => { releaseReplacement = resolve; });
+    let clock: ReturnType<typeof spyOn> | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      refreshFetches += 1;
+      if (refreshFetches === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        });
+      }
+      if (refreshFetches === 2) await replacementGate;
+      return Response.json({ access_token: "replacement-fresh", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const request = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+      const quotaPending = handleCodexAuthAPI(request, new URL(request.url), cfg);
+      await waitFor(() => refreshFetches === 1);
+      const guardianPending = guardianSweep(now);
+      await Promise.resolve();
+
+      clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120_001);
+      const replacement = getValidCodexToken("pool-a");
+      const [guardian, response] = await Promise.all([guardianPending, quotaPending]);
+      releaseReplacement();
+      await expect(replacement).resolves.toMatchObject({ accessToken: "replacement-fresh" });
+
+      expect(guardian.skippedBackoff).toContain("codex:pool-a");
+      expect(guardian.failed).not.toContain("codex:pool-a");
+      expect(readCodexAccountRecord("pool-a")?.lastCodexValidationStatus).not.toBe("failed");
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+      expect(response?.status).toBe(200);
+      const body = await response?.json() as { accounts: Array<{ id: string; needsReauth: boolean; quotaProbeSkipped?: boolean }> };
+      expect(body.accounts.find(account => account.id === "pool-a")).toMatchObject({
+        needsReauth: false,
+        quotaProbeSkipped: true,
+      });
+
+      clock.mockRestore();
+      clock = undefined;
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "retry-old",
+        refreshToken: "retry-refresh",
+        expiresAt: 0,
+        chatgptAccountId: "pool_acc",
+      });
+      const retry = await guardianSweep(now + 1_001);
+      expect(retry.refreshed).toContain("codex:pool-a");
+      expect(retry.skippedBackoff).not.toContain("codex:pool-a");
+    } finally {
+      releaseReplacement();
+      clock?.mockRestore();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.each([
+    ["busy", new CodexCredentialRefreshBusyError()],
+    ["stale", new CodexCredentialRefreshStaleError()],
+  ])("login returns a retryable response for a %s credential refresh failure", async (_kind, refreshError) => {
+    const oauth = await import("../src/oauth");
+    const startLogin = spyOn(oauth, "startLoginFlow").mockRejectedValue(refreshError);
+    const cfg = config();
+    try {
+      const request = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "pool-a", reauth: true }),
+      });
+      const response = await handleCodexAuthAPI(request, new URL(request.url), cfg);
+      expect(response?.status).toBe(503);
+      expect(response?.headers.get("Retry-After")).toBe("1");
+      expect(await response?.json()).toEqual({ error: "server_busy", code: "server_busy" });
+      expect(isAccountNeedsReauth("pool-a")).toBe(false);
+    } finally {
+      startLogin.mockRestore();
+    }
   });
 
   test("runtime provider metadata is applied only to forward provider copies", () => {

@@ -10,12 +10,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { drainAndShutdown } from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
 import {
-  resetRestoreTrashJobForTests,
+  resetRestoreTrashJobForTestsAsync,
   setRestoreTrashJobTestHooks,
 } from "../src/storage/restore-job";
+import { drainStorageWorkers } from "../src/storage/worker-lifecycle";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -47,19 +50,25 @@ function seedArchived(codexHome: string): void {
   db.close();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
   previousCleanupTestHooks = process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
   process.env.OPENCODEX_CLEANUP_TEST_HOOKS = "1";
+  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME.
+  stopStorageCleanupScheduler();
+  await resetRestoreTrashJobForTestsAsync();
+  await drainStorageWorkers();
   isolatedCodexHome = installIsolatedCodexHome("ocx-restore-job-responsive-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-restore-job-responsive-"));
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(baseConfig());
-  resetRestoreTrashJobForTests();
+  stopStorageCleanupScheduler();
 });
 
-afterEach(() => {
-  resetRestoreTrashJobForTests();
+afterEach(async () => {
+  stopStorageCleanupScheduler();
+  await resetRestoreTrashJobForTestsAsync();
+  await drainStorageWorkers();
   setRestoreTrashJobTestHooks(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -83,7 +92,7 @@ describe("storage trash restore job responsiveness", () => {
       await assert(server.url.toString());
     } finally {
       try {
-        await server.stop(true);
+        await drainAndShutdown(server, 5_000);
       } finally {
         setRestoreTrashJobTestHooks(null);
         if (previousHooksEnv === undefined) delete process.env.OPENCODEX_CLEANUP_TEST_HOOKS;
@@ -201,8 +210,8 @@ describe("storage trash restore job responsiveness", () => {
       expect(Date.now() - restoreStarted).toBeGreaterThanOrEqual(blockMs - 100);
       expect(existsSync(join(isolatedCodexHome!.path, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
     } finally {
-      await server.stop(true);
-      resetRestoreTrashJobForTests();
+      await drainAndShutdown(server, 5_000);
+      await resetRestoreTrashJobForTestsAsync();
     }
   }, { timeout: 30_000 });
 });

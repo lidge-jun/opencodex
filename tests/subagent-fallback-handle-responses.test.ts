@@ -28,6 +28,7 @@ import {
 } from "../src/codex/subagent-model-fallback";
 import type { CodexAuthContext } from "../src/codex/auth-context";
 import { handleResponses } from "../src/server/responses";
+import { isEagerRelaySseResponse } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { ResponsesTerminalStatus } from "../src/bridge";
@@ -949,4 +950,40 @@ describe("native passthrough terminal finalization", () => {
       expect(result.healthBlocked).toBe(false);
     });
   }
+});
+
+describe("darwin explicit eager-relay path selection", () => {
+  const completedSse = `event: response.completed\ndata: ${JSON.stringify({
+    type: "response.completed",
+    response: { id: "r1", status: "completed", output: [] },
+  })}\n\n`;
+
+  async function runDarwinStreamMode(streamMode: "legacy-tee" | "eager-relay"): Promise<Response> {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc", now);
+    mockSseUpstream(completedSse);
+    return postSpawn(
+      poolNativePlusRoutedConfig({ streamMode, activeCodexAccountId: "pool-a" }),
+      { model: "gpt-5.6-sol", input: readableAgentInput(), stream: true },
+    );
+  }
+
+  test.skipIf(process.platform !== "darwin")(
+    "eager-relay + no rewrite marks the direct handleResponses response as eager",
+    async () => {
+      const response = await runDarwinStreamMode("eager-relay");
+      expect(isEagerRelaySseResponse(response)).toBe(true);
+      expect(await response.text()).toContain("response.completed");
+    },
+  );
+
+  test.skipIf(process.platform !== "darwin")(
+    "legacy-tee + no rewrite does not carry the eager marker",
+    async () => {
+      const response = await runDarwinStreamMode("legacy-tee");
+      expect(isEagerRelaySseResponse(response)).toBe(false);
+      expect(await response.text()).toContain("response.completed");
+    },
+  );
 });

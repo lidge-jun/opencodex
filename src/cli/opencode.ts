@@ -20,17 +20,49 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadConfig } from "../config";
+import {
+  OPENCODE_API_KEY_ENV,
+  OPENCODE_CONFIG_SCHEMA,
+  OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+  OPENCODE_PROVIDER_ID,
+  buildOpencodeProviderBlockFromCatalog,
+  opencodeGlobalConfigPath,
+} from "../clients/config-export";
+import type {
+  OpencodeCatalogModel,
+  OpencodeGeneratedConfig,
+  OpencodeLaunchEnv,
+  OpencodeProviderBlock,
+} from "../clients/config-export";
 import { visibleNativeSlugs } from "../codex/catalog";
-import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
-export interface OpencodeLaunchEnv {
-  [key: string]: string | undefined;
-}
+/**
+ * The provider-block serializer, its constants, and the config-path helpers now live in
+ * `src/clients/config-export.ts`, shared with every other client-config export surface.
+ * They are re-exported here so the launcher's long-standing import surface is unchanged.
+ */
+export {
+  OPENCODE_API_KEY_ENV,
+  OPENCODE_API_KEY_ENV_REF,
+  OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+  OPENCODE_PROVIDER_ID,
+  SCHEMA_REQUIRED_OUTPUT_BUDGET,
+  buildOpencodeProviderBlockFromCatalog,
+  opencodeGlobalConfigPath,
+  opencodeProxyBaseUrl,
+} from "../clients/config-export";
+export type {
+  OpencodeCatalogModel,
+  OpencodeGeneratedConfig,
+  OpencodeLaunchEnv,
+  OpencodeModelEntry,
+  OpencodeProviderBlock,
+} from "../clients/config-export";
 
 /** One proxy-routed model destined for the generated provider block. */
 export interface OpencodeRoutedModel {
@@ -53,42 +85,6 @@ export interface OpencodeProxyModelRow {
   contextWindow?: number;
 }
 
-/** Visible catalog entry keyed by the proxy's canonical namespaced selector. */
-export interface OpencodeCatalogModel {
-  namespaced: string;
-  native?: boolean;
-  provider?: string;
-  id?: string;
-  contextWindow?: number;
-  displayName?: string;
-}
-
-export interface OpencodeModelEntry {
-  name: string;
-  limit?: { context: number; output: number };
-}
-
-export interface OpencodeProviderBlock {
-  npm: string;
-  name: string;
-  options: {
-    baseURL: string;
-    apiKey?: string;
-    headers?: Record<string, string>;
-  };
-  models: Record<string, OpencodeModelEntry>;
-}
-
-export interface OpencodeGeneratedConfig {
-  $schema: string;
-  provider: Record<string, OpencodeProviderBlock>;
-}
-
-/** Provider key owned by this launcher; the only key it ever injects at runtime. */
-export const OPENCODE_PROVIDER_ID = "opencodex";
-
-const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
-
 const PROJECT_CONFIG_FILENAMES = ["opencode.json", "opencode.jsonc"] as const;
 
 /**
@@ -96,41 +92,6 @@ const PROJECT_CONFIG_FILENAMES = ["opencode.json", "opencode.jsonc"] as const;
  * and carries only the generated provider block for this launch.
  */
 export const OPENCODE_CONFIG_CONTENT_ENV = "OPENCODE_CONFIG_CONTENT";
-
-/**
- * The proxy speaks the OpenAI-compatible shape at /v1, which opencode reaches through
- * the AI SDK's openai-compatible package (the same wiring users hand-write today).
- */
-const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
-
-/**
- * Env var carrying the proxy admission key to the child. The inline config only ever
- * holds the `{env:...}` reference, so the secret never lands on disk (AGENTS.md treats
- * token serialization as a release blocker). opencode substitutes it at load time.
- */
-export const OPENCODE_API_KEY_ENV = "OPENCODEX_OPENCODE_API_KEY";
-
-/**
- * opencode's config schema rejects a `limit` block that carries `context` without
- * `output`, but CatalogModel has no authoritative per-model output field. Dropping
- * `limit` entirely would also throw away the authoritative context window we DO have,
- * so the block is emitted with this budget standing in for the missing half.
- *
- * The value matches REASONING_MAX_TOKENS_CEILING in src/adapters/anthropic.ts — the
- * project's existing "safe ceiling across current models" figure. It is a ceiling for
- * schema validity, NOT a claim about any specific model's true maximum, and it is
- * clamped to the context window so a small-context model can never be emitted with
- * output > context.
- */
-export const SCHEMA_REQUIRED_OUTPUT_BUDGET = 32_000;
-
-/** Deterministic loopback default for exported provider-block helpers in tests. */
-export const OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG: OcxConfig = {
-  port: 10100,
-  hostname: "127.0.0.1",
-  defaultProvider: "mock",
-  providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
-} as OcxConfig;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -219,30 +180,10 @@ export function parseJsonc(text: string): unknown {
   }
 }
 
-/**
- * Resolve the user's global opencode config path. opencode uses the XDG layout on every
- * platform (including Windows, where it is %USERPROFILE%\.config\opencode).
- */
-export function opencodeGlobalConfigPath(
-  env: OpencodeLaunchEnv = process.env,
-  home: string = homedir(),
-): string {
-  const xdg = env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0 ? env.XDG_CONFIG_HOME : join(home, ".config");
-  return join(xdg, "opencode", "opencode.json");
-}
-
 /** Model key as the proxy routes it: `provider/id` for routed models, bare slug for native OpenAI entries. */
 export function opencodeModelKey(provider: string, id: string): string {
   return provider === "native" ? id : `${provider}/${id}`;
 }
-
-/** Compose the OpenAI-compatible proxy base URL from a live probe result. */
-export function opencodeProxyBaseUrl(port: number, hostname?: string): string {
-  return `http://${probeHostname(hostname)}:${port}/v1`;
-}
-
-/** Env reference shared by apiKey and the dedicated proxy admission header. */
-export const OPENCODE_API_KEY_ENV_REF = `{env:${OPENCODE_API_KEY_ENV}}`;
 
 /**
  * Native OpenAI slugs advertised to opencode. Omitted in Codex Direct mode because native
@@ -251,62 +192,6 @@ export const OPENCODE_API_KEY_ENV_REF = `{env:${OPENCODE_API_KEY_ENV}}`;
 export function opencodeLaunchNativeSlugs(config: OcxConfig): string[] {
   if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") return [];
   return [...visibleNativeSlugs(config)];
-}
-
-function opencodeProviderOptions(baseURL: string, config: OcxConfig): OpencodeProviderBlock["options"] {
-  const options: OpencodeProviderBlock["options"] = { baseURL };
-  // Non-loopback binds accept proxy admission only via x-opencodex-api-key so Authorization
-  // stays free for Codex Direct upstream credentials when applicable.
-  if (shouldInjectApiAuthHeader(config)) {
-    options.headers = { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF };
-    return options;
-  }
-  options.apiKey = OPENCODE_API_KEY_ENV_REF;
-  return options;
-}
-
-function opencodeModelEntryLabel(model: OpencodeCatalogModel): string {
-  const providerLabel = model.native ? "native" : (model.provider ?? "routed");
-  const id = model.id ?? model.namespaced;
-  if (model.displayName && model.displayName.length > 0) {
-    return `${model.displayName} (${providerLabel})`;
-  }
-  return `${id} (${providerLabel})`;
-}
-
-/**
- * Build the `opencodex` provider block from proxy catalog rows keyed by each row's
- * canonical `namespaced` selector.
- *
- * `limit.context` is emitted ONLY from an authoritative context window — never guessed.
- * When none is available the whole `limit` block is dropped and opencode keeps its own
- * defaults; when one is present, `limit.output` rides along (opencode's schema requires
- * the pair) clamped to the context window.
- */
-export function buildOpencodeProviderBlockFromCatalog(
-  port: number,
-  catalogModels: readonly OpencodeCatalogModel[],
-  hostname?: string,
-  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
-): OpencodeProviderBlock {
-  const models: Record<string, OpencodeModelEntry> = {};
-  for (const model of catalogModels) {
-    const key = model.namespaced;
-    if (models[key]) continue; // first entry wins; native rows lead /api/models
-    const entry: OpencodeModelEntry = { name: opencodeModelEntryLabel(model) };
-    const { contextWindow } = model;
-    if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {
-      const context = Math.floor(contextWindow);
-      entry.limit = { context, output: Math.min(SCHEMA_REQUIRED_OUTPUT_BUDGET, context) };
-    }
-    models[key] = entry;
-  }
-  return {
-    npm: OPENCODE_PROVIDER_NPM,
-    name: "OpenCodex",
-    options: opencodeProviderOptions(opencodeProxyBaseUrl(port, hostname), config),
-    models,
-  };
 }
 
 /** Back-compat helper for unit tests that assemble slugs/routed rows directly. */

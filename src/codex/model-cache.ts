@@ -8,6 +8,8 @@
  * restarts, so an in-memory cache is sufficient here (no SQLite layer needed).
  */
 import type { CatalogModel } from "./catalog";
+import type { GenerationContext } from "../lib/state-store-sweeper";
+import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
 /** Default freshness window. Matches Codex's own 5-min models cache so the two stay in step. */
 export const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -15,6 +17,7 @@ export const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 interface CacheEntry {
   models: CatalogModel[];
   fetchedAt: number;
+  sizeBytes: number;
 }
 
 export type ProviderModelDiscoveryFailureReason =
@@ -40,6 +43,29 @@ export type ProviderModelDiscoveryFailure = ProviderModelDiscoveryStatus extends
   : never;
 
 const cache = new Map<string, CacheEntry>();
+let cacheBytes = 0;
+let oldestCachedProvider: string | undefined;
+let oldestCachedAt: number | null = null;
+const modelCacheEncoder = new TextEncoder();
+
+function recomputeOldestCachedProvider(): void {
+  oldestCachedProvider = undefined;
+  oldestCachedAt = null;
+  for (const [provider, entry] of cache) {
+    if (oldestCachedAt !== null && entry.fetchedAt >= oldestCachedAt) continue;
+    oldestCachedProvider = provider;
+    oldestCachedAt = entry.fetchedAt;
+  }
+}
+
+function deleteCachedProvider(provider: string): number {
+  const entry = cache.get(provider);
+  if (!entry) return 0;
+  cache.delete(provider);
+  cacheBytes = Math.max(0, cacheBytes - entry.sizeBytes);
+  if (oldestCachedProvider === provider) recomputeOldestCachedProvider();
+  return entry.sizeBytes;
+}
 
 /** Cooldown after a failed live `/models` fetch, so a dead/unreachable provider doesn't re-pay
  * the full fetch timeout on every catalog poll (issue #54: UI stalls behind corporate proxies). */
@@ -54,6 +80,7 @@ const discoveryStatus = new Map<string, ProviderModelDiscoveryStatus>();
  * custom-only, and the provider's configured fallback would wrongly stay authoritative.
  */
 const liveModelCounts = new Map<string, number>();
+let lastReconciledGeneration = 0;
 
 export function markModelsFetchFailure(provider: string, now = Date.now()): void {
   failureAt.set(provider, now);
@@ -129,20 +156,72 @@ export function getStaleCached(provider: string): CatalogModel[] | null {
 }
 
 export function setCached(provider: string, models: CatalogModel[], now = Date.now()): void {
-  cache.set(provider, { models, fetchedAt: now });
+  deleteCachedProvider(provider);
+  const sizeBytes = modelCacheEncoder.encode(provider).byteLength
+    + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
+  cache.set(provider, { models, fetchedAt: now, sizeBytes });
+  cacheBytes += sizeBytes;
+  if (oldestCachedAt === null || now < oldestCachedAt) {
+    oldestCachedProvider = provider;
+    oldestCachedAt = now;
+  }
+  enforceAppOwnedMemoryBudget();
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
 export function clearModelCache(provider?: string): void {
   if (provider) {
-    cache.delete(provider);
+    deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
   } else {
     cache.clear();
+    cacheBytes = 0;
+    oldestCachedProvider = undefined;
+    oldestCachedAt = null;
     failureAt.clear();
     discoveryStatus.clear();
     liveModelCounts.clear();
   }
+}
+
+export function reconcileModelCacheProviders(
+  validProviders: ReadonlySet<string>,
+  generation = lastReconciledGeneration + 1,
+): number {
+  if (generation <= lastReconciledGeneration) return 0;
+  const removedProviders = new Set<string>();
+  for (const store of [failureAt, discoveryStatus, liveModelCounts]) {
+    for (const provider of store.keys()) {
+      if (validProviders.has(provider)) continue;
+      store.delete(provider);
+      removedProviders.add(provider);
+    }
+  }
+  for (const provider of cache.keys()) {
+    if (validProviders.has(provider)) continue;
+    deleteCachedProvider(provider);
+    removedProviders.add(provider);
+  }
+  lastReconciledGeneration = generation;
+  return removedProviders.size;
+}
+
+export function reconcileModelCacheGeneration(context: GenerationContext): number {
+  return reconcileModelCacheProviders(context.providerNames, context.generation);
+}
+
+export function modelCacheRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  return {
+    count: cache.size,
+    bytes: cacheBytes,
+    evictableBytes: cacheBytes,
+    pinnedBytes: 0,
+    oldestAt: oldestCachedAt,
+  };
+}
+
+export function evictOldestModelCacheForBudget(): number {
+  return oldestCachedProvider === undefined ? 0 : deleteCachedProvider(oldestCachedProvider);
 }

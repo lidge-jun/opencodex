@@ -492,6 +492,12 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   const catalog = loadCatalogForSync(catalogPath);
   if (!catalog) return { added: 0, path: catalogPath, catalogWritten: false, comboOmissions: [] };
 
+  // The bundled catalog is a reliable native template on the default path, but it is not the
+  // merge source. Preservation must inspect the file that this sync is about to overwrite;
+  // otherwise an empty/partial provider gather cannot see routed or user-native rows on disk.
+  const onDiskCatalog = readCatalog(catalogPath);
+  const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
+
   const template = findNativeTemplate(catalog);
 
   const comboOmissions: ComboCatalogOmission[] = [];
@@ -534,7 +540,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   // bare gpt-* rows that hard-404 via NoEnabledOpenAiProviderError. Keep natives when no
   // providers are configured yet (fresh install / catalog bootstrap tests).
   const includeNativeOpenAi = enabledProviders.length === 0 || hasCanonicalOpenai;
-  catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi);
+  catalog.models = mergeCatalogEntriesForSync(catalogModelsForMerge, goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider, includeNativeOpenAi);
   clampCatalogModelsToCodexSupport(catalog.models);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");

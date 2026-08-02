@@ -580,13 +580,14 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(result.stdout).toContain("needs-reauth");
   });
 
-  test("WP2 regression: use openai main prints next-session and auto-switch override notes", async () => {
+  test("WP2 regression: use openai main explains next-request routing and cache continuity", async () => {
     const result = await run(["use", "openai", "main"]);
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain("new Codex sessions");
-    expect(result.stderr).toContain("running threads keep their current account");
-    expect(result.stderr).toContain("auto-switch (threshold 80%) may override this pin");
+    expect(result.stderr).toContain("next request after clearing existing pool affinity");
+    expect(result.stderr).toContain("in-flight requests keep their captured account");
+    expect(result.stderr).toContain("failure recovery may later select another eligible account");
+    expect(result.stderr).toContain("provider-side prompt cache may be cold");
   });
 
   test("WP2 regression: classifyAccount routes a key-overridden OAuth provider to api-key", () => {

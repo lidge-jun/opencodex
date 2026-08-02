@@ -217,9 +217,9 @@ export function ClaudeCodeSettingsCard({
 
 export function ClaudeCodeQuickstartSection({ manualEnv }: { manualEnv: string }) {
   const t = useT();
+  // Title lives in ClaudeCode's shared ccw-main-head so every rail pane shares one top inset.
   return (
     <>
-      <div className="h-section">{t("claude.quickstart")}</div>
       <p className="muted text-label" style={{ margin: "0 0 8px" }}><Trans k="claude.quickstartHint" cmd="ocx claude" /></p>
       <pre className="mono card" style={{ padding: "10px 14px", overflowX: "auto", margin: 0 }}>ocx claude</pre>
       <details style={{ margin: "10px 0 0" }}>
@@ -238,9 +238,9 @@ export function ClaudeCodeModelMapSection({
   onRowsChange: (rows: MapRow[]) => void;
 }) {
   const t = useT();
+  // Title + count live in ClaudeCode's shared ccw-main-head (stable across rail panes).
   return (
     <>
-      <div className="h-section">{t("claude.modelMap")} <span className="count">{rows.length}</span></div>
       <p className="muted text-label" style={{ margin: "0 0 8px" }}>{t("claude.modelMapHint")}</p>
       <div className="stack" style={{ gap: 8 }}>
         {rows.map((row, i) => (
@@ -297,9 +297,9 @@ function groupAliasesByProvider(aliases: AliasRow[]): Array<[string, AliasRow[]]
 
 export function ClaudeCodeAliasesSection({ aliases }: { aliases: AliasRow[] }) {
   const t = useT();
+  // Title + count live in ClaudeCode's shared ccw-main-head (stable across rail panes).
   return (
     <div className="claude-aliases">
-      <div className="h-section">{t("claude.aliases")} <span className="count">{aliases.length}</span></div>
       <p className="muted text-label claude-aliases-hint">{t("claude.aliasesHint")}</p>
       {aliases.length === 0 ? (
         <div className="muted text-label">{t("claude.none")}</div>

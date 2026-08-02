@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getValidAccessToken, OAuthLoginRequiredError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../src/oauth";
+import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 
@@ -133,6 +133,29 @@ function mockRefreshFetch(responses: Array<Response | Error>): { count: () => nu
 }
 
 describe("oauth refresh hardening", () => {
+  test("OAuth token-refresh flight 33 rejects and a stale same-key owner cannot delete replacement", async () => {
+    await saveCredential("kiro", { access: "old", refresh: "rt-old", expires: 1, accountId: "flight-owner" });
+    const accountId = getAccountSet("kiro")!.activeAccountId;
+    const full = seedOAuthTokenRefreshFlightsForTests(Array.from({ length: 32 }, (_, index) => ({ key: `synthetic-${index}` })));
+    const fetchBefore = mockRefreshFetch([]);
+    try {
+      await expect(getValidAccessTokenForAccount("kiro", accountId)).rejects.toBeInstanceOf(OAuthTokenRefreshBusyError);
+      expect(fetchBefore.count()).toBe(0);
+    } finally {
+      for (const promise of full.promises) promise.catch(() => {});
+      full.cleanup();
+    }
+
+    const stale = seedOAuthTokenRefreshFlightsForTests([{ key: `kiro\0${accountId}`, startedAt: Date.now() - 120_001 }]);
+    const refresh = mockRefreshFetch([
+      new Response(JSON.stringify({ accessToken: "fresh", refreshToken: "rt-fresh", expiresIn: 3600 }), { status: 200 }),
+    ]);
+    const replacement = getValidAccessTokenForAccount("kiro", accountId);
+    await expect(stale.promises[0]!).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+    await expect(replacement).resolves.toBe("fresh");
+    expect(refresh.count()).toBe(1);
+    stale.cleanup();
+  });
   test("valid stored credential returns without refresh", async () => {
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
     await saveCredential("kiro", { access: "aoa-valid", refresh: "rt", expires: Date.now() + 3600_000 });
@@ -470,6 +493,129 @@ describe("oauth refresh hardening", () => {
     const credential = getAccountCredential("anthropic", id)!;
     await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new AnthropicTokenError("bad grant", 400, "invalid_grant"); } }, credential)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
     expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(true);
+  });
+
+  test("Anthropic post-dispatch stale flight replacement stays retryable without replay or reauth", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const originalRefresh = OAUTH_PROVIDERS.anthropic!.refresh;
+    let started!: () => void;
+    const didStart = new Promise<void>(resolve => { started = resolve; });
+    let calls = 0;
+    OAUTH_PROVIDERS.anthropic!.refresh = async (_refresh, signal) => {
+      calls += 1;
+      if (calls === 1) {
+        started();
+        return new Promise((_, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+      return { access: "fresh", refresh: "rt-fresh", expires: Date.now() + 3_600_000 };
+    };
+    const staleOwner = getValidAccessTokenForAccount("anthropic", id);
+    await didStart;
+    const intent = readOAuthRefreshIntent("anthropic", id);
+    expect(intent?.generation).toBe(credentialGeneration(getAccountCredential("anthropic", id)!));
+    expect(intent?.flightId).toBeString();
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120_001);
+    try {
+      const replacement = getValidAccessTokenForAccount("anthropic", id);
+      const [staleResult, replacementResult] = await Promise.allSettled([staleOwner, replacement]);
+      expect(staleResult.status).toBe("rejected");
+      expect(staleResult.status === "rejected" && staleResult.reason).toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(replacementResult.status).toBe("rejected");
+      expect(replacementResult.status === "rejected" && replacementResult.reason).toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(calls).toBe(1);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+      expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({
+        ...intent,
+        staleOwner: true,
+      });
+      await expect(getValidAccessTokenForAccount("anthropic", id)).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+      expect(calls).toBe(1);
+    } finally {
+      clock.mockRestore();
+      OAUTH_PROVIDERS.anthropic!.refresh = originalRefresh;
+    }
+  });
+
+  test("Anthropic pre-dispatch stale flight replacement clears its matching durable intent", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const generation = credentialGeneration(getAccountCredential("anthropic", id)!);
+    const flightId = "aborted-pre-dispatch-owner";
+    writeOAuthRefreshIntent("anthropic", id, generation, Date.now() - 120_001, flightId);
+    const stale = seedOAuthTokenRefreshFlightsForTests([{
+      key: `anthropic\0${id}`,
+      startedAt: Date.now() - 120_001,
+      flightId,
+      dispatched: false,
+    }]);
+    const originalRefresh = OAUTH_PROVIDERS.anthropic!.refresh;
+    let calls = 0;
+    OAUTH_PROVIDERS.anthropic!.refresh = async () => {
+      calls += 1;
+      return { access: "fresh", refresh: "rt-fresh", expires: Date.now() + 3_600_000 };
+    };
+    try {
+      const replacement = getValidAccessTokenForAccount("anthropic", id);
+      await expect(stale.promises[0]!).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      await expect(replacement).resolves.toBe("fresh");
+      expect(calls).toBe(1);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+      expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+    } finally {
+      stale.cleanup();
+      OAUTH_PROVIDERS.anthropic!.refresh = originalRefresh;
+    }
+  });
+
+  test("Anthropic stale flight replacement preserves foreign same-generation intents", async () => {
+    for (const [index, intentFlightId] of ["foreign-owner", undefined].entries()) {
+      await saveCredential("anthropic", {
+        access: `old-${index}`,
+        refresh: `rt-old-${index}`,
+        expires: 1,
+        accountId: `acct-${index}`,
+      });
+      const id = getAccountSet("anthropic")!.activeAccountId;
+      const generation = credentialGeneration(getAccountCredential("anthropic", id)!);
+      const staleFlightId = `stale-owner-${index}`;
+      writeOAuthRefreshIntent("anthropic", id, generation, Date.now() - 120_001, intentFlightId);
+      const expectedIntent = readOAuthRefreshIntent("anthropic", id);
+      const stale = seedOAuthTokenRefreshFlightsForTests([{
+        key: `anthropic\0${id}`,
+        startedAt: Date.now() - 120_001,
+        flightId: staleFlightId,
+        dispatched: false,
+      }]);
+      try {
+        const replacement = getValidAccessTokenForAccount("anthropic", id);
+        await expect(stale.promises[0]!).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+        await expect(replacement).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+        expect(readOAuthRefreshIntent("anthropic", id)).toEqual(expectedIntent);
+        expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)?.needsReauth).toBe(true);
+      } finally {
+        stale.cleanup();
+      }
+    }
+  });
+
+  test("legacy OAuth refresh intent without flightId remains valid", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const legacy = {
+      version: 1,
+      provider: "anthropic",
+      accountId: id,
+      generation: credentialGeneration(getAccountCredential("anthropic", id)!),
+      createdAt: Date.now() - 120_001,
+    } as const;
+    writeFileSync(getAuthRefreshIntentPath("anthropic", id), `${JSON.stringify(legacy)}\n`);
+
+    expect(readOAuthRefreshIntent("anthropic", id)).toEqual(legacy);
+    expect(readOAuthRefreshIntent("anthropic", id)?.uncertain).toBeUndefined();
   });
 
   test("Anthropic never replays an outstanding oauth-source generation across re-entry", async () => {

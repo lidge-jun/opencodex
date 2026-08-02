@@ -47,6 +47,43 @@ and overrides only conflicting keys for the child process.
 If a global or project config also defines `provider.opencodex`, the launcher prints an
 informational note: the runtime layer from `ocx opencode` overrides it for that launch.
 
+## Putting the block into your own config
+
+`ocx opencode` injects the provider block for one launch only, which means plain `opencode` still
+knows nothing about the proxy. When you want routed models available from plain `opencode` — or
+from an editor extension that never goes through the launcher — `ocx export` prints the same
+provider block for you to merge into your own config:
+
+```bash
+ocx export --client opencode
+```
+
+The proxy must be running. The command prints the config, the canonical destination
+(`~/.config/opencode/opencode.json`, or under `XDG_CONFIG_HOME` when that is set), the merge
+warning, and the env export line. It never touches that file — the section above stays true, and
+moving the block into your config is your explicit act.
+
+:::caution[Merge, never replace]
+Merge the `provider.opencodex` block into your existing config. Replacing the whole file with the
+exported one destroys your other providers, agents, keybinds, and MCP entries. `ocx export --out`
+refuses to overwrite an existing file for exactly this reason, so point `--out` at a scratch path
+and copy the block across:
+
+```bash
+ocx export --client opencode --out ~/opencodex-opencode.json
+```
+:::
+
+Unlike the launcher's runtime block, a merged block is a static snapshot: it does not follow your
+catalog. Re-run `ocx export` after you add a provider or change model visibility.
+
+Once merged, export the admission key before launching opencode — unless the proxy is on loopback,
+where none is needed:
+
+```bash
+export OPENCODEX_OPENCODE_API_KEY=<your key>
+```
+
 ## The admission key is not written to disk
 
 When the proxy requires an API key, the inline runtime config carries opencode's
@@ -77,6 +114,12 @@ Non-loopback example:
 The real value is passed only through the child process environment.
 `OPENCODEX_API_AUTH_TOKEN` takes precedence, then the hardened service token file, then
 a configured API key — which is what a non-loopback bind requires.
+
+A loopback bind (`127.0.0.1`, the default) authenticates nothing, so the `{env:…}` reference is
+inert and you can leave the variable unset. It matters only when `hostname` is set beyond loopback;
+see [Remote access](/reference/configuration/#remote-access). This admission key is opencodex's
+own, and is unrelated to the upstream provider keys configured under
+[Providers](/guides/providers/).
 
 ## Reverting
 

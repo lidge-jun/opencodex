@@ -9,14 +9,22 @@ test("ClaudeCode renders the denser workspace rail layout", async () => {
 
   expect(page).toContain("claudecode-workspace");
   expect(page).toContain("ccw-body");
+  expect(page).toContain("ccw-main-head");
   expect(page).toContain("selectedSection");
   expect(page).toContain("claude.workspace.settings");
+  // Save stays in the pane head (visibility-toggled) so the Code/Desktop chrome does not jump.
+  expect(page).toContain('data-visible={sectionEditable ? "true" : "false"}');
 
   expect(app).toContain("<Claude apiBase={API_BASE} />");
+  // Title/subtitle sit above the Code/Desktop strip (not inside each panel).
+  expect(claude).toContain("claude-page-intro");
+  expect(claude).toContain("claude.pageTitle");
+  expect(claude.indexOf("claude-page-intro")).toBeLessThan(claude.indexOf("claude-tabs"));
   // Both children stay mounted so drafts survive a tab switch; `active` is what keeps the hidden
   // one from fetching, so the two panels must be wired symmetrically.
   expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={tab === \"code\"} />");
-  expect(claude).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={tab === \"desktop\"} />");
+  expect(claude).toContain("active={tab === \"desktop\"}");
+  expect(claude).toContain("onPortChange={setDesktopPort}");
 });
 
 test("ClaudeCode workspace sections remain available in source order", async () => {

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { decodeServerSentEvents } from "../src/lib/sse-decoder";
+import {
+  TRANSLATOR_MAX_SSE_EVENT_BYTES,
+  TRANSLATOR_MAX_TURN_BYTES,
+  createTranslatorBudget,
+} from "../src/lib/translator-budget";
 
 function chunkedStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -13,16 +18,26 @@ function chunkedStream(chunks: string[]): ReadableStream<Uint8Array> {
 
 async function collect(chunks: string[]) {
   const records = [];
-  for await (const record of decodeServerSentEvents(chunkedStream(chunks))) records.push(record);
-  return records;
+  const translatorBudget = createTranslatorBudget();
+  try {
+    for await (const record of decodeServerSentEvents(chunkedStream(chunks), { translatorBudget })) records.push(record);
+    return records;
+  } finally {
+    translatorBudget.dispose();
+  }
 }
 
 async function collectWithComments(chunks: string[]) {
   const records = [];
-  for await (const record of decodeServerSentEvents(chunkedStream(chunks), { includeComments: true })) {
-    records.push(record);
+  const translatorBudget = createTranslatorBudget();
+  try {
+    for await (const record of decodeServerSentEvents(chunkedStream(chunks), { includeComments: true, translatorBudget })) {
+      records.push(record);
+    }
+    return records;
+  } finally {
+    translatorBudget.dispose();
   }
-  return records;
 }
 
 describe("text/event-stream decoder", () => {
@@ -73,4 +88,58 @@ describe("text/event-stream decoder", () => {
     expect(records).toEqual([{ event: "custom", data: "payload" }]);
     expect("kind" in records[0]).toBe(false);
   });
+
+  test("admits 17 MiB and exact 32 MiB logical events while accounting source/value overlap", async () => {
+    for (const size of [17 * 1024 * 1024, TRANSLATOR_MAX_SSE_EVENT_BYTES]) {
+      const payload = "x".repeat(size);
+      const translatorBudget = createTranslatorBudget({ maxTurnBytes: 4 * TRANSLATOR_MAX_SSE_EVENT_BYTES });
+      try {
+        const records = [];
+        for await (const record of decodeServerSentEvents(
+          chunkedStream([`data: ${payload}\n\n`]),
+          { translatorBudget },
+        )) records.push(record);
+        expect(records).toHaveLength(1);
+        expect(records[0]?.data.length).toBe(size);
+        expect(translatorBudget.snapshot().highWaterBytes).toBeGreaterThanOrEqual(3 * size);
+        expect(translatorBudget.snapshot().currentBytes).toBe(0);
+      } finally {
+        translatorBudget.dispose();
+      }
+    }
+  }, 60_000);
+
+  test("rejects an SSE event one byte over 32 MiB", async () => {
+    const payload = "x".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1);
+    const translatorBudget = createTranslatorBudget({ maxTurnBytes: 4 * TRANSLATOR_MAX_SSE_EVENT_BYTES });
+    try {
+      await expect(async () => {
+        for await (const _record of decodeServerSentEvents(
+          chunkedStream([`data: ${payload}\n\n`]),
+          { translatorBudget },
+        )) { /* unreachable */ }
+      }).toThrow(expect.objectContaining({ code: "translation_buffer_limit" }));
+    } finally {
+      translatorBudget.dispose();
+    }
+  }, 60_000);
+
+  test("rejects a 20 MiB event while the consumer turn already retains 20 MiB", async () => {
+    const translatorBudget = createTranslatorBudget();
+    const retained = 20 * 1024 * 1024;
+    translatorBudget.chargeRetained(retained, { kind: "retained_collectors" });
+    try {
+      const records = [];
+      await expect(async () => {
+        for await (const record of decodeServerSentEvents(
+          chunkedStream([`data: ${"x".repeat(retained)}\n\n`]),
+          { translatorBudget },
+        )) records.push(record);
+      }).toThrow(expect.objectContaining({ code: "translation_buffer_limit" }));
+      expect(translatorBudget.snapshot().highWaterBytes).toBeLessThanOrEqual(TRANSLATOR_MAX_TURN_BYTES);
+      expect(records).toHaveLength(0);
+    } finally {
+      translatorBudget.dispose();
+    }
+  }, 60_000);
 });

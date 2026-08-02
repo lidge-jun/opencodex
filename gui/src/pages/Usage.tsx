@@ -6,7 +6,7 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { EmptyState, Notice } from "../ui";
 import { modelLabel } from "../model-display";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 
@@ -83,6 +83,10 @@ interface UsageResponse {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  historyTruncated: boolean;
+  truncatedPrefixBytes: number;
+  entriesTruncated: boolean;
+  entriesDropped: number;
   error?: string;
 }
 
@@ -241,7 +245,7 @@ function UsageFilters({
       </div>
       <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
         {(["all", "30d", "7d"] as Range[]).map(choice => {
-          const label = t(`usage.range.${choice}`);
+          const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);
           return (
             <button
               key={choice}
@@ -758,14 +762,15 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     return next;
   }, [apiBase, range, surface]);
 
+  const resourceKey = usageCacheKey(apiBase, range, surface);
   const cached = readHeldUsage(apiBase, range, surface);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
-    usageCacheKey(apiBase, range, surface),
+    resourceKey,
     [apiBase, range, surface],
     loadUsage,
-    { isEmpty: () => false },
+    { isEmpty: () => false, initialData: cached ?? undefined },
   );
   const { state } = resource;
   const data = state.data ?? cached ?? null;
@@ -810,7 +815,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       ) : (
         <>
           {state.showError && <Notice tone="err">{t("usage.loadError")}</Notice>}
-          {state.refreshing && <DataSurfaceStatus live={!state.showError}>{t("usage.loading")}</DataSurfaceStatus>}
+          {data?.historyTruncated && <Notice tone="ok">{t("usage.historyTruncated")}</Notice>}
           <UsageWorkspaceBody
             data={data}
             heatmap={heatmap}

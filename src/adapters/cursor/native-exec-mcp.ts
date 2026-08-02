@@ -22,7 +22,7 @@ import {
   type ReadMcpResourceExecArgs,
 } from "./gen/agent_pb";
 import type { McpCallResult } from "./mcp-manager";
-import { CursorMcpManager } from "./mcp-manager";
+import { CursorMcpManager, decodedBase64Length } from "./mcp-manager";
 import { errorText } from "./native-exec-common";
 import type { CursorNativeToolDeps } from "./native-exec-tools";
 import { encodeCursorInputSchema } from "./tool-definitions";
@@ -62,7 +62,7 @@ export function mcpDepsFromManager(manager: CursorMcpManager): CursorNativeToolD
         }
         const result = await manager.callTool(name, decodeMcpArgs(args.args));
         return create(McpResultSchema, {
-          result: { case: "success", value: create(McpSuccessSchema, { isError: result.isError, content: toContentItems(result) }) },
+          result: { case: "success", value: create(McpSuccessSchema, { isError: result.isError, content: toContentItems(result, manager) }) },
         });
       } catch (err) {
         return create(McpResultSchema, { result: { case: "error", value: create(McpErrorSchema, { error: errorText(err) }) } });
@@ -112,7 +112,9 @@ function decodeMcpArgs(raw: { [key: string]: Uint8Array }): Record<string, unkno
   return decodeCursorArgsMap(raw);
 }
 
-function toContentItems(result: McpCallResult): McpToolResultContentItem[] {
+function toContentItems(result: McpCallResult, manager: CursorMcpManager): McpToolResultContentItem[] {
+  const decodedBytes = result.content.reduce((sum, block) => sum + (block.type === "image" && typeof block.data === "string" ? decodedBase64Length(block.data) : 0), 0);
+  manager.assertDecodedResultBudget(result, decodedBytes);
   return result.content.map(block => {
     // Promote real image payloads to McpImageContent so the model receives the actual bytes,
     // not a "[image]" placeholder. Non-text, non-image blocks (audio/resource) still degrade

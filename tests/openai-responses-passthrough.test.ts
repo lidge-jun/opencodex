@@ -1,12 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
+import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
+import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const provider = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.example/backend-api/codex",
   authMode: "forward" as const,
 };
+
+test("passthrough serialized-body observation releases after the request settles", () => {
+  const budget = createTranslatorBudget();
+  const request = createResponsesPassthroughAdapter(provider).buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers({ authorization: "Bearer token" }), translatorBudget: budget });
+  expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+  request.releaseBodyObservation?.();
+  expect(budget.snapshot().currentBytes).toBe(0);
+  budget.dispose();
+});
 
 function buildKeyAuthUrl(baseUrl: string, responsesPath?: string): string {
   const adapter = createResponsesPassthroughAdapter({
@@ -46,6 +68,39 @@ describe("OpenAI Responses key-auth URL construction", () => {
       "https://ark.cn-beijing.volces.com/api/plan/v3",
       "/responses",
     )).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/responses");
+  });
+});
+
+/**
+ * DeepSeek documents `POST /responses` with no `/v1` segment
+ * (https://api-docs.deepseek.com/api/create-response/). Commit e743660fc defaulted
+ * deepseek-v4-flash onto the Responses wire but left the path unset, so the adapter
+ * fell back to the legacy `/v1/responses` construction and the wire could never route.
+ */
+describe("DeepSeek Responses endpoint contract", () => {
+  test("the seeded deepseek provider targets the documented /responses route", () => {
+    const seed = providerConfigSeed(getProviderRegistryEntry("deepseek")!);
+    expect(seed.responsesPath).toBe("/responses");
+    expect(buildKeyAuthUrl(seed.baseUrl, seed.responsesPath))
+      .toBe("https://api.deepseek.com/responses");
+  });
+
+  test("a provider that declares no responsesPath still gets the legacy construction", () => {
+    // Negative control: the fix must not become a global change of the default branch.
+    const seed = providerConfigSeed(getProviderRegistryEntry("cerebras")!);
+    expect(seed.responsesPath).toBeUndefined();
+    expect(buildKeyAuthUrl("https://api.cerebras.ai/v1", seed.responsesPath))
+      .toBe("https://api.cerebras.ai/v1/responses");
+  });
+
+  test("a config saved before the fix is backfilled, and a hand-set path is preserved", () => {
+    const saved = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test" } as Parameters<typeof enrichProviderFromRegistry>[1];
+    enrichProviderFromRegistry("deepseek", saved);
+    expect(saved.responsesPath).toBe("/responses");
+
+    const custom = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", responsesPath: "/custom/responses" } as Parameters<typeof enrichProviderFromRegistry>[1];
+    enrichProviderFromRegistry("deepseek", custom);
+    expect(custom.responsesPath).toBe("/custom/responses");
   });
 });
 

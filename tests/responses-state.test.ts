@@ -1,5 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { BULK_DURABLE_IO_BUDGET_MS } from "./helpers/test-budget";
+import {
+  closeSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildResponseJSON } from "../src/bridge";
@@ -10,17 +24,39 @@ import { createSseInspector } from "../src/server/relay";
 import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
+  evictOldestResponseContinuationForBudget,
   expandPreviousResponseInput,
   flushResponseState,
   previousResponseConversationId,
   previousResponseProviderState,
+  previousResponseReplayFailure,
+  previousResponseReplayPrefixLength,
   recoverStaleResponseStateTemps,
   rememberResponseState,
   responseStateMetrics,
+  responseStatePersistPendingForTests,
+  responseContinuationRetainedStoreSnapshot,
+  runPendingResponseStatePersistForTests,
   setResponseStateByteCapForTests,
+  setResponseStatePersistAttemptHookForTests,
   getStoredResponseBytesForTests,
 } from "../src/responses/state";
+import {
+  readResponseSpill,
+  deleteResponseSpill,
+  recoverOrphanedResponseSpills,
+  responseSpillDirectory,
+  setSpillIoForTest,
+  writeResponseSpillDurably,
+} from "../src/responses/spill-store";
 import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../src/server/responses";
+import {
+  hardenSecretPath,
+  hardenedSecretPathCountForTests,
+  resetHardenedStateForTests,
+  setIcaclsRunnerForTests,
+  setPlatformForTests,
+} from "../src/lib/windows-secret-acl";
 
 function feedInspector(
   inspector: ReturnType<typeof createSseInspector>,
@@ -45,6 +81,24 @@ function isExactGuidanceItem(item: unknown, text: string): boolean {
     && (part as Record<string, unknown>).text === text;
 }
 
+function fixedResponse(id: string, output: unknown[]): { id: string; output: unknown[]; status: string } {
+  return { id, output, status: "completed" };
+}
+
+function spillFileNames(home: string): string[] {
+  const dir = responseSpillDirectory(home);
+  return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".spill.json")) : [];
+}
+
+function rememberLarge(id: string, text: string, providers?: Parameters<typeof rememberResponseState>[2]): void {
+  rememberResponseState(
+    { model: "test/model", input: text, store: false },
+    fixedResponse(id, [{ type: "message", role: "assistant", content: text }]),
+    providers,
+    { force: true },
+  );
+}
+
 describe("Responses previous_response_id state", () => {
   // Sandbox OPENCODEX_HOME: the state store now snapshots to disk, and these tests must never
   // touch the real ~/.opencodex.
@@ -58,6 +112,11 @@ describe("Responses previous_response_id state", () => {
   });
 
   afterEach(() => {
+    setSpillIoForTest(null);
+    setIcaclsRunnerForTests(null);
+    setPlatformForTests(null);
+    resetHardenedStateForTests();
+    setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
@@ -300,6 +359,38 @@ describe("Responses previous_response_id state", () => {
     expect(expanded.input.some(item => item.type === "function_call" && item.name === "must_not_replay")).toBe(false);
   });
 
+  test("tainted inspector reconstruction never persists a truncated replay", () => {
+    const requestBody = { model: "gpt-5.5", input: "start" };
+    let callbacks = 0;
+    const inspector = createSseInspector({
+      onCompletedResponse: response => {
+        callbacks += 1;
+        rememberResponseState(requestBody, response, undefined, { force: true });
+      },
+    });
+    const events: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < 257; index += 1) {
+      events.push({
+        type: "response.output_item.done",
+        output_index: index,
+        item: { type: "message", id: `tainted-${index}`, role: "assistant", content: [] },
+      });
+    }
+    events.push({
+      type: "response.completed",
+      response: { id: "resp_tainted_reconstruction", status: "completed", output: [] },
+    });
+    feedInspector(inspector, events);
+
+    const next = {
+      model: "gpt-5.5",
+      previous_response_id: "resp_tainted_reconstruction",
+      input: "continue",
+    };
+    expect(callbacks).toBe(0);
+    expect(expandPreviousResponseInput(next)).toEqual(next);
+  });
+
   test("two previous_response_id continuations keep one replayed guidance item (#326)", () => {
     const guidance = "Use the delegated agent workflow.";
     const countRawGuidance = (body: unknown): number => {
@@ -500,7 +591,653 @@ describe("Responses previous_response_id state", () => {
     expect(adapterNeedsForcedContinuation("")).toBe(false);
   });
 
-  test("byte cap evicts oldest entries while the newest chain link survives", () => {
+  test("spills the only oversized continuation and leaves resident bytes at or below cap", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_only_oversized", "x".repeat(8_000));
+    const metrics = responseStateMetrics();
+    expect(metrics).toMatchObject({ count: 1, residentCount: 0, spillStubCount: 1 });
+    expect(metrics.totalBytes).toBeLessThanOrEqual(1_024);
+    expect((expandPreviousResponseInput({
+      previous_response_id: "resp_only_oversized", input: "next",
+    }) as { input: unknown[] }).input).toHaveLength(3);
+  });
+
+  test("does not swap a resident row to a stub before fsync and no-replace publication succeed", () => {
+    const events: string[] = [];
+    setSpillIoForTest({ record: event => events.push(event) });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_durable_order", "x".repeat(8_000));
+    expect(events).toEqual(["write", "fsync", "close", "harden", "publish", "dir-fsync", "stub-swap"]);
+  });
+
+  test("directory fsync follows spill unlink", () => {
+    const ref = writeResponseSpillDurably("resp_unlink_order", { createdAt: Date.now(), items: ["x"] });
+    const events: string[] = [];
+    setSpillIoForTest({ record: event => events.push(event) });
+    deleteResponseSpill(ref);
+    expect(events).toEqual(["dir-fsync"]);
+  });
+
+  test("directory fsync still records and closes when fsync throws", () => {
+    const events: string[] = [];
+    const closed: number[] = [];
+    setSpillIoForTest({
+      record: event => events.push(event),
+      fsyncDir: () => {
+        throw new Error("injected directory fsync failure");
+      },
+      closeDir: fd => {
+        closed.push(fd);
+        closeSync(fd);
+      },
+    });
+    writeResponseSpillDurably("resp_dir_fsync_throw", { createdAt: Date.now(), items: ["x"] });
+    expect(events).toContain("dir-fsync");
+    expect(closed).toHaveLength(1);
+  });
+
+  test("directory fsync records even when directory open fails", () => {
+    const events: string[] = [];
+    setSpillIoForTest({
+      record: event => events.push(event),
+      openDir: () => {
+        throw Object.assign(new Error("injected directory open failure"), { code: "ENOENT" });
+      },
+    });
+    writeResponseSpillDurably("resp_dir_open_fail", { createdAt: Date.now(), items: ["x"] });
+    // Record happens before open so Windows (no directory-handle fsync) still
+    // observes the durability seam in ordering tests.
+    expect(events).toContain("dir-fsync");
+    expect(events).toContain("publish");
+  });
+
+  test("spill temp cleanup forgets successful ACL memos and retains failed removals", () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    const seedTempMemo = (event: string): void => {
+      if (event !== "harden") return;
+      const tempName = readdirSync(responseSpillDirectory(home)).find(name => name.endsWith(".tmp"));
+      expect(tempName).toBeTruthy();
+      hardenSecretPath(join(responseSpillDirectory(home), tempName!), { required: true });
+    };
+    try {
+      setSpillIoForTest({ record: seedTempMemo });
+      writeResponseSpillDurably("resp_acl_success", { createdAt: Date.now(), items: ["success"] });
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+
+      setSpillIoForTest({
+        record: seedTempMemo,
+        unlink: () => { throw Object.assign(new Error("injected unlink failure"), { code: "EPERM" }); },
+      });
+      expect(() => writeResponseSpillDurably("resp_acl_failure", {
+        createdAt: Date.now(),
+        items: ["failure"],
+      })).toThrow("Response spill write failed");
+      expect(hardenedSecretPathCountForTests()).toBe(1);
+    } finally {
+      setSpillIoForTest(null);
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("replays provider metadata and function_call_output history through a spill stub", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberResponseState(
+      { input: "x".repeat(8_000), store: false },
+      fixedResponse("resp_spill_tool", [{ type: "function_call", call_id: "call_1", name: "ping", arguments: "{}" }]),
+      { cursor: { conversationId: "cursor-spill" } },
+      { force: true },
+    );
+    const expanded = expandPreviousResponseInput({
+      previous_response_id: "resp_spill_tool",
+      input: [{ type: "function_call_output", call_id: "call_1", output: "ok" }],
+    }) as { input: unknown[] };
+    expect(previousResponseProviderState("resp_spill_tool")?.cursor?.conversationId).toBe("cursor-spill");
+    expect(expanded.input.at(-1)).toMatchObject({ type: "function_call_output", call_id: "call_1" });
+  });
+
+  test("replays a durable spill after simulated process restart", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_spill_restart", "r".repeat(8_000));
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    const expanded = expandPreviousResponseInput({ previous_response_id: "resp_spill_restart", input: "next" });
+    expect((expanded as { input: unknown[] }).input).toHaveLength(3);
+    expect(responseStateMetrics().spillStubCount).toBe(1);
+  });
+
+  test("spill references bind the expected response id and use the locked digest basename", () => {
+    const ref = writeResponseSpillDurably("resp_identity", {
+      createdAt: Date.now(),
+      items: ["payload"],
+    });
+    expect(ref.fileName).toMatch(/\.[0-9a-f]{12}\.[0-9a-f]{24}\.\d+\.\d+\.spill\.json$/);
+    expect(readResponseSpill("resp_identity", ref).ok).toBe(true);
+    expect(readResponseSpill("resp_other", ref)).toEqual({ ok: false, reason: "corrupt" });
+  });
+
+  test("returns previous_response_not_found for a missing spill file without forwarding delta", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_missing_spill", "m".repeat(8_000));
+    const file = spillFileNames(home)[0]!;
+    unlinkSync(join(responseSpillDirectory(home), file));
+    const body = { previous_response_id: "resp_missing_spill", input: "delta" };
+    expect(expandPreviousResponseInput(body)).toBe(body);
+    expect(previousResponseReplayFailure(body)).toEqual({
+      code: "previous_response_not_found", reason: "spill_missing",
+    });
+    expect(responseStateMetrics()).toMatchObject({ spillStubCount: 0, tombstoneCount: 1, spillReadFailures: 1 });
+  });
+
+  test("returns previous_response_not_found for a corrupt or digest-mismatched spill", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_corrupt_spill", "c".repeat(8_000));
+    const path = join(responseSpillDirectory(home), spillFileNames(home)[0]!);
+    const size = readFileSync(path).byteLength;
+    writeFileSync(path, "z".repeat(size));
+    const body = { previous_response_id: "resp_corrupt_spill", input: "delta" };
+    expect(expandPreviousResponseInput(body)).toBe(body);
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_corrupt");
+  });
+
+  test("spill write failure evicts resident bytes and records one bounded tombstone", () => {
+    setSpillIoForTest({ write: () => { throw new Error("injected write failure"); } });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_write_failure", "w".repeat(8_000));
+    const metrics = responseStateMetrics();
+    expect(metrics).toMatchObject({ count: 1, residentCount: 0, tombstoneCount: 1, spillWriteFailures: 1 });
+    expect(metrics.totalBytes).toBeLessThanOrEqual(1_024);
+  });
+
+  test("disk permission failure increments spillWriteFailures without retaining payload", () => {
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    setSpillIoForTest({ write: () => { throw denied; } });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_permission_failure", "p".repeat(8_000));
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, tombstoneCount: 1, spillWriteFailures: 1 });
+  });
+
+  test("replacing a response id deletes its previous dedicated spill file after the snapshot flush", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_replace_spill", "a".repeat(8_000));
+    const old = spillFileNames(home)[0]!;
+    rememberLarge("resp_replace_spill", "b".repeat(8_000));
+    // The superseded generation survives until the debounced snapshot is
+    // durable (crash safety: a pre-flush reload must find the OLD file).
+    expect(existsSync(join(responseSpillDirectory(home), old))).toBe(true);
+    await flushResponseState();
+    expect(existsSync(join(responseSpillDirectory(home), old))).toBe(false);
+    expect(spillFileNames(home)).toHaveLength(1);
+  });
+
+  test("TTL and count eviction delete dedicated spill files and release stub bytes", () => {
+    const realNow = Date.now;
+    setResponseStateByteCapForTests(1_024);
+    try {
+      Date.now = () => realNow() - 2 * 60 * 60 * 1_000;
+      rememberLarge("resp_ttl_spill", "t".repeat(8_000));
+      const ttlFile = spillFileNames(home)[0]!;
+      Date.now = realNow;
+      rememberLarge("resp_after_ttl", "u".repeat(8_000));
+      expect(existsSync(join(responseSpillDirectory(home), ttlFile))).toBe(false);
+
+      clearResponseStateForTests();
+      setResponseStateByteCapForTests(1_024);
+      rememberLarge("resp_count_spill", "v".repeat(8_000));
+      const countFile = spillFileNames(home)[0]!;
+      setResponseStateByteCapForTests(1_000_000_000);
+      for (let i = 0; i < 1_000; i++) rememberLarge(`resp_count_${i}`, "x");
+      expect(existsSync(join(responseSpillDirectory(home), countFile))).toBe(false);
+      expect(responseStateMetrics().count).toBe(1_000);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("startup orphan cleanup removes only old unreferenced regular spill files", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_live_orphan_gc", "l".repeat(8_000));
+    await flushResponseState();
+    const live = spillFileNames(home)[0]!;
+    const orphanRef = writeResponseSpillDurably("resp_orphan_gc", {
+      createdAt: Date.now(), items: ["orphan"],
+    });
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(join(responseSpillDirectory(home), orphanRef.fileName), old, old);
+    clearResponseStateMemoryForTests();
+    expandPreviousResponseInput({ previous_response_id: "resp_live_orphan_gc", input: "next" });
+    expect(existsSync(join(responseSpillDirectory(home), live))).toBe(true);
+    expect(existsSync(join(responseSpillDirectory(home), orphanRef.fileName))).toBe(false);
+  });
+
+  test("startup orphan cleanup preserves referenced young live and unrelated files", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_gc_preserve", "g".repeat(8_000));
+    await flushResponseState();
+    const live = spillFileNames(home)[0]!;
+    const young = writeResponseSpillDurably("resp_young", { createdAt: Date.now(), items: ["young"] });
+    const unrelated = join(responseSpillDirectory(home), "unrelated.txt");
+    writeFileSync(unrelated, "keep");
+    clearResponseStateMemoryForTests();
+    expandPreviousResponseInput({ previous_response_id: "resp_gc_preserve", input: "next" });
+    expect(existsSync(join(responseSpillDirectory(home), live))).toBe(true);
+    expect(existsSync(join(responseSpillDirectory(home), young.fileName))).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+  });
+
+  test("concurrent flush and synchronous demotion cannot inline or lose the spill stub", async () => {
+    rememberLarge("resp_before_flush", "small");
+    const flushing = flushResponseState();
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_during_flush", "d".repeat(8_000));
+    await flushing;
+    await flushResponseState();
+    const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { states: [string, Record<string, unknown>][] };
+    const row = snapshot.states.find(([id]) => id === "resp_during_flush")?.[1];
+    expect(row).toMatchObject({ kind: "spill" });
+    expect(row?.items).toBeUndefined();
+  });
+
+  test("small entries retain the legacy v2 debounced snapshot representation", async () => {
+    rememberLarge("resp_legacy_small", "small");
+    await flushResponseState();
+    const snapshot = JSON.parse(readFileSync(join(home, "responses-state.json"), "utf8")) as { version: number; states: [string, Record<string, unknown>][] };
+    expect(snapshot.version).toBe(2);
+    const row = snapshot.states.find(([id]) => id === "resp_legacy_small")?.[1];
+    expect(row).toMatchObject({ items: expect.any(Array) });
+    expect(row?.kind).toBeUndefined();
+    expect(row?.sizeBytes).toBeUndefined();
+  });
+
+  test("same-id spill replacement keeps the old row replay-addressable until atomic stub swap", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_atomic_replace", "old".repeat(3_000));
+    const oldFile = spillFileNames(home)[0]!;
+    let observedOld = false;
+    setSpillIoForTest({
+      record(event) {
+        if (event !== "publish") return;
+        const replay = expandPreviousResponseInput({ previous_response_id: "resp_atomic_replace", input: "delta" });
+        observedOld = JSON.stringify(replay).includes("oldoldold");
+        expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(true);
+      },
+    });
+    rememberLarge("resp_atomic_replace", "new".repeat(3_000));
+    expect(observedOld).toBe(true);
+    expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_atomic_replace", input: "delta" })))
+      .toContain("newnewnew");
+    await flushResponseState();
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(false);
+  });
+
+  test("existing spill replacement stays a direct stub-to-stub swap even when the candidate fits RAM", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_direct_b2", "old".repeat(3_000));
+    const oldFile = spillFileNames(home)[0]!;
+    const events: string[] = [];
+    setSpillIoForTest({ record: event => events.push(event) });
+    setResponseStateByteCapForTests(1_000_000);
+
+    rememberLarge("resp_direct_b2", "small replacement");
+
+    expect(events).toContain("publish");
+    expect(events).toContain("stub-swap");
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
+    await flushResponseState();
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(false);
+    expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_direct_b2", input: "delta" })))
+      .toContain("small replacement");
+  });
+
+  test("crash between new-generation publication and stub swap preserves the old row and reclaims the new orphan", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_crash_window", "old".repeat(3_000));
+    await flushResponseState();
+    const oldFile = spillFileNames(home)[0]!;
+    const orphan = writeResponseSpillDurably("resp_crash_window", {
+      createdAt: Date.now(), items: ["new".repeat(3_000)],
+    });
+    const oldTime = new Date(Date.now() - 20 * 60_000);
+    utimesSync(join(responseSpillDirectory(home), orphan.fileName), oldTime, oldTime);
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_crash_window", input: "delta" })))
+      .toContain("oldoldold");
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(true);
+    expect(existsSync(join(responseSpillDirectory(home), orphan.fileName))).toBe(false);
+  });
+
+  test("same response id and equal-size replacement use distinct basenames and unlink old only after stub swap", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_equal_size", "a".repeat(8_000));
+    const old = spillFileNames(home)[0]!;
+    let published: string[] = [];
+    setSpillIoForTest({ record: event => { if (event === "publish") published = spillFileNames(home); } });
+    rememberLarge("resp_equal_size", "b".repeat(8_000));
+    expect(published).toHaveLength(2);
+    expect(new Set(published).size).toBe(2);
+    await flushResponseState();
+    expect(spillFileNames(home)).toHaveLength(1);
+    expect(existsSync(join(responseSpillDirectory(home), old))).toBe(false);
+  });
+
+  test("identical-content re-spill still allocates a generation-unique basename", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_identical", "i".repeat(8_000));
+    const old = spillFileNames(home)[0]!;
+    let duringPublish: string[] = [];
+    setSpillIoForTest({ record: event => { if (event === "publish") duringPublish = spillFileNames(home); } });
+    rememberLarge("resp_identical", "i".repeat(8_000));
+    expect(duringPublish).toHaveLength(2);
+    expect(duringPublish.some(name => name !== old)).toBe(true);
+  });
+
+  test("spill-failed tombstone survives simulated process restart and returns the canonical failure", async () => {
+    setSpillIoForTest({ write: () => { throw new Error("fail"); } });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_failed_restart", "f".repeat(8_000));
+    setSpillIoForTest(null);
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+    const body = { previous_response_id: "resp_failed_restart", input: "delta" };
+    expect(expandPreviousResponseInput(body)).toBe(body);
+    expect(previousResponseReplayFailure(body)).toEqual({
+      code: "previous_response_not_found", reason: "spill_failed",
+    });
+  });
+
+  test("spill replay preserves replay-prefix provenance and compaction-marker acknowledgement", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberResponseState(
+      { input: [{ type: "context_compaction" }, { role: "user", content: "x".repeat(8_000) }] },
+      fixedResponse("resp_spill_provenance", [{ role: "assistant", content: "done" }]),
+    );
+    const expanded = expandPreviousResponseInput({
+      model: "test/model", previous_response_id: "resp_spill_provenance", input: "next",
+    });
+    expect(previousResponseReplayPrefixLength(expanded)).toBe(3);
+    expect(parseRequest(expanded)._contextCompactionBoundary).toBeUndefined();
+  });
+
+  test("multibyte resident payload accounting uses complete UTF-8 bytes including provider metadata", () => {
+    const realNow = Date.now;
+    const at = 1_900_000_000_000;
+    Date.now = () => at;
+    try {
+      const output = [{ role: "assistant", content: "🙂" }];
+      const providers = { kiro: { conversationId: "대화🙂" } };
+      rememberResponseState(
+        { input: "한글🙂" },
+        fixedResponse("resp_다국어", output),
+        providers,
+      );
+      const items = [{ role: "user", content: "한글🙂" }, ...output];
+      const expected = Buffer.byteLength(JSON.stringify({
+        responseId: "resp_다국어", createdAt: at, items, providers,
+      }), "utf8");
+      expect(getStoredResponseBytesForTests()).toBe(expected);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("serialization failure rejects the candidate and records a bounded tombstone", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    rememberResponseState({ input: "safe" }, fixedResponse("resp_circular", [circular]));
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, tombstoneCount: 1 });
+    const body = { previous_response_id: "resp_circular", input: "delta" };
+    expandPreviousResponseInput(body);
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_failed");
+
+    clearResponseStateForTests();
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_circular_replace", "old".repeat(3_000));
+    const oldFile = spillFileNames(home)[0]!;
+    rememberResponseState({ input: "replacement" }, fixedResponse("resp_circular_replace", [circular]));
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 0, tombstoneCount: 1 });
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(false);
+  });
+
+  test("serialization-failure tombstone still submits to the hard cap (C2-1)", () => {
+    // Cap below tombstone size: the tombstone must be pruned away, not stay
+    // resident above the cap because the failure path skipped pruning.
+    setResponseStateByteCapForTests(1);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    rememberResponseState({ input: "safe" }, fixedResponse("resp_tiny_cap_circular", [circular]));
+    const metrics = responseStateMetrics();
+    expect(metrics.totalBytes).toBeLessThanOrEqual(1);
+    expect(metrics.tombstoneCount).toBe(0);
+  });
+
+  test("pending spill-unlink deferral is bounded at 128 superseded generations (C2-2)", () => {
+    // Persistently failing snapshot writes mean persistNow() never drains the
+    // deferral queue. 140 same-id replacements must leave at most current +
+    // 128 pending files on disk — the overflow unlinks oldest-first instead
+    // of growing without limit.
+    setSpillIoForTest({ write: undefined }); // default write; only block snapshots below
+    setResponseStateByteCapForTests(1_024);
+    const dir = responseSpillDirectory(home);
+    for (let i = 0; i < 140; i++) {
+      rememberLarge("resp_unlink_bound", `payload-${i}-${"x".repeat(4_000)}`);
+    }
+    const files = spillFileNames(home);
+    // 1 current generation + at most 128 deferred superseded generations.
+    expect(files.length).toBeLessThanOrEqual(129);
+    expect(files.length).toBeGreaterThan(1); // deferral is real, not immediate unlink
+    void dir;
+  }, BULK_DURABLE_IO_BUDGET_MS); // 140 fsync'd durable writes ARE the assertion; Windows CI measured ~18s.
+
+  test("persistNow settles within the bounded rewrite attempts under revision churn", async () => {
+    rememberLarge("resp_churn_seed", "seed");
+    let attempts = 0;
+    setResponseStatePersistAttemptHookForTests(() => {
+      attempts += 1;
+      rememberLarge(`resp_churn_${attempts}`, `churn-${attempts}`);
+    });
+    await flushResponseState();
+    expect(attempts).toBe(8); // four attempts plus one awaited four-attempt shutdown follow-up
+    setResponseStatePersistAttemptHookForTests(null);
+    await flushResponseState();
+  });
+
+  test("persistent snapshot I/O failure does not schedule background retry passes", async () => {
+    const blockedHome = join(home, "not-a-directory");
+    writeFileSync(blockedHome, "file blocks config directory creation");
+    process.env["OPENCODEX_HOME"] = blockedHome;
+    rememberLarge("resp_persist_failure", "payload");
+    expect(responseStatePersistPendingForTests()).toBe(true);
+
+    await runPendingResponseStatePersistForTests();
+
+    expect(responseStatePersistPendingForTests()).toBe(false);
+  });
+
+  test("background revision churn schedules exactly one follow-up pass", async () => {
+    rememberLarge("resp_background_churn_seed", "seed");
+    let attempts = 0;
+    setResponseStatePersistAttemptHookForTests(() => {
+      attempts += 1;
+      rememberLarge(`resp_background_churn_${attempts}`, `churn-${attempts}`);
+    });
+
+    await runPendingResponseStatePersistForTests();
+
+    expect(attempts).toBe(4);
+    expect(responseStatePersistPendingForTests()).toBe(true);
+    setResponseStatePersistAttemptHookForTests(null);
+    await runPendingResponseStatePersistForTests();
+    expect(responseStatePersistPendingForTests()).toBe(false);
+  });
+
+  test("unstable final snapshot defers spill unlinks until a stable snapshot", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_unstable_unlink", "old".repeat(3_000));
+    await flushResponseState();
+    const oldFile = spillFileNames(home)[0]!;
+    rememberLarge("resp_unstable_unlink", "new".repeat(3_000));
+    expect(spillFileNames(home)).toHaveLength(2);
+    let attempts = 0;
+    setResponseStatePersistAttemptHookForTests(() => {
+      attempts += 1;
+      rememberLarge(`resp_unstable_revision_${attempts}`, `r-${attempts}`);
+    });
+    await flushResponseState();
+    expect(attempts).toBe(8);
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(true);
+    setResponseStatePersistAttemptHookForTests(null);
+    await flushResponseState();
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(false);
+  });
+
+  test("RAM cap demotes the oldest resident before deleting any older spill stub", async () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_older_stub", "old".repeat(3_000));
+    await flushResponseState();
+    const oldFile = spillFileNames(home)[0]!;
+    setResponseStateByteCapForTests(1_000_000);
+    rememberLarge("resp_newer_resident", "new".repeat(1_000));
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 1, spillStubCount: 1 });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_prune_trigger", "trigger");
+    expect(existsSync(join(responseSpillDirectory(home), oldFile))).toBe(true);
+    expect(responseStateMetrics().spillStubCount).toBeGreaterThanOrEqual(2);
+  });
+
+  test("continuation demotion releases resident bytes minus retained replacement stub bytes", () => {
+    setResponseStateByteCapForTests(1_000_000);
+    rememberLarge("resp_budget_net_release", "resident".repeat(1_000));
+    const before = responseContinuationRetainedStoreSnapshot();
+
+    const released = evictOldestResponseContinuationForBudget();
+    const after = responseContinuationRetainedStoreSnapshot();
+
+    expect(after.pinnedBytes).toBeGreaterThan(0);
+    expect(released).toBe(before.bytes - after.bytes);
+    expect(released).toBeGreaterThan(0);
+  });
+
+  test("stub-only over-cap state still deletes bounded metadata oldest-first", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_stub_oldest", "a".repeat(4_000));
+    rememberLarge("resp_stub_newer", "b".repeat(4_000));
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 2 });
+    setResponseStateByteCapForTests(1);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    rememberResponseState({ input: "trigger" }, fixedResponse("resp_stub_prune", [circular]));
+    expect(responseStateMetrics()).toMatchObject({ count: 0, residentCount: 0, spillStubCount: 0, tombstoneCount: 0 });
+    expect(spillFileNames(home)).toEqual([]);
+  });
+
+  test("write fsync or publication failure cleans its temp and preserves no unmeasured resident payload", () => {
+    const failures = [
+      { write: () => { throw new Error("write"); } },
+      { fsync: () => { throw new Error("fsync"); } },
+      { link: () => { throw Object.assign(new Error("publish"), { code: "EIO" }); } },
+    ];
+    for (const [index, io] of failures.entries()) {
+      clearResponseStateForTests();
+      setSpillIoForTest(io);
+      setResponseStateByteCapForTests(1_024);
+      rememberLarge(`resp_io_failure_${index}`, "x".repeat(8_000));
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 0, tombstoneCount: 1, spillWriteFailures: 1 });
+      const dir = responseSpillDirectory(home);
+      expect(existsSync(dir) ? readdirSync(dir) : []).toEqual([]);
+    }
+  });
+
+  test("EEXIST publication loss advances the generation and retries within the bound", () => {
+    let links = 0;
+    setSpillIoForTest({
+      link(temp, destination) {
+        links += 1;
+        if (links === 1) throw Object.assign(new Error("lost generation"), { code: "EEXIST" });
+        linkSync(temp, destination);
+      },
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_eexist", "e".repeat(8_000));
+    expect(links).toBe(2);
+    expect(responseStateMetrics()).toMatchObject({ spillStubCount: 1, spillWriteFailures: 0 });
+  });
+
+  test("orphan cleanup obeys scan and cleanup caps rejects symlinks and counts failed unlink", () => {
+    const dir = responseSpillDirectory(home);
+    mkdirSync(dir, { recursive: true });
+    const old = new Date(Date.now() - 20 * 60_000);
+    const target = join(dir, "target.txt");
+    writeFileSync(target, "target");
+    const symlinkRef = writeResponseSpillDurably("symlink", { createdAt: Date.now(), items: ["target"] });
+    const symlinkName = symlinkRef.fileName;
+    unlinkSync(join(dir, symlinkName));
+    symlinkSync(target, join(dir, symlinkName));
+    for (let i = 0; i < 520; i++) {
+      const ref = writeResponseSpillDurably(`orphan-${i}`, { createdAt: Date.now(), items: [i] });
+      const path = join(dir, ref.fileName);
+      utimesSync(path, old, old);
+    }
+    let failedOnce = false;
+    setSpillIoForTest({ unlink(path) {
+      if (!failedOnce) { failedOnce = true; throw new Error("locked"); }
+      unlinkSync(path);
+    } });
+    const result = recoverOrphanedResponseSpills(new Set(), dir);
+    // 521 orphan candidates exist (520 aged + 1 symlink); the CLEANUP cap
+    // (512) must bind strictly below the candidate count, proving the cap is
+    // live rather than vacuously larger than the workload (review C1-3).
+    expect(result.removed + result.failed).toBe(512);
+    expect(result.scanned).toBeLessThanOrEqual(4_096);
+    expect(result.failed).toBe(1);
+    expect(existsSync(join(dir, symlinkName))).toBe(true);
+  }, BULK_DURABLE_IO_BUDGET_MS); // 521 fsync'd spill writes build the workload; Windows CI measured ~34s.
+
+  test("orphan scan cap stops enumeration at the limit with an injected directory", () => {
+    // Prove RESPONSE_SPILL_SCAN_MAX itself binds: enumerate more entries than
+    // the cap via the injected readdir seam and assert the scan stops exactly
+    // at the limit without touching the excess (review C1-3 — a sub-cap
+    // workload cannot distinguish capped from uncapped scanning).
+    const dir = responseSpillDirectory(home);
+    mkdirSync(dir, { recursive: true });
+    const old = new Date(Date.now() - 20 * 60_000);
+    const seed = writeResponseSpillDurably("scan-seed", { createdAt: Date.now(), items: ["s"] });
+    utimesSync(join(dir, seed.fileName), old, old);
+    let served = 0;
+    setSpillIoForTest({
+      readdirEntry() {
+        served += 1;
+        // Serve the one real file first, then virtual entries that are
+        // filtered by the owned-file regex (name mismatch) — enumeration
+        // cost still counts toward the scan cap.
+        return served === 1 ? seed.fileName : `not-owned-${served}.txt`;
+      },
+    });
+    const result = recoverOrphanedResponseSpills(new Set(), dir);
+    expect(result.scanned).toBe(4_096);
+    expect(served).toBe(4_096);
+  });
+
+  test("response-state management metrics keep every added field finite scalar and privacy-safe", () => {
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_private_metric_id", "secret-content".repeat(1_000));
+    const metrics = responseStateMetrics();
+    expect(Object.values(metrics).every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    const serialized = JSON.stringify(metrics);
+    expect(serialized).not.toContain("resp_private_metric_id");
+    expect(serialized).not.toContain("secret-content");
+    expect(serialized).not.toContain(responseSpillDirectory(home));
+  });
+
+  test("byte cap spills over-cap rows instead of evicting prior continuation ids", () => {
     setResponseStateByteCapForTests(4_000);
     try {
       const bulk = "x".repeat(1_500);
@@ -511,23 +1248,26 @@ describe("Responses previous_response_id state", () => {
           { type: "text_delta", text: "ok" },
           { type: "done" },
         ], "cursor/grok-4.5");
+        json.id = `resp_cap_${i}`;
         rememberResponseState(body, json, { cursor: { conversationId: `conv_${i}` } }, { force: true });
         ids.push(json.id as string);
       }
-      // Oldest entries were evicted by the byte high-water; the newest survives.
-      expect(previousResponseProviderState(ids[0])).toBeUndefined();
+      expect(previousResponseProviderState(ids[0])?.cursor?.conversationId).toBe("conv_0");
       expect(previousResponseProviderState(ids[3])?.cursor?.conversationId).toBe("conv_3");
+      expect(responseStateMetrics().spillStubCount).toBeGreaterThan(0);
+      expect(getStoredResponseBytesForTests()).toBeLessThanOrEqual(4_000);
     } finally {
       setResponseStateByteCapForTests(null);
     }
   });
 
-  test("byte accounting survives restart (sizes recomputed on load)", async () => {
+  test("byte accounting across restart preserves spilled ids and recomputes resident and stub bytes", async () => {
     setResponseStateByteCapForTests(4_000);
     try {
       const bulk = "y".repeat(1_500);
       const bodyA = { model: "cursor/grok-4.5", input: `${bulk}-a`, store: false };
       const jsonA = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
+      jsonA.id = "resp_restart_a";
       rememberResponseState(bodyA, jsonA, { cursor: { conversationId: "conv_a" } }, { force: true });
       await flushResponseState();
 
@@ -538,13 +1278,16 @@ describe("Responses previous_response_id state", () => {
       // Post-restart stores still enforce the cap against recomputed sizes.
       const bodyB = { model: "cursor/grok-4.5", input: `${bulk}-b1`, store: false };
       const jsonB = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
+      jsonB.id = "resp_restart_b";
       rememberResponseState(bodyB, jsonB, { cursor: { conversationId: "conv_b1" } }, { force: true });
       const bodyC = { model: "cursor/grok-4.5", input: `${bulk}-b2`, store: false };
       const jsonC = buildResponseJSON([{ type: "text_delta", text: "ok" }, { type: "done" }], "cursor/grok-4.5");
+      jsonC.id = "resp_restart_c";
       rememberResponseState(bodyC, jsonC, { cursor: { conversationId: "conv_b2" } }, { force: true });
 
-      expect(previousResponseProviderState(jsonA.id as string)).toBeUndefined();
+      expect(previousResponseProviderState(jsonA.id as string)?.cursor?.conversationId).toBe("conv_a");
       expect(previousResponseProviderState(jsonC.id as string)?.cursor?.conversationId).toBe("conv_b2");
+      expect(getStoredResponseBytesForTests()).toBeLessThanOrEqual(4_000);
     } finally {
       setResponseStateByteCapForTests(null);
     }
@@ -587,7 +1330,8 @@ describe("Responses previous_response_id state", () => {
       // entry the same size, so leaked decrements would show up as >1000x.
       const total = getStoredResponseBytesForTests();
       expect(perEntryBytes).toBeGreaterThan(2_000);
-      expect(total).toBeLessThanOrEqual(perEntryBytes * 1_000);
+      expect(responseStateMetrics().count).toBe(1_000);
+      expect(total).toBeLessThanOrEqual((perEntryBytes + 4) * 1_000);
       expect(total).toBeGreaterThanOrEqual(perEntryBytes * 999);
     } finally {
       setResponseStateByteCapForTests(null);
@@ -821,7 +1565,9 @@ describe("Responses previous_response_id state", () => {
     expect(expanded.input).toHaveLength(3);
   });
 
-  test("oversized entries stay in memory but are skipped on disk", async () => {
+  test("oversized entries replay from dedicated spill across restart while small entries use snapshot", async () => {
+    setResponseStateByteCapForTests(128 * 1024);
+    try {
     const big = "x".repeat(3 * 1024 * 1024); // > 2MiB per-entry cap
     const first = buildResponseJSON([
       { type: "text_delta", text: big },
@@ -836,18 +1582,22 @@ describe("Responses previous_response_id state", () => {
     rememberResponseState({ model: "gpt-5.5", input: "small turn" }, small);
     await flushResponseState();
 
-    // In-memory: both expand.
+    // In-memory: both expand, with the oversized entry represented by a stub.
     expect((expandPreviousResponseInput({
       model: "gpt-5.5", previous_response_id: first.id, input: "n",
     }) as { input: unknown[] }).input).toHaveLength(3);
 
-    // After restart: only the small entry survived on disk.
+    expect(responseStateMetrics().spillStubCount).toBe(1);
     clearResponseStateMemoryForTests();
-    const bigMiss = { model: "gpt-5.5", previous_response_id: first.id, input: "n" };
-    expect(expandPreviousResponseInput(bigMiss)).toEqual(bigMiss);
+    expect((expandPreviousResponseInput({
+      model: "gpt-5.5", previous_response_id: first.id, input: "n",
+    }) as { input: unknown[] }).input).toHaveLength(3);
     expect((expandPreviousResponseInput({
       model: "gpt-5.5", previous_response_id: small.id, input: "n",
     }) as { input: unknown[] }).input).toHaveLength(3);
+    } finally {
+      setResponseStateByteCapForTests(null);
+    }
   });
 
   test("stores provider conversation id alongside Responses output state", () => {
@@ -925,9 +1675,21 @@ describe("Responses previous_response_id state", () => {
   });
 
   describe("responseStateMetrics (observe-only snapshot)", () => {
-    test("empty store reports all-zeroed metrics", () => {
+    test("empty store reports every resident spill tombstone and counter metric as zero", () => {
       const metrics = responseStateMetrics();
-      expect(metrics).toEqual({ count: 0, totalBytes: 0, largestBytes: 0, oldestAgeMs: 0 });
+      expect(metrics).toEqual({
+        count: 0,
+        residentCount: 0,
+        spillStubCount: 0,
+        tombstoneCount: 0,
+        totalBytes: 0,
+        spillPayloadBytes: 0,
+        largestBytes: 0,
+        oldestAgeMs: 0,
+        spillWrites: 0,
+        spillWriteFailures: 0,
+        spillReadFailures: 0,
+      });
     });
 
     test("largest entry over 200KB is reflected, and total is >= largest", () => {
@@ -964,7 +1726,7 @@ describe("Responses previous_response_id state", () => {
       }
     });
 
-    test("is side-effect free: it never lazy-loads the disk snapshot, prunes, or evicts", async () => {
+    test("metrics remain side-effect free with the complete additive metric shape", async () => {
       const first = buildResponseJSON([{ type: "text_delta", text: "persisted" }, { type: "done" }], "gpt-5.5");
       rememberResponseState({ model: "gpt-5.5", input: "persisted turn" }, first);
       await flushResponseState();
@@ -972,7 +1734,19 @@ describe("Responses previous_response_id state", () => {
       clearResponseStateMemoryForTests();
 
       // A probe must NOT trigger the lazy disk load — the store still reads empty.
-      expect(responseStateMetrics()).toEqual({ count: 0, totalBytes: 0, largestBytes: 0, oldestAgeMs: 0 });
+      expect(responseStateMetrics()).toEqual({
+        count: 0,
+        residentCount: 0,
+        spillStubCount: 0,
+        tombstoneCount: 0,
+        totalBytes: 0,
+        spillPayloadBytes: 0,
+        largestBytes: 0,
+        oldestAgeMs: 0,
+        spillWrites: 0,
+        spillWriteFailures: 0,
+        spillReadFailures: 0,
+      });
 
       // The real request path DOES load; the probe then reflects the loaded entry.
       expandPreviousResponseInput({ model: "gpt-5.5", previous_response_id: first.id, input: "next" });

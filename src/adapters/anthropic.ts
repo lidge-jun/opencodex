@@ -22,6 +22,7 @@ import { neutralizeIdentity } from "./identity";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -783,12 +784,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       return { url, method: "POST", headers, body: JSON.stringify(body) };
     },
 
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
       }
 
+      const budgetEncoder = new TextEncoder();
       let currentBlockType = "";
       let currentToolCallId = "";
       let currentToolCallName = "";
@@ -807,7 +809,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         };
       };
 
-      for await (const record of decodeServerSentEvents(response.body, { includeComments: true })) {
+      try {
+      for await (const record of decodeServerSentEvents(response.body, { includeComments: true, translatorBudget: budget })) {
         if (record.kind === "comment") {
           yield { type: "heartbeat" };
           continue;
@@ -837,6 +840,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   currentToolCallId = usableToolUseId(block.id);
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
                   currentToolCallJson = "";
+                  budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
@@ -866,7 +870,17 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   // response.function_call_arguments.delta frame, so withholding fragments until
                   // block close would leave a started call showing empty arguments. A copy is kept
                   // to validate the assembled payload at content_block_stop.
-                  currentToolCallJson += delta.partial_json;
+                  const previousBytes = budgetEncoder.encode(currentToolCallJson).byteLength;
+                  const nextBytes = previousBytes + budgetEncoder.encode(delta.partial_json).byteLength;
+                  const reservation = budget.reserveTransient(nextBytes, { kind: "tool_args", callId: currentToolCallId });
+                  try {
+                    currentToolCallJson += delta.partial_json;
+                    reservation.commitRetained();
+                    budget.releaseRetained(previousBytes, { kind: "tool_args", callId: currentToolCallId });
+                  } catch (error) {
+                    reservation.release();
+                    throw error;
+                  }
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 }
                 break;
@@ -886,6 +900,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                     return;
                   }
                   yield { type: "tool_call_end" };
+                  budget.closeCall(currentToolCallId);
                   currentToolCallId = "";
                   currentToolCallJson = "";
                 }
@@ -910,6 +925,18 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               }
         }
       }
+      } catch (error) {
+        if (!isTranslatorBudgetExceededError(error)) throw error;
+        yield {
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "translation_buffer_limit",
+          message: "upstream translation buffer exceeded the safe limit",
+        };
+      } finally {
+        if (currentToolCallId) budget.closeCall(currentToolCallId);
+      }
       if (!emittedDone) {
         // Fail closed on transport EOF. Compatible providers may omit message_stop after message_delta.stop_reason.
         if (pendingStopReason !== undefined) {
@@ -930,8 +957,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const json = await response.json() as Record<string, unknown>;
+      const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+      budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
+      try {
       const events: AdapterEvent[] = [];
       const content = json.content as { type: string; text?: string; id?: string; name?: string; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
       if (content) {
@@ -962,7 +992,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         usage: usageFromAnthropic(usage),
         ...(stopReason ? { stopReason } : {}),
       });
+      retainTranslatedEventBatch(events, budget);
       return events;
+      } finally {
+        budget.releaseRetained(responseBytes, { kind: "retained_collectors" });
+      }
     },
 
   };

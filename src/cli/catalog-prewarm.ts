@@ -19,6 +19,9 @@ export function scheduleCatalogPrewarm(deps: CatalogPrewarmDeps = {}): void {
       const { gatherRoutedModels } = await (deps.importCatalog?.() ?? import("../codex/catalog"));
       return gatherRoutedModels(load());
     })
-    .catch(() => {});
+    .catch(error => {
+      if (error && typeof error === "object" && (error as { code?: unknown }).code === "catalog_busy") {
+        console.warn("[catalog] startup discovery skipped: catalog gather is busy");
+      }
+    });
 }
-

@@ -97,9 +97,30 @@ describe("GET /api/usage", () => {
       expect(body).toHaveProperty("days");
       expect(body).toHaveProperty("models");
       expect(body).toHaveProperty("providers");
+      expect(body).toMatchObject({ historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0 });
       expect(Array.isArray(body.days)).toBe(true);
       expect(Array.isArray(body.models)).toBe(true);
       expect(Array.isArray(body.providers)).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("usage route cache preserves truncation metadata and invalidates when configured byte limit changes", async () => {
+    writeFixture(Date.now());
+    saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256 });
+    const server = startServer(0);
+    try {
+      const first = await fetch(new URL("/api/usage?range=all", server.url)).then(response => response.json());
+      const second = await fetch(new URL("/api/usage?range=all", server.url)).then(response => response.json());
+      expect(first.historyTruncated).toBe(true);
+      expect(first.truncatedPrefixBytes).toBeGreaterThan(0);
+      expect(second).toMatchObject({
+        historyTruncated: first.historyTruncated,
+        truncatedPrefixBytes: first.truncatedPrefixBytes,
+        entriesTruncated: first.entriesTruncated,
+        entriesDropped: first.entriesDropped,
+      });
     } finally {
       await server.stop(true);
     }

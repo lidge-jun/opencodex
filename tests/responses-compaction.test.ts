@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
-import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
+import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { parseRequest } from "../src/responses/parser";
 import {
   COMPACT_PROMPT,
@@ -12,6 +12,10 @@ import {
   extractCompactUserMessages,
 } from "../src/responses/compaction";
 import type { AdapterEvent } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
+  withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;

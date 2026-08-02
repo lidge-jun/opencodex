@@ -284,7 +284,14 @@ function host() {
 }
 
 async function pause(ms: number): Promise<void> {
-  await interruptible(Bun.sleep(ms));
+  const deadline = performance.now() + Math.max(0, ms);
+  for (;;) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return;
+    // Bun.sleep may wake fractionally before the requested deadline. Re-sleep
+    // instead of weakening a pre-registered duration.
+    await interruptible(Bun.sleep(Math.ceil(remaining)));
+  }
 }
 
 function frame(type: string | null, payload: unknown): Uint8Array {
@@ -801,12 +808,25 @@ async function execute(root: string, log: Log, run: Run): Promise<void> {
     });
 
     phase = "warm";
-    const warm = Date.now();
+    const warmWall = Date.now();
+    const warm = performance.now();
     log.add({ type: "warm-start", run: run.id });
     await pause(WARM);
-    log.add({ type: "warm-end", run: run.id, actualMs: Date.now() - warm });
-    if (Date.now() - warm < WARM || measured.process.exitCode !== null) {
-      throw new Error("warm invalid");
+    const warmActualMs = performance.now() - warm;
+    const warmWallActualMs = Date.now() - warmWall;
+    const warmExitCode = measured.process.exitCode;
+    log.add({
+      type: "warm-end",
+      run: run.id,
+      actualMs: warmActualMs,
+      wallActualMs: warmWallActualMs,
+      exitCodeAtGate: warmExitCode,
+    });
+    if (warmExitCode !== null) {
+      throw new Error(`child exited during warm: exit code ${warmExitCode}`);
+    }
+    if (warmActualMs < WARM) {
+      throw new Error(`warm duration invalid: ${warmActualMs}ms < ${WARM}ms`);
     }
 
     if (run.kind === "workload") {
@@ -820,14 +840,22 @@ async function execute(root: string, log: Log, run: Run): Promise<void> {
       }
     } else {
       phase = "observation";
-      const start = Date.now();
+      const observationWall = Date.now();
+      const start = performance.now();
       log.add({ type: "observation-start", run: run.id });
       await pause(OBSERVE);
+      const observationActualMs = performance.now() - start;
       log.add({
         type: "observation-end",
         run: run.id,
-        actualMs: Date.now() - start,
+        actualMs: observationActualMs,
+        wallActualMs: Date.now() - observationWall,
       });
+      if (observationActualMs < OBSERVE) {
+        throw new Error(
+          `observation duration invalid: ${observationActualMs}ms < ${OBSERVE}ms`,
+        );
+      }
       log.add({
         type: "client-cadence",
         run: run.id,
@@ -1102,13 +1130,14 @@ function analysis(
   work.forEach(run => validateWorkload(all, run));
 
   const envelope = (run: Run, field: MetricField) => {
+    const observationEnd = all.find(row => (
+      row.run === run.id && row.type === "observation-end"
+    ));
     const start = Number(all.find(row => (
       row.run === run.id && row.type === "observation-start"
     ))?.wallMs);
-    const end = Number(all.find(row => (
-      row.run === run.id && row.type === "observation-end"
-    ))?.wallMs);
-    if (!start || !end || end - start < OBSERVE) {
+    const end = Number(observationEnd?.wallMs);
+    if (!start || !end || Number(observationEnd?.actualMs) < OBSERVE) {
       throw new Error("observation interval");
     }
 

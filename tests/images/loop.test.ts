@@ -5,9 +5,11 @@ import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
+import type { ImageBridgeDeps } from "../../src/images/loop";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
-let runWithImageBridge: typeof import("../../src/images/loop")["runWithImageBridge"];
+let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
 let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRounds"];
 let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
 let MAX_ROUNDS_HARD_LIMIT: typeof import("../../src/images/loop")["MAX_ROUNDS_HARD_LIMIT"];
@@ -31,12 +33,24 @@ beforeAll(async () => {
     fulfillImageCall: async (): Promise<ImageCallResult> => fulfillResult,
   }));
   ({
-    runWithImageBridge,
+    runWithImageBridge: runWithImageBridgeProduction,
     clampImageMaxRounds,
     DEFAULT_MAX_ROUNDS,
     MAX_ROUNDS_HARD_LIMIT,
   } = await import("../../src/images/loop"));
 });
+
+function runWithImageBridge(
+  deps: Omit<ImageBridgeDeps, "incomingMeta"> & { incomingMeta?: ImageBridgeDeps["incomingMeta"] },
+): Promise<Response> {
+  return runWithImageBridgeProduction({
+    ...deps,
+    incomingMeta: deps.incomingMeta ?? {
+      headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget(),
+    },
+  });
+}
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
 
 // --- Mock adapter: yields canned events per iteration from a queue ---
@@ -89,6 +103,21 @@ async function runAndGetSSE(streams: AdapterEvent[][], fulfill?: ImageCallResult
 }
 
 describe("runWithImageBridge", () => {
+  test("translator overflow remains typed through the image loop and bridge", async () => {
+    const sse = await runAndGetSSE([[
+      {
+        type: "error",
+        status: 502,
+        errorType: "upstream_error",
+        code: "translation_buffer_limit",
+        message: "upstream translation buffer exceeded the safe limit",
+      },
+    ]]);
+    expect(sse).toContain("event: response.failed");
+    expect(sse).toContain('"code":"translation_buffer_limit"');
+    expect(sse).not.toContain("event: response.completed");
+  });
+
   test("no image tool call → passthrough text + done", async () => {
     const sse = await runAndGetSSE([
       [{ type: "text_delta", text: "hello world" }, { type: "done" }],

@@ -20,6 +20,12 @@
   rather than assuming a single file;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
+bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
+the rows being merged. This split is required because empty or partial provider discovery must
+preserve routed entries and genuine user-native rows from the file that will be overwritten; a
+bundled catalog never contains those rows.
+
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,

@@ -321,16 +321,35 @@ export async function runUpdate(): Promise<void> {
           windowsHide: true,
         });
         if (svcStdio === "pipe") logSpawnOutput("", svc);
-        if (svc.status !== 0) {
+        const serviceRefreshed = svc.status === 0;
+        let serviceViable = serviceRefreshed;
+        if (serviceRefreshed) {
+          try {
+            const { isServiceViable } = await import("../service");
+            serviceViable = isServiceViable();
+          } catch {
+            serviceViable = false;
+          }
+        }
+        if (!serviceRefreshed || !serviceViable) {
           // On Windows, schtasks /create requires elevation. The CLI inherits the
           // user's (non-admin) token, so the service reinstall can fail with access
-          // denied. Fall back to a direct detached proxy start so the update never
-          // leaves the user without a running proxy — but only when the port is free.
+          // denied — or exit 0 while leaving stale/missing assets that never start
+          // the proxy. Fall back to a direct detached proxy start so the update
+          // never leaves the user without a running proxy — but only when the port is free.
           if (!freed) {
-            console.warn("⚠️  Service refresh failed and the captured port is still busy; not starting on another port.");
+            console.warn(
+              serviceRefreshed
+                ? "⚠️  Service refresh left a non-viable manager and the captured port is still busy; not starting on another port."
+                : "⚠️  Service refresh failed and the captured port is still busy; not starting on another port.",
+            );
             console.warn(`   Run 'ocx service install' as administrator, then 'ocx start --port ${capturedListen.port}'.`);
           } else {
-            console.warn("⚠️  Service refresh failed — starting the proxy directly instead.");
+            console.warn(
+              serviceRefreshed
+                ? "⚠️  Service refresh left a non-viable manager (stale or missing assets) — starting the proxy directly instead."
+                : "⚠️  Service refresh failed — starting the proxy directly instead.",
+            );
             console.warn("   Run 'ocx service install' as administrator to refresh the background service.");
             const env = { ...process.env };
             delete env.OCX_SERVICE;

@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +19,7 @@ import {
   parseWindowsTrayRunValue,
   readWindowsTrayRunValueWithAsyncRunner,
   readWindowsTrayRunValueWithRunner,
+  replaceWindowsTrayOwnedFile,
   windowsTrayProcessArgs,
   windowsTrayRunValue,
   windowsTrayStatePathsOwned,
@@ -17,6 +27,13 @@ import {
   windowsRegistryParentShowsRunKey,
   type WindowsTrayEntry,
 } from "../src/tray/windows";
+import {
+  hardenSecretPath,
+  hardenedSecretPathCountForTests,
+  resetHardenedStateForTests,
+  setIcaclsRunnerForTests,
+  setPlatformForTests,
+} from "../src/lib/windows-secret-acl";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
@@ -30,6 +47,46 @@ const entry: WindowsTrayEntry = {
 };
 
 describe("Windows tray packaging and command safety", () => {
+  test("owned-file temp cleanup forgets successful ACL memos and retains failed removals", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-tray-acl-"));
+    const target = join(root, "tray-state.json");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    const write = (path: string, contents: string | Buffer): void => {
+      writeFileSync(path, contents, { mode: 0o600 });
+    };
+    const harden = (path: string): void => {
+      hardenSecretPath(path, { required: true });
+    };
+    try {
+      replaceWindowsTrayOwnedFile(target, "success", {
+        write,
+        harden,
+        rename: renameSync,
+        unlink: unlinkSync,
+      });
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+
+      expect(() => replaceWindowsTrayOwnedFile(target, "failure", {
+        write,
+        harden,
+        rename: () => { throw new Error("injected rename failure"); },
+        unlink: () => { throw Object.assign(new Error("injected unlink failure"), { code: "EPERM" }); },
+      })).toThrow("injected rename failure");
+      expect(hardenedSecretPathCountForTests()).toBe(1);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("uses fixed argv for the hidden PowerShell host", () => {
     const args = windowsTrayProcessArgs(entry);
     expect(args).toContain("-NoProfile");
@@ -358,7 +415,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(tray).toContain('join(getConfigDir(), "opencodex-tray.ps1")');
     expect(tray).toContain('join(import.meta.dir, "assets", name)');
     expect(tray).toContain("installedTrayIconPaths()");
-    expect(tray).toContain("const hardened = hardenSecretPath(temporary, { required: true })");
+    expect(tray).toContain("const hardened = hardenSecretPath(target, { required: true })");
     expect(tray).toContain("if (!hardened.ok)");
     expect(tray).toContain("if (!hardenedDir.ok)");
     expect(tray).toContain("refusing to replace its persistent script");

@@ -24,11 +24,15 @@
  * up to the drain window.
  */
 
+import { buildFailedTailPayload } from "./relay";
+
 export type EagerRelayHooks = {
   /** Feed one upstream chunk through SSE inspection (createSseInspector.feed). */
   inspectChunk: (chunk: Uint8Array) => void;
   /** Flush inspection at upstream end (createSseInspector.finish). */
   finishInspection: () => void;
+  /** Drop inspector-owned frame/item state during producer teardown. */
+  disposeInspection?: () => void;
   /** True once inspection has reported a protocol terminal (inspector.reported). */
   sawTerminal: () => boolean;
   /** Record a synthetic terminal (caller decides incomplete vs failed-502). */
@@ -151,25 +155,37 @@ export function relaySseEagerBounded(
           await paused();
         }
       }
-    } catch {
+    } catch (err) {
       // Upstream read failure. Distinguish genuine mid-stream reset from
       // abort-driven teardown (shutdown/cancel-expiry) — audit M3.
       if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
-        syntheticKind = "failed";
-        try { controllerRef?.error(new Error("upstream stream failed")); } catch { /* torn down */ }
+        // Serializing `err` can run user-defined accessors (Error.message
+        // getters, toString) that re-entrantly cancel the client or abort the
+        // upstream. Build the tail FIRST, then re-check eligibility before
+        // committing to the synthetic terminal (adversarial review blocker).
+        const tail = new TextEncoder().encode(
+          `\n\nevent: response.failed\ndata: ${buildFailedTailPayload(err)}\n\ndata: [DONE]\n\n`,
+        );
+        if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
+          syntheticKind = "failed";
+          queuedBytes += tail.byteLength;
+          try { controllerRef?.enqueue(tail); } catch { /* client already torn down */ }
+          try { controllerRef?.close(); } catch { /* client already torn down */ }
+        }
       }
     } finally {
       if (syntheticKind) hooks.onSynthetic(syntheticKind);
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
       }
-      if (cancelled || upstream.signal.aborted) {
+      if (cancelled || upstream.signal.aborted || syntheticKind === "failed") {
         upstream.abort();
         reader.cancel().catch(() => {});
       }
       if (!cancelled) {
         try { controllerRef?.close(); } catch { /* already closed/errored */ }
       }
+      try { hooks.disposeInspection?.(); } catch { /* inspection teardown must not block lifecycle cleanup */ }
       fireDone();
     }
   };

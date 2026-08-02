@@ -142,6 +142,7 @@ export function ApiKeysManagePanel({
 export function ApiKeysModelsPanel({
   filteredModels,
   modelsLoading,
+  modelsRefreshing = false,
   modelsLoadFailed,
   modelCount,
   hasModelData,
@@ -159,6 +160,8 @@ export function ApiKeysModelsPanel({
 }: {
   filteredModels: ExternalModelRow[];
   modelsLoading: boolean;
+  /** In-flight refresh that must not blank last-good rows. */
+  modelsRefreshing?: boolean;
   modelsLoadFailed: boolean;
   /** The whole catalog, before the search box narrowed it. "No models" and
    *  "no models matching this query" are different sentences. */
@@ -208,6 +211,9 @@ export function ApiKeysModelsPanel({
             {t("common.retry")}
           </button>
         </div>
+      )}
+      {modelsRefreshing && !modelsLoading && (
+        <p className="muted small" aria-live="polite">{t("api.modelsLoading")}</p>
       )}
       {modelsLoading ? (
         <DataSurfaceSkeleton label={t("api.modelsLoading")} rows={3} />

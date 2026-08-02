@@ -8,6 +8,7 @@
 type Rec = Record<string, unknown>;
 
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage } from "../lib/errors";
 
 function isRec(v: unknown): v is Rec {
@@ -135,13 +136,28 @@ function chunkBase(id: string, model: string, created: number): Rec {
   };
 }
 
+function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: string): number {
+  let nextBytes = previousBytes + Buffer.byteLength(fragment);
+  const previousLast = previous.charCodeAt(previous.length - 1);
+  const fragmentFirst = fragment.charCodeAt(0);
+  if (previousLast >= 0xd800 && previousLast <= 0xdbff
+    && fragmentFirst >= 0xdc00 && fragmentFirst <= 0xdfff) {
+    // Buffer.byteLength() replaces each isolated surrogate with three bytes, while the joined
+    // pair is one four-byte scalar. Preserve full-string sizing without re-encoding the prefix.
+    nextBytes -= 2;
+  }
+  return nextBytes;
+}
+
 /**
  * Streaming: Responses SSE bytes -> Chat Completions SSE bytes.
  */
 export function responsesSseToChatCompletionsSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
+  opts: { translatorBudget: TranslatorBudget },
 ): ReadableStream<Uint8Array> {
+  const translatorBudget = opts.translatorBudget;
   const encoder = new TextEncoder();
   let terminated = false;
   let cancelled = false;
@@ -155,6 +171,7 @@ export function responsesSseToChatCompletionsSse(
   const toolCallIdByIndex = new Map<number, string>();
   const toolNameByIndex = new Map<number, string>();
   const toolArgumentsByIndex = new Map<number, string>();
+  const toolArgumentBytesByIndex = new Map<number, number>();
   const emittedToolIndexes = new Set<number>();
   let nextToolIndex = 0;
   let sseIterator: AsyncGenerator<{ event?: string; data: string }> | undefined;
@@ -164,9 +181,54 @@ export function responsesSseToChatCompletionsSse(
   let emittedFrames = 0;
   let stepping = false;
   let decoderStarted = false;
+  const queuedLiveFrameBytes: number[] = [];
+  const enqueueLiveFrame = (frame: Uint8Array) => {
+    const reservation = translatorBudget.reserveTransient(frame.byteLength, { kind: "live_transient" });
+    controller.enqueue(frame);
+    reservation.commitRetained();
+    queuedLiveFrameBytes.push(frame.byteLength);
+  };
+  const releaseDeliveredFrame = () => {
+    const bytes = queuedLiveFrameBytes.shift();
+    if (bytes !== undefined) translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
+  };
+  const closeToolCalls = () => {
+    for (const callId of toolIndexByCallId.keys()) translatorBudget.closeCall(callId);
+  };
+  const replaceToolArguments = (toolIndex: number, next: string) => {
+    const previous = toolArgumentsByIndex.get(toolIndex) ?? "";
+    if (previous === next && toolArgumentsByIndex.has(toolIndex)) return;
+    const previousBytes = toolArgumentBytesByIndex.get(toolIndex) ?? 0;
+    const nextBytes = Buffer.byteLength(next);
+    const callId = toolCallIdByIndex.get(toolIndex);
+    const scope = { kind: "tool_args" as const, ...(callId ? { callId } : {}) };
+    const reservation = translatorBudget.reserveTransient(nextBytes, scope);
+    toolArgumentsByIndex.set(toolIndex, next);
+    toolArgumentBytesByIndex.set(toolIndex, nextBytes);
+    reservation.commitRetained();
+    translatorBudget.releaseRetained(previousBytes, scope);
+  };
+  const appendToolArguments = (toolIndex: number, fragment: string) => {
+    const previous = toolArgumentsByIndex.get(toolIndex) ?? "";
+    const previousBytes = toolArgumentBytesByIndex.get(toolIndex) ?? 0;
+    const nextBytes = appendedUtf8Bytes(previous, previousBytes, fragment);
+    const callId = toolCallIdByIndex.get(toolIndex);
+    const scope = { kind: "tool_args" as const, ...(callId ? { callId } : {}) };
+    const reservation = translatorBudget.reserveTransient(nextBytes, scope);
+    try {
+      const next = previous + fragment;
+      toolArgumentsByIndex.set(toolIndex, next);
+      toolArgumentBytesByIndex.set(toolIndex, nextBytes);
+      reservation.commitRetained();
+      translatorBudget.releaseRetained(previousBytes, scope);
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
       const emit = (payload: Rec | "[DONE]") => {
         if (failed) return;
-        controller.enqueue(encoder.encode(dataFrame(payload)));
+        enqueueLiveFrame(encoder.encode(dataFrame(payload)));
         emittedFrames++;
       };
       const ensureRole = () => {
@@ -251,21 +313,32 @@ export function responsesSseToChatCompletionsSse(
         // like response.text().
         const statusHint = details?.status ?? streamErrorStatus(message);
         const classified = classifyError(statusHint, details?.type ?? "upstream_error", message);
-        if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
+        const translatorOverflow = details?.code === "translation_buffer_limit";
+        if (translatorOverflow) {
+          upstreamAbort.abort(new Error("upstream translation buffer exceeded the safe limit"));
+          closeToolCalls();
+          try { void sseIterator?.return(undefined).catch(() => {}); } catch { /* already closed */ }
+          classified.code = "translation_buffer_limit";
+          classified.type = "invalid_request_error";
+        } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
           classified.code = CYBER_POLICY_ERROR_CODE;
           classified.type = "invalid_request_error";
         } else if (details?.code !== undefined && details.code !== null && !classified.code) {
           classified.code = details.code;
         }
         try {
-          controller.enqueue(encoder.encode(dataFrame({
+          const frame = encoder.encode(dataFrame({
             error: {
               message: classified.message,
               type: classified.type,
               param: null,
               code: classified.code,
             },
-          })));
+          }));
+          // The budget is already exhausted. This bounded emergency frame is the sole
+          // typed overflow closure and therefore cannot reserve from that budget again.
+          if (translatorOverflow) controller.enqueue(frame);
+          else enqueueLiveFrame(frame);
           emittedFrames++;
         } catch {
           /* controller may already be closed */
@@ -303,12 +376,11 @@ export function responsesSseToChatCompletionsSse(
             toolCallIdByIndex.set(toolIndex, callId);
             if (typeof item.id === "string") toolIndexByItemId.set(item.id, toolIndex);
             if (name) toolNameByIndex.set(toolIndex, name);
-            if (!toolArgumentsByIndex.has(toolIndex)) {
-              toolArgumentsByIndex.set(
-                toolIndex,
-                typeof item.arguments === "string" ? item.arguments : "",
-              );
-            }
+            translatorBudget.openCall(callId);
+            if (!toolArgumentsByIndex.has(toolIndex)) replaceToolArguments(
+              toolIndex,
+              typeof item.arguments === "string" ? item.arguments : "",
+            );
             break;
           }
           case "response.function_call_arguments.delta": {
@@ -317,10 +389,7 @@ export function responsesSseToChatCompletionsSse(
             const toolIndex = (itemId ? toolIndexByItemId.get(itemId) : undefined)
               ?? (nextToolIndex > 0 ? nextToolIndex - 1 : 0);
             ensureRole();
-            toolArgumentsByIndex.set(
-              toolIndex,
-              (toolArgumentsByIndex.get(toolIndex) ?? "") + data.delta,
-            );
+            appendToolArguments(toolIndex, data.delta);
             break;
           }
           case "response.function_call_arguments.done": {
@@ -331,10 +400,7 @@ export function responsesSseToChatCompletionsSse(
             const name = typeof data.name === "string" ? data.name : "";
             if (name) toolNameByIndex.set(toolIndex, name);
             const streamedArgs = toolArgumentsByIndex.get(toolIndex) ?? "";
-            toolArgumentsByIndex.set(
-              toolIndex,
-              resolveFinalArguments(data.arguments, streamedArgs),
-            );
+            replaceToolArguments(toolIndex, resolveFinalArguments(data.arguments, streamedArgs));
             break;
           }
           case "response.output_item.done": {
@@ -351,6 +417,7 @@ export function responsesSseToChatCompletionsSse(
               const toolIndex = existingIndex ?? nextToolIndex++;
               toolIndexByCallId.set(callId, toolIndex);
               toolCallIdByIndex.set(toolIndex, callId);
+              translatorBudget.openCall(callId);
               if (itemId) toolIndexByItemId.set(itemId, toolIndex);
               if (name) toolNameByIndex.set(toolIndex, name);
               const finalName = name || toolNameByIndex.get(toolIndex) || "";
@@ -361,7 +428,7 @@ export function responsesSseToChatCompletionsSse(
               // accumulate them. Emit one complete call here; finish() flushes any item whose
               // done event was omitted, and replace-style clients still get a complete object.
               const args = resolveFinalArguments(item.arguments, streamedArgs);
-              toolArgumentsByIndex.set(toolIndex, args);
+              replaceToolArguments(toolIndex, args);
               emitToolCall(toolIndex, callId, finalName, args);
             }
             break;
@@ -400,8 +467,9 @@ export function responsesSseToChatCompletionsSse(
             const type = typeof error.type === "string" ? error.type : undefined;
             fail(message, {
               code,
-              type,
-              ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}),
+              ...(code === "translation_buffer_limit"
+                ? { status: 413, type: "invalid_request_error" }
+                : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
             });
             break;
           }
@@ -413,7 +481,7 @@ export function responsesSseToChatCompletionsSse(
       // Shared spec-shaped SSE decoder: handles CRLF framing, arbitrary chunk boundaries,
       // multi-line data, and a terminal event without a trailing blank line (Sol audit
       // blocker 3 — the hand-rolled "\n\n" splitter misreported those as truncation).
-      sseIterator = decodeServerSentEvents(upstream, { signal: upstreamAbort.signal });
+      sseIterator = decodeServerSentEvents(upstream, { signal: upstreamAbort.signal, translatorBudget });
       const step = async () => {
         if (stepping || cancelled) return;
         stepping = true;
@@ -443,7 +511,13 @@ export function responsesSseToChatCompletionsSse(
             handleFrame(eventName, data);
           }
         } catch (err) {
-          fail(err instanceof Error ? err.message : String(err));
+          if (isTranslatorBudgetExceededError(err)) {
+            upstreamAbort.abort(err);
+            closeToolCalls();
+            fail(err.message, { status: 413, type: "invalid_request_error", code: err.code });
+          } else {
+            fail(err instanceof Error ? err.message : String(err));
+          }
         } finally {
           stepping = false;
         }
@@ -456,10 +530,13 @@ export function responsesSseToChatCompletionsSse(
       // decoding pauses until the chat consumer creates demand again.
     },
     pull() {
+      releaseDeliveredFrame();
       return step();
     },
     cancel(reason) {
       cancelled = true;
+      while (queuedLiveFrameBytes.length > 0) releaseDeliveredFrame();
+      closeToolCalls();
       // Abort first: it cancels the decoder's underlying reader, settling any in-flight
       // read() so the generator's return() below resolves promptly instead of hanging
       // behind an idle upstream (Sol re-verification blocker).
@@ -545,15 +622,22 @@ export function responsesJsonToChatCompletion(json: unknown, model: string): Rec
 export async function collectChatCompletion(
   stream: ReadableStream<Uint8Array>,
   model: string,
+  translatorBudget: TranslatorBudget,
 ): Promise<Rec> {
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
   let reasoning = "";
-  const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+  const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
   let finishReason = "stop";
   let usage: unknown;
   let streamError: ChatCompletionsStreamError | null = null;
+  const replaceRetained = (previous: string, next: string, kind: "live_transient" | "retained_collectors") => {
+    const reservation = translatorBudget.reserveTransient(Buffer.byteLength(next), { kind });
+    reservation.commitRetained();
+    translatorBudget.releaseRetained(Buffer.byteLength(previous), { kind });
+    return next;
+  };
   const reader = stream.getReader();
   try {
     for (;;) {
@@ -563,15 +647,22 @@ export async function collectChatCompletion(
         ({ done, value } = await reader.read());
       } catch (err) {
         if (isChatCompletionsStreamError(err)) throw err;
+        if (isTranslatorBudgetExceededError(err)) {
+          throw new ChatCompletionsStreamError(err.message, {
+            status: 413,
+            type: "invalid_request_error",
+            code: err.code,
+          });
+        }
         throw new ChatCompletionsStreamError(err instanceof Error ? err.message : String(err));
       }
       if (done) break;
       if (!value) continue;
-      buffer += decoder.decode(value, { stream: true });
+      buffer = replaceRetained(buffer, buffer + decoder.decode(value, { stream: true }), "live_transient");
       let sep: number;
       while ((sep = buffer.indexOf("\n\n")) !== -1) {
         const rawFrame = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
+        buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
         for (const line of rawFrame.split("\n")) {
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
@@ -585,9 +676,11 @@ export async function collectChatCompletion(
               : "upstream request failed";
             const type = typeof parsed.error.type === "string" ? parsed.error.type : "server_error";
             const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
-            const status = code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
-              ? 400
-              : streamErrorStatus(message);
+            const status = code === "translation_buffer_limit"
+              ? 413
+              : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
+                ? 400
+                : streamErrorStatus(message);
             streamError = new ChatCompletionsStreamError(message, { status, type, code });
             continue;
           }
@@ -598,22 +691,31 @@ export async function collectChatCompletion(
           if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
           const delta = isRec(choice.delta) ? choice.delta : null;
           if (!delta) continue;
-          if (typeof delta.content === "string") content += delta.content;
-          if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
+          if (typeof delta.content === "string") content = replaceRetained(content, content + delta.content, "retained_collectors");
+          if (typeof delta.reasoning_content === "string") reasoning = replaceRetained(reasoning, reasoning + delta.reasoning_content, "retained_collectors");
           if (Array.isArray(delta.tool_calls)) {
             for (const tc of delta.tool_calls) {
               if (!isRec(tc)) continue;
               const index = typeof tc.index === "number" ? tc.index : 0;
-              const current = toolCalls.get(index) ?? { id: "", name: "", arguments: "" };
+              const current = toolCalls.get(index) ?? { id: "", name: "", arguments: "", argumentBytes: 0 };
               if (typeof tc.id === "string") current.id = tc.id;
               const fn = isRec(tc.function) ? tc.function : {};
               // Done-frame final arguments are authoritative last-write-wins snapshots.
               if (typeof fn.name === "string" && fn.name.length > 0) current.name = fn.name;
               if (typeof fn.arguments === "string") {
-                if (fn.arguments.startsWith("{") || fn.arguments.startsWith("[") || current.arguments.length === 0) {
-                  current.arguments = fn.arguments;
-                } else {
-                  current.arguments += fn.arguments;
+                const replace = fn.arguments.startsWith("{") || fn.arguments.startsWith("[") || current.arguments.length === 0;
+                const nextBytes = replace
+                  ? Buffer.byteLength(fn.arguments)
+                  : appendedUtf8Bytes(current.arguments, current.argumentBytes, fn.arguments);
+                const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                try {
+                  current.arguments = replace ? fn.arguments : current.arguments + fn.arguments;
+                  reservation.commitRetained();
+                  translatorBudget.releaseRetained(current.argumentBytes, { kind: "retained_collectors" });
+                  current.argumentBytes = nextBytes;
+                } catch (error) {
+                  reservation.release();
+                  throw error;
                 }
               }
               toolCalls.set(index, current);
@@ -635,11 +737,15 @@ export async function collectChatCompletion(
   if (toolCalls.size > 0) {
     message.tool_calls = [...toolCalls.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([, tc]) => ({
+      .map(([, tc]) => {
+        const copy = {
         id: tc.id || `call_${uuid().slice(0, 16)}`,
         type: "function",
         function: { name: tc.name, arguments: tc.arguments },
-      }));
+        };
+        translatorBudget.chargeRetained(Buffer.byteLength(JSON.stringify(copy)), { kind: "retained_collectors" });
+        return copy;
+      });
     if (finishReason === "stop") finishReason = "tool_calls";
   }
 

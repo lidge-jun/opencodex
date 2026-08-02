@@ -236,7 +236,14 @@ async function computeEffectiveModelEnv(config: OcxConfig, auto?: AutoContextMod
   const { boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv } = await import("../claude/context-windows");
   const windows = await boundedContextWindows(async () => {
     const { gatherRoutedModels, visibleNativeSlugs } = await import("../codex/catalog");
-    return buildClaudeContextWindows([...visibleNativeSlugs(config)], await gatherRoutedModels(config));
+    try {
+      return buildClaudeContextWindows([...visibleNativeSlugs(config)], await gatherRoutedModels(config));
+    } catch (error) {
+      if (error && typeof error === "object" && (error as { code?: unknown }).code === "catalog_busy") {
+        return buildClaudeContextWindows([...visibleNativeSlugs(config)], []);
+      }
+      throw error;
+    }
   });
   return { modelEnv: effectiveModelEnv(config.claudeCode, windows ?? {}, auto), windows: windows ?? {} };
 }

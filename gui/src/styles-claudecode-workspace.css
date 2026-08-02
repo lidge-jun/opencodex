@@ -105,8 +105,45 @@
 .claudecode-workspace-main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
   min-width: 0;
+}
+
+/*
+  One pane head for every rail tab: same title baseline under the Code/Desktop selector,
+  and a permanently reserved Save slot so editable panes cannot shove the rail down.
+*/
+.ccw-main-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 32px;
+  min-width: 0;
+}
+
+.ccw-main-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+.ccw-main-title .count {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+}
+
+.claudecode-workspace-save[data-visible="false"] {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .ccw-body {
@@ -121,12 +158,9 @@
   min-width: 0;
 }
 
-.claude-aliases > .h-section {
-  margin: 0 0 6px;
-}
-
 .claude-aliases-hint {
-  margin: 0 0 10px;
+  /* Match the other pane hint paragraphs (inline margin 0 0 8px). */
+  margin: 0 0 8px;
 }
 
 .claude-aliases-scroll {

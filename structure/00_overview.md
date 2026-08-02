@@ -44,7 +44,8 @@ The default install keeps native OpenAI/ChatGPT passthrough working through one 
 `openai` provider. Pool is the default and selects across main plus added accounts; Direct uses only
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two
 credential routes never fall through into one another. Built-in provider presets include Anthropic,
-Google, Azure, Neuralwatt Cloud, Tencent Cloud Coding Plan, and SiliconFlow. Additional
+Google, Azure, Neuralwatt Cloud, Tencent Cloud Coding Plan, SiliconFlow, and separate Volcengine Ark
+pay-as-you-go, Coding Plan, and Agent Plan endpoints. Additional
 providers are routed by explicit `provider/model`, provider model lists, or the configured
 `defaultProvider`.
 

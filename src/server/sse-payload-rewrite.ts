@@ -1,3 +1,5 @@
+import type { TranslatorBudget } from "../lib/translator-budget";
+
 /**
  * Shared client-facing SSE payload rewrite shell.
  *
@@ -66,11 +68,60 @@ export function composeSsePayloadRewrites(...rewrites: SsePayloadRewrite[]): Sse
 export function relaySseWithPayloadRewrite(
   body: ReadableStream<Uint8Array>,
   rewrite: SsePayloadRewrite,
+  translatorBudget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+  let bufferBytes = 0;
+
+  const appendBuffer = (fragment: string): void => {
+    if (!fragment) return;
+    const nextBytes = bufferBytes + encoder.encode(fragment).byteLength;
+    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "live_transient" });
+    try {
+      buffer += fragment;
+      reservation.commitRetained();
+      translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
+      bufferBytes = nextBytes;
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
+
+  const replaceBuffer = (next: string): void => {
+    const nextBytes = encoder.encode(next).byteLength;
+    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "live_transient" });
+    reservation.commitRetained();
+    buffer = next;
+    translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
+    bufferBytes = nextBytes;
+  };
+
+  const enqueueText = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    text: string,
+  ): void => {
+    const bytes = encoder.encode(text).byteLength;
+    const reservation = translatorBudget.reserveTransient(bytes, { kind: "live_transient" });
+    try {
+      const encoded = encoder.encode(text);
+      reservation.commitRetained();
+      controller.enqueue(encoded);
+      translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
+
+  const releaseBuffer = (): void => {
+    translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
+    buffer = "";
+    bufferBytes = 0;
+  };
 
   const emitProcessedBlocks = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -78,13 +129,13 @@ export function relaySseWithPayloadRewrite(
   ): void => {
     let next: { block: string; delimiter: string; rest: string } | null;
     while ((next = nextSseBlock(buffer))) {
-      buffer = next.rest;
+      replaceBuffer(next.rest);
       const payload = sseDataPayload(next.block);
       const rewrittenPayload = payload ? rewrite(payload) : undefined;
       const block = payload && rewrittenPayload !== undefined && rewrittenPayload !== payload
         ? replaceSseDataPayload(next.block, rewrittenPayload)
         : next.block;
-      controller.enqueue(encoder.encode(block + next.delimiter));
+      enqueueText(controller, block + next.delimiter);
     }
     if (flushFinal && buffer.length > 0) {
       const payload = sseDataPayload(buffer);
@@ -92,24 +143,32 @@ export function relaySseWithPayloadRewrite(
       const block = payload && rewrittenPayload !== undefined && rewrittenPayload !== payload
         ? replaceSseDataPayload(buffer, rewrittenPayload)
         : buffer;
-      controller.enqueue(encoder.encode(block));
-      buffer = "";
+      enqueueText(controller, block);
+      releaseBuffer();
     }
   };
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        emitProcessedBlocks(controller, true);
-        controller.close();
-        return;
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          appendBuffer(decoder.decode());
+          emitProcessedBlocks(controller, true);
+          releaseBuffer();
+          controller.close();
+          return;
+        }
+        appendBuffer(decoder.decode(value, { stream: true }));
+        emitProcessedBlocks(controller);
+      } catch (error) {
+        releaseBuffer();
+        try { await reader.cancel(error); } catch { /* already closed */ }
+        controller.error(error);
       }
-      buffer += decoder.decode(value, { stream: true });
-      emitProcessedBlocks(controller);
     },
     cancel(reason) {
+      releaseBuffer();
       reader.cancel(reason).catch(() => {});
     },
   });

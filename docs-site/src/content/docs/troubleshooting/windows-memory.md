@@ -58,9 +58,10 @@ runtime the leak itself remains an upstream problem:
   service supervisor respawn) without tearing down Codex injection. That is a
   longer, informed recycle than the short drain on `POST /api/stop`.
 - **A gated alternative stream path** — a bounded single-reader relay that
-  removes the unbounded buffering shape entirely. It becomes the default
-  automatically once a bundled Bun release verifiably carries the #32111 fix;
-  today it is opt-in only (see below).
+  removes the unbounded buffering shape entirely. On Windows it becomes the
+  default automatically once a bundled Bun release verifiably carries the
+  #32111 fix; today it is opt-in only (see below). On macOS it stays opt-in
+  even after such a release — flipping macOS `auto` is a separate decision.
 
 Real-world RSS improvement from these changes is **awaiting verification by
 Windows users** — we do not claim the leak is fixed.
@@ -73,7 +74,8 @@ restart it.
 
 1. **Wait for a bundled runtime update.** Once a Bun release verifiably
    carries the fixes, opencodex will bump the bundled runtime and the safer
-   stream path turns on automatically.
+   stream path turns on automatically on Windows (macOS keeps requiring the
+   explicit opt-in below).
 
 2. **Run a Bun runtime you trust with `OPENCODEX_BUN_PATH`.** This is
    unvalidated territory — you are running opencodex on a runtime we have not
@@ -90,7 +92,8 @@ restart it.
    1.3.14 this uses the stream shape affected by #32111, which can crash the
    process mid-stream (on any OS, not just Windows). The service manager will
    restart it, but in-flight requests fail. `"legacy-tee"` pins the current
-   default; `"auto"` (default) lets the runtime gate decide.
+   default. On Windows, `"auto"` (default) lets the runtime gate decide. On
+   macOS, `"auto"` always stays on tee; explicit `"eager-relay"` is the opt-in.
 
 If you try any of these on a real Windows workload, please report the before
 and after `ocx doctor` memory sections on

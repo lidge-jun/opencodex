@@ -1,12 +1,27 @@
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWriteFile, getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import {
+  atomicWriteFile,
+  getConfigDir,
+  loadConfig,
+  readPid,
+  readRuntimePort,
+  removePid,
+  removeRuntimePort,
+  verifyPidIdentity,
+} from "../config";
 import { isProcessAlive, killProxy } from "../lib/process-control";
-import { reclaimListenPort } from "../server/port-reclaim";
+import {
+  buildWindowsElevatedArgumentList,
+  resolveTrustedWindowsPowerShellExe,
+} from "../lib/windows-elevation";
+import { stopWinswService } from "../lib/winsw";
+import { listListenPids, reclaimListenPort, scanListenPids, type ListenPidScan } from "../server/port-reclaim";
+import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
-import { isServiceInstalled } from "../service";
+import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
 import {
   type Channel,
   type Installer,
@@ -20,6 +35,7 @@ import {
   updateCommandStr,
 } from "./index";
 import { isNewer } from "./notify";
+import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
@@ -102,9 +118,103 @@ function nodeBin(): string {
   return process.platform === "win32" ? "node.exe" : "node";
 }
 
+/**
+ * Strict bind script: exit 0 only after listen+close. Any listen error (including
+ * Windows ghost-TCB failures under Bun) is busy — matches published `ocx start`
+ * probes that treat every listen error as unavailable.
+ */
+function strictBindProbeScript(port: number, hostname: string): string {
+  return [
+    "const net=require('net');",
+    "const s=net.createServer();",
+    "s.once('error',()=>process.exit(2));",
+    `s.listen(${Math.trunc(port)},${JSON.stringify(hostname)},()=>s.close(()=>process.exit(0)));`,
+    "setTimeout(()=>process.exit(3),2500);",
+  ].join("");
+}
+
+function spawnBindProbe(bin: string, script: string): boolean {
+  try {
+    const r = spawnSync(bin, ["-e", script], {
+      windowsHide: true,
+      timeout: 4000,
+      stdio: "ignore",
+    });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Live global package Bun — not the npm rename tree the update worker may still
+ * be executing from (`@bitkyc08/.opencodex-*`). Reject the tiny postinstall
+ * stub so probes fall back to the worker runtime instead of failing forever.
+ */
+function livePackageBunPath(): string | null {
+  const launcher = packageLauncherPath();
+  const root = join(dirname(launcher), "..");
+  for (const name of ["bun.exe", "bun"]) {
+    const candidate = join(root, "node_modules", "bun", "bin", name);
+    if (isRealBunBinary(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Port is free for post-update `ocx start` only when the runtime that will
+ * actually execute the start can bind. Prefer live package Bun; fall back to the
+ * worker runtime. Do not require a separate `node` binary (Bun-only installs).
+ */
+async function strictRuntimePortAvailable(port: number, hostname = "127.0.0.1"): Promise<boolean> {
+  const script = strictBindProbeScript(port, hostname);
+  const bun = livePackageBunPath();
+  if (bun) return spawnBindProbe(bun, script);
+  return spawnBindProbe(process.execPath, script);
+}
+
+/**
+ * Wait until netstat reports no LISTEN owners on `port` AND the start runtime
+ * can bind. Dead PIDs still appear as holders while the ghost TCB lives;
+ * SetTcpEntry is a no-op without elevation (rc 317), so wait them out.
+ */
+async function waitForGhostListenClear(
+  port: number,
+  hostname: string,
+  listPids: (port: number) => number[],
+  timeoutMs: number,
+  sleep: (ms: number) => Promise<void>,
+  aliveFn: (pid: number) => boolean = isProcessAlive,
+): Promise<{ ok: boolean; accessDenied: boolean }> {
+  const deadline = Date.now() + timeoutMs;
+  let accessDenied = false;
+  while (Date.now() < deadline) {
+    const holders = listPids(port).filter(pid => pid !== process.pid);
+    const liveHolders = holders.filter(pid => aliveFn(pid));
+    // Never SetTcpEntry while a live process still owns the port (foreign or ocx).
+    if (process.platform === "win32" && liveHolders.length === 0) {
+      try {
+        const drop = dropWindowsTcpRowsForLocalPort(port);
+        if (drop.accessDenied > 0) accessDenied = true;
+      } catch { /* best-effort */ }
+    }
+    if (holders.length === 0 && await strictRuntimePortAvailable(port, hostname)) {
+      return { ok: true, accessDenied };
+    }
+    await sleep(500);
+  }
+  return { ok: false, accessDenied };
+}
+
 function packageLauncherPath(): string {
   // This module lives at src/update/job.ts — the launcher is <pkg-root>/bin/ocx.mjs.
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "ocx.mjs");
+  // After `npm install -g`, import.meta.url can still point at npm's renamed temp
+  // tree (`@bitkyc08/.opencodex-*`). Prefer the live package path when that happens.
+  const fromMeta = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "ocx.mjs");
+  if (!/[\\/]\.opencodex-/i.test(fromMeta) && existsSync(fromMeta)) return fromMeta;
+  const live = fromMeta.replace(/[\\/]@bitkyc08[\\/]\.opencodex-[^\\/]+/i, `${sep}@bitkyc08${sep}opencodex`);
+  if (live !== fromMeta && existsSync(live)) return live;
+  return fromMeta;
 }
 
 function formatCommand(bin: string, args: string[]): string {
@@ -267,18 +377,68 @@ export function staleActiveUpdateJobReason(
   return null;
 }
 
-const defaultStartUpdateJobDeps: StartUpdateJobDeps = {
-  checkForUpdateFn: channel => checkForUpdate(channel),
-  spawnWorkerFn: (jobId, channel, restart) => spawn(
-    process.execPath,
-    [process.argv[1], "__gui-update-worker", jobId, channel, restart ? "restart" : "no-restart"],
-    {
+/**
+ * Spawn the GUI update worker without inheriting the proxy's LISTEN socket.
+ *
+ * On Windows, `spawn(..., { detached: true, stdio: "ignore" })` still inherits
+ * inheritable handles — including Bun.serve's LISTEN socket. After stop-first
+ * update kills the proxy PID, netstat keeps showing that dead PID as LISTENING
+ * until every inheriting child exits. The update worker was that child, so the
+ * port stayed busy for the whole job. Launch via PowerShell Start-Process so
+ * the worker is a fresh process tree with no inherited LISTEN handle.
+ */
+export function spawnGuiUpdateWorker(
+  jobId: string,
+  channel: Channel,
+  restart: boolean,
+): UpdateWorkerProcess {
+  const script = process.argv[1];
+  const args = [
+    script,
+    "__gui-update-worker",
+    jobId,
+    channel,
+    restart ? "restart" : "no-restart",
+  ];
+  if (process.platform !== "win32") {
+    return spawn(process.execPath, args, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
       env: { ...process.env, OCX_SERVICE: "1" },
-    },
-  ),
+    });
+  }
+
+  // Single -ArgumentList string with CommandLineToArgvW quoting so paths with
+  // spaces survive Start-Process's space-join (array elements lose outer quotes).
+  const psQuote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+  const argumentList = buildWindowsElevatedArgumentList(args);
+  const ps = [
+    `$env:OCX_SERVICE = '1'`,
+    `$p = Start-Process -FilePath ${psQuote(process.execPath)} -ArgumentList ${psQuote(argumentList)} -WindowStyle Hidden -PassThru`,
+    `if (-not $p) { exit 1 }`,
+    `Write-Output $p.Id`,
+  ].join("; ");
+  const launched = spawnSync(
+    resolveTrustedWindowsPowerShellExe(),
+    ["-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+    { encoding: "utf8", windowsHide: true, timeout: 15_000 },
+  );
+  const pid = Number(String(launched.stdout ?? "").trim().split(/\r?\n/).pop());
+  if (launched.status !== 0 || !Number.isSafeInteger(pid) || pid <= 0) {
+    const detail = String(launched.stderr ?? launched.stdout ?? "").trim() || `status ${launched.status}`;
+    throw new Error(`Windows update worker Start-Process failed: ${detail}`);
+  }
+  return {
+    pid,
+    unref() { /* Start-Process already detached */ },
+    once() { /* startup errors are not wired across Start-Process */ },
+  };
+}
+
+const defaultStartUpdateJobDeps: StartUpdateJobDeps = {
+  checkForUpdateFn: channel => checkForUpdate(channel),
+  spawnWorkerFn: spawnGuiUpdateWorker,
   isProcessAliveFn: isProcessAlive,
   nowMs: Date.now,
 };
@@ -369,18 +529,90 @@ function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], time
   return { status: result.status, signal: result.signal };
 }
 
-function spawnDetachedStart(job: UpdateJobState, installer: Installer, port?: number): void {
+/**
+ * Tear down anything that would make `ocx start` exit 1 with "already running"
+ * (service wrapper respawn, stale pidfile + live /healthz) before a pinned spawn.
+ */
+function preparePortForPinnedStart(
+  job: UpdateJobState,
+  port: number,
+  listPids: (port: number) => number[],
+  aliveFn: (pid: number) => boolean,
+  verifyOcx: (pid: number) => number | null = verifyPidIdentity,
+): void {
+  stopWindowsServiceWrappersBestEffort();
+  const pid = readPid();
+  if (pid) {
+    updateJob(job, {}, `Clearing pre-start proxy PID ${pid} before pinned start.`);
+    try { killProxy(pid); } catch { /* best-effort */ }
+    removePid(pid);
+  } else {
+    removePid();
+  }
+  removeRuntimePort();
+  for (const holder of listPids(port)) {
+    if (holder === process.pid || !aliveFn(holder)) continue;
+    if (verifyOcx(holder) !== holder) {
+      updateJob(
+        job,
+        {},
+        `Leaving foreign listen holder PID ${holder} on port ${port}; refusing collateral kill.`,
+      );
+      continue;
+    }
+    updateJob(job, {}, `Stopping live ocx listen holder PID ${holder} on port ${port} before pinned start.`);
+    try { killProxy(holder); } catch { /* best-effort */ }
+  }
+  // Match reclaimListenPort: never SetTcpEntry while a live holder remains.
+  const liveRemain = listPids(port).filter(pid => pid !== process.pid && aliveFn(pid));
+  if (process.platform === "win32" && liveRemain.length === 0) {
+    try { dropWindowsTcpRowsForLocalPort(port); } catch { /* best-effort */ }
+  }
+}
+
+function spawnDetachedStart(
+  job: UpdateJobState,
+  installer: Installer,
+  port?: number,
+): ChildProcess {
   const cmd = restartCommand(false, installer, packageLauncherPath(), port);
   const env = { ...process.env };
   delete env.OCX_SERVICE;
   updateJob(job, {}, `$ ${cmd.display}`);
+  let stdio: "ignore" | [ "ignore", number, number ] = "ignore";
+  let logFd: number | undefined;
+  try {
+    const logPath = join(getConfigDir(), "update-pinned-start.log");
+    mkdirSync(getConfigDir(), { recursive: true });
+    logFd = openSync(logPath, "a");
+    writeSync(logFd, `\n--- ${new Date().toISOString()} ---\n$ ${cmd.display}\n`);
+    stdio = ["ignore", logFd, logFd];
+  } catch { /* fall back to ignored stdio */ }
   const child = spawn(cmd.bin, cmd.args, {
     detached: true,
-    stdio: "ignore",
+    stdio,
     windowsHide: true,
     env,
   });
+  child.once("error", err => {
+    try {
+      updateJob(job, {}, `Pinned start spawn error: ${err instanceof Error ? err.message : String(err)}`);
+    } catch { /* best-effort */ }
+  });
+  // Foreground `ocx start` keeps the listen process; EADDRINUSE/ghost races exit quickly
+  // with stdio ignored — surface that so the job log explains a silent miss.
+  child.once("exit", (code, signal) => {
+    if (code === 0 && !signal) return;
+    try {
+      updateJob(
+        job,
+        {},
+        `Pinned start exited early (code=${code ?? "null"} signal=${signal ?? "null"}).`,
+      );
+    } catch { /* best-effort */ }
+  });
   child.unref();
+  return child;
 }
 
 /** Identity snapshot used to prove an npm self-update actually replaced the pre-update process. */
@@ -394,9 +626,17 @@ export interface RestartIo {
   waitForPort?: typeof reclaimListenPort;
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number) => void;
   serviceInstalledFn?: () => boolean;
+  /**
+   * After a service reinstall exits 0, only trust the service path when this is true.
+   * Defaults to {@link isServiceViable} — installed-but-stale assets must fall through
+   * to a direct proxy start so dashboard updates never leave /healthz dead.
+   */
+  serviceViableFn?: () => boolean;
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
+  /** Override the /healthz appearance window (default {@link RESTART_HEALTH_TIMEOUT_MS}). */
+  healthTimeoutMs?: number;
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
@@ -411,6 +651,21 @@ export interface RestartIo {
     captured?: { port: number; hostname: string; oldPid?: number },
     io?: RestartIo,
   ) => Promise<void>;
+  /**
+   * PIDs currently LISTENing on the captured port. Used to widen the post-update
+   * kill allowlist beyond the pre-update PID (Windows often leaves a respawned
+   * ocx child that would otherwise be treated as a protected listener).
+   */
+  listListenPidsFn?: (port: number) => number[];
+  /**
+   * Full listen-PID scan (ok/fail). When omitted, {@link scanListenPids} is used
+   * so a probe failure is not mistaken for "no listeners".
+   */
+  scanListenPidsFn?: (port: number) => ListenPidScan;
+  /** Identity check for listeners discovered via {@link listListenPidsFn}. */
+  verifyOcxFn?: (pid: number) => number | null;
+  /** Liveness check when deciding whether a reclaim timeout still has live holders. */
+  isAliveFn?: (pid: number) => boolean;
 }
 
 async function restartAfterUpdate(
@@ -437,60 +692,291 @@ async function restartAfterUpdate(
   }
   const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port, svcArgs);
   const waitFn = io.waitForPort ?? reclaimListenPort;
-  const reclaimOpts = {
+  const listPids = io.listListenPidsFn ?? listListenPids;
+  const verifyOcx = io.verifyOcxFn ?? verifyPidIdentity;
+  const aliveFn = io.isAliveFn ?? isProcessAlive;
+  // Pre-update PID plus any ocx still LISTENing on the captured port. After a
+  // stop-first npm self-update Windows often leaves a respawned bun/node child
+  // that is not the captured PID; treating it as protected blocks reclaim and
+  // the direct-start fallback never binds.
+  const reclaimKillAllowlist = (): number[] => {
+    const allow = new Set<number>();
+    if (oldPid != null) allow.add(oldPid);
+    for (const pid of listPids(port)) {
+      if (pid === process.pid) continue;
+      if (verifyOcx(pid) === pid) allow.add(pid);
+    }
+    return [...allow];
+  };
+  const reclaimOptsFor = (onlyKillPids: number[]) => ({
     timeoutMs: RESTART_PORT_RECLAIM_MS,
     intervalMs: 100,
     scanIntervalMs: 500,
-    killOcxHolders: oldPid != null,
-    onlyKillPids: oldPid != null ? [oldPid] : [],
-  };
+    killOcxHolders: true,
+    // Windows scheduler wrappers can mint a *new* bun PID during the wait; keep
+    // killing every ocx listener on this port, not only the pre-wait snapshot.
+    // npm rename trees under `@bitkyc08/.opencodex-*` are classified as ocx by
+    // isOcxStartCommandLine — never kill unknown foreign claimants on this port.
+    killAllOcxOnPort: true,
+    onlyKillPids,
+  });
 
   if (serviceInstalled) {
-    // Stop-first update already unloaded the service; reclaim the socket (only the
-    // captured old PID when trusted), then reinstall wrappers that bake `--port`.
-    const freed = await waitFn(port, hostname, reclaimOpts);
-    if (!freed) {
-      updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — reinstall may fail until the port is free.`);
+    // schtasks /end often leaves the hidden cmd/wscript wrapper alive; its :loop
+    // respawns `ocx start` a few seconds later and races port reclaim. End the
+    // task again and best-effort kill those wrappers before we touch the socket.
+    stopWindowsServiceWrappersBestEffort();
+    // Stop-first update already unloaded the service; reclaim the socket, then
+    // reinstall wrappers that bake `--port`.
+    const preServiceAllow = reclaimKillAllowlist();
+    const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
+    let skipServiceInstall = false;
+    // Windows GUI update worker sets OCX_SERVICE=1 and is never elevated.
+    // `schtasks /create` will UAC-fail and can race the subsequent direct start.
+    // Keep systemd/launchd reinstall on non-Windows supervisors.
+    if (process.platform === "win32" && process.env.OCX_SERVICE === "1") {
+      updateJob(job, {}, "Skipping service reinstall from the non-elevated update worker; falling back to a direct proxy start.");
+      skipServiceInstall = true;
     }
-    const prevBake = process.env.OCX_BAKE_PORT;
-    process.env.OCX_BAKE_PORT = String(Math.trunc(port));
-    let serviceOk = false;
-    try {
-      const run = io.runService ?? ((j, bin, args) => runLoggedCommand(j, bin, args, RESTART_TIMEOUT_MS));
-      const result = run(job, cmd.bin, cmd.args);
-      serviceOk = result.status === 0;
-      if (!serviceOk) {
-        // On Windows, `schtasks /create` requires an elevated token. The update worker
-        // inherits the (non-admin) proxy's privileges, so a service-managed install
-        // updated from the GUI or a normal terminal fails here with access denied.
-        // Falling back to a direct proxy start keeps the update from leaving the proxy
-        // stopped; the stale service manager can be refreshed later with an admin
-        // `ocx service install`.
-        updateJob(job, {}, `Service reinstall failed (exit ${result.status ?? "?"}); falling back to a direct proxy start. Run 'ocx service install' as administrator to refresh the background service manager.`);
+    if (!freed && !skipServiceInstall) {
+      updateJob(
+        job,
+        {},
+        `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — reinstall may fail until the port is free.`
+          + ` ${formatPortHolders(port, listPids, verifyOcx, preServiceAllow)}`,
+      );
+      const liveAfter = listPids(port).filter(pid => pid !== process.pid && aliveFn(pid));
+      if (liveAfter.length === 0) {
+        // Non-elevated `service install` will UAC-fail anyway; skip straight to
+        // the direct-start fallthrough instead of burning another minute on it.
+        updateJob(job, {}, "Skipping service reinstall after reclaim timeout with no live holders; falling back to a direct proxy start.");
+        skipServiceInstall = true;
       }
-    } finally {
-      if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
-      else process.env.OCX_BAKE_PORT = prevBake;
     }
-    if (serviceOk) return;
+    if (!skipServiceInstall) {
+      const prevBake = process.env.OCX_BAKE_PORT;
+      process.env.OCX_BAKE_PORT = String(Math.trunc(port));
+      let serviceOk = false;
+      try {
+        const run = io.runService ?? ((j, bin, args) => runLoggedCommand(j, bin, args, RESTART_TIMEOUT_MS));
+        const result = run(job, cmd.bin, cmd.args);
+        serviceOk = result.status === 0;
+        if (!serviceOk) {
+          // On Windows, `schtasks /create` requires an elevated token. The update worker
+          // inherits the (non-admin) proxy's privileges, so a service-managed install
+          // updated from the GUI or a normal terminal fails here with access denied.
+          // Falling back to a direct proxy start keeps the update from leaving the proxy
+          // stopped; the stale service manager can be refreshed later with an admin
+          // `ocx service install`.
+          updateJob(job, {}, `Service reinstall failed (exit ${result.status ?? "?"}); falling back to a direct proxy start. Run 'ocx service install' as administrator to refresh the background service manager.`);
+        }
+      } finally {
+        if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
+        else process.env.OCX_BAKE_PORT = prevBake;
+      }
+      if (serviceOk) {
+        // Exit 0 is not enough: a reinstall can leave stale/missing assets (or a
+        // disabled/conflicting manager) that never brings /healthz back. Fall through
+        // to a direct start so browser-dashboard updates do not require a viable
+        // Background Service for recovery.
+        const viable = (io.serviceViableFn ?? isServiceViable)();
+        if (viable) return;
+        updateJob(
+          job,
+          {},
+          "Service reinstall exited 0 but the background service is not viable (stale or missing assets, disabled, or conflicting); falling back to a direct proxy start.",
+        );
+      }
+    }
     // Fall through to the direct proxy start below so the update never leaves the
-    // proxy stopped when the service reinstall could not run.
+    // proxy stopped when the service reinstall could not run or did not leave a
+    // viable supervisor.
   }
 
   const pid = readPid();
   if (pid) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
-    killProxy(pid);
+    try {
+      killProxy(pid);
+    } catch {
+      // A PID that resists taskkill must not abort recovery: reclaim + pinned start
+      // below are the path that repairs stuck Windows listeners.
+    }
   }
+  if (serviceInstalled) stopWindowsServiceWrappersBestEffort();
   // Reclaim the captured port before the pinned start. Spawning `--port` while the old
   // socket is still busy is how Windows updates used to fail health checks (or hop).
-  // Only the trusted pre-update PID may be killed; never an arbitrary ocx listener.
-  const freed = await waitFn(port, hostname, reclaimOpts);
+  // killAllOcxOnPort covers wrapper-respawned bun PIDs minted during the wait.
+  const directAllow = reclaimKillAllowlist();
+  const freed = await waitFn(port, hostname, reclaimOptsFor(directAllow));
   if (!freed) {
-    updateJob(job, {}, `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s (reclaim could not free the socket); not starting on another port. Retry 'ocx start --port ${port}'.`);
+    const liveHolders = listPids(port).filter(pid => pid !== process.pid && aliveFn(pid));
+    updateJob(
+      job,
+      {},
+      `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s (reclaim could not free the socket).`
+        + ` ${formatPortHolders(port, listPids, verifyOcx, directAllow)}`,
+    );
+    if (liveHolders.length > 0) {
+      updateJob(job, {}, `Live holder(s) remain on port ${port}; not starting on another port. Retry 'ocx start --port ${port}'.`);
+      return;
+    }
+    // Dead PIDs can still own LISTEN rows. SetTcpEntry needs elevation (rc 317 on a
+    // normal update worker), so poll until netstat is empty and the start runtime can bind.
+    updateJob(
+      job,
+      {},
+      `No live holders on port ${port}; waiting for ghost LISTEN rows to clear before pinned start.`,
+    );
+    // Injected spawnStart is the unit-test seam — skip the long OS wait.
+    if (!io.spawnStart) {
+      const sleep = io.sleepMs ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+      const cleared = await waitForGhostListenClear(port, hostname, listPids, 90_000, sleep);
+      if (cleared.accessDenied) {
+        updateJob(job, {}, "SetTcpEntry is non-elevated (access denied); relying on OS ghost-LISTEN expiry.");
+      }
+      if (!cleared.ok) {
+        updateJob(
+          job,
+          {},
+          `Ghost LISTEN rows on port ${port} did not clear in time. `
+            + `${formatPortHolders(port, listPids, verifyOcx, directAllow)} `
+            + `Retry 'ocx start --port ${port}'.`,
+        );
+        return;
+      }
+    }
+  }
+  // Injected spawnStart keeps unit tests deterministic (one call). Production path
+  // retries on missing /healthz after prepare + ghost-LISTEN clear.
+  if (io.spawnStart) {
+    io.spawnStart(job, job.installer, port);
     return;
   }
-  (io.spawnStart ?? spawnDetachedStart)(job, job.installer, port);
+  const sleep = io.sleepMs ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const probe = io.probeProxy ?? (async (p: number, host?: string) => (
+    !!(await proxyIdentityAt(p, { hostname: host }))
+  ));
+  const probeIdentity = io.probeProxyIdentity ?? defaultProbeProxyIdentity;
+  const expectedVersion = typeof job.latestVersion === "string" && job.latestVersion.length > 0
+    ? job.latestVersion
+    : null;
+  // Service wrappers can respawn a listener during reclaim; if it already reports the
+  // update target version, do not spawn a second start that exits "already running".
+  {
+    const identity = await probeIdentity(port, hostname);
+    if (identity && expectedVersion && identity.version === expectedVersion) {
+      updateJob(
+        job,
+        {},
+        `Proxy already healthy on ${hostname}:${port} at ${expectedVersion}; skipping pinned start.`,
+      );
+      return;
+    }
+  }
+  const attempts = 3;
+  // Longer than published hard-pin reclaim (30s) so a slow start can still report healthy.
+  const perAttemptHealthMs = 70_000;
+  let lastChild: ChildProcess | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) {
+      updateJob(
+        job,
+        {},
+        `Pinned start attempt ${attempt - 1} did not become healthy on port ${port}; `
+          + `retrying (${attempt}/${attempts}).`,
+      );
+      if (lastChild?.pid && aliveFn(lastChild.pid)) {
+        try { killProxy(lastChild.pid); } catch { /* best-effort */ }
+      }
+      lastChild = null;
+    }
+    preparePortForPinnedStart(job, port, listPids, aliveFn, verifyOcx);
+    const ready = await waitForGhostListenClear(
+      port,
+      hostname,
+      listPids,
+      attempt === 1 ? (freed ? 15_000 : 5_000) : 30_000,
+      sleep,
+    );
+    if (!ready.ok) {
+      updateJob(
+        job,
+        {},
+        `Port ${port} not bindable before pinned start attempt ${attempt}; `
+          + `${formatPortHolders(port, listPids, verifyOcx, directAllow)}`,
+      );
+      continue;
+    }
+    lastChild = spawnDetachedStart(job, job.installer, port);
+    const healthDeadline = Date.now() + perAttemptHealthMs;
+    while (Date.now() < healthDeadline) {
+      if (await probe(port, hostname)) return;
+      await sleep(500);
+    }
+  }
+  // Exhausted retries: do not leave a hung pinned-start child owning the port.
+  if (lastChild?.pid && aliveFn(lastChild.pid)) {
+    try { killProxy(lastChild.pid); } catch { /* best-effort */ }
+  }
+}
+
+/** Compact listen-holder summary for update-job logs when reclaim fails. */
+function formatPortHolders(
+  port: number,
+  listPids: (port: number) => number[],
+  verifyOcx: (pid: number) => number | null,
+  allow: number[],
+): string {
+  const allowSet = new Set(allow);
+  const holders = listPids(port).map(pid => {
+    const tags = [
+      verifyOcx(pid) === pid ? "ocx" : "foreign",
+      allowSet.has(pid) ? "allow" : "deny",
+      isProcessAlive(pid) ? "live" : "dead",
+    ];
+    return `${pid}(${tags.join(",")})`;
+  });
+  return `holders=[${holders.join(", ") || "none"}] allow=[${allow.join(", ") || "none"}]`;
+}
+
+/** Stop the installed Windows backend and best-effort kill surviving :loop wrappers. */
+function stopWindowsServiceWrappersBestEffort(): void {
+  if (process.platform !== "win32") return;
+  try {
+    if (readServiceBackend() === "native") {
+      stopWinswService();
+      return;
+    }
+    stopWindows();
+  } catch { /* already stopped */ }
+  killWindowsServiceWrapperProcesses();
+}
+
+/**
+ * Best-effort termination of surviving Windows scheduler launcher/wrapper processes.
+ * `schtasks /end` ends the task instance but often leaves wscript/cmd running the
+ * `:loop` batch, which brings the proxy back during post-update reclaim.
+ */
+function killWindowsServiceWrapperProcesses(): void {
+  if (process.platform !== "win32") return;
+  try {
+    const ps = [
+      "$pats = @('opencodex-service.cmd','opencodex-service-launcher.vbs');",
+      "Get-CimInstance Win32_Process | Where-Object {",
+      "  if ($_.ProcessId -eq $PID) { return $false };",
+      "  $c = $_.CommandLine; if (-not $c) { return $false };",
+      "  foreach ($p in $pats) { if ($c -like ('*' + $p + '*')) { return $true } };",
+      "  $false",
+      "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    ].join(" ");
+    spawnSync(resolveTrustedWindowsPowerShellExe(), [
+      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+      "-Command", ps,
+    ], { stdio: "ignore", timeout: 5000, windowsHide: true });
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Exposed for tests: drives the non-service restart path with injected io. */
@@ -522,8 +1008,10 @@ async function awaitRestartedProxyHealthy(
   captured: { port: number; hostname: string },
   io: RestartIo = {},
 ): Promise<AwaitHealthyResult> {
+  // Fresh post-update starts are busy with catalog sync / OAuth; a single 750ms
+  // /healthz miss must not fail the job. Use a longer probe and tolerate brief blips.
   const probe = io.probeProxy ?? (async (port: number, hostname?: string) => (
-    !!(await proxyIdentityAt(port, { hostname }))
+    !!(await proxyIdentityAt(port, { hostname }, { timeoutMs: 2_000, attempts: 3 }))
   ));
   const sleep = io.sleepMs ?? (async (ms: number) => {
     await new Promise(resolve => setTimeout(resolve, ms));
@@ -531,7 +1019,9 @@ async function awaitRestartedProxyHealthy(
   const now = io.now ?? (() => Date.now());
   const port = captured.port;
   const hostname = captured.hostname;
-  const startDeadline = now() + RESTART_HEALTH_TIMEOUT_MS;
+  const startDeadline = now() + (io.healthTimeoutMs ?? RESTART_HEALTH_TIMEOUT_MS);
+  /** Consecutive failed probes before the stability window counts as a flap. */
+  const stabilityMissLimit = 3;
 
   while (true) {
     // Always make one identity-aware probe at or after the boundary. A replacement
@@ -540,10 +1030,16 @@ async function awaitRestartedProxyHealthy(
     if (await probe(port, hostname)) {
       updateJob(job, {}, `Proxy reported healthy on ${hostname}:${port}; confirming it stays up...`);
       const stableUntil = now() + RESTART_STABILITY_WINDOW_MS;
+      let misses = 0;
       while (now() < stableUntil) {
-        if (!(await probe(port, hostname))) {
-          updateJob(job, {}, `Proxy became unhealthy on ${hostname}:${port} during the stability window.`);
-          return { ok: false, reason: "flapped" };
+        if (await probe(port, hostname)) {
+          misses = 0;
+        } else {
+          misses += 1;
+          if (misses >= stabilityMissLimit) {
+            updateJob(job, {}, `Proxy became unhealthy on ${hostname}:${port} during the stability window.`);
+            return { ok: false, reason: "flapped" };
+          }
         }
         await sleep(500);
       }
@@ -679,6 +1175,10 @@ export function npmSelfUpdateRestartEvidence(
  * and/or target version) so a surviving pre-update process cannot look like success.
  * After an explicit npm restart the same evidence is required again — health alone is
  * not enough when a no-op restart or failed port reclaim leaves the old proxy up.
+ *
+ * Browser-dashboard update recovery must not require a viable Background Service: when
+ * no service is installed (or reinstall leaves a non-viable/stale manager), the explicit
+ * path always falls through to a direct `ocx start --port` so /healthz can recover.
  */
 export async function finishGuiUpdateRestart(
   job: UpdateJobState,
@@ -689,28 +1189,53 @@ export async function finishGuiUpdateRestart(
   if (installer === "npm") {
     const serviceInstalled = (io.serviceInstalledFn ?? isServiceInstalled)();
     if (serviceInstalled) {
-      const already = await awaitRestartedProxyHealthy(job, captured, io);
-      if (already.ok) {
-        const identity = await (io.probeProxyIdentity ?? defaultProbeProxyIdentity)(
-          captured.port,
-          captured.hostname,
-        );
-        const evidence = npmSelfUpdateRestartEvidence(job, captured, identity);
-        if (evidence.ok) {
+      // Stop-first npm update leaves a dead PID's LISTEN row. Polling /healthz for the
+      // full 30s against that zombie keeps ESTABLISHED TCBs alive and blocks bind.
+      // If nothing live owns the port, skip straight to explicit restart. A failed
+      // listener scan must not look like "no listeners" — fall back to /healthz.
+      const aliveFn = io.isAliveFn ?? isProcessAlive;
+      const scan: ListenPidScan = io.scanListenPidsFn
+        ? io.scanListenPidsFn(captured.port)
+        : io.listListenPidsFn
+          // Test seam: injected list is always a successful scan.
+          ? { ok: true, pids: io.listListenPidsFn(captured.port) }
+          : scanListenPids(captured.port);
+      const liveListeners = scan.ok
+        ? scan.pids.filter(pid => pid !== process.pid && aliveFn(pid))
+        : null;
+      if (liveListeners !== null && liveListeners.length === 0) {
+        updateJob(job, {}, "npm self-update did not leave a live listener; performing explicit restart...");
+      } else {
+        if (!scan.ok) {
           updateJob(
             job,
             {},
-            `Proxy already healthy on ${captured.hostname}:${captured.port} after npm self-update (${evidence.detail}); skipping redundant restart.`,
+            "Listener scan inconclusive after npm self-update; probing /healthz before deciding on explicit restart...",
           );
-          return true;
         }
-        updateJob(
-          job,
-          {},
-          `npm self-update left a healthy proxy but ${evidence.reason}; performing explicit restart...`,
-        );
-      } else {
-        updateJob(job, {}, "npm self-update did not leave a healthy proxy; performing explicit restart...");
+        const already = await awaitRestartedProxyHealthy(job, captured, io);
+        if (already.ok) {
+          const identity = await (io.probeProxyIdentity ?? defaultProbeProxyIdentity)(
+            captured.port,
+            captured.hostname,
+          );
+          const evidence = npmSelfUpdateRestartEvidence(job, captured, identity);
+          if (evidence.ok) {
+            updateJob(
+              job,
+              {},
+              `Proxy already healthy on ${captured.hostname}:${captured.port} after npm self-update (${evidence.detail}); skipping redundant restart.`,
+            );
+            return true;
+          }
+          updateJob(
+            job,
+            {},
+            `npm self-update left a healthy proxy but ${evidence.reason}; performing explicit restart...`,
+          );
+        } else {
+          updateJob(job, {}, "npm self-update did not leave a healthy proxy; performing explicit restart...");
+        }
       }
     }
   }

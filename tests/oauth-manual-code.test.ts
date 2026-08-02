@@ -79,6 +79,30 @@ describe("OAuth manual login code fallback", () => {
     expect(submitManualLoginCode("xai", "   ")).toEqual({ ok: false, error: "empty code" });
   });
 
+  test("OAuth pending code rejects 4097 UTF-8 bytes in the owner", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("openid-configuration")) {
+        return new Response(JSON.stringify({
+          authorization_endpoint: "https://auth.x.ai/authorize",
+          token_endpoint: "https://auth.x.ai/oauth/token",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      await startLoginFlow("xai", { forceLogin: true });
+      expect(submitManualLoginCode("xai", `${"한".repeat(1365)}xx`)).toEqual({
+        ok: false,
+        error: "code too large",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      cancelLoginFlow("xai");
+      clearLoginState("xai");
+    }
+  });
+
   test("manual paste completes the login using the ORIGINAL flow PKCE verifier", async () => {
     const originalFetch = globalThis.fetch;
     let tokenRequestBody: URLSearchParams | null = null;

@@ -12,6 +12,7 @@ dist/
 # third-party source with their own licenses and must never enter this history.
 devlog/_chase/_cca/
 devlog/_chase/_litellm/
+devlog/_chase/DSCodex/
 devlog/_fin/opencode-cursor/
 devlog/_plan/*/_ref_*/
 devlog/**/*-security-redaction/

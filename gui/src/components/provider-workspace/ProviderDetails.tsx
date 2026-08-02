@@ -151,7 +151,7 @@ export default function ProviderDetails({
         <ProviderIcon name={item.name} adapter={item.adapter} baseUrl={item.baseUrl} cls="pws-detail-icon" />
         <div className="pws-detail-title-wrap">
           <h2 className="pws-detail-title">
-            {formatProviderDisplayName(item.name)}
+            {formatProviderDisplayName(item.name, t)}
             {local && <span className="pwi-rail-badge pwi-rail-badge--local">{t("modal.badge.local")}</span>}
             {!local && free && <span className="pwi-rail-badge pwi-rail-badge--free">{t("modal.badge.free")}</span>}
           </h2>

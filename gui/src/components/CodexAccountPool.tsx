@@ -11,7 +11,6 @@ import CodexPoolStrategySetting from "./CodexPoolStrategySetting";
 import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
-import { DataSurfaceStatus } from "./data-surface";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
 import { CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
@@ -19,6 +18,7 @@ import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
+import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
@@ -51,16 +51,15 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
     invalid: t("codexAuth.autoSwitchThresholdInvalid"),
   });
+  const [poolStrategy, setPoolStrategy] = useState<
+    typeof DEFAULT_ACCOUNT_POOL_STRATEGY | "round-robin" | "fill-first" | null
+  >(null);
   const { beginServerRead, acceptServerRead, rejectServerRead, hydrateServerValue } = autoSwitch;
   // A hook cannot be called conditionally, so the fallback instance is always created
   // but stays inert (no load, no polling) whenever a shared controller was injected.
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
   const { accounts, activeId, loadState, switchingId, pauseUpdatingId, pausingExhausted, load } = controller;
-  // The controller owns the visible progress signal. A forced quota refresh keeps rows on screen
-  // and can take ~1s (longer when the server has to refill per-account quota), so without this the
-  // wait is invisible; `refreshingQuota` below stays local because it only guards its own button.
-  const { refreshing } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
@@ -277,12 +276,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         onRetry={() => { void load(); }}
       />
 
-      {/* Revalidation over existing rows. The cold branch above already owns a live region, so
-          this only renders once rows are on screen, keeping one announcement per transition. */}
-      {refreshing && accounts.length > 0 && (
-        <DataSurfaceStatus live={loadState !== "error"}>{t("common.loading")}</DataSurfaceStatus>
-      )}
-
       {!(loadState === "loading" && accounts.length === 0) && (
         <>
           <CodexAccountPoolMainCard
@@ -335,28 +328,32 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         </>
       )}
 
-      <CodexAutoSwitchSetting
-        threshold={autoSwitch.threshold}
-        draft={autoSwitch.draft}
-        hydrated={autoSwitch.hydrated}
-        saving={autoSwitch.saving}
-        loadError={autoSwitch.loadError}
-        feedback={autoSwitch.feedback}
-        onDraftChange={autoSwitch.setDraft}
-        onEditingChange={autoSwitch.setEditing}
-        onCommit={autoSwitch.commit}
-        onCancel={autoSwitch.cancel}
-        onToggle={autoSwitch.toggle}
-        onRetry={() => {
-          autoSwitch.retry();
-          void load();
-        }}
-      />
+      {poolStrategy !== null && (
+        <CodexAutoSwitchSetting
+          threshold={autoSwitch.threshold}
+          draft={autoSwitch.draft}
+          strategy={poolStrategy}
+          hydrated={autoSwitch.hydrated}
+          saving={autoSwitch.saving}
+          loadError={autoSwitch.loadError}
+          feedback={autoSwitch.feedback}
+          onDraftChange={autoSwitch.setDraft}
+          onEditingChange={autoSwitch.setEditing}
+          onCommit={autoSwitch.commit}
+          onCancel={autoSwitch.cancel}
+          onToggle={autoSwitch.toggle}
+          onRetry={() => {
+            autoSwitch.retry();
+            void load();
+          }}
+        />
+      )}
 
       <CodexPoolStrategySetting
         apiBase={apiBase}
         subscribeLoadObserver={controller.subscribeLoadObserver}
         readLastActive={controller.readLastActive}
+        onStrategyResolved={setPoolStrategy}
       />
 
       {confirm && (

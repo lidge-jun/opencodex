@@ -1,3 +1,5 @@
+import type { TFn, TKey } from "./i18n/shared";
+
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
   "anthropic-apikey": "claude-color.svg",
@@ -92,6 +94,17 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   litellm: "LiteLLM",
 };
 
+const PROVIDER_DISPLAY_NAME_KEYS: Record<string, TKey> = {
+  volcengine: "provider.name.volcengine",
+  "volcengine-coding-plan": "provider.name.volcengineCodingPlan",
+  "volcengine-agent-plan": "provider.name.volcengineAgentPlan",
+};
+
+const CATALOG_PROVIDER_IDS = new Set([
+  ...Object.keys(PROVIDER_DISPLAY_NAMES),
+  ...Object.keys(PROVIDER_DISPLAY_NAME_KEYS),
+]);
+
 type ProviderIconHints = {
   adapter?: string;
   baseUrl?: string;
@@ -109,8 +122,10 @@ export function providerIconSrc(provider: string, _hints?: ProviderIconHints): s
 }
 
 /** Display label with proper brand casing when known; otherwise original name. */
-export function formatProviderDisplayName(provider: string): string {
+export function formatProviderDisplayName(provider: string, t: TFn): string {
   const key = provider.toLowerCase();
+  const displayNameKey = PROVIDER_DISPLAY_NAME_KEYS[key];
+  if (displayNameKey) return t(displayNameKey);
   if (PROVIDER_DISPLAY_NAMES[key]) return PROVIDER_DISPLAY_NAMES[key]!;
   // Title-case simple ids like "my-provider" without mangling mixedCase custom names.
   if (provider === key && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(provider)) {
@@ -124,5 +139,5 @@ export function formatProviderDisplayName(provider: string): string {
 
 /** True for known registry/preset ids (hide ID/adapter/URL behind Advanced by default). */
 export function isCatalogProviderId(provider: string): boolean {
-  return Object.prototype.hasOwnProperty.call(PROVIDER_DISPLAY_NAMES, provider.toLowerCase());
+  return CATALOG_PROVIDER_IDS.has(provider.toLowerCase());
 }

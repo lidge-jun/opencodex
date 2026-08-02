@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
 import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey, type KeyLoginProvider } from "../src/oauth/key-providers";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
 function umansProvider(apiKey = "sk-umans", apiKeyTransport?: OcxProviderConfig["apiKeyTransport"]): OcxProviderConfig {
   return {

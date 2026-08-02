@@ -149,6 +149,18 @@ export async function collectOAuthDoctorChecks(
       message:
         "Codex account health unavailable (proxy not running). Action: start the proxy and re-run `ocx doctor` to inspect live cooldown/reauth",
     });
+  } else if (report.codexHealthSource === "management-auth-failed") {
+    checks.push({
+      level: "WARN",
+      message:
+        "Codex account health unavailable (proxy running; management authentication failed). Action: verify the admin token configuration, restart the proxy, and re-run `ocx doctor`",
+    });
+  } else if (report.codexHealthSource === "management-api-unavailable") {
+    checks.push({
+      level: "WARN",
+      message:
+        "Codex account health unavailable (proxy running; management API response failed). Action: inspect the proxy service log, restart the proxy if needed, and re-run `ocx doctor`",
+    });
   }
   for (const entry of report.entries) {
     if (entry.health.status === "healthy") continue;

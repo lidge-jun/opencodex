@@ -23,6 +23,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -67,6 +68,7 @@ import { applySystemEnvToggle } from "../system-env";
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
+import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
@@ -96,7 +98,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   // which would re-save the masked keys from GET). Live routing picks it up immediately.
   if (url.pathname === "/api/providers" && req.method === "POST") {
     let body: { name?: unknown; provider?: unknown; setDefault?: boolean };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const providerError = providerManagementConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
@@ -135,6 +137,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
+    reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
       const { addProviderApiKey } = await import("../../providers/api-keys");
       addProviderApiKey(config, name, prov.apiKey);
@@ -149,7 +152,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const name = url.searchParams.get("name")?.trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     let rawBody: unknown;
-    try { rawBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider patch body must be a plain object" }, 400);
     const keys = Object.keys(rawBody);
     const hasMode = Object.hasOwn(rawBody, "codexAccountMode");
@@ -173,6 +176,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const { saveConfigPreservingClaudeCode: save } = await import("../../config");
       config.providers.openai = { ...provider, codexAccountMode: mode };
       save(config);
+      reconcileLiveStateStores();
       (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
       (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
       if (mode === "pool") {
@@ -199,6 +203,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const { saveConfigPreservingClaudeCode: save } = await import("../../config");
       config.defaultProvider = name;
       save(config);
+      reconcileLiveStateStores();
       return jsonResponse({ success: true, name, defaultProvider: name });
     }
 
@@ -325,6 +330,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, next);
     save(config);
+    reconcileLiveStateStores();
     if (editorTouched) {
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
@@ -472,6 +478,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     delete config.providers[name];
     setProviderContextCap(config, name, false);
     save(config);
+    reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
     await refreshCodexCatalogBestEffort();
@@ -484,7 +491,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "PUT") {
     let body: { provider?: unknown; enabled?: unknown; value?: unknown; setAll?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const { clearModelCache } = await import("../../codex/model-cache");
     const respond = () => jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
@@ -497,6 +504,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const affected = Object.keys(providerContextCaps(config));
       setGlobalContextCapValue(config, body.value);
       save(config);
+      reconcileLiveStateStores();
       for (const provider of affected) clearModelCache(provider);
       await refreshCodexCatalogBestEffort();
       return respond();
@@ -511,6 +519,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const names = Object.keys(config.providers);
       setAllProviderContextCaps(config, names, body.setAll);
       save(config);
+      reconcileLiveStateStores();
       for (const provider of new Set([...before, ...names])) clearModelCache(provider);
       await refreshCodexCatalogBestEffort();
       return respond();
@@ -529,6 +538,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     setProviderContextCap(config, provider, body.enabled);
     save(config);
+    reconcileLiveStateStores();
     clearModelCache(provider);
     await refreshCodexCatalogBestEffort();
     return respond();

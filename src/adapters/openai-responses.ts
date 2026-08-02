@@ -8,6 +8,7 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
+import type { TranslatorBudget } from "../lib/translator-budget";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -526,6 +527,40 @@ function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
 }
 
 /**
+ * Drop request parameters a stateless Responses upstream cannot implement, and pin
+ * `store` false.
+ *
+ * `previous_response_id` is listed here as well as in `stripPreviousResponseId`
+ * because that helper's strip is conditional on replay expansion, and it keeps the
+ * field for API-key providers on the premise that the platform offers real
+ * server-side storage. DeepSeek documents the opposite: "the API is stateless:
+ * responses and conversations are not stored on the server", so the field can never
+ * be honoured regardless of expansion state.
+ *
+ * `prompt` is a reference to a server-stored prompt template — the most stateful
+ * field in the accepted schema.
+ *
+ * `service_tier` is deliberately NOT dropped: the server writes it for fast mode
+ * (`responses/core.ts`), and silently deleting a configured knob inside an adapter is
+ * worse than forwarding a parameter the upstream ignores.
+ *
+ * MUST run before the composed sanitize chain below: `stripItemIdsWhenUnstored` keys
+ * off `store === false`, and a stateless upstream cannot resolve a stored item id.
+ * Returns a copy, so `parsed._rawBody` keeps the client's original `store` value and
+ * the local replay cache still records the turn.
+ */
+function stripStatefulResponsesParams(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  const drop = ["previous_response_id", "conversation", "background", "metadata", "prompt"] as const;
+  const present = drop.some(key => Object.prototype.hasOwnProperty.call(body, key));
+  if (!present && body.store === false) return body;
+  const next: Record<string, unknown> = { ...body };
+  for (const key of drop) delete next[key];
+  next.store = false;
+  return next;
+}
+
+/**
  * Remove top-level parameters the ChatGPT backend (`authMode: "forward"`) rejects
  * with `{"detail":"Unsupported parameter: …"}` (strict allowlist). Codex CLI never
  * sends these — it controls output length via `reasoning.effort` — but third-party
@@ -922,7 +957,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
     name: "openai-responses",
     passthrough: true as const,
 
-    buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+    buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
+      const translatorBudget = incoming.translatorBudget;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       let url: string;
 
@@ -964,8 +1000,17 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
-      if (forward) {
+      const stateless = provider.statelessResponses === true;
+      if (stateless) outBody = stripStatefulResponsesParams(outBody);
+      // A replay miss can leave a function_call_output whose paired function_call sat
+      // in the prefix that was never expanded. A stateless upstream cannot resolve the
+      // pair from its own storage either, so it needs the same repair the forward
+      // backend gets — dropping previous_response_id is not much use if the body that
+      // reaches the wire is unparseable.
+      if (forward || stateless) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+      }
+      if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
       }
       else outBody = normalizeImageGenClientTools(outBody);
@@ -980,40 +1025,61 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = buildRoutedCompactionBody(outBody);
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))));
+      const body = JSON.stringify(stripDisabledReasoningSummaries(
+        normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
+        provider,
+        parsed.modelId,
+      ));
+      const releaseBodyObservation = translatorBudget.observeExternallyCapped(
+        "passthrough_serialization",
+        new TextEncoder().encode(body).byteLength,
+      );
       return {
         url,
         method: "POST",
         headers,
-        body: JSON.stringify(stripDisabledReasoningSummaries(
-          normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
-          provider,
-          parsed.modelId,
-        )),
+        body,
+        releaseBodyObservation,
       };
     },
 
     // The passthrough normally relays the upstream stream verbatim and never parses.
     // The exception is a routed compaction turn: the server drives this adapter like
     // an ordinary one so the bridge can build the single compaction item (#422).
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "passthrough adapter received no response body" };
         return;
       }
+      const budgetEncoder = new TextEncoder();
       let deltas = "";
       let doneText = "";
       let snapshot = "";
       let usage: OcxUsage | undefined;
-      for await (const event of decodeServerSentEvents(response.body)) {
+      for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
         let payload: unknown;
         try { payload = JSON.parse(event.data); } catch { continue; }
         if (!isPlainObject(payload)) continue;
         switch (payload.type) {
           case "response.output_text.delta":
-            if (typeof payload.delta === "string") deltas += payload.delta;
+            if (typeof payload.delta === "string") {
+              const next = deltas + payload.delta;
+              const previousBytes = budgetEncoder.encode(deltas).byteLength;
+              const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
+              deltas = next;
+              reservation.commitRetained();
+              budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+            }
             break;
           case "response.output_text.done":
-            if (typeof payload.text === "string") doneText += payload.text;
+            if (typeof payload.text === "string") {
+              const next = doneText + payload.text;
+              const previousBytes = budgetEncoder.encode(doneText).byteLength;
+              const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
+              doneText = next;
+              reservation.commitRetained();
+              budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+            }
             break;
           case "response.failed":
           case "error":
@@ -1023,7 +1089,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
             yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
             return;
           case "response.completed":
-            snapshot = responsesPayloadText(payload.response);
+            {
+              const next = responsesPayloadText(payload.response);
+              const previousBytes = budgetEncoder.encode(snapshot).byteLength;
+              const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
+              snapshot = next;
+              reservation.commitRetained();
+              budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
+            }
             usage = usageFromResponsesPayload(payload.response);
             break;
         }
@@ -1032,14 +1105,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // completed snapshot so text is never double-counted.
       const text = snapshot || doneText || deltas;
       if (text) yield { type: "text_delta", text };
+      budget.releaseRetained(budgetEncoder.encode(deltas).byteLength + budgetEncoder.encode(doneText).byteLength + budgetEncoder.encode(snapshot).byteLength, { kind: "retained_collectors" });
       yield { type: "done", ...(usage ? { usage } : {}) };
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       let payload: unknown;
       try { payload = await response.json(); } catch {
         return [{ type: "error", message: "malformed upstream compaction response" }];
       }
+      budget.chargeRetained(new TextEncoder().encode(JSON.stringify(payload)).byteLength, { kind: "retained_collectors" });
       if (!isPlainObject(payload)) {
         return [{ type: "error", message: "malformed upstream compaction response" }];
       }

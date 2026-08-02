@@ -75,45 +75,26 @@ flowchart LR
 
 ## 빠른 시작
 
+### 사람용
+
 ```bash
-# 설치 (Bun 런타임이 자동으로 번들됩니다 — Node 18+ 만 있으면 됩니다)
-# 사용자 소유 Node(nvm/fnm)를 권장합니다 — `sudo npm install -g …`는 피하세요
 npm install -g @bitkyc08/opencodex
-
-# 대화형 설정 (config 작성 + Codex 주입 + 자동 시작 shim 설치 선택)
-ocx init
-
-# 프록시 시작
-ocx start
-
-# init에서 건너뛰었다면 나중에 온디맨드 자동 시작 shim 설치
-ocx codex-shim install
-
-# Codex를 평소처럼 사용하세요 — opencodex를 통해 라우팅됩니다
-codex "Write a hello world in Rust"
+ocx start        # 또는 백그라운드에서 실행하려면 `ocx service`
 ```
 
-<details>
-<summary><b>"bundled Bun runtime is missing" 오류 / npm이 Bun 설치 스크립트를 차단했나요?</b></summary>
+http://localhost:10100에서 웹 대시보드를 열어 프로바이더, 모델, 계정을 설정하세요. `ocx gui`로 언제든지 다시 열 수 있습니다.
 
-<br/>
-
-opencodex는 Bun 런타임을 의존성으로 번들하고 Node 런처로 실행하므로 Bun을 직접 설치할 필요가 **없습니다**. "bundled Bun runtime is missing" 오류가 보이면 설치 과정에서 lifecycle 스크립트(npm이 `allowScripts`로 bun postinstall을 차단한 경우 포함)나 optional 의존성이 건너뛰어진 경우입니다. bun 설치 스크립트를 허용해서 다시 설치하세요:
+### 에이전트용
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex   # --ignore-scripts, --omit=optional 없이
-
-# 처음에 sudo로 설치했다면 sudo를 유지하세요:
-sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
+npm install -g @bitkyc08/opencodex
+ocx start     # 또는 `ocx service`
+ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 연결합니다
 ```
 
-npm 경고가 제안하는 축약 명령에는 패키지 이름이 빠져 있어 현재 디렉터리를
-재설치하게 됩니다. 항상 `@bitkyc08/opencodex`를 명시하세요.
+`ocx init`은 프록시를 시작하지 않습니다. 먼저 시작하세요(또는 나중에 해도 됩니다. 순서는 상관없지만, `ocx provider add`와 `ocx combo set` 같은 헤드리스 명령은 **실행 중인** 프록시와 통신하며 접근할 수 없으면 nonzero로 종료합니다). `ocx status` / `ocx doctor` / `ocx health`는 실행 상태를 보고합니다.
 
-sudo로 루트 소유 prefix에 설치했다면 위의 sudo 재설치가 해당 prefix를 풀어주지만,
-가능할 때 사용자 소유 Node(nvm, fnm, 사용자 npm prefix)로 옮기는 편이 좋습니다.
-
-</details>
+> **GitHub star 프롬프트는 사용자의 결정이며, 에이전트의 결정이 아닙니다.** 대화형 `ocx start` 또는 `ocx service install`은 이 저장소를 star할지 한 번 물을 수 있습니다. 에이전트라면 그 프롬프트에 답하지 말고, 사용자 대신 `gh`, GitHub star API, 또는 `POST /api/github/star`를 호출하지 마세요. CLI는 에이전트 실행에서 프롬프트를 숨기며 API는 `403 agent_consent_required`로 거부합니다. 답변에서 사용자에게 한 번만 묻고, 명시적인 yes가 있을 때만 행동하며, 다시 묻지 마세요.
 
 ## 프로바이더 추가하기
 

@@ -77,51 +77,37 @@ flowchart LR
 
 ## Быстрый старт
 
+### Для людей
+
 ```bash
-# Установка (рантайм Bun добавляется автоматически — нужен только Node 18+)
-# Предпочитайте Node, принадлежащий пользователю (nvm/fnm), — избегайте `sudo npm install -g …`
+npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
+ocx start                            # or `ocx service` to run it in the background
+```
+
+Откройте **http://localhost:10100** и настройте всё в веб-дашборде: добавьте провайдеров
+(40+ встроенных, либо любой OpenAI-совместимый endpoint), выберите модели, управляйте
+аккаунтами. `ocx gui` в любой момент снова откроет дашборд.
+
+### Для агентов
+
+```bash
 npm install -g @bitkyc08/opencodex
-
-# Интерактивная настройка (записывает конфигурацию, встраивается в Codex и предлагает установить shim автозапуска)
-ocx init
-
-# Запуск прокси
-ocx start
-
-# Если вы пропустили этот шаг в init, shim автозапуска по требованию можно установить позже
-ocx codex-shim install
-
-# Используйте Codex как обычно — теперь запросы идут через opencodex
-codex "Write a hello world in Rust"
+ocx start     # or `ocx service`
+ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```
 
-<details>
-<summary><b>Ошибка «bundled Bun runtime is missing» / npm заблокировал установочные скрипты Bun?</b></summary>
+`ocx init` никогда не запускает прокси; сначала запустите его сами (или после — оба порядка
+работают, но headless-команды вроде `ocx provider add` и `ocx combo set` обращаются к **живому**
+прокси и завершаются с ненулевым кодом, если он недоступен). Состояние запущенного прокси
+показывают `ocx status`, `ocx doctor` и `ocx health`.
 
-<br/>
-
-opencodex поставляет рантайм Bun как зависимость и запускает его через Node-лончер,
-поэтому устанавливать Bun самостоятельно **не нужно**. Если вы видите ошибку
-«bundled Bun runtime is missing», значит при установке были пропущены lifecycle-скрипты
-(в том числе когда npm блокирует postinstall Bun через `allowScripts`) или опциональные
-зависимости. Переустановите пакет без этих флагов, разрешив установочный скрипт Bun:
-
-```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex   # без --ignore-scripts и без --omit=optional
-
-# если первоначальная установка выполнялась через sudo, продолжайте использовать sudo:
-sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
-```
-
-Собственное предупреждение npm предлагает сокращённую команду без имени пакета —
-такая команда переустановит текущий каталог, поэтому всегда указывайте
-`@bitkyc08/opencodex` явно.
-
-Если вы устанавливали пакет через `sudo` в prefix, принадлежащий root, показанная выше
-переустановка с sudo разблокирует этот prefix — но при возможности лучше перейти на Node,
-принадлежащий пользователю (nvm, fnm или пользовательский prefix npm).
-
-</details>
+> **Решение о GitHub star принимает пользователь, а не агент.** При интерактивном `ocx start`
+> или `ocx service install` CLI может один раз спросить, нужно ли поставить star этому
+> репозиторию. Если вы агент, никогда не отвечайте на этот запрос и не вызывайте `gh`,
+> GitHub Star API или `POST /api/github/star` от имени пользователя — CLI подавляет этот
+> запрос в агентных запусках, а API отказывает с `403 agent_consent_required`. Один раз
+> спросите пользователя в своём ответе, действуйте только после явного `yes` и больше не
+> спрашивайте.
 
 ## Добавление провайдера
 

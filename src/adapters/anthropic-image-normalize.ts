@@ -20,6 +20,7 @@ import {
   TOTAL_IMAGE_BASE64_BUDGET,
   type ImageBlockRef,
 } from "./anthropic-image-guard";
+import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 /** One ladder position: dimension cap, JPEG quality attempts, per-image base64 cap. */
 export interface TierSpec {
@@ -98,48 +99,141 @@ type ProcessResult =
  * not entry count. Entries are immutable snapshots — demotions write NEW tier-suffixed
  * keys, never mutate stored values.
  */
-const CACHE_BYTE_CAP = 64 * MiB;
+export const IMAGE_NORMALIZE_CACHE_MAX_BYTES = 64 * MiB;
+const CACHE_MAX_ENTRIES = 4_096;
+const CACHE_MAX_ENTRY_BYTES = 20 * MiB;
 // "pass" = validated pass-through; "miss" = this position's ladder cannot meet its hard
 // cap for these bytes (skip straight to the next position — C-gate round 2, blocker 1).
-const cache = new Map<string, { data: string; mediaType: string } | "pass" | "miss">();
+type CacheValue = { data: string; mediaType: string } | "pass" | "miss";
+interface CacheEntry {
+  value: CacheValue;
+  sizeBytes: number;
+  metadataBytes: number;
+  storedAt: number;
+}
+interface NormalizeCacheLimits {
+  maxBytes: number;
+  maxEntries: number;
+  maxEntryBytes: number;
+}
+const DEFAULT_CACHE_LIMITS: NormalizeCacheLimits = {
+  maxBytes: IMAGE_NORMALIZE_CACHE_MAX_BYTES,
+  maxEntries: CACHE_MAX_ENTRIES,
+  maxEntryBytes: CACHE_MAX_ENTRY_BYTES,
+};
+const cacheEncoder = new TextEncoder();
+const cache = new Map<string, CacheEntry>();
+let cacheLimits = { ...DEFAULT_CACHE_LIMITS };
 let cacheBytes = 0;
+let cacheMetadataBytes = 0;
+let cacheSentinelEntries = 0;
 let encodeCalls = 0;
 
-function cachePut(key: string, value: { data: string; mediaType: string } | "pass" | "miss"): void {
-  const size = typeof value === "string" ? 0 : value.data.length;
+function cacheEntry(key: string, value: CacheValue): CacheEntry {
+  const keyBytes = cacheEncoder.encode(key).byteLength;
+  const valueBytes = typeof value === "string"
+    ? cacheEncoder.encode(value).byteLength
+    : cacheEncoder.encode(value.mediaType).byteLength + cacheEncoder.encode(value.data).byteLength;
+  const metadataBytes = keyBytes + (typeof value === "string"
+    ? cacheEncoder.encode(value).byteLength
+    : cacheEncoder.encode(value.mediaType).byteLength);
+  return { value, sizeBytes: keyBytes + valueBytes, metadataBytes, storedAt: Date.now() };
+}
+
+function deleteCacheEntry(key: string): number {
+  const entry = cache.get(key);
+  if (!entry) return 0;
+  cache.delete(key);
+  cacheBytes -= entry.sizeBytes;
+  cacheMetadataBytes -= entry.metadataBytes;
+  if (typeof entry.value === "string") cacheSentinelEntries--;
+  return entry.sizeBytes;
+}
+
+function cachePut(key: string, value: CacheValue): boolean {
+  const next = cacheEntry(key, value);
+  if (
+    next.sizeBytes > cacheLimits.maxEntryBytes
+    || next.sizeBytes > cacheLimits.maxBytes
+    || cacheLimits.maxEntries <= 0
+  ) return false;
   const existing = cache.get(key);
   if (existing !== undefined) {
-    cacheBytes -= typeof existing === "string" ? 0 : existing.data.length;
-    cache.delete(key); // re-insert refreshes recency and prevents double-count on concurrent misses
+    deleteCacheEntry(key); // re-insert refreshes recency and prevents double-count on concurrent misses
   }
-  while (cacheBytes + size > CACHE_BYTE_CAP && cache.size > 0) {
-    const oldest = cache.keys().next().value as string;
-    const evicted = cache.get(oldest);
-    cacheBytes -= typeof evicted === "string" || evicted === undefined ? 0 : evicted.data.length;
-    cache.delete(oldest);
+  while (cache.size + 1 > cacheLimits.maxEntries || cacheBytes + next.sizeBytes > cacheLimits.maxBytes) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined || deleteCacheEntry(oldest) === 0) return false;
   }
-  cache.set(key, value);
-  cacheBytes += size;
+  cache.set(key, next);
+  cacheBytes += next.sizeBytes;
+  cacheMetadataBytes += next.metadataBytes;
+  if (typeof value === "string") cacheSentinelEntries++;
+  enforceAppOwnedMemoryBudget();
+  return true;
 }
 
 /** Read a cache entry, refreshing its recency (true LRU, C-gate round 1 blocker 5). */
-function cacheGet(key: string): { data: string; mediaType: string } | "pass" | "miss" | undefined {
-  const value = cache.get(key);
-  if (value !== undefined) {
+function cacheGet(key: string): CacheValue | undefined {
+  const entry = cache.get(key);
+  if (entry !== undefined) {
     cache.delete(key);
-    cache.set(key, value);
+    entry.storedAt = Date.now();
+    cache.set(key, entry);
   }
-  return value;
+  return entry?.value;
 }
 
 /** Test hooks: encoder-invocation counter + cache reset (no production caller). */
-export function getNormalizeStatsForTests(): { encodeCalls: number; cacheEntries: number; cacheBytes: number } {
-  return { encodeCalls, cacheEntries: cache.size, cacheBytes };
+export function getNormalizeStatsForTests(): {
+  encodeCalls: number;
+  cacheEntries: number;
+  cacheBytes: number;
+  sentinelEntries: number;
+  metadataBytes: number;
+  oldestAt: number | null;
+} {
+  return {
+    encodeCalls,
+    cacheEntries: cache.size,
+    cacheBytes,
+    sentinelEntries: cacheSentinelEntries,
+    metadataBytes: cacheMetadataBytes,
+    oldestAt: cache.values().next().value?.storedAt ?? null,
+  };
 }
 export function resetNormalizeStateForTests(): void {
   cache.clear();
   cacheBytes = 0;
+  cacheMetadataBytes = 0;
+  cacheSentinelEntries = 0;
   encodeCalls = 0;
+}
+
+export function setNormalizeCacheLimitsForTests(limits?: Partial<NormalizeCacheLimits>): void {
+  resetNormalizeStateForTests();
+  cacheLimits = limits ? { ...DEFAULT_CACHE_LIMITS, ...limits } : { ...DEFAULT_CACHE_LIMITS };
+}
+
+export function anthropicImageNormalizeRetainedStoreSnapshot(): {
+  count: number;
+  bytes: number;
+  evictableBytes: number;
+  pinnedBytes: number;
+  oldestAt: number | null;
+} {
+  return {
+    count: cache.size,
+    bytes: cacheBytes,
+    evictableBytes: cacheBytes,
+    pinnedBytes: 0,
+    oldestAt: cache.values().next().value?.storedAt ?? null,
+  };
+}
+
+export function evictOldestAnthropicImageNormalizeForBudget(): number {
+  const oldest = cache.keys().next().value;
+  return oldest === undefined ? 0 : deleteCacheEntry(oldest);
 }
 
 /** Default encoder: Bun.Image resize-to-fit + JPEG at the given quality. */

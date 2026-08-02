@@ -4,8 +4,12 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { createImageBudget, guessExtFromMagic, materializeInlineImage } from "../../src/images/artifacts";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
-import { createGoogleAdapter } from "../../src/adapters/google";
+import { createGoogleAdapter as createGoogleAdapterProduction } from "../../src/adapters/google";
 import type { AdapterEvent, OcxProviderConfig } from "../../src/types";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
+
+const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
+  withTestTranslatorBudget(createGoogleAdapterProduction(...args));
 
 let tempHome: string;
 let artifactsDir: string;

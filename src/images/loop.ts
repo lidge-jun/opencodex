@@ -10,7 +10,7 @@
  * Removed vs web-search: no sidecar backend selection, no forced-answer nudge, no failed-query
  * dedup, no describeImages/structuredOutput, no recordSidecarOutcome.
  */
-import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
@@ -20,6 +20,11 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
+import {
+  isTranslatorBudgetExceededError,
+  TRANSLATOR_MAX_TURN_BYTES,
+  TranslatorBudgetExceededError,
+} from "../lib/translator-budget";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
@@ -200,6 +205,7 @@ class LoopError extends Error {
 export interface ImageBridgeDeps {
   parsed: OcxParsedRequest;
   adapter: ProviderAdapter;
+  incomingMeta: IncomingMeta;
   plan?: ImageBridgePlan;
   videoPlan?: VideoBridgePlan;
   /** Per-video generation timeout (ms) including polling. */
@@ -240,6 +246,7 @@ export interface ImageBridgeDeps {
  * inject the answer as a tool_result, and loop (bounded by `maxRounds`).
  */
 export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Response> {
+  const translatorBudget = deps.incomingMeta.translatorBudget;
   const { parsed, plan, videoPlan, videoTimeoutMs, abortSignal } = deps;
   let adapter = deps.adapter;
   const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
@@ -347,7 +354,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       void adapter
         .runTurn(
           iterParsed,
-          { headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(), abortSignal: signal },
+          {
+            headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+            abortSignal: signal,
+            translatorBudget,
+          },
           queue.push,
         )
         .then(() => queue.close())
@@ -396,6 +407,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
       const errorEvent = events.find(e => e.type === "error");
       if (errorEvent && errorEvent.type === "error") {
+        if (errorEvent.code === "translation_buffer_limit") {
+          throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
+        }
         throw new LoopError(502, errorEvent.message);
       }
 
@@ -414,11 +428,14 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         const request = await requestAdapter.buildRequest(iterParsed, {
           headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
           abortSignal: headerDeadline.signal,
+          translatorBudget,
         });
         try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best-effort */ }
         deps.onAttemptSend?.();
-        const response = requestAdapter.fetchResponse
-          ? await requestAdapter.fetchResponse(request, {
+        let response: Response;
+        try {
+          response = requestAdapter.fetchResponse
+            ? await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
@@ -436,7 +453,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 });
               },
               { abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
-            );
+              );
+        } finally {
+          request.releaseBodyObservation?.();
+        }
         return { response, responseAdapter: requestAdapter };
       };
 
@@ -476,6 +496,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       return prepared;
     } catch (error) {
+      if (isTranslatorBudgetExceededError(error)) throw error;
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
@@ -503,11 +524,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       for await (const event of parseStreamWithProgress(prepared.response, parse, {
         signal,
         inactivityTimeoutMs: stallTimeoutMs,
+        translatorBudget,
       })) {
         if (event.type === "heartbeat") yield event;
         else events.push(event);
       }
     } catch (error) {
+      if (isTranslatorBudgetExceededError(error)) throw error;
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
@@ -520,7 +543,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       throw new LoopError(502, `Image-bridge adapter stream protocol error: expected one final terminal event, received ${terminalIndexes.length}`);
     }
     const terminal = events[terminalIndexes[0]!];
-    if (terminal.type === "error") throw new LoopError(502, terminal.message);
+    if (terminal.type === "error") {
+      if (terminal.code === "translation_buffer_limit") {
+        throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
+      }
+      throw new LoopError(502, terminal.message);
+    }
     return scanEventsForImageCall(events, mediaToolNames);
   };
 
@@ -754,12 +782,23 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             });
           }
         } catch (e) {
-          yield {
-            type: "error",
-            message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
-            ...(e instanceof LoopError ? { status: e.status } : {}),
-            ...(hiddenUsage ? { usage: hiddenUsage } : {}),
-          };
+          if (isTranslatorBudgetExceededError(e)) {
+            yield {
+              type: "error",
+              status: 502,
+              errorType: "upstream_error",
+              code: e.code,
+              message: "upstream translation buffer exceeded the safe limit",
+              ...(hiddenUsage ? { usage: hiddenUsage } : {}),
+            };
+          } else {
+            yield {
+              type: "error",
+              message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
+              ...(e instanceof LoopError ? { status: e.status } : {}),
+              ...(hiddenUsage ? { usage: hiddenUsage } : {}),
+            };
+          }
           return;
         }
       }
@@ -773,6 +812,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {
+      translatorBudget,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       stallTimeoutSec: deps.stallTimeoutSec,

@@ -9,7 +9,7 @@ import { createResponsesPassthroughAdapter } from "../adapters/openai-responses"
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { providerModelWireDefault } from "../providers/registry";
+import { type InboundWire, providerModelWireDefault } from "../providers/registry";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -18,8 +18,18 @@ import { providerModelWireDefault } from "../providers/registry";
  *
  * Safe to call more than once on its own output — the pin check does not look at the
  * current adapter, so a second pass cannot let an override displace a pin.
+ *
+ * `inbound` is the protocol the ORIGINAL client spoke. It defaults to `"responses"`
+ * because the Chat and Anthropic surfaces translate into a Responses-shaped body and
+ * replay through `handleResponses`; those two callers pass their real inbound so a
+ * scoped registry default cannot fire for a client that never asked for that wire.
  */
-export function resolveWireProtocolOverride(providerName: string, modelId: string, providerConfig: OcxProviderConfig): OcxProviderConfig {
+export function resolveWireProtocolOverride(
+  providerName: string,
+  modelId: string,
+  providerConfig: OcxProviderConfig,
+  inbound: InboundWire = "responses",
+): OcxProviderConfig {
   const pinned = pinnedWireAdapter(providerName, modelId);
   if (pinned && providerConfig.adapter !== pinned) {
     return { ...providerConfig, adapter: pinned };
@@ -31,7 +41,7 @@ export function resolveWireProtocolOverride(providerName: string, modelId: strin
   // opt-out from a registry default). Invalid hand-edited values fall through to the default.
   const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)
     ? configured
-    : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED);
+    : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound);
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter

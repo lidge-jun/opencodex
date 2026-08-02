@@ -34,10 +34,12 @@ export default function CodexPoolStrategySetting({
   apiBase,
   subscribeLoadObserver,
   readLastActive,
+  onStrategyResolved,
 }: {
   apiBase: string;
   subscribeLoadObserver?: (observer: CodexAccountLoadObserver) => () => void;
   readLastActive?: () => unknown;
+  onStrategyResolved?: (strategy: AccountPoolStrategy) => void;
 }) {
   const t = useT();
   // Seed defaults immediately — never gate the control chrome on a network round-trip.
@@ -61,13 +63,14 @@ export default function CodexPoolStrategySetting({
     const nextStrategy = normalizeAccountPoolStrategy(json.accountPoolStrategy);
     const nextSticky = normalizeAccountPoolStickyLimit(json.accountPoolStickyLimit);
     setStrategy(nextStrategy);
+    onStrategyResolved?.(nextStrategy);
     setStickyLimit(nextSticky);
     setStickyDraft(String(nextSticky));
     hydratedRef.current = true;
     setHydrated(true);
     setLoadError(false);
     setError(null);
-  }, []);
+  }, [onStrategyResolved]);
 
   const applyActivePayload = useCallback((value: unknown) => {
     const fields = strategyFieldsFromActive(value);
@@ -156,7 +159,10 @@ export default function CodexPoolStrategySetting({
     if (savingRef.current) return;
     const previousStrategy = strategy;
     const previousSticky = stickyLimit;
-    if (next.strategy !== undefined) setStrategy(next.strategy);
+    if (next.strategy !== undefined) {
+      setStrategy(next.strategy);
+      onStrategyResolved?.(next.strategy);
+    }
     if (next.stickyLimit !== undefined) {
       setStickyLimit(next.stickyLimit);
       setStickyDraft(String(next.stickyLimit));
@@ -169,6 +175,7 @@ export default function CodexPoolStrategySetting({
     revisionRef.current += 1;
     if (result.ok) {
       setStrategy(result.strategy);
+      onStrategyResolved?.(result.strategy);
       setStickyLimit(result.stickyLimit);
       setStickyDraft(String(result.stickyLimit));
       hydratedRef.current = true;
@@ -176,13 +183,14 @@ export default function CodexPoolStrategySetting({
     } else {
       setError(t("accountPool.strategyUpdateFailed"));
       setStrategy(previousStrategy);
+      onStrategyResolved?.(previousStrategy);
       setStickyLimit(previousSticky);
       setStickyDraft(String(previousSticky));
     }
     savingRef.current = false;
     setSaving(false);
     scheduleDeferredActiveRefresh();
-  }, [apiBase, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
+  }, [apiBase, onStrategyResolved, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
 
   // Block writes until /active confirms — defaults paint for CLS but must not overwrite server state.
   const controlsDisabled = saving || loadError || !hydrated;

@@ -153,6 +153,7 @@ describe("main account rotation (Option A)", () => {
       accountId: MAIN_CODEX_ACCOUNT_ID,
       accessToken: "main_access",
       chatgptAccountId: "main_acct",
+      writerGeneration: expect.any(Number),
     });
     expect(isCodexAuthContextUsable(ctx, config)).toBe(true);
     const headers = headersForCodexAuthContext(new Headers(), ctx);
@@ -180,6 +181,7 @@ describe("main account rotation (Option A)", () => {
       accountId: MAIN_CODEX_ACCOUNT_ID,
       accessToken: "replacement_access",
       chatgptAccountId: "replacement_acct",
+      writerGeneration: expect.any(Number),
     });
     expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);

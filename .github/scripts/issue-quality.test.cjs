@@ -13,6 +13,9 @@ const {
   shouldReopen,
   shouldEnforceClosure,
   labelForKind,
+  AREA_LABELS,
+  mapAreaFieldToLabels,
+  detectAreaLabels,
   isPlaceholderOnlyValue,
   isPlaceholder,
   isRawPlaceholder,
@@ -1648,5 +1651,154 @@ describe("rejectsWorkflowDispatchNonDefaultBranch", () => {
       ),
       null,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orthogonal area labels
+// ---------------------------------------------------------------------------
+
+describe("mapAreaFieldToLabels", () => {
+  it("maps canonical Area dropdown values", () => {
+    assert.deepEqual(mapAreaFieldToLabels("CLI"), ["cli"]);
+    assert.deepEqual(mapAreaFieldToLabels("Proxy and routing"), ["proxy"]);
+    assert.deepEqual(mapAreaFieldToLabels("Dashboard"), ["gui"]);
+    assert.deepEqual(mapAreaFieldToLabels("Provider adapter"), ["provider"]);
+    assert.deepEqual(mapAreaFieldToLabels("Provider adapters"), ["provider"]);
+    assert.deepEqual(mapAreaFieldToLabels("Authentication and account pool"), ["account-pool"]);
+    assert.deepEqual(mapAreaFieldToLabels("Catalog / models"), ["catalog"]);
+    assert.deepEqual(mapAreaFieldToLabels("Streaming"), ["streaming"]);
+    assert.deepEqual(mapAreaFieldToLabels("Tools / MCP / web search"), ["tools"]);
+    assert.deepEqual(mapAreaFieldToLabels("Installation or packaging"), ["install"]);
+    assert.deepEqual(mapAreaFieldToLabels("Service lifecycle"), ["service"]);
+    assert.deepEqual(mapAreaFieldToLabels("Platform (Windows / macOS / Linux)"), ["platform"]);
+    assert.deepEqual(mapAreaFieldToLabels("Documentation"), []);
+  });
+
+  it("maps legacy Service lifecycle wording and ignores Other / Multiple areas", () => {
+    assert.deepEqual(mapAreaFieldToLabels("Service lifecycle (config injection)"), ["service"]);
+    assert.deepEqual(mapAreaFieldToLabels("Other"), []);
+    assert.deepEqual(mapAreaFieldToLabels("Multiple areas"), []);
+    assert.deepEqual(mapAreaFieldToLabels(""), []);
+    assert.deepEqual(mapAreaFieldToLabels(null), []);
+  });
+
+  it("exposes metadata for every non-documentation area label", () => {
+    for (const name of Object.keys(AREA_LABELS)) {
+      assert.ok(AREA_LABELS[name].color, name);
+      assert.ok(AREA_LABELS[name].description, name);
+    }
+  });
+});
+
+describe("detectAreaLabels", () => {
+  it("applies Area mapping plus orthogonal heuristics", () => {
+    const labels = detectAreaLabels({
+      title: "Pool failover stalls on SSE without terminal frame",
+      body: [
+        "### Area",
+        "Authentication and account pool",
+        "### Summary",
+        "Account pool failover waits forever when the upstream SSE stream ends without a terminal frame.",
+      ].join("\n"),
+      labels: ["bug"],
+    });
+    assert.ok(labels.includes("account-pool"));
+    assert.ok(labels.includes("streaming"));
+  });
+
+  it("adds provider for provider-compatibility form and label", () => {
+    const fromLabel = detectAreaLabels({
+      title: "AgentRouter Anthropic streams can end without terminal SSE frames",
+      body: "### Summary\nStream ends early.",
+      labels: ["provider-compatibility"],
+    });
+    assert.ok(fromLabel.includes("provider"));
+    assert.ok(fromLabel.includes("streaming"));
+
+    const fromHeading = detectAreaLabels({
+      title: "Custom relay rejects tool_calls",
+      body: [
+        "### Provider or upstream service",
+        "Volcengine Ark",
+        "### Current behaviour",
+        "tool_calls with empty content return 400.",
+      ].join("\n"),
+      labels: [],
+    });
+    assert.ok(fromHeading.includes("provider"));
+    assert.ok(fromHeading.includes("tools"));
+  });
+
+  it("runs heuristics for Multiple areas / Other without inventing per-provider labels", () => {
+    const labels = detectAreaLabels({
+      title: "Dashboard ACL hardening blocks management API on Windows",
+      body: [
+        "### Area",
+        "Multiple areas",
+        "### Summary",
+        "Management API fails closed when icacls hardening cannot be verified.",
+      ].join("\n"),
+      labels: ["bug"],
+    });
+    assert.ok(labels.includes("gui"), `got ${labels.join(",")}`);
+    assert.ok(labels.includes("platform"), `got ${labels.join(",")}`);
+    assert.ok(labels.includes("proxy"), `got ${labels.join(",")}`);
+    assert.equal(labels.includes("kiro"), false);
+    assert.equal(labels.includes("gemini"), false);
+    assert.equal(labels.includes("windows"), false);
+  });
+
+  it("does not map Documentation Area onto the documentation kind label", () => {
+    const labels = detectAreaLabels({
+      title: "Codex Auth UI/docs conflate usage-based switching",
+      body: ["### Area", "Documentation", "### Summary", "Docs misdefine new session."].join("\n"),
+      labels: ["enhancement"],
+    });
+    assert.equal(labels.includes("documentation"), false);
+    assert.equal(labels.includes("docs"), false);
+  });
+
+  it("ignores Operating system metadata for platform heuristics", () => {
+    const labels = detectAreaLabels({
+      title: "Dashboard shows empty providers tab",
+      body: [
+        "### Area",
+        "Dashboard",
+        "### Summary",
+        "Providers tab is blank after login.",
+        "### Operating system",
+        "Windows 11",
+        "### Reproduction",
+        "1. Open the dashboard",
+      ].join("\n"),
+      labels: ["bug"],
+    });
+    assert.ok(labels.includes("gui"));
+    assert.equal(labels.includes("platform"), false);
+  });
+
+  it("uses heuristicBody translation text when Area is Other", () => {
+    const labels = detectAreaLabels({
+      title: "问题报告",
+      body: ["### Area", "Other", "### Summary", "原始描述"].join("\n"),
+      heuristicBody: [
+        "### Area",
+        "Other",
+        "### Summary",
+        "Account pool failover fails when refresh token is already used.",
+      ].join("\n"),
+      labels: ["bug"],
+    });
+    assert.ok(labels.includes("account-pool"), `got ${labels.join(",")}`);
+  });
+
+  it("matches truncated streaming wording via truncat stem", () => {
+    const labels = detectAreaLabels({
+      title: "Upstream streaming response truncated mid-turn",
+      body: ["### Area", "Other", "### Summary", "The streaming response was truncated."].join("\n"),
+      labels: ["bug"],
+    });
+    assert.ok(labels.includes("streaming"), `got ${labels.join(",")}`);
   });
 });

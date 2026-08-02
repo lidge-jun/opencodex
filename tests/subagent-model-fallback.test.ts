@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,11 @@ import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../src/codex/account-runtime-state";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/quota";
 import type { OcxConfig } from "../src/types";
+
+// beforeEach writes three Codex credentials (NTFS ACL harden on Windows). Under
+// `bun test --isolate` on a loaded windows-latest runner that can exceed the
+// default 5s hook budget (seen as beforeEach/afterEach timeout at ~7.6s).
+setDefaultTimeout(30_000);
 
 const savedCodexHome = process.env.CODEX_HOME;
 const savedOpencodexHome = process.env.OPENCODEX_HOME;
@@ -70,6 +75,8 @@ function codexHomeFixture(): string {
   return dir;
 }
 
+// Credential writes can hit Windows ACL harden stalls under full-suite isolate
+// load (GHA windows-latest: beforeEach/afterEach hook timed out ~7.6s).
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-fb-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -81,7 +88,7 @@ beforeEach(() => {
   clearAccountNeedsReauth("account-a");
   clearAccountNeedsReauth("account-b");
   clearAccountNeedsReauth("main");
-});
+}, { timeout: 30_000 });
 
 afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -95,7 +102,7 @@ afterEach(() => {
   clearAccountNeedsReauth("account-b");
   clearAccountNeedsReauth("main");
   rmSync(testDir, { recursive: true, force: true });
-});
+}, { timeout: 30_000 });
 
 describe("subagent model fallback chain", () => {
   test("buildSubagentModelChain dedupes and preserves order", () => {

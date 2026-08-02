@@ -126,7 +126,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 61 встроенным пресетом: 50 на основе ключей, семь OAuth, три локальных и
+opencodex поставляется с 66 встроенными пресетами: 55 на основе ключей, семь OAuth, три локальных и
 пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его. Наиболее заметные записи:
 
@@ -144,6 +144,8 @@ opencodex поставляется с 61 встроенным пресетом: 
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
+| Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -154,6 +156,7 @@ opencodex поставляется с 61 встроенным пресетом: 
 | Qwen Cloud | Token plan (по умолчанию): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · или Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
+| Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
@@ -163,12 +166,35 @@ opencodex поставляется с 61 встроенным пресетом: 
 Большинство использует адаптер `openai-chat` с bearer-ключом; немногие провайдеры, предоставляющие
 только Anthropic-совместимую конечную точку (например, **Xiaomi MiMo**), используют адаптер
 `anthropic` (`x-api-key`).
+Volcengine Agent Plan использует нативную конечную точку Responses через адаптер `openai-responses`.
+
+> **Три маршрута тарификации Volcengine:** `volcengine` — Ark API с оплатой по факту,
+> `volcengine-coding-plan` расходует квоту Coding Plan, а `volcengine-agent-plan` — квоту Agent
+> Plan. Используйте ключ и конечную точку одного продукта; обычный `/api/v3` может тарифицироваться
+> отдельно даже при активной подписке Plan.
+> Все три preset используют отобранные статические каталоги моделей. Ark `/models` возвращает
+> текстовые, embedding-, графические, видео- и 3D-ресурсы, а шлюз Coding выдаёт тот же широкий
+> каталог. У шлюза Agent Plan ресурса `/models` нет. Для pay-as-you-go модель по умолчанию —
+> `doubao-seed-2-1-pro-260628`; его статический каталог также включает актуальные текстовые модели
+> DeepSeek и GLM. Для Coding Plan модель по умолчанию — `ark-code-latest`, для Agent Plan —
+> `deepseek-v4-pro`.
 
 **Discovery для DeepInfra.** `deepinfra` — провайдер OpenAI Chat Completions с аутентификацией по
 ключу; он использует адаптер `openai-chat` и Bearer API-ключ. Принадлежащий registry URL списка
 моделей DeepInfra оставляет только строки с тегом `chat`, сохраняет нативные id моделей со знаком
 `/` и ограничивает live discovery 512 KiB и 512 исходными строками. Ключи создаются в
 [дашборде DeepInfra](https://deepinfra.com/dash/api_keys).
+
+**Discovery для Hyperbolic.** Пресет читает `/v1/models` с настроенным bearer-ключом, сохраняет
+нативные id моделей со знаком `/` и ограничивает live discovery размером 256 KiB и 256 исходными
+строками. Он охватывает только serverless text и vision-language chat; отдельные image, audio и GPU
+endpoint в него не входят. Ключи создаются в [Hyperbolic](https://app.hyperbolic.ai).
+
+> **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
+> Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),
+> а для общего/промышленного использования — командный ключ с правом **Call Model APIs**. Выделенные конечные точки Truss `predict` используют другие хосты и
+> схемы и этим пресетом не маршрутизируются.
+> Для этого пресета live discovery ограничен ответом размером 1 MiB и 256 исходными строками моделей.
 
 > **Ограничение Tencent Cloud Coding Plan:** Tencent разрешает использовать эту подписку только
 > в интерактивных инструментах программирования. Автоматизация общего API, серверы пользовательских
@@ -225,7 +251,7 @@ Assist), `azure` / `azure-openai`, `kiro` и `cursor`. Проприетарны�
 Cursor отслеживается отдельно как экспериментальный адаптер. `adapter: "cursor"` появляется в
 `ocx init` и в селекторе Add Provider дашборда как экспериментальная запись локальной конфигурации
 с метаданными статического резервного каталога моделей Cursor. Когда настроен токен доступа Cursor,
-opencodex использует живой транспорт HTTP/2 Cursor. Его резервный список версии v2.7.1 включает
+opencodex использует живой транспорт HTTP/2 Cursor. Его встроенный резервный список включает
 `gpt-5.6-sol` / `terra` / `luna` (контекст 1M), `grok-4.5` / `grok-4.5-fast` (500K) и `kimi-k3`
 (262K); живое обнаружение решает, какие из них останутся видимыми для аккаунта. Cursor отдаёт
 Kimi K3 только через wire id с суффиксом усилия, поэтому `cursor/kimi-k3` предоставляет лестницу

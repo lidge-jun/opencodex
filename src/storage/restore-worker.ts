@@ -46,6 +46,12 @@ self.onmessage = async (event: MessageEvent<unknown>) => {
       requestId,
       message: err instanceof Error ? err.message : "worker_failed",
     });
+  } finally {
+    // Close from inside the worker so the thread begins exiting before the
+    // parent’s terminate() races isolate realm reclaim on Windows.
+    try {
+      (self as unknown as { close?: () => void }).close?.();
+    } catch { /* already closing */ }
   }
 };
 

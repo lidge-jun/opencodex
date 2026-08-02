@@ -129,16 +129,21 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
   if (hardPin && preferred > 0) {
     const { reclaimListenPort } = await import("../server/port-reclaim");
     await reclaimListenPort(preferred, config.hostname ?? "127.0.0.1", {
-      timeoutMs: 30_000,
+      // Ghost LISTEN rows with a dead PID can outlive the process for a while.
+      // SetTcpEntry(DELETE_TCB) needs elevation (often returns 317), so the only
+      // reliable non-admin recovery is to wait for the OS to release the TCB.
+      timeoutMs: 60_000,
       intervalMs: 100,
       scanIntervalMs: 500,
       killOcxHolders: false,
-      dropTcpRows: false,
+      dropTcpRows: true,
     });
   }
   try {
     const selected = await findAvailablePort(preferred, config.hostname ?? "127.0.0.1", {
-      preferRetryMs: hardPin ? 0 : 750,
+      // After reclaim, keep probing briefly — ghost rows sometimes clear between
+      // the reclaim deadline and the final listen. Still never hop off `--port`.
+      preferRetryMs: hardPin ? 5_000 : 750,
       preferRetryIntervalMs: 50,
       allowEphemeralFallback: !hardPin,
     });
@@ -1029,6 +1034,11 @@ switch (command) {
   case "api-key": {
     const { handleAccessCommand } = await import("./access");
     process.exitCode = await handleAccessCommand(["key", ...args.slice(1)]);
+    break;
+  }
+  case "export": {
+    const { handleExportCommand } = await import("./export-command");
+    process.exitCode = await handleExportCommand(args.slice(1));
     break;
   }
   case "grok": {

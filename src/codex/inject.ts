@@ -296,10 +296,10 @@ function stripExistingModelProvider(content: string): string {
 }
 
 /**
- * Drop ROOT-level `model_context_window` / `model_auto_compact_token_limit` overrides (keys before
- * the first table header). Codex treats these root keys as a global override that wins over the
- * per-model catalog values, so a stale `model_context_window = 1000000` makes every model (e.g.
- * gpt-5.5) report a 1M window. Stripping them on (re)injection lets the catalog drive context size.
+ * Drop ROOT-level `model_context_window` overrides (keys before the first table header). Codex
+ * treats this root key as a global override that wins over the per-model catalog values, so a stale
+ * `model_context_window = 1000000` makes every model (e.g. gpt-5.5) report a 1M window. User-owned
+ * compaction limits do not alter the advertised context window and must survive reinjection.
  */
 export function stripRootContextWindowOverrides(content: string): string {
   const lines = content.split("\n");
@@ -307,7 +307,7 @@ export function stripRootContextWindowOverrides(content: string): string {
   return lines
     .filter((line, i) => {
       const isRoot = firstTable === -1 || i < firstTable;
-      return !isRoot || !/^\s*model_(?:context_window|auto_compact_token_limit)\s*=/.test(line);
+      return !isRoot || !/^\s*model_context_window\s*=/.test(line);
     })
     .join("\n");
 }

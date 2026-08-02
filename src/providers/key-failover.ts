@@ -11,6 +11,7 @@
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
+import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
 
@@ -99,6 +100,7 @@ export function rotateKeyOn429(
     keyCooldowns.set(cooldownKey(providerName, currentEntry.id), {
       cooldownUntil: now + cooldownMs,
     });
+    sweepExpiredOnWrite(now);
   }
 
   // Lost the race: someone already rotated away from the failed key. If the live key is healthy,
@@ -129,6 +131,16 @@ export function rotateKeyOn429(
   // All keys in cooldown
   console.warn(`[key-failover] ${providerName}: all ${pool.length} keys in cooldown; returning 429 to client`);
   return null;
+}
+
+export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, cooldown] of keyCooldowns) {
+    if (cooldown.cooldownUntil > now) continue;
+    keyCooldowns.delete(key);
+    removed += 1;
+  }
+  return removed;
 }
 
 interface RotateProviderTransportOptions {

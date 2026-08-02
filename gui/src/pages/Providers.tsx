@@ -213,7 +213,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     );
   }
 
-  const addModalAccountRows = buildAddModalAccountRows(config, oauthProviders);
+  const addModalAccountRows = buildAddModalAccountRows(config, oauthProviders, t);
   const accountLoginStatus = buildAccountLoginStatus(config, oauthStatusWithCodex);
   const isForwardProvider = (name: string) => config.providers[name]?.authMode === "forward";
 
@@ -372,7 +372,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCloseCodexLogin={() => setCodexLoginOpen(false)}
         onCodexAdded={() => {
           setCodexLoginOpen(false);
-          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai"), cmd: "ocx sync" }), true);
+          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ocx sync" }), true);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
 
 const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-x", authMode: "apiKey" } as unknown as OcxProviderConfig;
 

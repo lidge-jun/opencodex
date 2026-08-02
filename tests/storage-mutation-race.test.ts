@@ -18,23 +18,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { drainAndShutdown } from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
+import { endStorageMutation, getActiveStorageMutation, tryBeginStorageMutation } from "../src/storage/storage-mutation-coordinator";
 import {
   resetArchivedCleanupJobForTests,
   setArchivedCleanupJobTestHooks,
 } from "../src/storage/cleanup-job";
 import {
-  resetStorageCleanupPolicyJobForTests,
+  resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
 } from "../src/storage/policy-job";
+import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
 import {
-  resetRestoreTrashJobForTests,
+  resetRestoreTrashJobForTestsAsync,
   runRestoreTrashEntryJob,
   setRestoreTrashJobTestHooks,
 } from "../src/storage/restore-job";
 import {
   resetStorageMutationCoordinatorForTests,
 } from "../src/storage/storage-mutation-coordinator";
+import {
+  cancelQueuedStorageWorkerSpawns,
+  drainStorageWorkers,
+} from "../src/storage/worker-lifecycle";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let testDir = "";
@@ -137,22 +144,53 @@ async function waitForPolicyJob(
   throw new Error("policy job did not finish");
 }
 
-beforeEach(() => {
+/** Windows can keep SQLite/job handles briefly after stop; retry only transient cleanup codes. */
+function removeTree(path: string): void {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String(error.code)
+        : "";
+      if (!new Set(["EPERM", "EBUSY", "ENOTEMPTY"]).has(code)) throw error;
+      lastError = error;
+      Bun.sleepSync(50);
+    }
+  }
+  throw lastError;
+}
+
+beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
+  // Join leftover Workers before allocating homes / mutating OPENCODEX_HOME —
+  // same order as installPolicyApiHarness (startServer also arms the unref'd
+  // policy scheduler; bare server.stop does not clear it).
+  stopStorageCleanupScheduler();
+  cancelQueuedStorageWorkerSpawns();
+  await resetRestoreTrashJobForTestsAsync();
+  await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
+  // Clear shared coordination only after workers have joined — same ordering
+  // as resetRestoreTrashJobForTestsAsync / policy-job's mutation-slot finally.
+  resetArchivedCleanupJobForTests();
+  resetStorageMutationCoordinatorForTests();
   isolatedCodexHome = installIsolatedCodexHome("ocx-storage-mutation-race-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-storage-mutation-race-"));
   process.env.OPENCODEX_HOME = testDir;
   saveConfig(baseConfig());
-  resetRestoreTrashJobForTests();
-  resetArchivedCleanupJobForTests();
-  resetStorageCleanupPolicyJobForTests();
-  resetStorageMutationCoordinatorForTests();
+  stopStorageCleanupScheduler();
 });
 
-afterEach(() => {
-  resetRestoreTrashJobForTests();
+afterEach(async () => {
+  stopStorageCleanupScheduler();
+  cancelQueuedStorageWorkerSpawns();
+  await resetRestoreTrashJobForTestsAsync();
+  await resetStorageCleanupPolicyJobForTestsAsync();
+  await drainStorageWorkers();
   resetArchivedCleanupJobForTests();
-  resetStorageCleanupPolicyJobForTests();
   resetStorageMutationCoordinatorForTests();
   setRestoreTrashJobTestHooks(null);
   setArchivedCleanupJobTestHooks(null);
@@ -161,11 +199,25 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTree(testDir);
   testDir = "";
 });
 
+async function stopRaceServer(server: ReturnType<typeof startServer>): Promise<void> {
+  // Joins storage Workers + clears the scheduler; Bun.serve.stop alone does not.
+  await drainAndShutdown(server, 5_000);
+}
+
 describe("storage mutation coordinator", () => {
+  test("cleanup restore and policy retain their exact mutation lease through worker join", () => {
+    const home = join(testDir, "exact-lease-home");
+    const owner = tryBeginStorageMutation("cleanup", home);
+    expect(owner.acquired).toBe(true);
+    endStorageMutation(join(testDir, "different-home"));
+    expect(getActiveStorageMutation(home)?.kind).toBe("cleanup");
+    if (owner.acquired) owner.lease.release();
+    expect(getActiveStorageMutation(home)).toBeNull();
+  });
   test("policy run is rejected while restore holds the shared mutation slot", async () => {
     const home = isolatedCodexHome!.path;
     setRestoreTrashJobTestHooks({ blockMs: 400, runInProcess: true });
@@ -193,7 +245,7 @@ describe("storage mutation coordinator", () => {
       const restoreResult = await restorePromise;
       expect(restoreResult.ok).toBe(true);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -220,7 +272,7 @@ describe("storage mutation coordinator", () => {
       const cleanupRes = await cleanupPromise;
       expect(cleanupRes.status).toBe(200);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -231,7 +283,7 @@ describe("storage mutation coordinator", () => {
 
     const server = startServer(0);
     try {
-      await enablePolicyAndRun(server.url);
+      const { startedAt } = await enablePolicyAndRun(server.url);
       await Bun.sleep(80);
 
       const preview = await previewDigest(server.url, 50);
@@ -250,8 +302,12 @@ describe("storage mutation coordinator", () => {
       });
       expect(restoreRes.status).toBe(409);
       expect((await restoreRes.json()).error).toBe("storage_mutation_busy");
+
+      // Drain the blocked policy job before stop/teardown — leaving it mid-block leaves
+      // Windows holding OPENCODEX_HOME (SQLite/job handles) and afterEach rmSync fails EBUSY.
+      await waitForPolicyJob(server.url, startedAt);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -330,7 +386,7 @@ describe("storage mutation coordinator", () => {
       expect(threadCount(home)).toBe(2);
       expect(readFileSync(restoredPath, "utf8")).toBe("o".repeat(100));
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 45_000 });
 
@@ -371,7 +427,7 @@ describe("storage mutation coordinator", () => {
       expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(true);
       expect(threadCount(home)).toBe(1);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 
@@ -408,7 +464,7 @@ describe("storage mutation coordinator", () => {
       const firstRes = await first;
       expect(firstRes.status).toBe(200);
     } finally {
-      await server.stop(true);
+      await stopRaceServer(server);
     }
   }, { timeout: 30_000 });
 });

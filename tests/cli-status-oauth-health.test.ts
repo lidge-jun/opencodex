@@ -76,6 +76,16 @@ describe("formatOAuthHealthForStatus", () => {
     expect(text).toContain("Codex health: unavailable");
     expect(text).toContain("management API");
   });
+
+  test("does not call an authentication failure a stopped proxy", () => {
+    const text = formatOAuthHealthForStatus({
+      entries: [],
+      codexHealthSource: "management-auth-failed",
+    });
+    expect(text).toContain("proxy running");
+    expect(text).toContain("management authentication failed");
+    expect(text).not.toContain("proxy not running");
+  });
 });
 
 describe("collectOAuthHealthEntries via status formatter", () => {
