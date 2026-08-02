@@ -463,12 +463,12 @@ describe("Responses previous_response_id state", () => {
     feedInspector(inspector, [
       {
         type: "response.output_item.done",
-        output_index: 2,
+        output_index: 0,
         item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "stale sentinel" }] },
       },
       {
         type: "response.output_item.done",
-        output_index: 2,
+        output_index: 0,
         item: { type: "function_call", call_id: "call_final", name: "final_lookup", arguments: "{}" },
       },
       { type: "response.completed", response: { id: "resp_334_duplicate", status: "completed", output: [] } },

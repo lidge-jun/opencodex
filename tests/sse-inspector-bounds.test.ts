@@ -232,6 +232,43 @@ describe("createSseInspector frame bounds", () => {
 });
 
 describe("createSseInspector completed-item bounds", () => {
+  test("gapped completed indexes never synthesize a partial response", () => {
+    const completed: Array<{ output?: unknown }> = [];
+    const inspector = createSseInspector({ onCompletedResponse: response => completed.push(response) });
+    inspector.feed(frame(doneItemEvent(0, { type: "message", id: "zero" })));
+    inspector.feed(frame(doneItemEvent(2, { type: "message", id: "two" })));
+    inspector.feed(frame(completedEvent("gapped")));
+
+    expect(completed).toEqual([]);
+  });
+
+  test("out-of-order contiguous indexes reconstruct in index order", () => {
+    const completed: Array<{ output?: unknown }> = [];
+    const inspector = createSseInspector({ onCompletedResponse: response => completed.push(response) });
+    inspector.feed(frame(doneItemEvent(1, { type: "message", id: "one" })));
+    inspector.feed(frame(doneItemEvent(0, { type: "message", id: "zero" })));
+    inspector.feed(frame(completedEvent("out-of-order")));
+
+    expect(completed).toEqual([expect.objectContaining({
+      output: [
+        { type: "message", id: "zero" },
+        { type: "message", id: "one" },
+      ],
+    })]);
+  });
+
+  test("duplicate completed index replacement remains contiguous and latest-wins", () => {
+    const completed: Array<{ output?: unknown }> = [];
+    const inspector = createSseInspector({ onCompletedResponse: response => completed.push(response) });
+    inspector.feed(frame(doneItemEvent(0, { type: "message", id: "old" })));
+    inspector.feed(frame(doneItemEvent(0, { type: "message", id: "new" })));
+    inspector.feed(frame(completedEvent("duplicate")));
+
+    expect(completed).toEqual([expect.objectContaining({
+      output: [{ type: "message", id: "new" }],
+    })]);
+  });
+
   test("300 indexes retain at most the lowest 256 and count every high-index eviction", () => {
     const inspector = createSseInspector({ onCompletedResponse: () => {} });
     for (let index = 0; index < 300; index += 1) {

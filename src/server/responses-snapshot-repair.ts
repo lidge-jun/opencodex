@@ -244,14 +244,21 @@ export function createResponsesSnapshotPayloadRewrite(
     if (responseStatus && isPlainObject(event.response)) {
       const hasAuthoritativeOutput = Array.isArray(event.response.output)
         && event.response.output.length > 0;
-      const reconstructedOutput = type === "response.completed"
+      let reconstructedOutput: Record<string, unknown>[] | undefined;
+      if (type === "response.completed"
         && !hasAuthoritativeOutput
         && !reconstructionTainted
-        && completedItems.size > 0
-        ? [...completedItems.entries()]
-          .sort(([left], [right]) => left - right)
-          .map(([, retained]) => retained.item)
-        : undefined;
+        && completedItems.size > 0) {
+        const orderedItems = [...completedItems.entries()]
+          .sort(([left], [right]) => left - right);
+        if (orderedItems.every(([index], position) => index === position)) {
+          reconstructedOutput = orderedItems.map(([, retained]) => retained.item);
+        } else {
+          // A gap means at least one completed item is missing. Never compact later indexes into a
+          // shorter array that appears complete to persistence or the client.
+          reconstructionTainted = true;
+        }
+      }
       const response = repairResponseSnapshot(
         event.response,
         responseStatus,

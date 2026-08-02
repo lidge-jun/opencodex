@@ -237,6 +237,23 @@ describe("Responses passthrough sparse-snapshot repair", () => {
     }
   });
 
+  test("does not reconstruct terminal output when completed item indexes have a gap", () => {
+    const rewrite = createResponsesSnapshotPayloadRewrite();
+    for (const outputIndex of [0, 2]) {
+      rewrite(JSON.stringify({
+        type: "response.output_item.done",
+        output_index: outputIndex,
+        item: { id: `msg_${outputIndex}`, type: "message", content: [] },
+      }));
+    }
+    const terminal = JSON.parse(rewrite(JSON.stringify({
+      type: "response.completed",
+      response: { id: "resp_gapped", object: "response" },
+    }))) as { response: { output?: unknown } };
+
+    expect(terminal.response.output).toEqual([]);
+  });
+
   test("uses request tool metadata when sparse snapshots omit or corrupt it", () => {
     const requestDefaults = {
       parallel_tool_calls: false,

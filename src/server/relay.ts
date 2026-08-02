@@ -711,11 +711,15 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
           return;
         }
         if (!hasAuthoritativeOutput && completedItemsByOutputIndex!.size > 0) {
+          const orderedItems = [...completedItemsByOutputIndex!.entries()]
+            .sort(([left], [right]) => left - right);
+          if (!orderedItems.every(([index], position) => index === position)) {
+            clearCompletedItems();
+            return;
+          }
           response = {
             ...response,
-            output: [...completedItemsByOutputIndex!.entries()]
-              .sort(([left], [right]) => left - right)
-              .map(([, retained]) => retained.item),
+            output: orderedItems.map(([, retained]) => retained.item),
           };
         }
         try {
