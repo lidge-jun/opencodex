@@ -183,7 +183,7 @@ keys are not returned to dashboard clients.
 | --- | --- | --- |
 | `GET /api/providers` | List redacted provider configuration and discovery state | — |
 | `POST /api/providers` | Add or replace one validated provider and optionally make it default | 400 invalid/dangerous destination or config; 409 namespace collision |
-| `PATCH /api/providers?name=...` | Update allowed provider fields, enabled/default state, or OpenAI account mode | 400 invalid field or transition; 404 unknown provider |
+| `PATCH /api/providers?name=...` | Update allowed provider fields (including a merged `headers` block), enabled/default state, or OpenAI account mode | 400 invalid field or transition; 404 unknown provider |
 | `DELETE /api/providers?name=...` | Delete a provider, reassigning the default when possible | 404 unknown provider; 409 `last_provider`; 409 `provider_has_dependent_combos` |
 | `POST /api/providers/test?name=...` | Perform a bounded live provider connectivity/model-discovery probe | 404 unknown provider; failures are normally returned as `ok: false` evidence |
 | `GET /api/provider-quotas` | Read provider quota reports; `refresh=1` forces refresh | — |

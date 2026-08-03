@@ -1838,6 +1838,69 @@ describe("provider management validation", () => {
     // Unknown-only bodies are rejected.
     expect((await patch("extra", { bogus: 1 }))?.status).toBe(400);
   });
+  test("provider PATCH manages custom headers with merge and clear semantics", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        agw: { adapter: "openai-chat", baseUrl: "https://agw.example.test/v1", apiKey: "sk-agw" },
+      },
+    };
+    saveConfig(liveConfig);
+    let catalogRefreshes = 0;
+    const patch = async (name: string, body: unknown) => {
+      const req = new Request(`http://127.0.0.1/api/providers?name=${name}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        refreshCodexCatalog: async () => { catalogRefreshes += 1; },
+      });
+    };
+
+    // Set a fresh headers block.
+    const set = await patch("agw", { headers: { "X-Custom": "v1", "anthropic-version": "2023-06-01" } });
+    expect(set?.status).toBe(200);
+    expect(liveConfig.providers.agw.headers).toEqual({ "X-Custom": "v1", "anthropic-version": "2023-06-01" });
+
+    // Later patches merge, so adding one fingerprint header never drops the rest.
+    const merge = await patch("agw", { headers: { "x-app": "cli" } });
+    expect(merge?.status).toBe(200);
+    expect(liveConfig.providers.agw.headers).toEqual({
+      "X-Custom": "v1",
+      "anthropic-version": "2023-06-01",
+      "x-app": "cli",
+    });
+
+    // null and empty object both clear the whole block.
+    expect((await patch("agw", { headers: null }))?.status).toBe(200);
+    expect(liveConfig.providers.agw.headers).toBeUndefined();
+    expect((await patch("agw", { headers: { "X-A": "b" } }))?.status).toBe(200);
+    expect((await patch("agw", { headers: {} }))?.status).toBe(200);
+    expect(liveConfig.providers.agw.headers).toBeUndefined();
+
+    // Invalid shapes, sensitive headers, CRLF values, and non-string values are rejected.
+    for (const invalid of [
+      "nope",
+      [],
+      { Authorization: "Bearer sk" },
+      { "X-Bad": "a\r\nb" },
+      { "bad name": "v" },
+      { "X-N": 42 },
+    ]) {
+      const rejected = await patch("agw", { headers: invalid });
+      expect(rejected?.status).toBe(400);
+    }
+    expect(liveConfig.providers.agw.headers).toBeUndefined();
+    expect(catalogRefreshes).toBeGreaterThan(0);
+  });
   test("provider context-cap API persists toggles and annotates model rows", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

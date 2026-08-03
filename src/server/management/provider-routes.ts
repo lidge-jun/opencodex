@@ -286,6 +286,22 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
      touched = true;
    }
 
+    // headers is the one object-valued field in the mask. PATCH semantics merge it
+    // shallowly into the existing block so a single fingerprint header can be added
+    // without wiping the rest; null or an empty object clears the whole block.
+    if (Object.hasOwn(rawBody, "headers")) {
+      const headersValue = rawBody.headers;
+      if (headersValue === null || (isPlainRecord(headersValue) && Object.keys(headersValue).length === 0)) {
+        delete next.headers;
+      } else {
+        if (!isPlainRecord(headersValue)) return jsonResponse({ error: "headers must be an object" }, 400);
+        const headersError = providerHeadersConfigError(headersValue);
+        if (headersError) return jsonResponse({ error: headersError }, 400);
+        next.headers = { ...next.headers, ...headersValue } as Record<string, string>;
+      }
+      touched = true;
+    }
+
     if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);
 
     // A disabled-only toggle preserves the v2 fast lane for non-openai providers: it changes

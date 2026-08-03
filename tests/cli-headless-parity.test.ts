@@ -112,6 +112,36 @@ describe("headless GUI parity CLI", () => {
     }]);
   });
 
+  test("provider edit --headers sends the parsed block and - clears it", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", [
+      "agw", "--headers", '{"x-app":"cli","anthropic-version":"2023-06-01"}', "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests).toEqual([{
+      path: "/api/providers?name=agw",
+      method: "PATCH",
+      body: { headers: { "x-app": "cli", "anthropic-version": "2023-06-01" } },
+    }]);
+
+    const clearRuntime = fakeRuntime();
+    const clearCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "-", "--json"], clearRuntime.deps);
+    expect(clearCode).toBe(0);
+    expect(clearRuntime.requests[0]?.body).toEqual({ headers: null });
+  });
+
+  test("provider edit rejects malformed --headers JSON without a request", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "{not json"], runtime.deps);
+    expect(code).toBe(2);
+    expect(runtime.requests).toEqual([]);
+
+    const arrayRuntime = fakeRuntime();
+    const arrayCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", '["x-app"]'], arrayRuntime.deps);
+    expect(arrayCode).toBe(2);
+    expect(arrayRuntime.requests).toEqual([]);
+  });
+
   test("provider test treats a static catalog as neutral", async () => {
     const runtime = fakeRuntime(() => ({ applicable: false, reason: "static_catalog", latencyMs: 0 }));
     const code = await handleProviderRuntimeCommand("test", ["google-antigravity", "--json"], runtime.deps);

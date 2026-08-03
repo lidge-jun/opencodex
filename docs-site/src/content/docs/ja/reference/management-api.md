@@ -166,7 +166,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/providers` |編集されたプロバイダー設定と検出状態をリストする | — |
 | `POST /api/providers` |検証済みプロバイダーを 1 つ追加または置換し、必要に応じてそれをデフォルトにします。 400 無効または危険な宛先または構成。 409 名前空間の衝突 |
-| `PATCH /api/providers?name=...` |許可されたプロバイダー フィールド、有効/デフォルト状態、または OpenAI アカウント モードを更新します。 400 無効なフィールドまたは遷移。 404 不明なプロバイダ |
+| `PATCH /api/providers?name=...` |許可されたプロバイダー フィールド（マージされる `headers` ブロックを含む）、有効/デフォルト状態、または OpenAI アカウント モードを更新します。 400 無効なフィールドまたは遷移。 404 不明なプロバイダ |
 | `DELETE /api/providers?name=...` |プロバイダーを削除し、可能な場合はデフォルトを再割り当てします。 404 不明なプロバイダー。 409 `last_provider`; 409 `provider_has_dependent_combos` |
 | `POST /api/providers/test?name=...` |制限されたライブプロバイダー接続/モデル検出プローブを実行する | 404 不明なプロバイダー。障害は通常、`ok: false` の証拠として返されます。
 | `GET /api/provider-quotas` |プロバイダー クォータ レポートを読む。 `refresh=1` 強制更新 | — |

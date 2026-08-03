@@ -17,7 +17,7 @@ pool'ами и контролируют каталог моделей, кото�
 | --- | --- | --- |
 | `list` | `--json` | Показать настроенных провайдеров и оставшиеся записи registry. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Добавить registry/custom-провайдера. `--force` перезаписывает; `--sync` обновляет живой прокси в human-output mode. |
-| `edit <name>` | provider field flags, `--json` | Изменить валидированные live-поля провайдера, не заменяя key-pool'ы. |
+| `edit <name>` | provider field flags, `--headers <json>`, `--json` | Изменить валидированные live-поля провайдера, не заменяя key-pool'ы. `--headers` объединяет пользовательские request-header'ы; передайте `{}` или `-`, чтобы очистить их. |
 | `test <name>` | `--json` | Пробный запрос к реальному upstream model-endpoint'у. |
 | `show <name>` | `--json` | Показать конфиг с замаскированными API-key'ами. |
 | `remove <name>` | `--json` | Удалить не-default-провайдера; последний провайдер удалить нельзя. |
