@@ -780,26 +780,26 @@ async function gatherRoutedModelsUncached(
   replaceLastComboCatalogOmissions(localOmissions);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
-  // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
+  // custom rows get the same capability hints as discovered rows.
   const enrichedByName = new Map(activeProviders);
   const customModels = (config.customModels ?? []).map(cm => {
     const rawProvider = config.providers[cm.provider];
-    const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
+    const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
+    const providerCap = cm.contextWindow === undefined ? providerContextCap(config, cm.provider) : undefined;
+    const hints = enrichedProvider
+      ? catalogHintsFromProviderConfig(cm.provider, enrichedProvider, cm.modelId, providerCap)
+      : {};
     const base: CatalogModel = {
+      ...hints,
       id: cm.modelId,
       provider: cm.provider,
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
       ...(cm.displayName ? { displayName: cm.displayName } : {}),
       ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
-      ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     };
-    // Vision-sidecar coverage ONLY: if the custom model is in the enriched provider's
-    // noVisionModels, advertise image input so the Codex app lets images reach the sidecar
-    // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
-    // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
-    // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
-    const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
+    // Explicit custom modalities win over hints, but noVisionModels still needs to append image
+    // so the Codex app permits attachments to reach the proxy's vision sidecar.
     if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, base.id)) {
       const current = base.inputModalities ?? ["text"];
       if (!current.includes("image")) {
