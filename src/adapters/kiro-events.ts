@@ -18,8 +18,9 @@ const KNOWN_EVENT_TYPES = new Set([
   "toolUseEvent",
   "messageMetadataEvent",
   "metadataEvent",
-  // Kiro reports context pressure in its OWN event type, not inside metadataEvent (verified
-  // against kiro-cli 2.14.1 and 2.16.0: metadataEvent carries only `stopReason`).
+  // Authoritative context pressure. Every capture (kiro-cli 2.14.1 and 2.16.0) put the percentage
+  // HERE and left `metadataEvent` carrying only `stopReason`; metadataEvent's own
+  // contextUsagePercentage stays supported as a fallback rather than being dropped.
   "contextUsageEvent",
   "invalidStateEvent",
   "error",

@@ -95,23 +95,30 @@ describe("kiro redacted-reasoning round-trip (bridge → parse)", () => {
     expect((assistant as { kiroRedactedReasoning?: string }).kiroRedactedReasoning).toBe(BLOB);
   });
 
-  test("batch: the retained blob is released, leaving no translator-budget drift", () => {
+  test("batch: the raw blob is retained then released, leaving only the finalized items", () => {
+    // A big blob makes the accounting unambiguous: the raw string is an allocation distinct from
+    // the finalized item that embeds its base64.
+    const bigBlob = "X".repeat(4000);
     const budget = createTranslatorBudget();
-    buildResponseJSON(
+    const response = buildResponseJSON(
       [
         { type: "text_delta", text: "the answer" },
-        { type: "kiro_redacted_reasoning", data: BLOB },
+        { type: "kiro_redacted_reasoning", data: bigBlob },
         { type: "done", usage: { inputTokens: 1, outputTokens: 2 }, endTurn: true },
       ],
       "kiro/gpt-5.6-sol",
-      undefined,
-      undefined,
-      { budget },
+      { translatorBudget: budget },
     );
-    // Only the finalized output items stay retained; the raw blob must not be double-counted or
-    // released without ever having been charged.
-    expect(budget.snapshot().currentBytes).toBeGreaterThanOrEqual(0);
-    expect(budget.snapshot().overflows).toBe(0);
+    const items = response.output as Record<string, unknown>[];
+    const finalizedBytes = items.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0);
+    const { currentBytes, highWaterBytes, overflows } = budget.snapshot();
+
+    // EXACTLY the finalized output items remain retained. A raw blob still held would show up as
+    // ~4000 extra bytes here; releasing bytes that were never charged would show up as a shortfall.
+    expect(currentBytes).toBe(finalizedBytes);
+    // ...and it really was charged while held, rather than never accounted for at all.
+    expect(highWaterBytes).toBeGreaterThanOrEqual(finalizedBytes + bigBlob.length);
+    expect(overflows).toBe(0);
   });
 
   test("a turn ending in a tool call still pairs the blob with that assistant turn", async () => {
