@@ -247,7 +247,7 @@ export function createResponsesSnapshotPayloadRewrite(
       const hasAuthoritativeOutput = Array.isArray(event.response.output)
         && event.response.output.length > 0;
       let reconstructedOutput: Record<string, unknown>[] | undefined;
-      if (type === "response.completed"
+      if ((type === "response.completed" || type === "response.incomplete")
         && !hasAuthoritativeOutput
         && !reconstructionTainted
         && completedItems.size > 0) {
@@ -298,6 +298,10 @@ export function createResponsesSnapshotPayloadRewrite(
     if ((type === "response.output_text.delta" || type === "response.output_text.done")
       && !Array.isArray(event.logprobs)) {
       nextEvent = { ...nextEvent, logprobs: [] };
+      changed = true;
+    }
+    if (type === "response.output_text.done" && typeof event.text !== "string") {
+      nextEvent = { ...nextEvent, text: "" };
       changed = true;
     }
 

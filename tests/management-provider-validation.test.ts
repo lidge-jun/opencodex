@@ -849,6 +849,54 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider management accepts only a boolean responsesSnapshotRepair value", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+    stubModelDiscoveryFor("http://127.0.0.1:8080");
+
+    const server = startServer(0);
+    try {
+      const valid = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "snapshot-valid",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            allowPrivateNetwork: true,
+            responsesSnapshotRepair: true,
+          },
+        }),
+      });
+      expect(valid.status).toBe(200);
+      expect(loadConfig().providers["snapshot-valid"]?.responsesSnapshotRepair).toBe(true);
+
+      const invalid = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "snapshot-invalid",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            allowPrivateNetwork: true,
+            responsesSnapshotRepair: { enabled: true },
+          },
+        }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toMatchObject({
+        error: "provider snapshot-invalid responsesSnapshotRepair must be a boolean",
+      });
+      expect(loadConfig().providers["snapshot-invalid"]).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
  test("provider management rejects sensitive or injectable provider headers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

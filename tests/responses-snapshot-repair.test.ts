@@ -72,6 +72,10 @@ describe("Responses sparse-snapshot repair", () => {
         expected: { logprobs: [] },
       },
       {
+        input: { type: "response.output_text.done" },
+        expected: { text: "", logprobs: [] },
+      },
+      {
         input: {
           type: "response.completed",
           response: {
@@ -261,6 +265,28 @@ describe("Responses sparse-snapshot repair", () => {
 
       expect(terminal.response.output).toEqual([]);
     }
+  });
+
+  test("reconstructs contiguous done items for incomplete terminal responses", () => {
+    const rewrite = createResponsesSnapshotPayloadRewrite();
+    rewrite(JSON.stringify({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "msg_partial", type: "message", content: [{ type: "output_text", text: "partial" }] },
+    }));
+
+    const terminal = JSON.parse(rewrite(JSON.stringify({
+      type: "response.incomplete",
+      response: { id: "resp_incomplete", object: "response" },
+    }))) as { response: { output?: unknown } };
+
+    expect(terminal.response.output).toEqual([{
+      id: "msg_partial",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "partial", annotations: [] }],
+    }]);
   });
 
   test("suppresses partial reconstruction after retained-item bounds are exceeded", () => {
