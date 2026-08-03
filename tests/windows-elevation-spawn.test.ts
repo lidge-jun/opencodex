@@ -24,6 +24,7 @@ import {
   finalizeWindowsSchedulerServiceRegistration,
   setFinalizeWindowsSchedulerHooksForTests,
 } from "../src/service";
+import type { WindowsSchedulerInstallVerification } from "../src/service";
 
 /** Linux CI fakes win32 without a real System32; keep elevation paths production-shaped. */
 const FAKE_TRUSTED_ELEVATION_EXES = {
@@ -275,6 +276,7 @@ describe("finalizeWindowsSchedulerServiceRegistration", () => {
     return {
       taskInstalled: true,
       registrationHealthy: true,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeServiceAbsent: true,
       nativeStatusUnknown: false,
@@ -698,6 +700,7 @@ describe("finalizeWindowsSchedulerServiceRegistration", () => {
       verify: () => ({
         taskInstalled: true,
         registrationHealthy: true,
+        registrationInvalid: false,
         assetsHealthy: true,
         nativeServiceAbsent: false,
         nativeStatusUnknown: false,
@@ -724,6 +727,7 @@ describe("finalizeWindowsSchedulerServiceRegistration", () => {
       verify: () => ({
         taskInstalled: true,
         registrationHealthy: true,
+        registrationInvalid: false,
         assetsHealthy: true,
         nativeServiceAbsent: false,
         nativeStatusUnknown: true,
@@ -736,6 +740,292 @@ describe("finalizeWindowsSchedulerServiceRegistration", () => {
 
     await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/could not verify/);
     expect(elevateLaunches).toBe(1);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(0);
+  });
+
+  // --- Post-create settle (#868) -------------------------------------------------
+  //
+  // Task Scheduler's non-elevated view can lag an elevated /create, so a one-shot
+  // verification rolls back a task that is merely not visible yet. These cases pin
+  // both halves: the lagging view must settle, and every fail-closed state must
+  // still fail closed without spending a single delay.
+
+  function absentVerify(): WindowsSchedulerInstallVerification {
+    return {
+      taskInstalled: false,
+      registrationHealthy: false,
+      registrationInvalid: false,
+      assetsHealthy: true,
+      nativeServiceAbsent: true,
+      nativeStatusUnknown: false,
+      conflict: false,
+      ok: false,
+      detail: "Task Scheduler task is not installed.",
+    };
+  }
+
+  // Transient lag: the task is visible but its XML has not been published yet.
+  function unhealthyVerify(): WindowsSchedulerInstallVerification {
+    return {
+      taskInstalled: true,
+      registrationHealthy: false,
+      registrationInvalid: false,
+      assetsHealthy: true,
+      nativeServiceAbsent: true,
+      nativeStatusUnknown: false,
+      conflict: false,
+      ok: false,
+      detail: "Task Scheduler registration is present but unhealthy.",
+    };
+  }
+
+  // Permanent invalidity: the XML IS published and violates the contract.
+  function invalidVerify(): WindowsSchedulerInstallVerification {
+    return {
+      taskInstalled: true,
+      registrationHealthy: false,
+      registrationInvalid: true,
+      assetsHealthy: true,
+      nativeServiceAbsent: true,
+      nativeStatusUnknown: false,
+      conflict: false,
+      ok: false,
+      detail: "Task Scheduler registration is present but unhealthy.",
+    };
+  }
+
+  function succeedingElevation() {
+    return async () => {
+      elevateLaunches += 1;
+      return { outcome: "success" as const, exitCode: OCX_ELEVATED_SUCCESS, stdout: "", stderr: "" };
+    };
+  }
+
+  test("a lagging scheduler view settles into a healthy install instead of rolling back", async () => {
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    const sequence = [absentVerify(), unhealthyVerify(), okVerify()];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => sequence[probes++] ?? okVerify(),
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    const result = await finalizeWindowsSchedulerServiceRegistration();
+    expect(result).toEqual({ kind: "done" });
+    expect(probes).toBe(3);
+    expect(delays).toEqual([50, 150]);
+    expect(writeCount).toBe(1);
+    expect(parentRollbackLaunches).toBe(0);
+  });
+
+  test("a persistently unhealthy registration exhausts the bounded budget and then rolls back", async () => {
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => { probes += 1; return unhealthyVerify(); },
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/present but unhealthy/);
+    expect(probes).toBe(5);
+    expect(delays).toEqual([50, 150, 300, 600]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("a published-but-invalid registration rolls back immediately with zero delays", async () => {
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => { probes += 1; return invalidVerify(); },
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    // Permanent invalidity: ONE probe, no settle delay, rollback right away —
+    // waiting can never repair published-but-violating XML.
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/present but unhealthy/);
+    expect(probes).toBe(1);
+    expect(delays).toEqual([]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("a proven conflict is never retried into success", async () => {
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => {
+        probes += 1;
+        return {
+          taskInstalled: true,
+          registrationHealthy: true,
+          registrationInvalid: false,
+          assetsHealthy: true,
+          nativeServiceAbsent: false,
+          nativeStatusUnknown: false,
+          conflict: true,
+          ok: false,
+          detail: "CONFLICT: Task Scheduler and native WinSW are both present.",
+        };
+      },
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/CONFLICT/);
+    expect(probes).toBe(1);
+    expect(delays).toEqual([]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("missing assets fail immediately — waiting does not create files", async () => {
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => {
+        probes += 1;
+        return {
+          taskInstalled: true,
+          registrationHealthy: true,
+          registrationInvalid: false,
+          assetsHealthy: false,
+          nativeServiceAbsent: true,
+          nativeStatusUnknown: false,
+          conflict: false,
+          ok: false,
+          detail: "Required scheduler service assets are missing.",
+        };
+      },
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/assets are missing/);
+    expect(probes).toBe(1);
+    expect(delays).toEqual([]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("a proven-present WinSW service blocks retry even before the task becomes visible", async () => {
+    // conflict only turns true once the task itself is visible, so an invisible task
+    // beside a running WinSW is `conflict: false, nativeServiceAbsent: false`. A
+    // predicate that only checked `!conflict` would happily retry this.
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => {
+        probes += 1;
+        return {
+          taskInstalled: false,
+          registrationHealthy: false,
+          registrationInvalid: false,
+          assetsHealthy: true,
+          nativeServiceAbsent: false,
+          nativeStatusUnknown: false,
+          conflict: false,
+          ok: false,
+          detail: "Task Scheduler task is not installed.",
+        };
+      },
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/not installed/);
+    expect(probes).toBe(1);
+    expect(delays).toEqual([]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(1);
+  });
+
+  test("unknown WinSW status is unproven, not transient, and still preserves the task", async () => {
+    mockParentRollbackSpawn();
+    const delays: number[] = [];
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => {
+        probes += 1;
+        return {
+          taskInstalled: true,
+          registrationHealthy: true,
+          registrationInvalid: false,
+          assetsHealthy: true,
+          nativeServiceAbsent: false,
+          nativeStatusUnknown: true,
+          conflict: false,
+          ok: false,
+          detail: "The Task Scheduler task was created, but OpenCodex could not verify that the native WinSW service is absent.",
+        };
+      },
+      settleDelay: async ms => { delays.push(ms); },
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).rejects.toThrow(/could not verify/);
+    expect(probes).toBe(1);
+    expect(delays).toEqual([]);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(0);
+  });
+
+  test("ownership lost during a settle delay stops without rollback or state write", async () => {
+    mockParentRollbackSpawn();
+    let owned = true;
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => { probes += 1; return absentVerify(); },
+      settleDelay: async () => { owned = false; },
+      stillOwnsAttempt: () => owned,
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).resolves.toEqual({ kind: "done" });
+    expect(probes).toBe(1);
+    expect(writeCount).toBe(0);
+    expect(parentRollbackLaunches).toBe(0);
+  });
+
+  test("ownership lost around a non-retryable failure skips rollback too", async () => {
+    // The settle loop never awaits for a non-retryable verdict, so this is the only
+    // path that reaches the pre-rollback ownership fence: a stale attempt must not
+    // delete a task that a newer attempt now owns.
+    mockParentRollbackSpawn();
+    let owned = true;
+    let probes = 0;
+    setFinalizeWindowsSchedulerHooksForTests({
+      elevateCreateAndRun: succeedingElevation(),
+      verify: () => {
+        probes += 1;
+        owned = false;
+        return unhealthyVerify();
+      },
+      settleDelay: async () => { throw new Error("must not settle a non-retryable verdict"); },
+      stillOwnsAttempt: () => owned,
+      writeInstallState: () => { writeCount += 1; },
+    });
+
+    await expect(finalizeWindowsSchedulerServiceRegistration()).resolves.toEqual({ kind: "done" });
+    expect(probes).toBe(1);
     expect(writeCount).toBe(0);
     expect(parentRollbackLaunches).toBe(0);
   });
@@ -775,6 +1065,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: true,
       registrationHealthy: true,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeStatus: "nonexistent",
       installStateBackend: null,
@@ -785,6 +1076,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: false,
       registrationHealthy: false,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeStatus: "nonexistent",
       installStateBackend: "scheduler",
@@ -795,6 +1087,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: true,
       registrationHealthy: true,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeStatus: "stopped",
       installStateBackend: "scheduler",
@@ -805,6 +1098,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: true,
       registrationHealthy: true,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeStatus: "nonexistent",
       installStateBackend: "scheduler",
@@ -815,6 +1109,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: true,
       registrationHealthy: true,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeStatus: "unknown",
       installStateBackend: "scheduler",
@@ -825,6 +1120,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: true,
       registrationHealthy: false,
+      registrationInvalid: false,
       assetsHealthy: true,
       nativeStatus: "nonexistent",
       installStateBackend: "scheduler",
@@ -832,6 +1128,7 @@ describe("evaluateSchedulerInstallRestartReconciliation", () => {
     expect(evaluateSchedulerInstallRestartReconciliation({
       taskInstalled: true,
       registrationHealthy: true,
+      registrationInvalid: false,
       assetsHealthy: false,
       nativeStatus: "nonexistent",
       installStateBackend: "scheduler",

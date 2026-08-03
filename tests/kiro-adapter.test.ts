@@ -1031,3 +1031,21 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
     expect(cw["kiro-auto"]).toBeUndefined();
   });
 });
+
+describe("boundedInjectedInstruction surrogate safety", () => {
+  test("a budget cut never ends on a lone high surrogate", async () => {
+    const { boundedInjectedInstructionForTests } = await import("../src/adapters/kiro");
+    const { MAX_KIRO_INJECTED_INSTRUCTION_CHARS } = await import("../src/adapters/kiro-constants");
+    // Place an astral character exactly at the budget boundary.
+    const prefix = "가".repeat(MAX_KIRO_INJECTED_INSTRUCTION_CHARS - 1);
+    const text = `${prefix}🎆tail`;
+    const used = { value: 0 };
+    const result = boundedInjectedInstructionForTests(text, used);
+    expect(result).toBeDefined();
+    const last = result!.charCodeAt(result!.length - 1);
+    // The astral pair is dropped whole rather than split into a broken half.
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    expect(result!.includes("\uFFFD")).toBe(false);
+    expect(Buffer.byteLength(result!, "utf8")).toBeGreaterThan(0);
+  });
+});

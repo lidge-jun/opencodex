@@ -17,7 +17,7 @@ runs helper features around provider requests.
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise `supports_websockets` for the Responses WebSocket path. False keeps HTTP/SSE. |
-| `corsAllowOrigins?` | `string[]` | `[]` | Additional exact CORS origins. Loopback origins are always allowed. |
+| `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
@@ -120,6 +120,9 @@ subscription with a warning when detection is inconclusive. See
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
 replacement runs at low effort. Set `sourceModels` only when a client uses different helper ids.
+Codex 0.145.0+ marks request purpose in `x-codex-turn-metadata`: normal `request_kind: "turn"`
+requests keep the selected model, while recognized maintenance requests can be redirected. Clients
+without that metadata retain the legacy prefix behavior.
 
 ```json
 {

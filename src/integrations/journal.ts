@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { atomicWriteFile } from "../config";
-import { ensureDir, integrationsDir, type OwnershipRecord } from "./ownership";
+import { ensureDir, fingerprint, integrationsDir, type OwnershipRecord } from "./ownership";
 import { isIntegrationClientId, type IntegrationClientId } from "./registry";
 
 export type OperationKind = "apply" | "disable" | "refresh" | "restore";
@@ -52,6 +52,25 @@ export interface JournalEntry {
 }
 
 export const SNAPSHOT_RETENTION = 10;
+
+/**
+ * Does the file on disk still hold what this operation left behind?
+ *
+ * The one place that answers it, because two places answered differently. An
+ * operation whose result was ABSENCE records `resultAbsent: true` and an empty
+ * `resultFingerprint`; the route compared a missing file to `""` and called it
+ * a match, while restore hashed `""` into a real digest and called the same
+ * unchanged absence a drift. So the journal offered Undo and the restore
+ * route then demanded a confirmation for edits nobody had made.
+ *
+ * `currentText` is `null` for a missing file — not `""`, which is a file that
+ * exists and is empty. The distinction is the whole point.
+ */
+export function matchesOperationResult(entry: JournalEntry, currentText: string | null): boolean {
+  if (entry.resultAbsent) return currentText === null;
+  if (currentText === null) return false;
+  return fingerprint(currentText) === entry.resultFingerprint;
+}
 
 export function newOpId(): string {
   return randomUUID();

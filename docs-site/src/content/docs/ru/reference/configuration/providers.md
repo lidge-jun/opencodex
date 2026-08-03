@@ -58,6 +58,8 @@ cross-route credential fallback не существует. Строки API GPT-
 | `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (или alias `azure`). |
 | `baseUrl` | `string` | Базовый URL API upstream'а. Большинство built-in fixed-endpoint'ов игнорируют несовпадение; collision-safe key-preset'ы сохраняют старый custom destination с тем же именем. |
 | `responsesPath?` | `string` | Relative resource path для key-auth запросов `openai-responses`. Должен начинаться с `/` и не может содержать scheme, query или fragment. |
+| `supportsServiceTier?` | `boolean` | Три состояния поддержки `service_tier`. `true`: fast mode может подставлять поле, значения вызывающего сохраняются. `false`: поле удаляется и никогда не подставляется (апстрим, для которого задокументировано отсутствие поддержки, не должен его получать). Не задано: провайдер не классифицирован — значения вызывающего сохраняются без изменений, fast mode не подставляет. Registry классифицирует canonical OpenAI (`true`), DeepSeek и Volcengine Ark (`false`); задавайте явно только для custom gateway'ев, реально поддерживающих tier'ы. |
+| `preserveResponsesReasoningContent?` | `boolean` | Сохранять plaintext reasoning content в replay'нутых Responses reasoning item'ах вместо очистки (очистка — правило ChatGPT backend'а). Включайте для upstream'ов, чей контракт принимает reasoning replay, например DeepSeek. Proxy-minted `ocxr1` envelope'ы удаляются всегда. |
 | `disabled?` | `boolean` | Сохранить провайдера на диске, но исключить его из routing'а и из model/catalog-listing'ов. |
 | `apiKey?` | `string` | API-key либо ссылка `${ENV_VAR}` / `$ENV_VAR`, разрешаемая при каждом запросе. |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Header-style для ключа Anthropic. По умолчанию нативный `x-api-key`; допустим только для key-auth-провайдеров `anthropic`. |
@@ -82,7 +84,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `modelReasoningEfforts?` | `Record<string, string[]>` | Label'ы по отдельным моделям. Пустой список скрывает управление effort. |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Установите `false` для модели, чтобы перестать рекламировать summary и вырезать поля доставки summary. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Responses delivery enum по моделям; переписывает уже существующее поле delivery. |
-| `modelAdapters?` | `Record<string, string>` | Wire-override по модели для `openai-chat` или `openai-responses` в gateway с несколькими wire-форматами. Явные записи имеют приоритет над default'ами registry; preset DeepSeek может выбирать native Responses для `deepseek-v4-flash`. Single-wire upstream pin'ы и canonical ChatGPT forward override не принимают. |
+| `modelAdapters?` | `Record<string, string>` | Wire-override по модели для `openai-chat` или `openai-responses` в gateway с несколькими wire-форматами. Явные записи имеют приоритет над default'ами registry; preset DeepSeek может выбирать native Responses для `deepseek-v4-flash`, а GitHub Copilot объявляет Responses-only default'ы для семейства GPT-5 (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`), потому что эти модели отклоняют `/chat/completions` для агентного трафика. Модели без встроенного default'а (например, `gpt-5.4-nano`) можно включить здесь. Single-wire upstream pin'ы и canonical ChatGPT forward override не принимают. |
 | `reasoningEffortMap?` | `Record<string, string>` | Provider-wide wire-alias'ы для reasoning-label'ов. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Wire-alias'ы для reasoning-label'ов по отдельным моделям. |
 | `noReasoningModels?` | `string[]` | Модели, отвергающие параметры reasoning/thinking. |
@@ -97,6 +99,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `thinkingBudgetModels?` | `string[]` | Chat-модели, использующие целочисленный `thinking_budget`; effort отображается в долю бюджета. |
 | `noVisionModels?` | `string[]` | Text-only-модели, идущие через vision sidecar; при сопоставлении tolerируется тег Ollama вида `:size`. |
 | `escapeBuiltinToolNames?` | `boolean` | Экранировать built-in tool name'ы для Anthropic-compatible gateway'ев и восстанавливать их в возвращаемых call'ах. |
+| `anthropicEofTolerance?` | `boolean` | Позволяет Anthropic-совместимому шлюзу завершить поток до `message_stop`, только если получен видимый текст или полный JSON-объект аргументов инструмента. По умолчанию выключено. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Режим транспорта/аутентификации Google. По умолчанию `ai-studio`. |
 | `project?` | `string` | Идентификатор проекта Vertex или Antigravity Cloud Code Assist. |
 | `location?` | `string` | Локация Vertex; fallback через окружение — `GOOGLE_CLOUD_LOCATION`. |

@@ -666,6 +666,68 @@ describe("server local API auth", () => {
     }
   });
 
+  test("extension allowlist gates preflight and data-plane requests by authority", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const extensionOrigin = "chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh";
+    saveConfig({
+      ...config("127.0.0.1"),
+      corsAllowOrigins: [extensionOrigin],
+    });
+    stubModelDiscoveryFor("https://api.example.test");
+
+    const server = startServer(0);
+    const modelsUrl = new URL("/v1/models", server.url);
+    try {
+      const preflight = await fetch(modelsUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: extensionOrigin,
+          "access-control-request-method": "GET",
+        },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-origin")).toBe(extensionOrigin);
+
+      const accepted = await fetch(modelsUrl, { headers: { origin: extensionOrigin } });
+      expect(accepted.status).toBe(200);
+      expect(accepted.headers.get("access-control-allow-origin")).toBe(extensionOrigin);
+
+      const rejected = await fetch(modelsUrl, {
+        headers: { origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      });
+      expect(rejected.status).toBe(403);
+
+      // The management plane shares isExtraAllowedOrigin: the configured extension gets
+      // its preflight echoed, any other extension is refused before reaching /api/*.
+      const managementUrl = new URL("/api/settings", server.url);
+      const managementPreflight = await fetch(managementUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: extensionOrigin,
+          "access-control-request-method": "GET",
+        },
+      });
+      expect(managementPreflight.status).toBe(204);
+      expect(managementPreflight.headers.get("access-control-allow-origin")).toBe(extensionOrigin);
+
+      const managementRejected = await fetch(managementUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "access-control-request-method": "GET",
+        },
+      });
+      expect(managementRejected.status).toBe(403);
+      expect(managementRejected.headers.get("access-control-allow-origin")).not.toBe(
+        "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      );
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("loopback management API rejects host-header same-origin rebinding", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

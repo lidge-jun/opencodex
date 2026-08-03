@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import {
@@ -14,7 +14,7 @@ import {
 } from "./codex/account-namespace-match";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
 import {
-  forgetHardenedSecretPath,
+  forgetEphemeralSecretPath,
   hardenSecretDir,
   hardenSecretPath,
   hardenSecretPathAsync,
@@ -104,25 +104,92 @@ function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
+/**
+ * Resolve a write target through any symlink before the temp+rename dance.
+ *
+ * rename(2) replaces a directory ENTRY. When the entry is itself a symlink
+ * (a dotfiles-managed `~/.codex/config.toml` -> `~/dotfiles/.codex/config.toml`,
+ * say), renaming a sibling temp file over it destroys the link and leaves a plain
+ * file behind — the repo silently stops receiving writes. Resolving first puts both
+ * the temp file and the rename target inside the link's real directory, so the entry
+ * being replaced is the real file and the symlink survives.
+ *
+ * Same-filesystem atomicity is preserved because the temp file stays beside its
+ * resolved target. A genuinely absent destination (not yet created) falls back to
+ * the literal path, which is the correct target for a first write.
+ *
+ * An EXISTING symlink that cannot be resolved — dangling because its target volume
+ * is unmounted, an ELOOP chain, an EACCES parent — is refused instead. Falling back
+ * to the literal path there would let the rename replace the link, recreating the
+ * exact dotfiles-divergence failure this helper exists to prevent (audit: wt4 wp2).
+ */
+export function resolveWriteTarget(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (cause) {
+    let entry;
+    try {
+      entry = lstatSync(path);
+    } catch (error) {
+      if (isMissingPathError(error)) return path; // no entry at all — first write
+      throw error;
+    }
+    if (entry.isSymbolicLink()) {
+      throw new Error(`refusing to replace unresolvable symlinked write target: ${path}`, { cause });
+    }
+    return path;
+  }
+}
+
+/**
+ * Re-apply the real-home guard to a RESOLVED write target.
+ *
+ * Callers such as saveConfig check only their logical config dir, which passes when
+ * OPENCODEX_HOME points at a temp fixture. Following a symlink out of that fixture
+ * would land on the protected home the caller's own check just cleared, so the guard
+ * has to run again on wherever the write actually terminates. Inert in production,
+ * where the guard is disarmed.
+ */
+function assertResolvedTargetAllowed(path: string, target: string): void {
+  // The file itself may resolve literally while its PARENT is a symlink out
+  // of the fixture (a first write beneath a symlinked config dir). Guard the
+  // directory the write actually lands in either way.
+  if (target === path) {
+    let realParent: string;
+    try {
+      realParent = realpathSync(dirname(target));
+    } catch {
+      return; // unresolvable parent: resolveWriteTarget already owns that refusal
+    }
+    if (realParent !== dirname(target)) assertNotRealHomeUnderTest(realParent);
+    return;
+  }
+  assertNotRealHomeUnderTest(dirname(target));
+}
+
 export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO = {
   write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
   harden: target => {
     try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
-    if (process.platform === "win32") hardenSecretPath(target, { required: true });
+    // Timeout memo keyed by the stable destination (matches the async writer):
+    // a failed temp harden must not mint a new unique-temp key on every write.
+    if (process.platform === "win32") hardenSecretPath(target, { required: true, timeoutMemoKey: path });
   },
   rename: renameAtomicFile,
   truncate: target => truncateSync(target, 0),
   unlink: unlinkSync,
 }): void {
   recordOwnedConfigPath(resolveConfigDir(), path);
-  const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  const target = resolveWriteTarget(path);
+  assertResolvedTargetAllowed(path, target);
+  const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {
     io.write(tmp, content);
     io.harden(tmp);
     hardened = true;
-    io.rename(tmp, path);
-    forgetHardenedSecretPath(tmp);
+    io.rename(tmp, target);
+    forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     let scrubbed = false;
     try {
@@ -149,7 +216,7 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
     if (!removed && !hardened) {
       try { io.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
     }
-    if (removed) forgetHardenedSecretPath(tmp);
+    if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
   }
@@ -201,14 +268,16 @@ export async function atomicWriteFileAsync(
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,
   };
-  const tmp = `${path}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
+  const target = resolveWriteTarget(path);
+  assertResolvedTargetAllowed(path, target);
+  const tmp = `${target}.ocx.${process.pid}.${++_atomicSeq}.tmp`;
   let hardened = false;
   try {
     await effective.write(tmp, content);
     await effective.harden(tmp);
     hardened = true;
-    await effective.rename(tmp, path);
-    forgetHardenedSecretPath(tmp);
+    await effective.rename(tmp, target);
+    forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     let scrubbed = false;
     try {
@@ -235,7 +304,7 @@ export async function atomicWriteFileAsync(
     if (!removed && !hardened) {
       try { await effective.harden(tmp); hardened = true; } catch { /* zero-byte residual is reported honestly */ }
     }
-    if (removed) forgetHardenedSecretPath(tmp);
+    if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
   }
@@ -379,7 +448,7 @@ export function backupConfigBeforeOpenAiTierMigration(
         }
       }
     }
-    if (removed) forgetHardenedSecretPath(temp);
+    if (removed) forgetEphemeralSecretPath(temp);
     if (!removed && !scrubbed) throw new OpenAiTierBackupSecretResidualError(temp);
     if (!removed) throw new OpenAiTierBackupCleanupError();
   };
@@ -400,16 +469,16 @@ export function backupConfigBeforeOpenAiTierMigration(
     published = true;
     try {
       io.unlink(temp);
-      forgetHardenedSecretPath(temp);
+      forgetEphemeralSecretPath(temp);
     } catch (firstError) {
       if (isMissingPathError(firstError)) {
-        forgetHardenedSecretPath(temp);
+        forgetEphemeralSecretPath(temp);
       } else try {
         io.unlink(temp);
-        forgetHardenedSecretPath(temp);
+        forgetEphemeralSecretPath(temp);
       } catch (secondError) {
         if (isMissingPathError(secondError)) {
-          forgetHardenedSecretPath(temp);
+          forgetEphemeralSecretPath(temp);
           return "created";
         }
         // temp and backup are hard links to the same inode. Roll back the backup
@@ -482,6 +551,8 @@ const providerConfigSchema = z.object({
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
   responsesPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
+  supportsServiceTier: z.boolean().optional(),
+  preserveResponsesReasoningContent: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   responsesItemIdRepair: z.object({
@@ -1076,6 +1147,9 @@ export function getRuntimePortPath(): string {
 
 export function hardenConfigDir(): void {
   const dir = getConfigDir();
+  // The guard runs BEFORE any mutation: refusing the write after chmod/ACL
+  // would already have changed the protected directory (review round 2).
+  assertNotRealHomeUnderTest(dir);
   if (existsSync(dir)) {
     try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
     if (process.platform === "win32") {
@@ -2062,6 +2136,8 @@ export function applyProxyEnv(config: OcxConfig): void {
 
 export function writePid(pid: number): void {
   const dir = getConfigDir();
+  // Guard before ANY directory mutation (mkdir or chmod), not just the write.
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else {
@@ -2090,6 +2166,8 @@ function isValidRuntimePortState(value: unknown): value is RuntimePortState {
 
 export function writeRuntimePort(state: RuntimePortState): void {
   const dir = getConfigDir();
+  // Guard before ANY directory mutation (mkdir or chmod), not just the write.
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } else {

@@ -80,13 +80,26 @@ export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean
 
 function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
   if (!cfg.corsAllowOrigins?.length) return false;
+  const parsedOrigin = comparableOrigin(origin);
   return cfg.corsAllowOrigins.some(allowed => {
-    try {
-      return new URL(allowed).origin === new URL(origin).origin;
-    } catch {
-      return allowed === origin;
-    }
+    const parsedAllowed = comparableOrigin(allowed);
+    return parsedOrigin !== null && parsedAllowed !== null
+      ? parsedAllowed === parsedOrigin
+      : allowed === origin;
   });
+}
+
+function comparableOrigin(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.origin !== "null") return parsed.origin;
+    // WHATWG URL exposes authority-based custom schemes (for example browser
+    // extensions) as opaque `null` origins. Compare their scheme + authority so
+    // one allowlisted extension cannot admit every other opaque origin.
+    return parsed.host ? `${parsed.protocol}//${parsed.host}` : null;
+  } catch {
+    return null;
+  }
 }
 
 export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {

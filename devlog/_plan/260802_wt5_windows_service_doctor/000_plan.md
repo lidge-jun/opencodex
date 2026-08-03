@@ -1,6 +1,8 @@
 # wt5 — Windows scheduler settle + Bun provenance diagnostics (research)
 
-Worktree: `/Users/jun/.codex/worktrees/260802-wt5-windows-service` (branch `codex/wt5-windows-service`, off `dev`).
+Worktree: `/Users/jun/.codex/worktrees/bdbb/opencodex` (branch `codex/wt5-windows-service`, off `dev`).
+The originally scaffolded `260802-wt5-windows-service` checkout was empty and has been removed; this
+checkout owns the branch.
 Two must-fix bugs in service install/diagnostics.
 
 ## Scope

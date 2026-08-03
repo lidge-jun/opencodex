@@ -16,7 +16,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
 | `websockets?` | `boolean` | `false` |応答 WebSocket パスとして `supports_websockets` をアドバタイズします。 False は HTTP/SSE を維持します。 |
-| `corsAllowOrigins?` | `string[]` | `[]` |追加の正確な CORS 起点。ループバック起点は常に許可されます。 |
+| `corsAllowOrigins?` | `string[]` | `[]` | 追加の正確な CORS origin。ループバック origin は常に許可します。`chrome-extension://<extension-id>` など authority ベースのブラウザー拡張 origin に対応し、`*` はワイルドカードではありません。Firefox と Safari は拡張 UUID を（インストール/ブラウザー起動ごとに）再生成するため、origin が変わったらエントリを更新してください。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` |生成された `ocx_…` 資格情報は、非ループバック バインドでの管理およびデータ プレーン認証によって受け入れられました。ダッシュボードで管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` |排除可能なアプリ所有のログ、キャッシュ、BLOB、および継続ペイロードの MiB の上限。範囲は 64 ～ 4096。 RSSキャップではありません。 |

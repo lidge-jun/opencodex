@@ -27,6 +27,25 @@ let base = "";
 let home = "";
 let storeRoot = "";
 let store: IntegrationStateStore;
+
+/**
+ * The CSRF wire test fetches the real served page, which only exists when the
+ * GUI build does. CI runs `bun test` BEFORE `GUI build`, so the artifact is
+ * absent on a fresh checkout — build it once here instead of letting the page
+ * fall back to the JSON root payload (which silently voids the wire test).
+ */
+{
+  if (!existsSync(join(import.meta.dir, "..", "gui", "dist", "index.html"))) {
+    const build = Bun.spawnSync({
+      cmd: ["bun", "run", "build:gui"],
+      cwd: join(import.meta.dir, ".."),
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    if (build.exitCode !== 0) throw new Error("gui build failed for the wire-level CSRF suite");
+  }
+}
+
 /**
  * The environment the ROUTE resolves paths with — never `process.env`.
  *

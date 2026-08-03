@@ -18,7 +18,7 @@
 import { catalogModelEfforts, nativeEffortClamp, nativeOpenAiContextWindow, type CatalogModel } from "../codex/catalog";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
-import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, type AutoContextMode } from "./context-windows";
+import { AUTO_CONTEXT_OFF, type AutoContextMode } from "./context-windows";
 
 const MODEL_INFO_CREATED_AT = "2026-01-01T00:00:00Z";
 const ANTHROPIC_EFFORT_RUNGS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -113,19 +113,22 @@ export function buildAnthropicModelInfos(
   const seen = new Set<string>();
   // [1m] picker variant (devlog 260712 B1): Claude Code accounts exactly 1M for ids
   // carrying the marker (2.1.207 binary: /\[1m\]/i → 1e6, compaction preserved), so
-  // models with an authoritative >=1M window get a second selectable row. In
-  // auto-context mode (devlog 020) the predicate widens to windows > 200k that can
-  // host the compact window — display stays honest (real window, not "1M"). Guards
-  // (audit R1#11): same dedupe set, never double-suffix.
-  const push1mVariant = (base: AnthropicModelInfo, contextWindow: number | undefined, mode: AutoContextMode = auto) => {
-    if (!shouldMarkOneMillion(contextWindow, mode)) return;
+  // ONLY models with an authoritative >=1M window get a second selectable row —
+  // the auto-context widening that let a 372K route carry the marker (and be
+  // over-filled) is the #854 defect and does not come back. Guards (audit R1#11):
+  // same dedupe set, never double-suffix.
+  const push1mVariant = (base: AnthropicModelInfo, contextWindow: number | undefined) => {
+    // The [1m] marker makes Claude Code account 1e6 tokens for the row, so it
+    // may only name models whose AUTHORITATIVE effective window is >= 1M —
+    // never the auto-context widening, which would mark a 372K route and have
+    // Claude Code over-fill it (the #854 defect).
+    if (contextWindow === undefined || contextWindow < ONE_MILLION) return;
     if (base.id.includes("[1m]")) return;
     const id = `${base.id}[1m]`;
     if (seen.has(id)) return;
     seen.add(id);
     const window = contextWindow as number;
-    const label = window >= ONE_MILLION ? "1M" : `${Math.round(window / 1_000)}k`;
-    out.push({ ...base, id, display_name: `${base.display_name} · ${label}`, max_input_tokens: Math.min(window, ONE_MILLION) });
+    out.push({ ...base, id, display_name: `${base.display_name} · 1M`, max_input_tokens: ONE_MILLION });
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
@@ -145,7 +148,7 @@ export function buildAnthropicModelInfos(
     out.push(info);
     // Anthropic passthrough guard (audit 021 #3): never auto-widen canonical claude
     // routes — only a genuine >=1M window earns the variant row there.
-    push1mVariant(info, m.contextWindow, m.provider === "anthropic" ? AUTO_CONTEXT_OFF : auto);
+    push1mVariant(info, m.contextWindow);
   }
   return out;
 }

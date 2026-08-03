@@ -7,6 +7,12 @@ export const BOUNDED_BODY_TIMEOUT_MS = 5_000;
 export interface BoundedBodyOptions {
 	/** Abort the read with this signal. Its reason is rethrown by identity. */
 	signal?: AbortSignal;
+	/**
+	 * Byte ceiling for retained body data. Defaults to BOUNDED_BODY_MAX_BYTES (64 KiB),
+	 * which suits error bodies; callers materializing whole success payloads (e.g. a
+	 * non-streaming upstream JSON completion) pass a larger explicit budget.
+	 */
+	maxBytes?: number;
 	/** Total wall-clock deadline. Exposed for focused tests. */
 	totalTimeoutMs?: number;
 	/** Deadline between non-empty raw chunks. Exposed for focused tests. */
@@ -93,7 +99,11 @@ export async function readBoundedResponseBody(
 	}
 
 	const reader = body.getReader();
-	const chunks: Uint8Array[] = [];
+	const maxBytes = options.maxBytes ?? BOUNDED_BODY_MAX_BYTES;
+	// Geometrically growing single buffer: per-chunk arrays would retain one object per
+	// transport chunk, which a hostile peer could inflate into metadata amplification far
+	// beyond the payload ceiling on large budgets.
+	let retained = new Uint8Array(Math.min(maxBytes, 64 * 1024));
 	let retainedBytes = 0;
 	let mustCancel = false;
 	let cancelReason: unknown;
@@ -134,7 +144,7 @@ export async function readBoundedResponseBody(
 					"TimeoutError",
 				);
 				return {
-					text: decodeUtf8(chunks),
+					text: decodeUtf8([retained.subarray(0, retainedBytes)]),
 					truncated: true,
 					timedOut: true,
 					totalTimedOut: outcome === TOTAL_TIMEOUT,
@@ -147,7 +157,7 @@ export async function readBoundedResponseBody(
 			const { value, done } = outcome as ReadableStreamReadResult<Uint8Array>;
 			if (done) {
 				return {
-					text: decodeUtf8(chunks),
+					text: decodeUtf8([retained.subarray(0, retainedBytes)]),
 					truncated: false,
 					timedOut: false,
 					totalTimedOut: false,
@@ -165,10 +175,10 @@ export async function readBoundedResponseBody(
 				INACTIVITY_TIMEOUT,
 			);
 
-			if (value.byteLength > BOUNDED_BODY_MAX_BYTES - retainedBytes) {
+			if (value.byteLength > maxBytes - retainedBytes) {
 				mustCancel = true;
 				cancelReason = new DOMException("Error body size limit reached", "QuotaExceededError");
-				chunks.length = 0;
+				retained = new Uint8Array(0);
 				retainedBytes = 0;
 				return {
 					text: "",
@@ -181,7 +191,14 @@ export async function readBoundedResponseBody(
 				};
 			}
 
-			chunks.push(value);
+			if (retainedBytes + value.byteLength > retained.length) {
+				const grown = new Uint8Array(
+					Math.min(maxBytes, Math.max(retained.length * 2, retainedBytes + value.byteLength)),
+				);
+				grown.set(retained.subarray(0, retainedBytes));
+				retained = grown;
+			}
+			retained.set(value, retainedBytes);
 			retainedBytes += value.byteLength;
 		}
 	} catch (error) {

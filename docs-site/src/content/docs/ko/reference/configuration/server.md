@@ -16,7 +16,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `connectTimeoutMs?` | `number` | `200000` | 시도별 DNS/TCP/TLS/최종 헤더 기한입니다. 본문 생성 전에 끝납니다. |
 | `shutdownTimeoutMs?` | `number` | `5000` | 진행 중인 turn을 중단하기 전에 허용하는 정상 종료 드레인 기한입니다. |
 | `websockets?` | `boolean` | `false` | Responses WebSocket 경로에 `supports_websockets`를 광고합니다. `false`이면 HTTP/SSE를 유지합니다. |
-| `corsAllowOrigins?` | `string[]` | `[]` | 추가로 허용할 정확한 CORS origin입니다. 루프백 origin은 항상 허용됩니다. |
+| `corsAllowOrigins?` | `string[]` | `[]` | CORS에서 추가로 허용할 정확한 origin입니다. 루프백 origin은 항상 허용됩니다. `chrome-extension://<extension-id>` 같은 authority 기반 브라우저 확장 origin을 지원하며, `*`는 와일드카드가 아닙니다. Firefox와 Safari는 확장 UUID를 (설치/브라우저 실행 때마다) 새로 만드므로 origin이 바뀌면 항목을 갱신하세요. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 비루프백 바인드에서 관리 API와 데이터 플레인 인증이 허용하는 생성된 `ocx_…` 자격 증명입니다. 대시보드에서 관리합니다. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 선택적으로 활성화하는 보관 세션 정리 정책입니다. 절대 암묵적으로 활성화되지 않습니다. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 제거 가능한 앱 소유 로그, 캐시, blob, continuation payload에 대한 MiB 단위 상한입니다. 범위는 64–4096이며 RSS 상한은 아닙니다. |

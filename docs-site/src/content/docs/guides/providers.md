@@ -314,6 +314,15 @@ device-flow login for a short-lived Copilot API token — not a pasted API key. 
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
+Copilot fronts a mixed-wire catalog: its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`,
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) rejects
+`/chat/completions` for agent traffic, so opencodex routes those models over the
+Responses API by built-in default while every other Copilot model stays on chat
+completions. The precedence is: hard wire pin → your explicit
+[`modelAdapters`](/reference/configuration/providers/) entry → registry default →
+provider-wide adapter. To opt a model without a built-in default (for example
+`gpt-5.4-nano`) into Responses, set `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.
+
 Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` appears in `ocx init`
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
 fallback model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, setOwnedBudgetAbandonedMsForTests } from "../src/bridge";
+import {
+  resetTranslatorAggregateForTests,
+  translatorAggregateCurrentBytesForTests,
+  translatorLiveBudgetCountForTests,
+} from "../src/lib/translator-budget";
 import type { AdapterEvent } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -1020,5 +1025,87 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     ], "routed/model");
     expect(json.status).toBe("completed");
     expect(json.incomplete_details).toBeUndefined();
+  });
+});
+
+describe("buildResponseJSON default budget safety net", () => {
+  test("omitting the translator budget is bounded, never unbounded", () => {
+    // A single tool call with arguments above the 2 MiB default per-call cap
+    // must overflow even with NO budget option passed (previously unbounded).
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_huge", name: "f" },
+      { type: "tool_call_delta", arguments: "x".repeat(3 * 1024 * 1024) },
+      { type: "tool_call_end", id: "call_huge" },
+      { type: "done" },
+    ];
+    expect(() => buildResponseJSON(events, "mock/test-model")).toThrow(/translation_buffer_limit|buffer exceeded/);
+  });
+});
+
+describe("bridgeToResponsesSSE owned default budget lifecycle", () => {
+  test("terminal completion disposes the owned default budget", async () => {
+    const before = translatorLiveBudgetCountForTests();
+    const stream = bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "hi" },
+      { type: "done" },
+    ]), "mock/test-model");
+    await new Response(stream).text();
+    expect(translatorLiveBudgetCountForTests()).toBe(before);
+  });
+
+  test("client cancel disposes the owned default budget", async () => {
+    const before = translatorLiveBudgetCountForTests();
+    const stream = bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "hi" },
+      { type: "done" },
+    ]), "mock/test-model");
+    await stream.cancel(new Error("client gone"));
+    expect(translatorLiveBudgetCountForTests()).toBe(before);
+  });
+
+  test("cancel during a pending upstream next never charges the disposed budget", async () => {
+    resetTranslatorAggregateForTests();
+    let release: ((event: AdapterEvent) => void) | null = null;
+    async function* gated(): AsyncGenerator<AdapterEvent> {
+      yield { type: "text_delta", text: "first" };
+      yield await new Promise<AdapterEvent>((resolve) => { release = resolve; });
+      yield { type: "done" };
+    }
+    const stream = bridgeToResponsesSSE(gated(), "mock/test-model");
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    // Drain frames until the first text arrives; the next read leaves step()
+    // parked inside `await it.next()`.
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("stream closed before the first text frame");
+      if (decoder.decode(value).includes("first")) break;
+    }
+    const pending = reader.read();
+    // Prove the second upstream next() has STARTED before cancelling — otherwise
+    // the cancel happens before the race exists and the regression is vacuous.
+    for (let attempt = 0; attempt < 200 && !release; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(release).not.toBeNull();
+    await reader.cancel(new Error("client gone"));
+    release?.({ type: "text_delta", text: "late event after cancel" });
+    await pending;
+    reader.releaseLock();
+    expect(translatorLiveBudgetCountForTests()).toBe(0);
+    expect(translatorAggregateCurrentBytesForTests()).toBe(0);
+  });
+
+  test("an abandoned stream's owned budget is disposed by the watchdog", async () => {
+    resetTranslatorAggregateForTests();
+    setOwnedBudgetAbandonedMsForTests(10);
+    try {
+      const before = translatorLiveBudgetCountForTests();
+      bridgeToResponsesSSE(replay([{ type: "text_delta", text: "never read" }]), "mock/test-model");
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(translatorLiveBudgetCountForTests()).toBe(before);
+    } finally {
+      setOwnedBudgetAbandonedMsForTests(null);
+    }
   });
 });

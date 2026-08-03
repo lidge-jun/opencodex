@@ -1357,6 +1357,14 @@ dialog.modal-overlay::backdrop {
 .codex-auto-switch-copy { flex: 1 1 auto; min-width: 0; }
 .codex-auto-switch-copy .card-sub { padding: 2px 0 0; }
 .codex-auto-switch-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-request-user-input-card { gap: 16px; flex-wrap: wrap; }
+.codex-request-user-input-copy { flex: 1 1 auto; min-width: 0; }
+.codex-request-user-input-copy .card-sub { padding: 2px 0 0; }
+.codex-request-user-input-config { display: block; margin-top: 6px; overflow-wrap: anywhere; font-size: var(--text-label); color: var(--muted); }
+.codex-request-user-input-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-request-user-input-controls > .toggle { margin-left: auto; }
+.codex-request-user-input-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
+.codex-request-user-input-feedback.is-error { color: var(--red); }
 /* The toggle now lives in the slot below, which carries the auto margin itself. */
 /*
   Toggle slot: matches the height of the threshold compound so the 20px toggle centres against

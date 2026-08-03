@@ -138,17 +138,27 @@ jobs:
           fi
 
           ci_url="$(
+            # shellcheck disable=SC2016
+            # `$branch` is a jq variable bound by --arg, not a shell variable, so
+            # the filter must stay single-quoted.
             gh run list \
               --workflow ci.yml \
               --commit "$GITHUB_SHA" \
               --status success \
               --limit 10 \
-              --json conclusion,headSha,url,workflowName \
-              --jq '.[0].url // ""'
+              --json conclusion,headSha,url,workflowName,event,headBranch \
+              --jq --arg branch "${GITHUB_REF#refs/heads/}" \
+                'map(select(.event == "push" and .headBranch == $branch)) | .[0].url // ""'
           )"
 
           if [ -z "$ci_url" ]; then
-            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA}. Wait for CI to pass before releasing."
+            # Deliberately narrower than "any successful ci.yml run for this SHA".
+            # The Windows suite runs on promotion pushes to main/preview and on
+            # dispatch, not on pull requests — so a green PR run for the same SHA
+            # proves Linux and macOS and says nothing about Windows. Accepting it
+            # here would let a publish proceed while the promotion run that
+            # actually carries Windows was still pending, or had failed.
+            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA} on ${GITHUB_REF#refs/heads/} (push event). A pull-request run does not qualify: it skips the Windows leg. Wait for the promotion run to pass before releasing."
             gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 10 || true
             exit 1
           fi

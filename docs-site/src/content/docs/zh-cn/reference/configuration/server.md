@@ -17,7 +17,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `connectTimeoutMs?` | `number` | `200000` | 每次尝试的 DNS/TCP/TLS/最终响应头截止时间；它在正文生成之前结束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 优雅停机截止时间，超过后会中止仍在进行中的请求。 |
 | `websockets?` | `boolean` | `false` | 为 Responses WebSocket 路径声明 `supports_websockets`。设为 false 会保留 HTTP/SSE。 |
-| `corsAllowOrigins?` | `string[]` | `[]` | 额外的精确 CORS 来源。回环来源始终允许。 |
+| `corsAllowOrigins?` | `string[]` | `[]` | CORS 额外允许的精确 origin。loopback origin 始终允许；支持 `chrome-extension://<扩展 ID>` 等基于 authority 的浏览器扩展 origin，`*` 不是通配符。Firefox 和 Safari 会（每次安装/启动浏览器时）重新生成扩展 UUID，origin 变化后请更新该条目。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 管理平面和非回环绑定上的数据平面身份验证可接受的已生成 `ocx_…` 凭据。由仪表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |

@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { hardenSecretPath } from "../lib/windows-secret-acl";
+import { forgetEphemeralSecretPath, hardenSecretPath, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
@@ -72,16 +72,34 @@ export function durableWrite(path: string, content: string): void {
   let fd: number | undefined;
   try {
     writeFileSync(tmp, content, { encoding: "utf8", mode: FILE_MODE });
-    if (process.platform === "win32") hardenSecretPath(tmp, { required: false });
+    // The journal carries full config.toml bytes (provider credentials):
+    // hardening must fail closed, matching the token/tray writers.
+    if (windowsSecretAclApplies()) hardenSecretPath(tmp, { required: true, timeoutMemoKey: path });
     fd = openSync(tmp, "r+");
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
     renameSync(tmp, path);
+    // The temp is renamed away: proven absent — release its ACL memos.
+    forgetEphemeralSecretPath(tmp);
     fsyncDir(path);
   } catch (error) {
     try { if (fd !== undefined) closeSync(fd); } catch { /* ignore */ }
-    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* ignore */ }
+    if (!existsSync(tmp)) {
+      // Explicit non-existence is proven absence — release even when the
+      // failure happened before/while the temp disappeared.
+      forgetEphemeralSecretPath(tmp);
+    } else {
+      try {
+        unlinkSync(tmp);
+        forgetEphemeralSecretPath(tmp);
+      } catch (cleanupError) {
+        if ((cleanupError as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+          forgetEphemeralSecretPath(tmp);
+        }
+        /* residual temp: memos stay (fail-closed) */
+      }
+    }
     throw error;
   }
 }
@@ -90,8 +108,10 @@ export function durableDelete(path: string): void {
   try {
     if (existsSync(path)) unlinkSync(path);
     fsyncDir(path);
-  } catch {
-    /* a missing file is the state we wanted */
+  } catch (error) {
+    // Only absence is the state we wanted; every other deletion failure must
+    // surface — recovery and commit evidence depend on the file being gone.
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") throw error;
   }
 }
 
@@ -223,13 +243,65 @@ export function recoverIfNeeded(journalPath: string): RecoveryOutcome {
   }
 
   if (config === "post" && store === "post") {
-    durableDelete(journalPath);
+    try {
+      durableDelete(journalPath);
+    } catch (error) {
+      return {
+        ok: false,
+        error: "recovery_required",
+        detail: `commit confirmed but the journal could not be removed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
     return { ok: true, action: "committed" };
   }
 
-  if (config === "post") restore(record.configPath, record.preConfigBytes);
-  if (store === "post") restore(record.storePath, record.preStoreBytes);
-  durableDelete(journalPath);
+  // Revalidate each target immediately before its own restore: a target that
+  // changed since the initial classification must not be overwritten.
+  if (config === "post") {
+    if (classify(readOrNull(record.configPath), record.preConfig, record.postConfig) !== "post") {
+      return {
+        ok: false,
+        error: "recovery_required",
+        detail: `${record.configPath} changed after its first classification; refusing to overwrite it`,
+      };
+    }
+    try {
+      restore(record.configPath, record.preConfigBytes);
+    } catch (error) {
+      return {
+        ok: false,
+        error: "recovery_required",
+        detail: `rollback of ${record.configPath} failed mid-write: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+  if (store === "post") {
+    if (classify(readOrNull(record.storePath), record.preStore, record.postStore) !== "post") {
+      return {
+        ok: false,
+        error: "recovery_required",
+        detail: `${record.storePath} changed after its first classification; refusing to overwrite it`,
+      };
+    }
+    try {
+      restore(record.storePath, record.preStoreBytes);
+    } catch (error) {
+      return {
+        ok: false,
+        error: "recovery_required",
+        detail: `rollback of ${record.storePath} failed mid-write: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+  try {
+    durableDelete(journalPath);
+  } catch (error) {
+    return {
+      ok: false,
+      error: "recovery_required",
+      detail: `rollback restored but the journal could not be removed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   return { ok: true, action: "rolled-back" };
 }
 

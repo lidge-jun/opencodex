@@ -85,6 +85,24 @@ describe("GUI update check", () => {
     expect(result.canUpdate).toBe(false);
     expect(result.reason).toBe("already_latest");
   });
+
+  test("offers a stable update from an older preview but not the same base", () => {
+    const olderPreview = checkForUpdate("latest", {
+      currentVersion: () => "2.8.2-preview.20260731",
+      detectInstall: () => "npm",
+      latestVersion: () => "2.9.1",
+    });
+    expect(olderPreview.updateAvailable).toBe(true);
+    expect(olderPreview.canUpdate).toBe(true);
+
+    const sameBasePreview = checkForUpdate("latest", {
+      currentVersion: () => "2.9.1-preview.20260731",
+      detectInstall: () => "npm",
+      latestVersion: () => "2.9.1",
+    });
+    expect(sameBasePreview.updateAvailable).toBe(false);
+    expect(sameBasePreview.canUpdate).toBe(false);
+  });
 });
 
 describe("GUI update execution decisions", () => {

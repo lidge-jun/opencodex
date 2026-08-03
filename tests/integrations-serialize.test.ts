@@ -65,11 +65,30 @@ describe("renderYaml", () => {
     expect(renderYaml({ a: {}, b: [] })).toBe("a: {}\nb: []\n");
   });
 
-  test("throws rather than emitting ambiguous bytes", () => {
-    expect(() => renderYaml({ k: null })).toThrow(/unsupported YAML value/);
-    expect(() => renderYaml({ k: Number.NaN })).toThrow(/unsupported YAML number/);
-    expect(() => renderYaml({ k: [[1]] })).toThrow(/unsupported YAML array item/);
+  test("renders the values YAML actually allows", () => {
+    /*
+     * These renderers used to see only our own builder output, so anything
+     * richer threw. The integration writer feeds them the USER's whole parsed
+     * config, and a legitimate `null` threw straight out of the writer as a
+     * 500 on a file we had no business rejecting.
+     */
+    expect(renderYaml({ k: null })).toBe("k: null\n");
+    expect(renderYaml({ k: { nested: null } })).toBe("k:\n  nested: null\n");
+  });
+
+  test("still refuses what YAML genuinely cannot represent", () => {
+    expect(() => renderYaml({ k: Number.NaN })).toThrow(/YAML cannot represent the number/);
     expect(() => renderYaml({ a: 1 }, -1)).toThrow(/non-negative integer/);
+    // The message names the KIND, never the value — a config may hold secrets.
+    expect(() => renderYaml({ k: () => 1 })).toThrow(/YAML cannot represent .*function/);
+  });
+
+  test("nested sequences render, because YAML has always allowed them", () => {
+    // This threw a PLAIN Error carrying `String(item)` — untyped, so the
+    // writer surfaced it as a 500, and it repeated the value's contents into
+    // the message of a config that may hold secrets.
+    expect(renderYaml({ matrix: [[1, 2], [3, 4]] })).toBe("matrix:\n  -\n    - 1\n    - 2\n  -\n    - 3\n    - 4\n");
+    expect(renderYaml({ k: [[]] })).toBe("k:\n  - []\n");
   });
 });
 
@@ -89,9 +108,18 @@ describe("renderToml", () => {
     expect(Bun.TOML.parse(renderToml(doc))).toEqual(doc);
   });
 
-  test("throws on a value TOML cannot express inline", () => {
-    expect(() => renderToml({ k: null })).toThrow(/unsupported TOML value/);
-    expect(() => renderToml({ k: [1, 2] })).toThrow(/unsupported TOML value/);
+  test("renders arrays of any scalar, not only strings", () => {
+    // TOML 1.0 permits mixed-type arrays; the string-only check was written
+    // against our builder output and refused `ports = [1, 2]` in a real file.
+    expect(renderToml({ k: [1, 2] })).toContain("k = [1, 2]");
+    expect(renderToml({ k: [true, false] })).toContain("k = [true, false]");
+    expect(renderToml({ k: ["a", 1, true] })).toContain('k = ["a", 1, true]');
+  });
+
+  test("still refuses what TOML cannot express inline", () => {
+    // TOML has no null; that is a real limit of the format, not of our renderer.
+    expect(() => renderToml({ k: null })).toThrow(/TOML cannot represent/);
+    expect(() => renderToml({ k: () => 1 })).toThrow(/TOML cannot represent .*function/);
   });
 
   test("escapes strings", () => {

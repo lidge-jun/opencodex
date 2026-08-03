@@ -31,6 +31,15 @@ The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/ef
 `/api/subagent-models`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
 the custom prompt is the `prompt` field on that API.
 
+The Codex Auth page can also toggle Codex's own `default_mode_request_user_input`
+feature flag (`GET`/`PUT /api/codex-auth/features/default-mode-request-user-input`). Enabling it
+adds `[features] default_mode_request_user_input = true` to Codex's
+`$CODEX_HOME/config.toml` through the official `codex features enable|disable` CLI
+(format-preserving edit, removed again when disabled), which lets Codex pause a
+Default-mode session and ask you questions with the `request_user_input` tool. The
+flag is under development upstream and only applies to new sessions; the toggle fails
+loudly when the installed Codex build does not know the flag yet.
+
 ## Roster and guidance
 
 The effective v2 roster is the configured, picker-visible, priority-sorted first five models that

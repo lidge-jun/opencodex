@@ -8,7 +8,7 @@
  *
  * Design of record: devlog/_plan/260802_client_toggle_api/021 §3.
  */
-import { EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
@@ -23,7 +23,9 @@ export type StateReason =
   | "foreign-edit"
   | "unowned-key"
   /** A container we would have to write through holds a non-object value. */
-  | "blocked-container";
+  | "blocked-container"
+  /** A path selector we cannot resolve, e.g. a relative OPENCLAW_CONFIG_PATH. */
+  | "unresolvable-path";
 
 export interface IntegrationStatus {
   clientId: IntegrationClientId;
@@ -227,9 +229,29 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   const io = input.io ?? store.io();
   const spec = INTEGRATION_CLIENTS[input.clientId];
   const exportSpec = EXPORT_CLIENTS[input.clientId];
-  const configPath = spec.configPath(input.env, input.home);
-  const installed = io.statKind(spec.detectDir(input.env, input.home)) === "dir";
   const retention = retentionOf(input.clientId, store);
+  /*
+   * Resolution can refuse — a relative OPENCLAW_* selector names a file whose
+   * meaning depends on a working directory we cannot know. The LIST route asks
+   * every client for its state, so letting that escape would answer 500 for
+   * the whole Integrations page because one client is misconfigured.
+   */
+  let configPath: string;
+  let installed: boolean;
+  try {
+    configPath = spec.configPath(input.env, input.home);
+    installed = io.statKind(spec.detectDir(input.env, input.home)) === "dir";
+  } catch (error) {
+    if (!(error instanceof ClientPathError)) throw error;
+    return {
+      clientId: input.clientId,
+      state: "unsafe",
+      installed: false,
+      configPath: "",
+      reason: "unresolvable-path",
+      ...retention,
+    };
+  }
 
   const target = loadTarget(io, configPath);
   if (!target.ok) {

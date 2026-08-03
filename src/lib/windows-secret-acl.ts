@@ -173,6 +173,24 @@ export function forgetHardenedSecretPath(targetPath: string): void {
   hardenedPaths.delete(targetPath);
 }
 
+/**
+ * Ephemeral-path lifecycle release: clears the success memo AND any timeout
+ * memo keyed by THIS TEMP path in both namespaces. Call only after the temp is
+ * proven absent (successful rename, successful unlink, ENOENT, or an explicit
+ * non-existence check). Never pass a stable destination: destination-keyed
+ * timeout memos are intentional anti-restall state and are not touched here.
+ */
+export function forgetEphemeralSecretPath(tempPath: string): void {
+  hardenedPaths.delete(tempPath);
+  timedOutPaths.delete(`required:${tempPath}`);
+  timedOutPaths.delete(`optional:${tempPath}`);
+}
+
+/** Test seam: timeout memo sets return to baseline after ephemeral cleanup. */
+export function timedOutSecretPathCountForTests(): number {
+  return timedOutPaths.size;
+}
+
 /** Test seam for proving ephemeral success memos do not grow across replacements. */
 export function hardenedSecretPathCountForTests(): number {
   return hardenedPaths.size;

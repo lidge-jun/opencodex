@@ -10,7 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 import type { IntegrationIO } from "../../integrations/config-io";
-import { fingerprint } from "../../integrations/ownership";
+import { matchesOperationResult } from "../../integrations/journal";
 import {
   INTEGRATION_CLIENT_IDS,
   isIntegrationClientId,
@@ -223,12 +223,20 @@ async function buildIntegrationWriteInput(
   };
 }
 
-function liveResultFingerprint(configPath: string): string | null {
+/**
+ * The file's current bytes, or `null` when it is missing.
+ *
+ * `null` is NOT the same as `""`: an absent file and an empty one are
+ * different states, and collapsing them is what made this route disagree with
+ * the writer about whether an absence-result operation had drifted.
+ * `undefined` means we could not read it at all, which is neither.
+ */
+function currentConfigText(configPath: string): string | null | undefined {
   try {
-    return fingerprint(readFileSync(configPath, "utf8"));
+    return readFileSync(configPath, "utf8");
   } catch (error) {
-    if (isPlainRecord(error) && error.code === "ENOENT") return "";
-    return null;
+    if (isPlainRecord(error) && error.code === "ENOENT") return null;
+    return undefined;
   }
 }
 
@@ -386,9 +394,18 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
            * `none` stays undoable — restoring an op that created a file means
            * deleting it, and that needs no snapshot bytes.
            */
-          undoable: snapshot !== "expired"
-            && newestByClient.get(operation.clientId) === operation.opId
-            && liveResultFingerprint(operation.configPath) === operation.resultFingerprint,
+          /*
+           * Eligibility goes through the SAME matcher restore uses. This route
+           * used to represent a missing file as `""` and call that a match,
+           * while restore hashed `""` into a real digest — so the row was
+           * offered as Undo and then refused as drift.
+           */
+          undoable: (() => {
+            if (snapshot === "expired") return false;
+            if (newestByClient.get(operation.clientId) !== operation.opId) return false;
+            const current = currentConfigText(operation.configPath);
+            return current === undefined ? false : matchesOperationResult(operation, current);
+          })(),
         };
       });
       return jsonResponse({ operations } satisfies IntegrationJournalEnvelope, 200, req, ctx.config);

@@ -1728,3 +1728,31 @@ describe("kiro adapter — parseResponse (web-search sidecar non-streaming path)
     expect(usage?.contextTotalTokens).toBeGreaterThanOrEqual(builtEstimate);
   });
 });
+
+describe("surrogate safety at kiro boundaries", () => {
+  test("the reasoning carry never emits a delta ending on a lone high surrogate", async () => {
+    const { KiroThinkingParser } = await import("../src/adapters/kiro-thinking");
+    const parser = new KiroThinkingParser();
+    // An astral char exactly at the carry/send boundary.
+    const events = parser.feed("<thinking>🎆aaaaaaaaaaa");
+    const emitted = JSON.stringify(events);
+    expect(emitted.includes("\uFFFD")).toBe(false);
+    for (const event of events) {
+      const text = (event as { text?: string }).text ?? "";
+      if (text.length === 0) continue;
+      const last = text.charCodeAt(text.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    }
+  });
+
+  test("a truncated tool description never ends on a lone high surrogate", async () => {
+    const { truncateDescriptionForTests } = await import("../src/adapters/kiro-tools");
+    const description = "a".repeat(1022) + "🎆cd";
+    const out = truncateDescriptionForTests(description, 1024);
+    expect(out.endsWith("…")).toBe(true);
+    const kept = out.slice(0, -1);
+    const last = kept.charCodeAt(kept.length - 1);
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    expect(out.includes("\uFFFD")).toBe(false);
+  });
+});

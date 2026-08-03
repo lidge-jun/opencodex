@@ -3,6 +3,7 @@ import type { StartupInstallAction } from "../startup-action-control";
 
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
+  toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   refreshCodexCatalog?: () => Promise<void>;
   /**
    * Persistence seam for route-level tests. Production leaves this unset and uses

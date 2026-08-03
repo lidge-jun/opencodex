@@ -96,3 +96,38 @@ describe("isAllowedRequestOrigin over a forwarded port", () => {
     ).toBe(false);
   });
 });
+
+describe("isAllowedRequestOrigin with extension origins", () => {
+  test("admits only the configured browser extension authority", () => {
+    const config = {
+      ...loopbackConfig,
+      corsAllowOrigins: ["chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh"],
+    } as OcxConfig;
+
+    expect(
+      isAllowedRequestOrigin(
+        request("localhost:10100", "chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh"),
+        config,
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedRequestOrigin(
+        request("localhost:10100", "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        config,
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedRequestOrigin(
+        request("localhost:10100", "moz-extension://modkelfkcfjpgbfmnbnllalkiogfofh"),
+        config,
+      ),
+    ).toBe(false);
+
+    expect(
+      isAllowedRequestOrigin(
+        request("localhost:10100", "chrome-extension://modkelfkcfjpgbfmnbnllalkiogfofh"),
+        { ...loopbackConfig, corsAllowOrigins: ["*"] } as OcxConfig,
+      ),
+    ).toBe(false);
+  });
+});

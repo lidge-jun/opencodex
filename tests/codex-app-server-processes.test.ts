@@ -457,13 +457,26 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         expect(child.pid).toBeGreaterThan(1);
         // Brief settle so Win32_Process can observe the child. A loaded Windows
         // runner can also exhaust one CIM enumeration deadline, so tolerate one
-        // transient empty result while keeping the production timeout unchanged.
+        // transient empty result OR one thrown deadline (ETIMEDOUT propagates by
+        // design) while keeping the production timeout unchanged.
         Bun.sleepSync(250);
-        let snapshots = listWindowsSnapshots();
+        const enumerate = (): ReturnType<typeof listWindowsSnapshots> | undefined => {
+          try {
+            return listWindowsSnapshots();
+          } catch {
+            return undefined; // transient CIM deadline on a contended runner
+          }
+        };
+        let snapshots = enumerate() ?? [];
         let match = snapshots.find(snapshot => snapshot.pid === child.pid);
         if (!match) {
           Bun.sleepSync(250);
-          snapshots = listWindowsSnapshots();
+          snapshots = enumerate() ?? [];
+          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        }
+        if (!match) {
+          Bun.sleepSync(1_000);
+          snapshots = enumerate() ?? [];
           match = snapshots.find(snapshot => snapshot.pid === child.pid);
         }
         expect(match).toBeDefined();

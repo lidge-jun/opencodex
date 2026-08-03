@@ -76,7 +76,7 @@ describe("service listen-port bake", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });
     saveConfig({ port: 13337, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig);
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" });
     expect(script).toContain("start --port 13337");
     expect(buildPlist()).toContain("start --port 13337");
     expect(buildUnit()).toContain("start --port 13337");
@@ -495,6 +495,7 @@ describe("Windows service task", () => {
   test("escapes service executable paths through variables", () => {
     const script = buildWindowsServiceScript({
       bun: "C:\\Bun&Dir\\100%bun^\\bun.exe",
+      bunRuntimeSource: "bundled",
       cli: "C:\\OpenCodex&Dir\\cli.ts",
     });
 
@@ -505,7 +506,7 @@ describe("Windows service task", () => {
   });
 
   test("switches the wrapper console to UTF-8 and sleeps via ping (timeout dies without console stdin)", () => {
-    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\OpenCodex\\cli.ts" });
+    const script = buildWindowsServiceScript({ bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" });
 
     expect(script).toContain("chcp 65001 >nul");
     expect(script.indexOf("chcp 65001 >nul")).toBeLessThan(script.indexOf('set "OCX_SERVICE=1"'));
@@ -521,6 +522,7 @@ describe("Windows service task", () => {
       process.env.APPDATA = "C:\\Users\\한글사용자\\AppData\\Roaming";
       const script = buildWindowsServiceScript({
         bun: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe",
+        bunRuntimeSource: "bundled",
         cli: "C:\\Users\\한글사용자\\AppData\\Roaming\\npm\\node_modules\\opencodex\\src\\cli.ts",
       });
 
@@ -545,6 +547,7 @@ describe("Windows service task", () => {
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const script = buildWindowsServiceScript({
         bun: "C:\\OpenCodex\\bun.exe",
+        bunRuntimeSource: "bundled",
         cli: "C:\\OpenCodex\\cli.ts",
       });
 
@@ -573,6 +576,41 @@ describe("Windows service task", () => {
 });
 
 describe("launchd service plist", () => {
+  test("every durable launcher stamps the Bun provenance paired with the binary it baked (#848)", () => {
+    const inherited = process.env.OPENCODEX_BUN_PATH;
+    const overrideBun = join(TEST_DIR, "provenance-override-bun.exe");
+    mkdirSync(TEST_DIR, { recursive: true });
+    writeFileSync(overrideBun, "x".repeat(2 * 1024 * 1024));
+    try {
+      // With a valid override active, every launcher must bake THAT binary and
+      // label it `override` — a marker that disagreed with the baked path would be
+      // worse than no marker at all.
+      process.env.OPENCODEX_BUN_PATH = overrideBun;
+      const plist = buildPlist();
+      expect(plist).toContain("<key>OCX_BUN_RUNTIME_SOURCE</key><string>override</string>");
+      expectTextToContainPath(plist, overrideBun);
+
+      const unit = buildUnit();
+      expect(unit).toContain('Environment="OCX_BUN_RUNTIME_SOURCE=override"');
+      expectTextToContainPath(unit, overrideBun);
+
+      const script = buildWindowsServiceScript();
+      expect(script).toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
+      expect(script).toContain('echo bun_source="override"');
+
+      // No override: the same three fall back to the bundled/process runtime and say so.
+      delete process.env.OPENCODEX_BUN_PATH;
+      const bundledPlist = buildPlist();
+      expect(bundledPlist).toMatch(/<key>OCX_BUN_RUNTIME_SOURCE<\/key><string>(bundled|process)<\/string>/);
+      expect(bundledPlist).not.toContain(">override<");
+      expect(buildUnit()).toMatch(/Environment="OCX_BUN_RUNTIME_SOURCE=(bundled|process)"/);
+      expect(buildWindowsServiceScript()).toMatch(/set "OCX_BUN_RUNTIME_SOURCE=(bundled|process)"/);
+    } finally {
+      if (inherited === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = inherited;
+    }
+  });
+
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
@@ -1333,7 +1371,7 @@ describe("service serving confirmation", () => {
     });
 
     test("reads the port out of a real generated WinSW XML", () => {
-      const xml = buildWinswXml({ bun: "C:\\pkg\\bun.exe", cli: "C:\\pkg\\src\\cli\\index.ts" });
+      const xml = buildWinswXml({ bun: "C:\\pkg\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\pkg\\src\\cli\\index.ts" });
       expect(winswListenPort({ readXml: () => xml })).toBe(resolveServiceListenPort());
     });
   });

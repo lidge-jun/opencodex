@@ -17,6 +17,7 @@ import type { OcxConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -205,7 +206,7 @@ async function ensureProxyForClaude(): Promise<number | null> {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: { ...process.env, OCX_SERVICE: "1" },
+    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
   });
   child.unref();
   const deadline = Date.now() + 8_000;

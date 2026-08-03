@@ -13,6 +13,8 @@ import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntimePort, resolveEnvValue } from "../config";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { gracefulStopHost } from "../lib/process-control";
+import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
+import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { maskAccountId } from "../lib/privacy";
 import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
 import { configuredAdminToken } from "../lib/admin-secrets";
@@ -523,6 +525,8 @@ export async function probeWham(fetchImpl: typeof fetch = fetch): Promise<WhamPr
 export type ServiceMemoryData = {
   pid: number;
   bunVersion: string;
+  /** Launch-time provenance; absent for services installed before the marker existed. */
+  bunRuntimeSource?: BunRuntimeSource;
   platform: string;
   rss: number;
   heapUsed: number;
@@ -579,6 +583,9 @@ export async function fetchServiceMemory(
       data: {
         pid: body.pid,
         bunVersion: body.bunVersion,
+        // Allowlisted independently of the server: an unrecognized wire value is
+        // treated as absent rather than echoed into user-facing guidance.
+        bunRuntimeSource: BUN_RUNTIME_SOURCES.find(source => source === body.bunRuntimeSource),
         platform: typeof body.platform === "string" ? body.platform : "unknown",
         rss: body.rss,
         heapUsed: typeof body.heapUsed === "number" ? body.heapUsed : 0,
@@ -652,12 +659,22 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   } else {
     lines.push("  !!     high RSS, indeterminate split — capture two doctor runs over time to see the trend");
   }
-  // Version-claiming (never binary-claiming): the endpoint cannot distinguish
-  // the bundled binary from an OPENCODEX_BUN_PATH override of the same version.
   if (d.platform === "win32" && d.eagerRelay?.reason === "auto-known-bad") {
     lines.push(`         service is running Bun ${d.bunVersion} on Windows — a version affected by the upstream Bun memory issue.`);
-    lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
-    lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    // The remediation depends on how the SERVICE was launched, which only the
+    // launch-time marker can answer. Telling someone to set OPENCODEX_BUN_PATH
+    // when it is already set is the bug this branch exists to avoid (#848).
+    if (d.bunRuntimeSource === "override") {
+      lines.push(`         OPENCODEX_BUN_PATH is already active for this service — the override runtime is itself an affected version (unvalidated — own risk).`);
+      lines.push("         Options: point the override at a different runtime, or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    } else if (d.bunRuntimeSource === undefined) {
+      lines.push("         this service records no runtime origin (installed before provenance tracking), so OpenCodex cannot tell whether an override is already active.");
+      lines.push("         Reinstall the service to record it, or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    } else {
+      const origin = d.bunRuntimeSource === "process" ? "the runtime that launched it" : "the bundled runtime";
+      lines.push(`         the service is using ${origin}. Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),`);
+      lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+    }
   }
   return lines;
 }

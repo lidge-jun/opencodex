@@ -18,7 +18,7 @@ import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPr
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedModel } from "./identity";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
@@ -277,7 +277,69 @@ function usableToolUseId(id: unknown): string {
   return typeof id === "string" && id.trim() ? id : synthesizeToolUseId();
 }
 
-function toolUseArguments(input: unknown): string {
+/**
+ * Bound repair for a malformed tool-arguments string under the compatibility profile (#658):
+ * a gateway such as AgentRouter can concatenate JSON objects (`{}{"value":42}`). Find the
+ * last parseable JSON object by scanning suffixes from each object-open brace and prefixes
+ * ending at each object-close brace. Both scans walk backwards from the end trying at most
+ * `maxCandidates` positions, so no offset index is ever materialized: a brace-dense hostile
+ * input costs at most 2 × maxCandidates bounded JSON.parse attempts and no extra storage.
+ * Inputs above MAX_REPAIRABLE_TOOL_ARGUMENT_BYTES are not repaired at all.
+ */
+const MAX_REPAIRABLE_TOOL_ARGUMENT_BYTES = 1024 * 1024;
+
+/**
+ * Whether `input` encodes to more than `max` UTF-8 bytes, with an early exit so the check
+ * itself never allocates a copy of a hostile string. `string.length` counts UTF-16 code
+ * units, which undercounts astral text by 2x against a byte budget.
+ */
+function utf8BytesExceed(input: string, max: number): boolean {
+  let bytes = 0;
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < input.length
+      && input.charCodeAt(i + 1) >= 0xdc00 && input.charCodeAt(i + 1) <= 0xdfff) {
+      // A complete surrogate pair is one 4-byte scalar. Anything else — a high surrogate
+      // followed by another high surrogate or a non-surrogate — encodes as two separate
+      // U+FFFD replacements, so the next unit must NOT be skipped.
+      bytes += 4;
+      i++;
+    } else bytes += 3; // lone surrogates encode as U+FFFD (3 bytes)
+    if (bytes > max) return true;
+  }
+  return false;
+}
+
+function lastValidJsonObject(input: string, maxCandidates: number): string | undefined {
+  const tryParseObject = (candidate: string): string | undefined => {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return candidate;
+    } catch { /* keep scanning */ }
+    return undefined;
+  };
+  let scanFrom = input.length - 1;
+  for (let tried = 0; tried < maxCandidates && scanFrom >= 0; tried++) {
+    const open = input.lastIndexOf("{", scanFrom);
+    if (open === -1) break;
+    const repaired = tryParseObject(input.slice(open));
+    if (repaired !== undefined) return repaired;
+    scanFrom = open - 1;
+  }
+  scanFrom = input.length - 1;
+  for (let tried = 0; tried < maxCandidates && scanFrom >= 0; tried++) {
+    const close = input.lastIndexOf("}", scanFrom);
+    if (close === -1) break;
+    const repaired = tryParseObject(input.slice(0, close + 1));
+    if (repaired !== undefined) return repaired;
+    scanFrom = close - 1;
+  }
+  return undefined;
+}
+
+function toolUseArguments(input: unknown, lenient = false): string {
   if (typeof input === "string") {
     const trimmed = input.trim();
     if (!trimmed) return "{}";
@@ -285,6 +347,10 @@ function toolUseArguments(input: unknown): string {
       JSON.parse(trimmed);
       return trimmed;
     } catch {
+      if (lenient && !utf8BytesExceed(trimmed, MAX_REPAIRABLE_TOOL_ARGUMENT_BYTES)) {
+        const repaired = lastValidJsonObject(trimmed, 32);
+        if (repaired !== undefined) return repaired;
+      }
       // A tool call's arguments must be a JSON object. Re-encoding an unparseable string as a
       // JSON *string* is the double-encoding #765 reports: the caller then receives
       // `"get weather"` where an object was required and the tool call is unusable either way.
@@ -441,7 +507,7 @@ function messagesToAnthropicFormat(
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
   const system = systemParts.length
-    ? neutralizeIdentity(systemParts.join("\n\n")) || undefined
+    ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
     : undefined;
   const messages: unknown[] = [];
 
@@ -798,6 +864,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
+      let sawVisibleText = false;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -853,6 +920,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 const delta = data.delta as Record<string, unknown> | undefined;
                 if (!delta) break;
                 if (delta.type === "text_delta" && typeof delta.text === "string") {
+                  // Only non-empty text proves the upstream produced usable output; an empty
+                  // delta followed by EOF must stay a truncation error even on the tolerant
+                  // profile, or a cut-off turn would surface as a successful empty answer.
+                  if (delta.text.length > 0) sawVisibleText = true;
                   yield { type: "text_delta", text: delta.text };
                 } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
                   yield { type: "thinking_delta", thinking: delta.thinking };
@@ -934,6 +1005,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           code: "translation_buffer_limit",
           message: "upstream translation buffer exceeded the safe limit",
         };
+        // The budget error IS the terminal event for this stream. Falling through to the
+        // EOF handling below could append tool_call_end/done after it, violating the
+        // one-terminal-event contract for consumers that keep draining the generator.
+        return;
       } finally {
         if (currentToolCallId) budget.closeCall(currentToolCallId);
       }
@@ -951,6 +1026,26 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
             usage: usageFromAnthropic(pendingUsage),
             ...(stopReason ? { stopReason } : {}),
           };
+        } else if (provider.anthropicEofTolerance === true) {
+          // AgentRouter-style compatibility profile (#658): the upstream can close the stream
+          // after valid content without terminal frames. Complete only when visible text was
+          // received or an open tool call has complete JSON-object arguments; everything else
+          // (incomplete tool JSON, no usable content, transport failure) stays a truncation
+          // error, matching the strict default.
+          if (currentToolCallId) {
+            if (streamedToolArgumentsParse(currentToolCallJson)) {
+              budget.closeCall(currentToolCallId);
+              currentToolCallId = "";
+              yield { type: "tool_call_end" };
+              yield* emitDone();
+            } else {
+              yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
+            }
+          } else if (sawVisibleText) {
+            yield* emitDone();
+          } else {
+            yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
+          }
         } else {
           yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
         }
@@ -980,7 +1075,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "tool_use") {
             const id = usableToolUseId(block.id);
             events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
-            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
+            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input, provider.anthropicEofTolerance === true) });
             events.push({ type: "tool_call_end" });
           }
         }

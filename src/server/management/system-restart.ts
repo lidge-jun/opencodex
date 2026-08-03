@@ -32,6 +32,7 @@ import {
 } from "../lifecycle";
 import { isServiceViable } from "../../service";
 import { readRuntimePort } from "../../config";
+import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
 
 /** Fixed v1 drain window for the memory-card action (not config-driven). */
 export const MEMORY_DRAIN_RESTART_MS = 60_000;
@@ -98,7 +99,7 @@ function spawnDetachedStart(port?: number): Promise<void> {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: { ...process.env, OCX_SERVICE: "1" },
+        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
       });
     } catch (err) {
       reject(err);

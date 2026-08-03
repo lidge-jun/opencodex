@@ -7,7 +7,7 @@
  * legitimate edit made after a crash.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,6 +19,12 @@ import {
   recoverIfNeeded,
   type JournalRecord,
 } from "../src/codex/prompt-journal";
+import {
+  hardenedSecretPathCountForTests,
+  resetHardenedStateForTests,
+  setIcaclsRunnerForTests,
+  setPlatformForTests,
+} from "../src/lib/windows-secret-acl";
 
 const roots: string[] = [];
 
@@ -217,5 +223,52 @@ describe("durable write", () => {
     durableWrite(path, "one");
     durableWrite(path, "two");
     expect(readFileSync(path, "utf8")).toBe("two");
+  });
+
+  test("successful durable writes release temp ACL memos", () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    try {
+      const dir = root();
+      durableWrite(join(dir, "one.json"), "one");
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+      durableWrite(join(dir, "two.json"), "two");
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("a temp that disappears during hardening still releases its memo", () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    const dir = root();
+    setIcaclsRunnerForTests(() => {
+      // The temp vanishes mid-harden; hardenEntry still records the success memo.
+      for (const name of readdirSync(dir)) {
+        if (name.endsWith(".tmp")) unlinkSync(join(dir, name));
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    try {
+      // openSync then fails on the missing temp — but the success memo must not linger.
+      expect(() => durableWrite(join(dir, "out.json"), "x")).toThrow();
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
   });
 });

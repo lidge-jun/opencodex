@@ -15,7 +15,8 @@ import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime } from "./codex/home";
-import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./lib/bun-runtime";
+import type { BunRuntimeSource } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
 import { randomUUID } from "node:crypto";
@@ -43,11 +44,15 @@ const TASK = "opencodex-proxy";
 
 export type ServiceBackend = "scheduler" | "native";
 
-function cliEntry(): { bun: string; cli: string } {
+function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
   // Bake the bundled Bun (npm global prefix, survives `ocx update`) rather than
   // a transient system Bun, so launchd/systemd/schtasks keep resolving even if a
   // standalone Bun is later removed. The CLI entry lives at src/cli/index.ts.
-  return { bun: durableBunPath(), cli: join(import.meta.dir, "cli", "index.ts") };
+  //
+  // Path and provenance come from ONE resolution so the marker can never describe a
+  // different binary than the one actually baked.
+  const runtime = durableBunRuntime();
+  return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(import.meta.dir, "cli", "index.ts") };
 }
 
 function plistPath(): string {
@@ -268,13 +273,15 @@ function writeServiceApiTokenFile(): string | null {
 }
 
 export function buildPlist(): string {
-  const { bun, cli } = cliEntry();
+  const { bun, bunRuntimeSource, cli } = cliEntry();
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
+    `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
+    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
@@ -788,6 +795,10 @@ export function windowsSchedulerTaskInstalled(taskName = TASK): boolean {
 export interface WindowsSchedulerInstallVerification {
   taskInstalled: boolean;
   registrationHealthy: boolean;
+  /** Well-formed XML that is PUBLISHED but policy-violating — permanent, never
+   * worth a settle retry (vs an empty/unreadable view, which is publication
+   * lag and transient). */
+  registrationInvalid: boolean;
   assetsHealthy: boolean;
   nativeServiceAbsent: boolean;
   /** True when SCM probe failed; not a proven WinSW presence. */
@@ -808,6 +819,10 @@ export function evaluateWindowsSchedulerInstallVerification(inputs: {
 }): WindowsSchedulerInstallVerification {
   const registrationHealthy = inputs.xml.length > 0
     && windowsTaskRegistrationHealthy(inputs.xml, inputs.wscript, inputs.launcher);
+  // Permanent invalidity: the XML IS published but violates the registration
+  // contract — no amount of settling changes it. Empty/unreadable XML stays
+  // transient (publication lag).
+  const registrationInvalid = inputs.taskInstalled && inputs.xml.length > 0 && !registrationHealthy;
   const assetsHealthy = inputs.assetsExist;
   const nativeServiceAbsent = inputs.nativeStatus === "nonexistent";
   const nativeStatusUnknown = inputs.nativeStatus === "unknown";
@@ -831,6 +846,7 @@ export function evaluateWindowsSchedulerInstallVerification(inputs: {
   return {
     taskInstalled: inputs.taskInstalled,
     registrationHealthy,
+    registrationInvalid,
     assetsHealthy,
     nativeServiceAbsent,
     nativeStatusUnknown,
@@ -909,6 +925,8 @@ type FinalizeHooks = {
   /** Defense-in-depth: late reconciliation must still own this attempt. */
   stillOwnsAttempt?: (attemptId: string) => boolean;
   requestTimeoutMs?: number;
+  /** Test-only seam for the post-create settle backoff; real installs use a timer. */
+  settleDelay?: (ms: number) => Promise<void>;
 };
 
 let finalizeHooks: FinalizeHooks | null = null;
@@ -973,6 +991,68 @@ function attemptStillOwned(options: ApplyElevatedOptions): boolean {
   return !check || check(options.attemptId);
 }
 
+/**
+ * Bounded post-create backoff, 1.1s total. Task Scheduler's non-elevated view can
+ * lag an elevated `/create` by a few hundred milliseconds, so a single verification
+ * would roll back a task that is merely not visible yet.
+ */
+const SCHEDULER_SETTLE_DELAYS_MS = [50, 150, 300, 600] as const;
+
+/**
+ * Whether a failed verification is still worth re-checking after a short delay.
+ *
+ * Retrying is confined to states that a lagging scheduler view actually produces:
+ * the task is not visible yet, or it is visible but its registration has not been
+ * published in full. Everything else keeps its existing fail-closed meaning and is
+ * rejected here so no delay can turn it into a pass:
+ *
+ * - a proven conflict (both backends present) is a real dual-backend install;
+ * - missing assets are missing on disk, which no amount of waiting creates;
+ * - a WinSW service that is proven present (`started`/`stopped`) is never absent
+ *   later. This is checked independently of `conflict`, which only becomes true
+ *   once the task itself is visible — while the task is still invisible the pair
+ *   is `conflict: false` with `nativeServiceAbsent: false`, and that must not retry;
+ * - unknown SCM status is unproven rather than transient, and has its own
+ *   task-preserving branch below.
+ */
+/** Exported for tests: the transient-vs-permanent settle decision. */
+export function schedulerVerificationMaySettle(v: WindowsSchedulerInstallVerification): boolean {
+  if (v.ok) return false;
+  if (v.conflict) return false;
+  if (!v.assetsHealthy) return false;
+  if (!v.nativeServiceAbsent) return false;
+  // A published-but-invalid registration is permanent: no delay repairs it.
+  if (v.registrationInvalid) return false;
+  return !v.taskInstalled || !v.registrationHealthy;
+}
+
+function settleDelay(ms: number): Promise<void> {
+  const hook = finalizeHooks?.settleDelay;
+  if (hook) return hook(ms);
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Verify the elevated install, re-checking only while the failure looks like a
+ * scheduler view that has not caught up yet. Returns `null` when this attempt lost
+ * ownership mid-settle: a newer attempt owns the task, so this one must neither
+ * write install state nor roll anything back.
+ */
+async function verifyWindowsSchedulerInstallAfterSettle(
+  options: ApplyElevatedOptions,
+): Promise<WindowsSchedulerInstallVerification | null> {
+  const verify = finalizeHooks?.verify ?? verifyWindowsSchedulerInstall;
+  let verification = verify();
+  for (const delayMs of SCHEDULER_SETTLE_DELAYS_MS) {
+    if (!schedulerVerificationMaySettle(verification)) break;
+    if (!attemptStillOwned(options)) return null;
+    await settleDelay(delayMs);
+    if (!attemptStillOwned(options)) return null;
+    verification = verify();
+  }
+  return verification;
+}
+
 async function applyElevatedSchedulerResult(
   result: ElevatedSchtasksCreateAndRunResult,
   options: ApplyElevatedOptions,
@@ -1002,7 +1082,9 @@ async function applyElevatedSchedulerResult(
     await reconcileUnknownElevatedOutcome(result.exitCode);
   }
 
-  const verification = (finalizeHooks?.verify ?? verifyWindowsSchedulerInstall)();
+  const verification = await verifyWindowsSchedulerInstallAfterSettle(options);
+  // Ownership moved to a newer attempt while settling; that attempt owns the outcome.
+  if (!verification) return;
   if (!verification.ok) {
     // Preserve a healthy elevated task when WinSW absence cannot be proven (unknown SCM status).
     // Unknown is not a confirmed dual-backend conflict; install state is still withheld.
@@ -1019,6 +1101,9 @@ async function applyElevatedSchedulerResult(
         "Installation state was not written.",
       ]);
     }
+    // Rollback deletes a real task, so it needs the same ownership fence as the
+    // state write below: a stale attempt must never delete a newer attempt's task.
+    if (!attemptStillOwned(options)) return;
     const rollbackError = await rollbackElevatedSchedulerTask();
     const parts = [
       "Elevated Task Scheduler registration did not produce a conflict-free install.",
@@ -1259,8 +1344,9 @@ function taskXmlRunLevelAcceptable(principal: string): boolean {
 }
 
 export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
-  const { bun, cli } = entry;
-  const bunRuntime = durableBunRuntime();
+  // Provenance rides along with the entry: a second durableBunRuntime() call here could
+  // resolve differently from the binary the caller actually baked.
+  const { bun, bunRuntimeSource, cli } = entry;
   const path = process.env.PATH ?? "";
   const lines = [
     "@echo off",
@@ -1269,6 +1355,8 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     // it to UTF-8 is safe (no leak into user shells) and lets cmd parse UTF-8 remnants.
     "chcp 65001 >nul",
     windowsBatchSet("OCX_SERVICE", "1"),
+    windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
+    windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     windowsBatchSet("PATH", path, "pathList"),
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
@@ -1282,7 +1370,7 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     ":loop",
     '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] opencodex service wrapper start',
     '>>"%OCX_SERVICE_LOG%" echo bun="%OCX_BUN%"',
-    `>>"%OCX_SERVICE_LOG%" echo bun_source="${bunRuntime.source}"`,
+    `>>"%OCX_SERVICE_LOG%" echo bun_source="${bunRuntimeSource}"`,
     '>>"%OCX_SERVICE_LOG%" echo cli="%OCX_CLI%"',
     '>>"%OCX_SERVICE_LOG%" echo opencodex_home="%OPENCODEX_HOME%"',
     '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
@@ -1854,13 +1942,15 @@ function unitPath(): string {
 }
 
 export function buildUnit(): string {
-  const { bun, cli } = cliEntry();
+  const { bun, bunRuntimeSource, cli } = cliEntry();
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
+    systemdEnvironmentAssignment(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
+    systemdEnvironmentAssignment(BUN_RUNTIME_PATH_ENV, bun),
     systemdEnvironmentAssignment("PATH", path),
     codexHome,
     opencodexHome,

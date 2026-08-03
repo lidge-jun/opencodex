@@ -270,6 +270,12 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
       : {}),
+    ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
+      ? { supportsServiceTier: registryEntry.supportsServiceTier }
+      : {}),
+    ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
+      ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
+      : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
     // Backfill the Google wire mode + Vertex project/location from the registry when the user

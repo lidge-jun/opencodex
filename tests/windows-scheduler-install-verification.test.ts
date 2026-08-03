@@ -6,6 +6,7 @@ import {
   formatWindowsSchedulerServiceStatus,
   inspectWindowsSchedulerServiceStatus,
   probeWindowsSchedulerTask,
+  schedulerVerificationMaySettle,
   setQuerySchtasksForTests,
   windowsSchedulerCsvIncludesTask,
   windowsSchedulerTaskInstalled,
@@ -247,6 +248,47 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
     expect(result.ok).toBe(false);
     expect(result.registrationHealthy).toBe(false);
     expect(result.detail).toContain("unhealthy");
+  });
+
+  test("a published-but-invalid registration never enters the settle loop", () => {
+    const badXml = healthyXml.replace("<LogonTrigger>", "<BootTrigger>");
+    const invalid = evaluateWindowsSchedulerInstallVerification({
+      taskInstalled: true,
+      xml: badXml,
+      assetsExist: true,
+      nativeStatus: "nonexistent",
+      wscript,
+      launcher,
+    });
+    expect(invalid.registrationHealthy).toBe(false);
+    expect(invalid.registrationInvalid).toBe(true);
+    // Permanent: rollback must fire immediately, with zero settle delays.
+    expect(schedulerVerificationMaySettle(invalid)).toBe(false);
+
+    // An empty/unreadable view is publication lag: still transient.
+    const pending = evaluateWindowsSchedulerInstallVerification({
+      taskInstalled: false,
+      xml: "",
+      assetsExist: true,
+      nativeStatus: "nonexistent",
+      wscript,
+      launcher,
+    });
+    expect(pending.registrationInvalid).toBe(false);
+    expect(schedulerVerificationMaySettle(pending)).toBe(true);
+
+    // A <Data> block is an explicit permanent violation too.
+    const dataXml = healthyXml.replace("<Triggers>", "<Data>x</Data><Triggers>");
+    const withData = evaluateWindowsSchedulerInstallVerification({
+      taskInstalled: true,
+      xml: dataXml,
+      assetsExist: true,
+      nativeStatus: "nonexistent",
+      wscript,
+      launcher,
+    });
+    expect(withData.registrationInvalid).toBe(true);
+    expect(schedulerVerificationMaySettle(withData)).toBe(false);
   });
 
   test("fails when required assets are missing", () => {

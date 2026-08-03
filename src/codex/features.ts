@@ -1,11 +1,14 @@
 /**
  * features.ts — codex feature-flag view for $CODEX_HOME/config.toml.
  *
- * Scope boundary: this module mirrors ONLY `multi_agent_v2`, because opencodex has
- * to migrate its concurrency value across the v1/v2 boundary and expose the
- * multi-agent config surface. Every other upstream feature flag is delegated to
- * the native `codex features` command (see src/cli/v2.ts) and must not be
- * hardcoded here.
+ * Scope boundary: this module mirrors only the flags opencodex has to READ
+ * directly from config.toml:
+ *   - `multi_agent_v2`, because opencodex migrates its concurrency value across
+ *     the v1/v2 boundary and exposes the multi-agent config surface;
+ *   - `default_mode_request_user_input` (Codex Auth page toggle), because the
+ *     management API needs a live reader for the flag it manages.
+ * Every other upstream feature flag is delegated to the native `codex features`
+ * command (see src/cli/v2.ts) and must not be hardcoded here.
  *
  * Upstream reshapes flags freely: in the 1f0566d3f..5a1097ed2 range alone,
  * `code_mode_host` changed from a boolean to a table (it is Stage::Stable and
@@ -30,8 +33,12 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import { atomicWriteFile, expandUserPath } from "../config";
+import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, expandUserPath } from "../config";
+import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { CODEX_CONFIG_PATH } from "./paths";
+
+/** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
+export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
 
 // EOL preservation, local copies of inject.ts dominantEol/applyEol: importing
 // inject here would close a module cycle (features -> inject -> catalog -> features).
@@ -55,7 +62,7 @@ function mergeTrailingComments(existing?: string, migrated?: string): string {
   return `${existing}; ${migratedText}`;
 }
 
-function activeCodexConfigPath(): string {
+export function activeCodexConfigPath(): string {
   const raw = process.env.CODEX_HOME?.trim();
   if (!raw) return CODEX_CONFIG_PATH;
   const path = resolve(expandUserPath(raw));
@@ -125,6 +132,22 @@ export function isMultiAgentV2Enabled(configPath?: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * TRUE when the codex `default_mode_request_user_input` feature is enabled in
+ * config.toml — lets a Default-mode session pause and ask the user questions
+ * through `request_user_input` (upstream FeatureSpec: under development,
+ * default_enabled = false). Recognizes the shipped boolean form
+ * `[features] default_mode_request_user_input = true`.
+ * Missing file/key -> false.
+ */
+export function isDefaultModeRequestUserInputEnabled(configPath?: string): boolean {
+  const content = readConfigText(configPath);
+  if (content === null) return false;
+  const features = tomlTableBody(content, "features");
+  if (features === null) return false;
+  return tomlBoolInBody(features, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY) === true;
 }
 
 /**
@@ -833,10 +856,20 @@ function activeThreadComment(content: string, v2Enabled: boolean): string | unde
 }
 
 let migrationEditSeq = 0;
+/** Both residual classes gate the memo release: a plain residual and a
+ * secret-bearing one alike keep their destination memo while the file
+ * remains on disk. Exported for the regression seam. */
+export function isAtomicResidualError(error: unknown): boolean {
+  return error instanceof AtomicWriteResidualTempError || error instanceof AtomicWriteSecretResidualError;
+}
+
 function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => ConfigEditResult): ConfigEditResult {
   const content = readConfigText(path);
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const tempPath = `${path}.ocx-migration.${process.pid}.${++migrationEditSeq}`;
+  // An inner residual temp (AtomicWriteResidualTempError) keeps its
+  // destination-keyed memo: fail-closed while the residual exists.
+  let innerResidual = false;
   try {
     atomicWriteFile(tempPath, content);
     const result = edit(tempPath);
@@ -846,8 +879,19 @@ function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => Co
     if (edited === content) return { ok: true, changed: false };
     atomicWriteFile(path, edited);
     return { ok: true, changed: true };
+  } catch (error) {
+    if (isAtomicResidualError(error)) innerResidual = true;
+    throw error;
   } finally {
-    try { unlinkSync(tempPath); } catch { /* already absent */ }
+    try {
+      unlinkSync(tempPath);
+      if (!innerResidual) forgetEphemeralSecretPath(tempPath);
+    } catch (error) {
+      // Already absent is also proven-absent; other failures keep the memo.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        if (!innerResidual) forgetEphemeralSecretPath(tempPath);
+      }
+    }
   }
 }
 

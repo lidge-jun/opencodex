@@ -2207,16 +2207,16 @@ describe("Codex catalog routed normalization", () => {
     expect(models).toEqual([]);
   });
 
-  test("anthropic sonnet 4.6 uses the 200k opencodex catalog cap", () => {
+  test("anthropic sonnet 4.6 keeps the upstream 1M context window", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "anthropic", id: "claude-sonnet-4-6" },
     ]);
     const routed = entries.find(e => e.slug === "anthropic/claude-sonnet-4-6");
 
-    expect(routed?.context_window).toBe(200_000);
-    expect(routed?.max_context_window).toBe(200_000);
-    expect(routed?.auto_compact_token_limit).toBe(180_000);
-    expect(getJawcodeModelMetadata("anthropic", "claude-sonnet-4-6")?.contextWindow).toBe(200_000);
+    expect(routed?.context_window).toBe(1_000_000);
+    expect(routed?.max_context_window).toBe(1_000_000);
+    expect(routed?.auto_compact_token_limit).toBe(900_000);
+    expect(getJawcodeModelMetadata("anthropic", "claude-sonnet-4-6")?.contextWindow).toBe(1_000_000);
   });
 
   test("routed entries resolve jawcode provider aliases", () => {

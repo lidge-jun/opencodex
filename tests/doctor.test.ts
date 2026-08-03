@@ -402,10 +402,39 @@ describe("service memory section (#314 WP4)", () => {
   });
 
   test("guidance gating: win32 + auto-known-bad prints version-claiming guidance", () => {
-    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    // A bundled runtime is the case where "set OPENCODEX_BUN_PATH" is still the right advice.
+    const lines = formatServiceMemoryLines({ status: "ok", data: { ...baseData, bunRuntimeSource: "bundled" } });
     expect(lines.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(true);
     // Version-claiming, never binary-claiming.
     expect(lines.join("\n")).not.toContain("bundled binary");
+  });
+
+  test("guidance gating: an active override is never told to set OPENCODEX_BUN_PATH again (#848)", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, bunRuntimeSource: "override" },
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("OPENCODEX_BUN_PATH is already active");
+    expect(text).not.toContain("set OPENCODEX_BUN_PATH to a runtime you trust");
+    // The affected-version warning itself must survive; only the remedy changes.
+    expect(text).toContain("affected by the upstream Bun memory issue");
+  });
+
+  test("guidance gating: a legacy payload without provenance says unknown instead of guessing", () => {
+    const { bunRuntimeSource: _omitted, ...legacy } = { ...baseData, bunRuntimeSource: undefined };
+    const text = formatServiceMemoryLines({ status: "ok", data: legacy as ServiceMemoryData }).join("\n");
+    expect(text).toContain("records no runtime origin");
+    expect(text).not.toContain("set OPENCODEX_BUN_PATH to a runtime you trust");
+  });
+
+  test("guidance gating: a process-provenance runtime is not described as bundled", () => {
+    const text = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, bunRuntimeSource: "process" },
+    }).join("\n");
+    expect(text).toContain("the runtime that launched it");
+    expect(text).toContain("set OPENCODEX_BUN_PATH to a runtime you trust");
   });
 
   test("guidance gating: darwin auto-off or fixed Windows runtime prints no override guidance", () => {

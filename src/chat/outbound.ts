@@ -319,7 +319,9 @@ export function responsesSseToChatCompletionsSse(
           closeToolCalls();
           try { void sseIterator?.return(undefined).catch(() => {}); } catch { /* already closed */ }
           classified.code = "translation_buffer_limit";
-          classified.type = "invalid_request_error";
+          // Provider-controlled overflow is an upstream failure on every path:
+          // streaming frame, collector, and defensive JSON agree on 502.
+          classified.type = "upstream_error";
         } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
           classified.code = CYBER_POLICY_ERROR_CODE;
           classified.type = "invalid_request_error";
@@ -468,7 +470,7 @@ export function responsesSseToChatCompletionsSse(
             fail(message, {
               code,
               ...(code === "translation_buffer_limit"
-                ? { status: 413, type: "invalid_request_error" }
+                ? { status: 502, type: "upstream_error" }
                 : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
             });
             break;
@@ -514,7 +516,7 @@ export function responsesSseToChatCompletionsSse(
           if (isTranslatorBudgetExceededError(err)) {
             upstreamAbort.abort(err);
             closeToolCalls();
-            fail(err.message, { status: 413, type: "invalid_request_error", code: err.code });
+            fail(err.message, { status: 502, type: "upstream_error", code: err.code });
           } else {
             fail(err instanceof Error ? err.message : String(err));
           }
@@ -629,6 +631,9 @@ export async function collectChatCompletion(
   let content = "";
   let reasoning = "";
   const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
+  // Per-call budget scopes (2 MiB/call enforced by the budget): the map key is the
+  // wire index, which is stable across deltas and present before the call id.
+  const callScope = (index: number) => `chat_collect_${index}`;
   let finishReason = "stop";
   let usage: unknown;
   let streamError: ChatCompletionsStreamError | null = null;
@@ -648,9 +653,11 @@ export async function collectChatCompletion(
       } catch (err) {
         if (isChatCompletionsStreamError(err)) throw err;
         if (isTranslatorBudgetExceededError(err)) {
+          // Provider-controlled overflow is an upstream failure, not a client
+          // request error: match the adapter/bridge contract (502 upstream_error).
           throw new ChatCompletionsStreamError(err.message, {
-            status: 413,
-            type: "invalid_request_error",
+            status: 502,
+            type: "upstream_error",
             code: err.code,
           });
         }
@@ -677,11 +684,15 @@ export async function collectChatCompletion(
             const type = typeof parsed.error.type === "string" ? parsed.error.type : "server_error";
             const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
             const status = code === "translation_buffer_limit"
-              ? 413
+              ? 502
               : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
                 ? 400
                 : streamErrorStatus(message);
-            streamError = new ChatCompletionsStreamError(message, { status, type, code });
+            streamError = new ChatCompletionsStreamError(message, {
+              status,
+              type: code === "translation_buffer_limit" ? "upstream_error" : type,
+              code,
+            });
             continue;
           }
           if (parsed.usage) usage = parsed.usage;
@@ -697,7 +708,12 @@ export async function collectChatCompletion(
             for (const tc of delta.tool_calls) {
               if (!isRec(tc)) continue;
               const index = typeof tc.index === "number" ? tc.index : 0;
-              const current = toolCalls.get(index) ?? { id: "", name: "", arguments: "", argumentBytes: 0 };
+              let current = toolCalls.get(index);
+              if (!current) {
+                current = { id: "", name: "", arguments: "", argumentBytes: 0 };
+                toolCalls.set(index, current);
+                translatorBudget.openCall(callScope(index));
+              }
               if (typeof tc.id === "string") current.id = tc.id;
               const fn = isRec(tc.function) ? tc.function : {};
               // Done-frame final arguments are authoritative last-write-wins snapshots.
@@ -707,27 +723,43 @@ export async function collectChatCompletion(
                 const nextBytes = replace
                   ? Buffer.byteLength(fn.arguments)
                   : appendedUtf8Bytes(current.arguments, current.argumentBytes, fn.arguments);
-                const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "tool_args", callId: callScope(index) });
                 try {
                   current.arguments = replace ? fn.arguments : current.arguments + fn.arguments;
                   reservation.commitRetained();
-                  translatorBudget.releaseRetained(current.argumentBytes, { kind: "retained_collectors" });
+                  translatorBudget.releaseRetained(current.argumentBytes, { kind: "tool_args", callId: callScope(index) });
                   current.argumentBytes = nextBytes;
                 } catch (error) {
                   reservation.release();
                   throw error;
                 }
               }
-              toolCalls.set(index, current);
             }
           }
         }
       }
     }
+  } catch (error) {
+    // Never leak an open call scope on the error path; the turn budget's
+    // dispose is a backstop, not the owner of this transfer.
+    for (const index of toolCalls.keys()) translatorBudget.closeCall(callScope(index));
+    // Processing-time overflow (per-call or turn cap) gets the same typed
+    // contract as read-time overflow: 502 upstream_error.
+    if (isTranslatorBudgetExceededError(error)) {
+      throw new ChatCompletionsStreamError(error.message, {
+        status: 502,
+        type: "upstream_error",
+        code: error.code,
+      });
+    }
+    throw error;
   } finally {
     reader.releaseLock();
   }
-  if (streamError) throw streamError;
+  if (streamError) {
+    for (const index of toolCalls.keys()) translatorBudget.closeCall(callScope(index));
+    throw streamError;
+  }
 
   const message: Rec = {
     role: "assistant",
@@ -735,17 +767,40 @@ export async function collectChatCompletion(
   };
   if (reasoning) message.reasoning_content = reasoning;
   if (toolCalls.size > 0) {
-    message.tool_calls = [...toolCalls.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, tc]) => {
-        const copy = {
-        id: tc.id || `call_${uuid().slice(0, 16)}`,
-        type: "function",
-        function: { name: tc.name, arguments: tc.arguments },
-        };
-        translatorBudget.chargeRetained(Buffer.byteLength(JSON.stringify(copy)), { kind: "retained_collectors" });
-        return copy;
-      });
+    // Final owner transfer is itself a charging operation: if it overflows,
+    // release every copy already charged in this loop and close every scope
+    // still open — the error must not escape as a raw budget exception.
+    const chargedCopies: number[] = [];
+    try {
+      message.tool_calls = [...toolCalls.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([index, tc]) => {
+          const copy = {
+          id: tc.id || `call_${uuid().slice(0, 16)}`,
+          type: "function",
+          function: { name: tc.name, arguments: tc.arguments },
+          };
+          const copyBytes = Buffer.byteLength(JSON.stringify(copy));
+          translatorBudget.chargeRetained(copyBytes, { kind: "retained_collectors" });
+          chargedCopies.push(copyBytes);
+          // The serialized owner is charged; release the per-call accumulation.
+          translatorBudget.closeCall(callScope(index));
+          return copy;
+        });
+    } catch (error) {
+      for (const copyBytes of chargedCopies) {
+        translatorBudget.releaseRetained(copyBytes, { kind: "retained_collectors" });
+      }
+      for (const index of toolCalls.keys()) translatorBudget.closeCall(callScope(index));
+      if (isTranslatorBudgetExceededError(error)) {
+        throw new ChatCompletionsStreamError(error.message, {
+          status: 502,
+          type: "upstream_error",
+          code: error.code,
+        });
+      }
+      throw error;
+    }
     if (finishReason === "stop") finishReason = "tool_calls";
   }
 

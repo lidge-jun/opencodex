@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { adminApiTokenFilePath } from "../lib/admin-secrets";
-import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
   isAllowedManagementOrigin,
@@ -95,12 +95,17 @@ function readExistingToken(path: string): string {
 export function removeManagementTokenPathBestEffort(
   path: string,
   remove: (path: string) => void = unlinkSync,
+  options?: { ephemeral?: boolean },
 ): void {
+  // Temps get the full ephemeral release (success + both timeout namespaces);
+  // stable token paths drop only the success memo — destination-keyed timeout
+  // memos are intentional anti-restall state.
+  const forget = options?.ephemeral ? forgetEphemeralSecretPath : forgetHardenedSecretPath;
   try {
     remove(path);
-    forgetHardenedSecretPath(path);
+    forget(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") forgetHardenedSecretPath(path);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") forget(path);
     /* other failures retain fail-closed state for the caller */
   }
 }
@@ -120,7 +125,8 @@ function createTokenFile(path: string): string {
     chmodSync(temporary, 0o600);
     let temporaryHardened: { ok: boolean };
     try {
-      temporaryHardened = hardenSecretPath(temporary, { required: true });
+      // Destination-keyed timeout memo (the final token path), not the temp.
+      temporaryHardened = hardenSecretPath(temporary, { required: true, timeoutMemoKey: path });
     } catch {
       temporaryHardened = { ok: false };
     }
@@ -155,7 +161,7 @@ function createTokenFile(path: string): string {
     if (fd !== null) {
       try { closeSync(fd); } catch { /* best effort */ }
     }
-    removeManagementTokenPathBestEffort(temporary);
+    removeManagementTokenPathBestEffort(temporary, unlinkSync, { ephemeral: true });
   }
 }
 

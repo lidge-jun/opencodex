@@ -10,10 +10,11 @@
  *  - hardenSecretDir mirrors the same contract for directories.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  forgetEphemeralSecretPath,
   hardenSecretDir,
   forgetHardenedSecretPath,
   hardenSecretPath,
@@ -24,6 +25,7 @@ import {
   setIcaclsRunnerForTests,
   setNowForTests,
   setPlatformForTests,
+  timedOutSecretPathCountForTests,
   type HardenResult,
   type IcaclsResult,
 } from "../src/lib/windows-secret-acl";
@@ -615,5 +617,71 @@ describe("async hardenSecretPath (issue #612)", () => {
     });
     expect(await hardenSecretPathAsync(secretFile(), { required: true })).toEqual({ ok: true });
     expect(steps).toEqual(["grant-owner", "remove-inheritance", "remove-broad"]);
+  });
+});
+
+describe("ephemeral ACL memo release (#840 refinement)", () => {
+  const timeout: IcaclsResult = { success: false, exitCode: null, timedOut: true, stdout: "" };
+
+  test("ephemeral release clears temp-keyed timeout memos in BOTH namespaces", () => {
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => timeout);
+    const tempA = join(testDir, "dest.ocx.1.1.tmp");
+    const tempB = join(testDir, "dest.ocx.1.2.tmp");
+    writeFileSync(tempA, "a", "utf-8");
+    writeFileSync(tempB, "b", "utf-8");
+    try {
+      // required timeout throws; optional timeout soft-fails — both memoize by the temp.
+      expect(() => hardenSecretPath(tempA, { required: true })).toThrow(/ETIMEDOUT/);
+      expect(hardenSecretPath(tempB, { required: false }).ok).toBe(false);
+      expect(timedOutSecretPathCountForTests()).toBe(2);
+      forgetEphemeralSecretPath(tempA);
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+      forgetEphemeralSecretPath(tempB);
+      expect(timedOutSecretPathCountForTests()).toBe(0);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+    }
+  });
+
+  test("sync atomic write keys timeouts by destination, and the memo survives temp cleanup", () => {
+    setPlatformForTests("win32");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    let runnerCalls = 0;
+    setIcaclsRunnerForTests(() => {
+      runnerCalls += 1;
+      return timeout;
+    });
+    const dest = join(testDir, "config.json");
+    // Mirrors the production sync harden in config.ts (POSIX tests cannot reach
+    // the process.platform gate): required harden keyed by the DESTINATION.
+    const io = {
+      write: (path: string, content: string) => writeFileSync(path, content, { mode: 0o600 }),
+      harden: (path: string) => {
+        chmodSync(path, 0o600);
+        hardenSecretPath(path, { required: true, timeoutMemoKey: dest });
+      },
+      rename: renameSync,
+      truncate: (path: string) => truncateSync(path, 0),
+      unlink: unlinkSync,
+    };
+    try {
+      expect(() => atomicWriteFile(dest, "first", io)).toThrow();
+      // Exactly ONE memo — keyed by the destination, not the unique temp.
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+      const callsAfterFirst = runnerCalls;
+      expect(() => atomicWriteFile(dest, "second", io)).toThrow();
+      // Anti-restall: the destination memo short-circuits the second harden
+      // (no new runner call) and is NOT cleared by the temp cleanup.
+      expect(runnerCalls).toBe(callsAfterFirst);
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+    } finally {
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+    }
   });
 });

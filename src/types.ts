@@ -645,7 +645,8 @@ export interface OcxConfig {
    * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
    * commit messages, skill orchestration) to a user-chosen model. Default intercepted
    * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
-   * Opt-in; disabled by default. When enabled, effort is forced to low.
+   * Opt-in; disabled by default. Matching maintenance/helper requests are forced to low.
+   * Normal Codex turns identified by request_kind=turn are never rewritten.
    */
   shadowCallIntercept?: {
     /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
@@ -756,7 +757,7 @@ export interface OcxConfig {
   combos?: Record<string, OcxComboConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
-  /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
+  /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
 }
 
@@ -939,6 +940,24 @@ export interface OcxProviderConfig {
    */
   statelessResponses?: boolean;
   /**
+   * Whether this provider's Responses route honours the OpenAI `service_tier`
+   * parameter. Tri-state: `true` lets fast mode inject/remove the field (an unset
+   * fast mode preserves a caller-supplied value); `false` strips the field and
+   * never injects, because an upstream documented as not supporting the parameter
+   * must not receive it; absent (`undefined`) leaves the provider unclassified —
+   * caller-supplied values are preserved untouched, and fast mode never injects.
+   * An explicit config value always wins over the registry default.
+   */
+  supportsServiceTier?: boolean;
+  /**
+   * Responses upstream whose native contract accepts plaintext reasoning replay
+   * (DeepSeek documents reasoning items with plaintext content). When set, the
+   * passthrough serializer keeps `reasoning_text` content on replayed reasoning
+   * items instead of blanking it the way the ChatGPT backend requires; proxy-minted
+   * `ocxr1` envelopes are still stripped because no upstream can decrypt them.
+   */
+  preserveResponsesReasoningContent?: boolean;
+  /**
    * Explicit opt-in for non-registry private-network destinations such as localhost, RFC1918,
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
    */
@@ -1104,6 +1123,13 @@ export interface OcxProviderConfig {
   thinkingBudgetModels?: string[];
   /** Anthropic-compatible gateways that need custom tool names escaped on the wire. */
   escapeBuiltinToolNames?: boolean;
+  /**
+   * Anthropic-compatible gateways (e.g. AgentRouter) that may close the stream before
+   * `message_stop`. With this enabled the adapter completes an otherwise-clean EOF only when
+   * visible text was received or an open tool call has complete JSON-object arguments; all
+   * other EOFs remain truncation errors. Absent = strict default behavior.
+   */
+  anthropicEofTolerance?: boolean;
   /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.

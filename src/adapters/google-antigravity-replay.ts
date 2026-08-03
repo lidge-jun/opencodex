@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 /**
@@ -34,6 +35,8 @@ const REPLAY_MAX_CALLS_PER_SESSION = 256;
 export const ANTIGRAVITY_REPLAY_MAX_BYTES_PER_SESSION = 2 * 1024 * 1024;
 export const ANTIGRAVITY_REPLAY_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 const REPLAY_MAX_SIGNATURE_BYTES = 64 * 1024;
+/** Fixed 64-hex outer key length, counted once per session entry. */
+const REPLAY_SESSION_KEY_BYTES = 64;
 
 interface ReplayLimits {
   maxCallsPerSession: number;
@@ -54,29 +57,202 @@ let replayBytes = 0;
 let replayOldestSessionKey: string | undefined;
 let replayOldestAt: number | null = null;
 
+/**
+ * Fixed-size identity for a (model, sessionId) pair: SHA-256 over
+ * length-prefixed UTF-16 code units fed incrementally (no separator ambiguity
+ * — `("a\0b","c")` and `("a","b\0c")` derive different keys — and no raw
+ * model/session strings retained as Map keys, which the byte caps never
+ * counted).
+ */
+/**
+ * Injective string feed for key derivation: length-prefixed in CODE UNITS,
+ * then each code unit as two little-endian bytes. TextEncoder/UTF-8 would
+ * fold lone surrogates into U+FFFD, colliding distinct strings (e.g.
+ * "�" and "�") into the same key.
+ */
+function updateHashWithString(hash: ReturnType<typeof createHash>, value: string): void {
+  hash.update(String(value.length));
+  hash.update("\0");
+  const buf = Buffer.allocUnsafe(8192);
+  let offset = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    buf.writeUInt16LE(value.charCodeAt(index), offset);
+    offset += 2;
+    if (offset === buf.length) {
+      hash.update(buf);
+      offset = 0;
+    }
+  }
+  if (offset > 0) hash.update(buf.subarray(0, offset));
+}
+
 function replayKey(model: string, sessionId: string): string {
-  return `${model}::session:${sessionId}`;
+  const hash = createHash("sha256");
+  updateHashWithString(hash, model);
+  updateHashWithString(hash, sessionId);
+  return hash.digest("hex");
 }
 
-/** Recursively canonicalize a JSON value: object keys sorted, arrays preserved. */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.keys(value as Record<string, unknown>).sort()
-    .map(k => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`);
-  return `{${entries.join(",")}}`;
+/** Canonical output exceeding this budget is rejected DURING the walk — the
+ * pre-fix path materialized an unbounded canonical string before admission. */
+const REPLAY_MAX_CANONICAL_ARGS_BYTES = 64 * 1024;
+const CANONICAL_OVERFLOW = Symbol("canonical-overflow");
+
+/** Byte-identical output to the old recursive canonicalJson, written incrementally. */
+/**
+ * Key-count pre-check: every object key costs at least 4 canonical bytes
+ * (two quotes, colon, separator), so a wider object ALWAYS overflows the
+ * canonical budget — skip the sort and the walk. Object.keys allocation
+ * itself is linear and irreducible in JS (there is no streaming key API),
+ * but it is transient and never sorted or walked past this bound.
+ */
+const CANONICAL_MAX_KEYS_PER_OBJECT = REPLAY_MAX_CANONICAL_ARGS_BYTES / 4;
+
+/** Test-only scan instrumentation: proves overflow aborts the walk near the
+ * cap instead of scanning/materializing the whole input. */
+let canonicalScanUnitsForTests = 0;
+export function canonicalScanUnitsForTestsValue(): number {
+  return canonicalScanUnitsForTests;
+}
+export function resetCanonicalScanUnitsForTests(): void {
+  canonicalScanUnitsForTests = 0;
 }
 
-/** Stable identity for a functionCall part: name + recursively canonicalized args. */
+const MAX_CANONICAL_DEPTH = 128;
+
+function writeCanonicalJson(value: unknown, sink: (chunk: string) => void, depth = 0): void {
+  canonicalScanUnitsForTests += 1;
+  // Depth overflow is the same class as byte overflow: skip replay for this
+  // call instead of exhausting the stack on a pathological argument shape.
+  if (depth > MAX_CANONICAL_DEPTH) throw CANONICAL_OVERFLOW;
+  if (typeof value === "string") {
+    writeJsonStringEscaped(value, sink);
+    return;
+  }
+  if (value === null || typeof value !== "object") {
+    sink(JSON.stringify(value) ?? "null");
+    return;
+  }
+  if (Array.isArray(value)) {
+    sink("[");
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) sink(",");
+      // Array.prototype.map parity: holes produce NOTHING between the commas
+      // (old output `[1,,3]`), while an explicit undefined element is "null".
+      if (index in value) writeCanonicalJson(value[index], sink, depth + 1);
+    }
+    sink("]");
+    return;
+  }
+  const keys = Object.keys(value as Record<string, unknown>);
+  if (keys.length > CANONICAL_MAX_KEYS_PER_OBJECT) throw CANONICAL_OVERFLOW;
+  keys.sort();
+  sink("{");
+  keys.forEach((k, index) => {
+    if (index > 0) sink(",");
+    writeJsonStringEscaped(k, sink);
+    sink(":");
+    writeCanonicalJson((value as Record<string, unknown>)[k], sink, depth + 1);
+  });
+  sink("}");
+}
+
+/**
+ * JSON.stringify string escaping, streamed in small chunks so the budget can
+ * reject mid-string — calling JSON.stringify on a multi-MiB primitive would
+ * materialize its full escaped form before the sink could refuse it.
+ * Semantics mirror JSON.stringify for strings exactly (ES2019 JSON
+ * superset): quotes/backslash and control characters are escaped, LONE
+ * surrogates become \uXXXX, and valid surrogate pairs pass through raw.
+ */
+function writeJsonStringEscaped(value: string, sink: (chunk: string) => void): void {
+  sink('"');
+  let buffer = "";
+  for (const cp of value) {
+    canonicalScanUnitsForTests += 1;
+    const code = cp.codePointAt(0)!;
+    let escaped: string;
+    if (cp === '"') escaped = '\\"';
+    else if (cp === "\\") escaped = "\\\\";
+    else if (cp === "\b") escaped = "\\b";
+    else if (cp === "\f") escaped = "\\f";
+    else if (cp === "\n") escaped = "\\n";
+    else if (cp === "\r") escaped = "\\r";
+    else if (cp === "\t") escaped = "\\t";
+    else if (code < 0x20) escaped = `\\u${code.toString(16).padStart(4, "0")}`;
+    // Lone surrogates: JSON.stringify emits \uXXXX (a raw one would decode
+    // back as U+FFFD and collide with real U+FFFD content).
+    else if (code >= 0xd800 && code <= 0xdfff) escaped = `\\u${code.toString(16).padStart(4, "0")}`;
+    else escaped = cp;
+    buffer += escaped;
+    if (buffer.length >= 4096) {
+      sink(buffer);
+      buffer = "";
+    }
+  }
+  if (buffer.length > 0) sink(buffer);
+  sink('"');
+}
+
+/** Bounded canonicalization: null on overflow (skip replay for that call). */
+function canonicalJsonBounded(value: unknown, maxBytes: number): string | null {
+  let written = 0;
+  const parts: string[] = [];
+  const sink = (chunk: string) => {
+    written += utf8.encode(chunk).byteLength;
+    if (written > maxBytes) throw CANONICAL_OVERFLOW;
+    parts.push(chunk);
+  };
+  try {
+    writeCanonicalJson(value, sink);
+  } catch (error) {
+    if (error === CANONICAL_OVERFLOW) return null;
+    throw error;
+  }
+  return parts.join("");
+}
+
+/**
+ * Stable identity for a functionCall part: fixed-size SHA-256 over
+ * length-prefixed name + canonical args. Overflow during canonicalization
+ * skips replay for that call (never materializes an unbounded string); other
+ * canonicalization failures keep the old name-only fallback semantics.
+ */
 function functionCallKey(name: unknown, args: unknown): string | undefined {
   if (typeof name !== "string" || name.length === 0) return undefined;
-  let argsKey = "";
+  let canonical: string | null;
   try {
-    argsKey = canonicalJson(args ?? {});
+    canonical = canonicalJsonBounded(args ?? {}, REPLAY_MAX_CANONICAL_ARGS_BYTES);
   } catch {
-    argsKey = "";
+    canonical = "";
   }
-  return `${name}::${argsKey}`;
+  if (canonical === null) return undefined;
+  const hash = createHash("sha256");
+  updateHashWithString(hash, name);
+  updateHashWithString(hash, canonical);
+  return hash.digest("hex");
+}
+
+/** Test-only key-derivation seam: the fixed-key regression cannot go red
+ * through snapshot.bytes (that metric never counted raw outer keys). */
+export function antigravityReplayKeyForTests(model: string, sessionId: string): string {
+  return replayKey(model, sessionId);
+}
+
+export function antigravityFunctionCallKeyForTests(name: unknown, args: unknown): string | undefined {
+  return functionCallKey(name, args);
+}
+
+/** Test-only bounded-canonicalization seam: proves mid-walk rejection without
+ * materializing the escaped form (allocation guard). */
+export function antigravityCanonicalJsonBoundedForTests(value: unknown, maxBytes: number): string | null {
+  return canonicalJsonBounded(value, maxBytes);
+}
+
+/** Test-only: the ACTUAL internal session keys, so tests can prove raw
+ * model/session strings are never retained as Map keys. */
+export function antigravityReplaySessionKeysForTests(): string[] {
+  return [...replayCache.keys()];
 }
 
 function extractSignature(part: Record<string, unknown>): string | undefined {
@@ -121,6 +297,22 @@ function refreshReplaySessionCandidate(key: string, entry: ReplayEntry): void {
 
 function deleteExpiredReplaySessions(now: number): void {
   for (const [key, entry] of replayCache) if (entry.expiresAtMs <= now) deleteReplaySession(key);
+}
+
+/**
+ * The lazy per-call expiry scan is O(sessions); at the 10,240-session cap
+ * every observe/apply would rescan the whole map — O(n²) under load. The 60s
+ * state-store sweeper is already the periodic expiry authority, so lazy scans
+ * are throttled to at most one per interval (expired entries may linger a few
+ * extra seconds; TTL is fuzzy at that scale by design).
+ */
+const LAZY_SWEEP_INTERVAL_MS = 30_000;
+let lastLazySweepAt = Number.NEGATIVE_INFINITY;
+
+function deleteExpiredReplaySessionsThrottled(now: number): void {
+  if (now - lastLazySweepAt < LAZY_SWEEP_INTERVAL_MS) return;
+  lastLazySweepAt = now;
+  deleteExpiredReplaySessions(now);
 }
 
 export function sweepExpiredAntigravityReplay(now = Date.now()): number {
@@ -178,11 +370,12 @@ export function antigravityUsesReplayCache(model: string): boolean {
 export function observeAntigravityReplay(model: string, sessionId: string, parts: unknown[]): void {
   if (!antigravityUsesReplayCache(model) || !Array.isArray(parts) || parts.length === 0) return;
   const now = Date.now();
-  deleteExpiredReplaySessions(now);
+  deleteExpiredReplaySessionsThrottled(now);
   const key = replayKey(model, sessionId);
-  const entry = replayCache.get(key) ?? {
+  const existing = replayCache.get(key);
+  const entry = existing ?? {
     byCall: new Map<string, ReplayCall>(),
-    bytes: 0,
+    bytes: REPLAY_SESSION_KEY_BYTES,
     expiresAtMs: 0,
     oldestAtMs: null,
   };
@@ -205,7 +398,17 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     inserted = true;
   }
   if (!inserted) return;
+  // Charge the fixed outer key only when the session is actually stored.
+  if (!existing) replayBytes += REPLAY_SESSION_KEY_BYTES;
   evictInnerCalls(entry);
+  if (entry.byCall.size === 0) {
+    // The fixed session overhead can exceed the per-session cap on its own
+    // (test-sized limits): an entry holding zero calls is unusable — drop it
+    // instead of retaining an unevictable shell.
+    if (existing) deleteReplaySession(key);
+    else replayBytes -= REPLAY_SESSION_KEY_BYTES;
+    return;
+  }
   entry.expiresAtMs = now + REPLAY_TTL_MS;
   replayCache.set(key, entry);
   refreshReplaySessionCandidate(key, entry);
@@ -221,7 +424,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
 export function applyAntigravityReplay(model: string, sessionId: string, contents: unknown[]): unknown[] {
   if (!antigravityUsesReplayCache(model) || !Array.isArray(contents)) return contents;
   const now = Date.now();
-  deleteExpiredReplaySessions(now);
+  deleteExpiredReplaySessionsThrottled(now);
   const entry = replayCache.get(replayKey(model, sessionId));
   if (!entry) {
     return contents;
@@ -296,6 +499,7 @@ export function setAntigravityReplayLimitsForTests(limits?: Partial<ReplayLimits
 
 /** Test seam. */
 export function __resetAntigravityReplayCache(): void {
+  lastLazySweepAt = Number.NEGATIVE_INFINITY;
   replayCache.clear();
   replayBytes = 0;
   replayOldestSessionKey = undefined;

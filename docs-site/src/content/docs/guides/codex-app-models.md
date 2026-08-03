@@ -120,8 +120,11 @@ fast_mode = true
 ```
 
 But the model catalog and runtime request tier id use `priority`. opencodex preserves that split.
-Native OpenAI passthrough models keep fast support; routed non-OpenAI models strip service-tier
-metadata so the fast option is not advertised where it cannot be honored.
+Native OpenAI passthrough models keep fast support; routed providers are capability-gated —
+`service_tier` is stripped only when the provider declares `supportsServiceTier: false` (the registry
+classifies canonical OpenAI as `true`, DeepSeek and Volcengine Ark as `false`), while unclassified
+custom gateways keep caller-supplied values untouched and never get an injection. The fast option is
+never advertised where it cannot be honored, and custom gateways can opt in explicitly with `true`.
 
 ## Subagent selection
 

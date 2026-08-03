@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -27,7 +27,7 @@ import {
 } from "../src/config";
 
 import * as windowsAcl from "../src/lib/windows-secret-acl";
-import { AtomicWriteResidualTempError, atomicWriteFile, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
+import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
 let testDir = "";
 
 beforeEach(() => {
@@ -1698,5 +1698,157 @@ describe("config.ts – Windows ACL hardening integration", () => {
     expect(spy).not.toHaveBeenCalled();
     expect(existsSync(getConfigPath())).toBe(true);
     spy.mockRestore();
+  });
+});
+
+describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
+  test("the production sync harden keys timeouts by destination", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf-8");
+    expect(source).toContain("hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
+  });
+
+  test("timed-out write with a RESIDUAL temp retains both memos (fail-closed)", () => {
+    const destination = join(testDir, "residual-timeout.json");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    windowsAcl.resetHardenedStateForTests();
+    windowsAcl.setPlatformForTests("win32");
+    windowsAcl.setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+    const io = {
+      write: (path: string, content: string) => writeFileSync(path, content, { mode: 0o600 }),
+      harden: (path: string) => {
+        chmodSync(path, 0o600);
+        windowsAcl.hardenSecretPath(path, { required: true, timeoutMemoKey: destination });
+      },
+      rename: renameSync,
+      truncate: (path: string) => truncateSync(path, 0),
+      unlink: () => {
+        throw Object.assign(new Error("denied"), { code: "EPERM" });
+      },
+    };
+    try {
+      expect(() => atomicWriteFile(destination, "secret", io)).toThrow();
+      // Destination timeout memo retained (anti-restall) while the residual
+      // temp remains on disk.
+      expect(windowsAcl.timedOutSecretPathCountForTests()).toBe(1);
+    } finally {
+      windowsAcl.setIcaclsRunnerForTests(null);
+      windowsAcl.setPlatformForTests(null);
+      windowsAcl.resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+});
+
+describe("config.ts – atomic writes preserve symlinked destinations", () => {
+  test("a symlinked destination survives the write and the real file receives it", () => {
+    // Dotfiles shape: ~/.codex/config.toml -> ~/dotfiles/.codex/config.toml
+    const repoDir = join(testDir, "dotfiles");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config.toml");
+    symlinkSync(realFile, link);
+
+    atomicWriteFile(link, "rewritten");
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(realFile);
+    expect(readFileSync(realFile, "utf8")).toBe("rewritten");
+    expect(readFileSync(link, "utf8")).toBe("rewritten");
+  });
+
+  test("no temp file is left beside the link or its target", () => {
+    const repoDir = join(testDir, "dotfiles-clean");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-clean.toml");
+    symlinkSync(realFile, link);
+
+    atomicWriteFile(link, "rewritten");
+
+    expect(readdirSync(repoDir).filter(name => name.includes(".ocx."))).toEqual([]);
+    expect(readdirSync(testDir).filter(name => name.includes(".ocx."))).toEqual([]);
+  });
+
+  test("a plain destination is unaffected", () => {
+    const destination = join(testDir, "plain.toml");
+    atomicWriteFile(destination, "first");
+    atomicWriteFile(destination, "second");
+
+    expect(lstatSync(destination).isSymbolicLink()).toBe(false);
+    expect(readFileSync(destination, "utf8")).toBe("second");
+  });
+
+  test("a destination that does not exist yet is created at the literal path", () => {
+    const destination = join(testDir, "created.toml");
+    expect(existsSync(destination)).toBe(false);
+
+    atomicWriteFile(destination, "fresh");
+
+    expect(readFileSync(destination, "utf8")).toBe("fresh");
+  });
+
+  test("a dangling symlink is preserved and the write is refused", () => {
+    const link = join(testDir, "dangling.toml");
+    symlinkSync(join(testDir, "gone", "config.toml"), link);
+
+    // The target volume may only be temporarily unavailable; replacing the link
+    // would recreate the dotfiles divergence this fix exists to prevent.
+    expect(() => atomicWriteFile(link, "recovered")).toThrow(/unresolvable symlinked write target/);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(testDir, "gone"))).toBe(false);
+  });
+});
+
+describe("config.ts – async atomic writes preserve symlinked destinations", () => {
+  test("a symlinked destination survives the write and the real file receives it", async () => {
+    const repoDir = join(testDir, "dotfiles-async");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-async.toml");
+    symlinkSync(realFile, link);
+
+    await atomicWriteFileAsync(link, "rewritten");
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(realFile);
+    expect(readFileSync(realFile, "utf8")).toBe("rewritten");
+    expect(readFileSync(link, "utf8")).toBe("rewritten");
+  });
+
+  test("no temp file is left beside the link or its target", async () => {
+    const repoDir = join(testDir, "dotfiles-async-clean");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-async-clean.toml");
+    symlinkSync(realFile, link);
+
+    await atomicWriteFileAsync(link, "rewritten");
+
+    expect(readdirSync(repoDir).filter(name => name.includes(".ocx."))).toEqual([]);
+    expect(readdirSync(testDir).filter(name => name.includes(".ocx."))).toEqual([]);
+  });
+
+  test("a plain destination is unaffected", async () => {
+    const destination = join(testDir, "plain-async.toml");
+    await atomicWriteFileAsync(destination, "first");
+    await atomicWriteFileAsync(destination, "second");
+
+    expect(lstatSync(destination).isSymbolicLink()).toBe(false);
+    expect(readFileSync(destination, "utf8")).toBe("second");
+  });
+
+  test("a dangling symlink is preserved and the write is refused", async () => {
+    const link = join(testDir, "dangling-async.toml");
+    symlinkSync(join(testDir, "gone-async", "config.toml"), link);
+
+    await expect(atomicWriteFileAsync(link, "recovered")).rejects.toThrow(/unresolvable symlinked write target/);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(testDir, "gone-async"))).toBe(false);
   });
 });

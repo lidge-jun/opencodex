@@ -28,3 +28,27 @@ export function isShadowSourceModel(modelId: string, configured?: unknown): bool
   if (modelId.includes("/")) return false;
   return shadowSourceModels(configured).some(prefix => modelId.startsWith(prefix));
 }
+
+/**
+ * Decide whether a matching source model should use the opt-in intercept.
+ *
+ * Codex 0.145.0+ identifies normal user turns and maintenance requests in
+ * x-codex-turn-metadata. Only an explicit normal turn bypasses interception;
+ * missing or unrecognized metadata retains the legacy opt-in prefix behavior.
+ */
+export function shouldInterceptShadowCall(
+  modelId: string,
+  configured: unknown,
+  headers: Headers,
+): boolean {
+  if (!isShadowSourceModel(modelId, configured)) return false;
+  const rawMetadata = headers.get("x-codex-turn-metadata");
+  if (rawMetadata === null) return true;
+
+  try {
+    const parsed = JSON.parse(rawMetadata) as { request_kind?: unknown };
+    return parsed?.request_kind !== "turn";
+  } catch {
+    return true;
+  }
+}

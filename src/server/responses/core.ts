@@ -95,7 +95,7 @@ import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../provid
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import type { InboundWire } from "../../providers/registry";
+import { providerModelWebsocketUpstreamStreaming, type InboundWire } from "../../providers/registry";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
@@ -188,7 +188,7 @@ export function sidecarOutcomeRecorder(
 
 
 
-import { isShadowSourceModel } from "../../lib/shadow-call";
+import { isShadowSourceModel, shouldInterceptShadowCall } from "../../lib/shadow-call";
 
 export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";
 
@@ -549,6 +549,8 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /** Internal transport identity for route-scoped upstream compatibility policy. */
+  inboundTransport?: "websocket";
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
@@ -697,6 +699,15 @@ export function buildComboChildHeaders(parentHeaders: HeadersInit): Headers {
 const UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE =
   "Routed V2 worker task is encrypted for the native ChatGPT backend and cannot be read by the selected provider. Use plaintext V2 agent-message delivery or select a native ChatGPT model.";
 
+// Whole-body policy for non-streaming upstream JSON responses (see the application/json
+// branch of the passthrough return path). 32 MiB matches the continuation snapshot read
+// bound and is far above any legitimate non-streaming completion, including base64 image
+// payloads. The stall deadlines only govern the body transfer — generation time before
+// the response headers is untouched.
+const MAX_UPSTREAM_JSON_BODY_BYTES = 32 * 1024 * 1024;
+const UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS = 180_000;
+const UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS = 30_000;
+
 function unreadableEncryptedAgentTaskResponse(): Response {
   return new Response(
     JSON.stringify({
@@ -793,8 +804,9 @@ async function applyFinalRouteRequestNormalization(args: {
   req: Request;
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
+  inboundTransport?: "websocket";
 }): Promise<void> {
-  const { parsed, route, config, req, logCtx, inboundWire } = args;
+  const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -803,6 +815,10 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
+  const websocketUpstreamStreaming = inboundTransport === "websocket"
+    ? providerModelWebsocketUpstreamStreaming(route.providerName, route.provider, route.modelId)
+    : undefined;
+
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
@@ -810,14 +826,22 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
 
+  if (websocketUpstreamStreaming === false) {
+    parsed.stream = false;
+    if (parsed._rawBody && typeof parsed._rawBody === "object") {
+      (parsed._rawBody as Record<string, unknown>).stream = false;
+    }
+  }
+
   // Final selected model before virtual wire-model rewriting (Pro aliases).
   const finalSelectedModelId = route.modelId;
 
   // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
   applyOpenAiVirtualModel(parsed, route, logCtx);
 
-  // Fast mode override for OpenAI-routed models.
-  if (config.fastMode !== undefined && route.provider.adapter === "openai-responses") {
+  // Fast mode override for OpenAI-routed models, only where the provider's Responses
+  // route documents `service_tier` support (capability gate below strips everywhere else).
+  if (config.fastMode !== undefined && route.provider.adapter === "openai-responses" && route.provider.supportsServiceTier === true) {
     const tier = config.fastMode ? "priority" : undefined;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       if (tier) (parsed._rawBody as Record<string, unknown>).service_tier = tier;
@@ -825,6 +849,7 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.options.serviceTier = tier;
   }
+  applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
 
   {
     const guidance = await multiAgentGuidanceText(parsed, {
@@ -1160,6 +1185,28 @@ function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBud
   return finalizedResponse;
 }
 
+/**
+ * Service-tier capability gate, applied after the final route/wire is settled. A
+ * provider explicitly documented as NOT supporting `service_tier` must never
+ * receive it: strip the field and clear the logging value even when the caller
+ * supplied one (fail closed). Tri-state contract: `true` supports (injection
+ * allowed, caller values preserved), `false` strips, and an UNCLASSIFIED custom
+ * provider (`undefined`) preserves caller-supplied values but never gets an
+ * injection — deleting the caller's field there would silently change their
+ * request against a gateway we know nothing about.
+ */
+export function applyServiceTierGate(
+  provider: OcxProviderConfig,
+  rawBody: unknown,
+  options: { serviceTier?: string },
+): void {
+  if (provider.adapter !== "openai-responses" || provider.supportsServiceTier !== false) return;
+  if (rawBody && typeof rawBody === "object") {
+    delete (rawBody as Record<string, unknown>).service_tier;
+  }
+  options.serviceTier = undefined;
+}
+
 export async function handleResponses(
   req: Request,
   config: OcxConfig,
@@ -1264,7 +1311,11 @@ async function handleResponsesInner(
   // Shadow call intercept: rewrite Codex's hard-coded helper calls
   // (gpt-5.4-mini on older clients, gpt-5.6-luna on 0.145.0+)
   const _sci = config.shadowCallIntercept;
-  if (_sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+  if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
+    parsed.modelId,
+    _sci.sourceModels,
+    req.headers,
+  )) {
     const _sciOriginal = parsed.modelId;
     parsed.modelId = _sci.model;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
@@ -1366,7 +1417,15 @@ async function handleResponsesInner(
     );
   }
 
-  await applyFinalRouteRequestNormalization({ parsed, route, config, req, logCtx, inboundWire });
+  await applyFinalRouteRequestNormalization({
+    parsed,
+    route,
+    config,
+    req,
+    logCtx,
+    inboundWire,
+    inboundTransport: options.inboundTransport,
+  });
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
@@ -1946,7 +2005,24 @@ async function handleResponsesInner(
       }));
     }
     if (headers.get("content-type")?.toLowerCase().includes("application/json")) {
-      const text = await upstreamResponse.text();
+      // Bounded whole-body read: a non-streaming upstream JSON body is fully materialized
+      // here (and again by the request-log finalizer and the WebSocket bridge's reframing),
+      // so an unbounded .text() would let a hostile or stuck upstream grow proxy memory
+      // without limit. This path is no longer rare — WebSocket turns for models whose
+      // streaming terminal event is unreliable are deliberately answered with bounded JSON.
+      // Oversize and stall deadlines both fail closed; a partial body is never parsed.
+      const bounded = await readBoundedResponseBody(upstreamResponse, {
+        maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
+        totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
+        inactivityTimeoutMs: UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS,
+      });
+      if (bounded.oversized) {
+        return formatErrorResponse(502, "upstream_error", "upstream JSON response exceeded the safe body limit");
+      }
+      if (bounded.truncated) {
+        return formatErrorResponse(502, "upstream_error", "upstream JSON response stalled before completing");
+      }
+      const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
       if (rememberPassthroughResponse) {
         try {

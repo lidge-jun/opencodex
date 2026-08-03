@@ -356,6 +356,31 @@ describe("Cursor blob handshake", () => {
     expect(run?.requestedModel).toBeUndefined();
   });
 
+  test("encodes Grok Fast through requested_model parameters without legacy model_details", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      requestedModelParameters: [
+        { id: "effort", value: "high" },
+        { id: "fast", value: "true" },
+      ],
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+
+    expect(run?.modelDetails).toBeUndefined();
+    expect(run?.requestedModel).toMatchObject({
+      modelId: "grok-4.5",
+      maxMode: false,
+      parameters: [
+        { id: "effort", value: "high" },
+        { id: "fast", value: "true" },
+      ],
+    });
+  });
+
   test("adds Cursor exact-tool guidance to system prompt blobs when tools are advertised", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "claude-4.6-sonnet",
@@ -734,7 +759,7 @@ describe("Cursor bounded blob store", () => {
     const second = storeCursorBlob(bytes("5678"));
     expectBlobHit(first, bytes("1234"));
     expectBlobHit(second, bytes("5678"));
-    expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 2, bytes: 8 });
+    expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 2, bytes: 8 + 2 * 66 });
   });
 
   test("request construction one byte above the per-blob boundary fails before writing a request and returns no unstored hash", () => {
@@ -797,7 +822,7 @@ describe("Cursor bounded blob store", () => {
     storeCursorBlob(bytes("a"), scope);
     storeCursorBlob(bytes("b"), scope);
     sealCursorBlobRequestScope(scope);
-    expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(2);
+    expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(2 + 2 * 66);
     releaseCursorBlobRequestScope(scope);
     releaseCursorBlobRequestScope(scope);
     expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(0);
@@ -823,7 +848,10 @@ describe("Cursor bounded blob store", () => {
     const selected = message.message.value.conversationState?.rootPromptMessagesJson ?? [];
     expect(selected.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
     expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBeGreaterThan(0);
-    const selectedBytes = cursorBlobRetainedStoreSnapshot().bytes;
+    // Payload-only counter: the snapshot's bytes include retained key strings,
+    // but maxTotalBytes is a payload cap — using snapshot bytes here would hand
+    // the repeated request unintended headroom.
+    const selectedBytes = cursorBlobMetrics().totalBytes;
     releaseCursorBlobRequestScope(prepared.blobRequestScope);
     setCursorBlobLimitsForTests({ maxTotalBytes: selectedBytes, maxEntryBytes: 1024 * 1024 });
     expect(() => prepareCursorRunRequest({
@@ -844,7 +872,7 @@ describe("Cursor bounded blob store", () => {
     expectBlobHit(a, bytes("aaa"));
     expectBlobMiss(b);
     expectBlobHit(c, bytes("cccc"));
-    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(7);
+    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(7 + 2 * 66);
   });
 
   test("aggregate admission evicts oldest local-regenerated blobs first", () => {
@@ -855,7 +883,7 @@ describe("Cursor bounded blob store", () => {
     expectBlobMiss(first);
     expectBlobHit(second, bytes("2222"));
     expectBlobHit(third, bytes("3333"));
-    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(8);
+    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(8 + 2 * 66);
   });
 
   test("remote setBlobArgs remains pinned within TTL while local blobs are evicted", () => {
@@ -875,7 +903,7 @@ describe("Cursor bounded blob store", () => {
     setBlobReply(remoteId, bytes("rem"));
     storeCursorBlob(bytes("loc"));
     expectBlobMiss(remoteId);
-    expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 1, bytes: 3, evictableBytes: 3 });
+    expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 1, bytes: 3 + 66, evictableBytes: 3 + 66 });
     expect(cursorBlobStoreDebugSnapshotForTests()[0]?.provenance).toBe("local-regenerated");
   });
 
@@ -894,8 +922,8 @@ describe("Cursor bounded blob store", () => {
       now = 112;
       releaseCursorBlobRequestScope(scope);
       const snapshot = cursorBlobRetainedStoreSnapshot();
-      expect(snapshot).toMatchObject({ bytes: 6, evictableBytes: 6, pinnedBytes: 0, oldestAt: 100 });
-      expect(evictOldestCursorBlobForBudget()).toBe(3);
+      expect(snapshot).toMatchObject({ bytes: 6 + 2 * 66, evictableBytes: 6 + 2 * 66, pinnedBytes: 0, oldestAt: 100 });
+      expect(evictOldestCursorBlobForBudget()).toBe(3 + 66);
       expectBlobMiss(remoteId);
       expectBlobHit(localId, bytes("loc"));
     } finally {
@@ -916,7 +944,7 @@ describe("Cursor bounded blob store", () => {
     const hydratedScope = createCursorBlobRequestScope();
     const hydrated = storeCursorBlob(bytes("hydrate"), hydratedScope);
     sealCursorBlobRequestScope(hydratedScope);
-    expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(7);
+    expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(7 + 66);
     hydrateBlob(hydrated, hydratedScope);
     expect(cursorBlobRetainedStoreSnapshot().count).toBe(0);
 
@@ -936,7 +964,7 @@ describe("Cursor bounded blob store", () => {
     try {
       setCursorBlobLimitsForTests({ ttlMs: 10 });
       setBlobReply(sha256(bytes("remote")), bytes("remote"));
-      expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 1, pinnedBytes: 6 });
+      expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 1, pinnedBytes: 6 + 66 });
       Date.now = () => 111;
       timers.at(-1)!();
       expect(cursorBlobRetainedStoreSnapshot().count).toBe(0);
@@ -961,7 +989,7 @@ describe("Cursor bounded blob store", () => {
     if (reply.message.value.message.case !== "setBlobResult") throw new Error("expected setBlobResult");
     expect(reply.message.value.message.value.error?.message).toContain("capacity");
     expectBlobMiss(rejectedId, 78);
-    expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 1, bytes: 3, pinnedBytes: 3 });
+    expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({ count: 1, bytes: 3 + 66, pinnedBytes: 3 + 66 });
   });
 
   test("getBlob hit preserves the request id includes blobData and releases that key's request pin", () => {
@@ -1061,7 +1089,7 @@ describe("Cursor bounded blob store", () => {
     expectBlobHit(pinned, bytes("pin!"), scope);
     expectBlobHit(remote, bytes("rm"));
     expectBlobHit(localVictim, bytes("lv!"));
-    const expiredKey = Buffer.from(expired).toString("hex");
+    const expiredKey = `h:${Buffer.from(expired).toString("hex")}`;
     expect(cursorBlobStoreDebugSnapshotForTests().some(row => row.key === expiredKey)).toBe(true);
   });
 
@@ -1099,7 +1127,7 @@ describe("Cursor bounded blob store", () => {
     });
     // The expired row was in the LOGICAL victim view but must not have been
     // committed-removed by the failed transaction.
-    const expiredKey = Buffer.from(expired).toString("hex");
+    const expiredKey = `h:${Buffer.from(expired).toString("hex")}`;
     expect(cursorBlobStoreDebugSnapshotForTests().some(row => row.key === expiredKey)).toBe(true);
   });
 
@@ -1115,7 +1143,7 @@ describe("Cursor bounded blob store", () => {
     // Late remote set carrying the stale token.
     const late = sha256(bytes("lat"));
     setBlobReply(late, bytes("lat"), 1, scope);
-    const lateKey = Buffer.from(late).toString("hex");
+    const lateKey = `h:${Buffer.from(late).toString("hex")}`;
     const rows = cursorBlobStoreDebugSnapshotForTests();
     const lateRow = rows.find(row => row.key === lateKey);
     expect(lateRow).toBeDefined();
@@ -1134,7 +1162,9 @@ describe("Cursor bounded blob store", () => {
       messages: [{ role: "user", content: "hi" }],
     })).toThrow(CursorBlobAdmissionError);
     const snapshot = cursorBlobRetainedStoreSnapshot();
-    expect(snapshot.bytes).toBeLessThanOrEqual(150);
+    // The payload cap is what the admission contract bounds; the framework-
+    // facing snapshot bytes additionally include the fixed key strings.
+    expect(cursorBlobMetrics().totalBytes).toBeLessThanOrEqual(150);
     expect(snapshot.pinnedBytes).toBe(0);
   });
 
@@ -1195,10 +1225,117 @@ describe("Cursor bounded blob store", () => {
     expect(cursorBlobRetainedStoreSnapshot()).toEqual(before);
     expect(cursorBlobMetrics()).toMatchObject({ count: 2, totalBytes: 7, localBytes: 7, pinnedBytes: 0 });
     const released = evictOldestCursorBlobForBudget();
-    expect(released).toBe(4);
+    expect(released).toBe(4 + 66);
     expectBlobHit(first, bytes("one"));
-    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(3);
+    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(3 + 66);
     resetCursorBlobStateForTests();
     expect(cursorBlobMetrics()).toMatchObject({ count: 0, totalBytes: 0, localBytes: 0, pinnedBytes: 0 });
+  });
+});
+
+describe("Cursor blob ID key channel bounds", () => {
+  test("conforming 32-byte IDs keep their hex passthrough", () => {
+    const blobId = sha256(new TextEncoder().encode("payload"));
+    setBlobReply(blobId, new TextEncoder().encode("payload"));
+    const keys = cursorBlobStoreDebugSnapshotForTests().map(entry => entry.key);
+    expect(keys).toEqual([`h:${Buffer.from(blobId).toString("hex")}`]);
+    expect(cursorBlobMetrics().keyBytes).toBe(66);
+  });
+
+  test("a multi-MiB remote ID becomes a fixed-size digest key and still round-trips", () => {
+    const hugeId = new Uint8Array(1024 * 1024).fill(7);
+    hugeId[0] = 1;
+    const data = new TextEncoder().encode("blob-content");
+    setBlobReply(hugeId, data);
+    const snapshot = cursorBlobStoreDebugSnapshotForTests();
+    expect(snapshot).toHaveLength(1);
+    // Fixed digest key — the raw 1 MiB ID is never retained as a key.
+    expect(snapshot[0]!.key).toMatch(/^d:[0-9a-f]{64}$/);
+    expect(cursorBlobMetrics().keyBytes).toBe(66);
+    // Symmetric derivation: the same huge ID fetches the data back.
+    expect([...blobData(hugeId)]).toEqual([...data]);
+  });
+
+  test("the passthrough/digest boundary sits at 64 raw bytes", () => {
+    const id64 = new Uint8Array(64).fill(3);
+    const id65 = new Uint8Array(65).fill(4);
+    setBlobReply(id64, new TextEncoder().encode("a"));
+    setBlobReply(id65, new TextEncoder().encode("b"));
+    const keys = cursorBlobStoreDebugSnapshotForTests().map(entry => entry.key).sort();
+    expect(keys).toContain(`h:${Buffer.from(id64).toString("hex")}`);
+    expect(keys).toContain(`d:${Buffer.from(sha256(id65)).toString("hex")}`);
+    expect([...blobData(id64)]).toEqual([...new TextEncoder().encode("a")]);
+    expect([...blobData(id65)]).toEqual([...new TextEncoder().encode("b")]);
+  });
+
+  test("aggregate key bytes stay bounded across oversized-ID admissions", () => {
+    for (let index = 0; index < 32; index++) {
+      const hugeId = new Uint8Array(256 * 1024).fill(index + 1);
+      setBlobReply(hugeId, new TextEncoder().encode(`blob-${index}`));
+    }
+    const metrics = cursorBlobMetrics();
+    expect(metrics.count).toBe(32);
+    // 32 entries x fixed 66-char digest keys — never 32 x 512 KiB of hex.
+    expect(metrics.keyBytes).toBe(32 * 66);
+    // Payload accounting is untouched by the key channel.
+    expect(metrics.totalBytes).toBeGreaterThan(0);
+  });
+
+  test("a digested long ID never collides with a raw ID equal to that digest", () => {
+    const longId = new Uint8Array(256).fill(9);
+    const digestAsRawId = sha256(longId); // 32 bytes — a conforming raw ID
+    setBlobReply(longId, new TextEncoder().encode("long-payload"));
+    setBlobReply(digestAsRawId, new TextEncoder().encode("raw32-payload"));
+    // Domain-separated keys: two DISTINCT entries, no silent replacement.
+    expect(cursorBlobMetrics().count).toBe(2);
+    expect([...blobData(longId)]).toEqual([...new TextEncoder().encode("long-payload")]);
+    expect([...blobData(digestAsRawId)]).toEqual([...new TextEncoder().encode("raw32-payload")]);
+  });
+
+  test("key bytes pair with entry deletion on replacement, eviction, and reset", () => {
+    // Local-regenerated entries are budget-evictable; remote ones are TTL-protected.
+    const id = storeCursorBlob(new TextEncoder().encode("one"));
+    expect(cursorBlobMetrics().keyBytes).toBe(66);
+    // Same-content re-store replaces in place: still exactly one key's worth.
+    storeCursorBlob(new TextEncoder().encode("one"));
+    expect(cursorBlobMetrics().keyBytes).toBe(66);
+    // Budget eviction removes the entry AND its key bytes.
+    expect(evictOldestCursorBlobForBudget()).toBe(3 + 66);
+    expect(cursorBlobMetrics().keyBytes).toBe(0);
+    storeCursorBlob(new TextEncoder().encode("three"));
+    resetCursorBlobStateForTests();
+    expect(cursorBlobMetrics().keyBytes).toBe(0);
+  });
+
+  test("key bytes stay bounded at the 4096-entry ceiling", () => {
+    for (let index = 0; index < 4096; index++) {
+      const id = new Uint8Array(65);
+      new DataView(id.buffer).setUint32(61, index, false);
+      setBlobReply(id, new TextEncoder().encode("v"));
+    }
+    const metrics = cursorBlobMetrics();
+    expect(metrics.count).toBe(4096);
+    // Fixed digest keys at full capacity: 4096 x 66 = 270,336 — never GiBs of hex.
+    expect(metrics.keyBytes).toBe(4096 * 66);
+    // Entry 4097 must be rejected typed, leaving count and keys unchanged.
+    const extraId = new Uint8Array(65).fill(0xaa);
+    const reply = setBlobReply(extraId, new TextEncoder().encode("overflow"));
+    const kv = reply.message.value;
+    expect(kv.message.case).toBe("setBlobResult");
+    const result = kv.message.value as { error?: { message?: string } };
+    expect(result.error?.message).toBeDefined();
+    expect(cursorBlobMetrics().count).toBe(4096);
+    expect(cursorBlobMetrics().keyBytes).toBe(4096 * 66);
+  });
+
+  test("a zero-payload blob stays evictable through its key bytes", () => {
+    storeCursorBlob(new Uint8Array());
+    const snapshot = cursorBlobRetainedStoreSnapshot();
+    expect(snapshot.bytes).toBe(66);
+    // The budget can SELECT the reclaimable entry: its key classifies with it.
+    expect(snapshot.evictableBytes).toBe(66);
+    expect(snapshot.pinnedBytes).toBe(0);
+    expect(evictOldestCursorBlobForBudget()).toBe(66);
+    expect(cursorBlobRetainedStoreSnapshot().bytes).toBe(0);
   });
 });

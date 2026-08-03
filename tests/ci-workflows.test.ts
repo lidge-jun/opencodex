@@ -35,19 +35,109 @@ describe("GitHub Actions hardening", () => {
     };
 
     // Job-scoped: a global count still passes if values are swapped between jobs.
-    // Pin ownership explicitly. `test` is 30m for Windows isolate margin on #827
-    // after state-store admission — do not raise again; fix hung tests instead
-    // (unref'd oauth waitMs / shell kill-grace). Selector stays at 2; smoke at 8.
+    // Pin ownership explicitly. `platform-windows` keeps the 30m Windows isolate
+    // margin from #827 after state-store admission — do not raise again; fix hung
+    // tests instead (unref'd oauth waitMs / shell kill-grace). A `test` shard runs
+    // a quarter of the suite, so 15m there means wedged rather than slow.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
-    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);
     expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
+    expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
     // Every job must stay bounded — an unbounded job can hang a queue for hours.
-    expect(count(workflow, "timeout-minutes:")).toBe(3);
+    // Asserted structurally rather than by counting the string: a count passes if
+    // a job is added while another loses its bound in the same edit. Iterating the
+    // parsed jobs proves what the sentence above always claimed, and names the
+    // offending job when it fails.
+    for (const [name, job] of Object.entries(ci.jobs ?? {})) {
+      expect(`${name}:${typeof job?.["timeout-minutes"]}`).toBe(`${name}:number`);
+    }
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).toContain("bun test --isolate tests");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // Sharding is only safe while the shards tile the suite exactly. If the
+    // matrix and the divisor drift apart, some files stop running and CI stays
+    // green — the worst failure available here. Pin them to each other.
+    const shards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
+      ?.strategy?.matrix?.shard ?? [];
+    expect(shards).toEqual([1, 2, 3, 4]);
+    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${shards.length}`);
+
+    // The aggregate gate is the check a human trusts. Three ways to break it
+    // silently: drop `if: always()` so it skips (and a skipped job reports
+    // success), shrink `needs:` so it stops covering a job, or add a job and
+    // forget to gate it. Deriving the expected list from the workflow's own job
+    // keys closes all three — a hardcoded list rots on the next job added.
+    const gate = ci.jobs?.ci as { if?: unknown; needs?: string[] } | undefined;
+    expect(gate?.if).toBe("always()");
+    expect([...(gate?.needs ?? [])].sort())
+      .toEqual(Object.keys(ci.jobs ?? {}).filter(name => name !== "ci").sort());
+
+    // macOS is the unsharded control for the sharded Linux lane: it is the only
+    // place the whole suite runs in one pool. Sharded or conditional, it stops
+    // being a control.
+    const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { run?: string }[] })?.steps ?? [];
+    expect(macosSteps.some(step => step.run?.includes("bun test --isolate tests"))).toBe(true);
+    expect(macosSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    expect(ci.jobs?.["platform-macos"]).not.toHaveProperty("if");
+
+    // Windows leaving the PR lane is a trade, not a deletion: it still runs
+    // before anything is published. Assert the positive condition rather than the
+    // absence of `pull_request` — `!= 'pull_request'` also matches every push to
+    // dev, which would restore the 16-minute leg to the busiest lane while still
+    // passing a loosely-worded test.
+    const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
+    expect(windowsIf).toContain("github.event_name == 'workflow_dispatch'");
+    expect(windowsIf).toContain("github.ref == 'refs/heads/main'");
+    expect(windowsIf).toContain("github.ref == 'refs/heads/preview'");
+    expect(windowsIf).not.toContain("refs/heads/dev");
+
+    // Windows runs the same full suite, and keeps the self-hosted workspace wipe.
+    // Without the wipe a deleted file survives on the runner's disk and the suite
+    // passes against a tree that no longer exists in git.
+    const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
+    expect(winSteps.some(step => step.run?.includes("bun test --isolate tests"))).toBe(true);
+    expect(winSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
+      && step.run?.includes("git clean -xffd"))).toBe(true);
+
+    // Every job that runs the root suite must build the GUI first, unconditionally.
+    // Tests that fetch the served dashboard read their session bootstrap out of
+    // `gui/dist/index.html`; with no build the server has no index to serve and the
+    // assertions read an empty string. The old three-platform job satisfied this by
+    // accident, because the same job also ran the GUI build — splitting the suite
+    // away from the gates removed that coincidence, and the shards went red on a
+    // pull request before this pin existed.
+    for (const jobName of ["test", "platform-macos", "platform-windows"]) {
+      const steps = (ci.jobs?.[jobName] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
+      const build = steps.find(step => step.run?.includes("bun run build"));
+      expect(`${jobName}:${build === undefined}`).toBe(`${jobName}:false`);
+      expect(`${jobName}:${build?.if ?? "unconditional"}`).toBe(`${jobName}:unconditional`);
+    }
+
+    // No job in this workflow pushes, and the self-hosted runner keeps its
+    // checkout between jobs, so a persisted token is avoidable residue. The
+    // other workflows in this repository already set this; ci.yml was the gap.
+    const checkouts = Object.values(ci.jobs ?? {})
+      .flatMap(job => (job as { steps?: { uses?: string; with?: Record<string, unknown> }[] })?.steps ?? [])
+      .filter(step => step.uses?.startsWith("actions/checkout@"));
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const [index, step] of checkouts.entries()) {
+      expect(`checkout[${index}]:${step.with?.["persist-credentials"]}`).toBe(`checkout[${index}]:false`);
+    }
+
+    // The self-hosted workspace wipe must not swallow its own failure. A clean
+    // that fails on permissions leaves deleted files on disk, and the checkout
+    // after it then validates a tree that no longer exists in git.
+    const wipe = ((ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [])
+      .find(step => step.run?.includes("git clean -xffd"));
+    expect(wipe?.run).not.toContain("|| true");
+    expect(wipe?.run).toContain("git rev-parse --is-inside-work-tree");
   });
 
   test("PR checks reach every branch the target gate accepts", async () => {
@@ -106,6 +196,9 @@ describe("GitHub Actions hardening", () => {
       ".github/workflows/release.yml",
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",
+      "LICENSE",
+      "README.md",
+      "assets/**",
       "bin/**",
       "bun.lock",
       "gui/**",
@@ -130,6 +223,71 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun run lint");
     expect(workflow).toContain("- name: GUI build");
     expect(workflow).toContain("bun run build");
+
+    // Presence is no longer enough. After area scoping, a step conditioned on a
+    // filter that never fires is a dropped gate wearing the step's name — the
+    // same outcome #97 hit, reached a different way. Pin the condition to the
+    // filter output, and pin the filter to patterns that can actually match.
+    const ci = Bun.YAML.parse(workflow) as {
+      jobs?: Record<string, Record<string, unknown> | undefined>;
+    };
+    const gateSteps = (ci.jobs?.gates as {
+      steps?: { name?: string; if?: string }[];
+    })?.steps ?? [];
+    for (const stepName of ["GUI lint", "GUI build"]) {
+      const step = gateSteps.find(candidate => candidate.name === stepName);
+      expect(`${stepName}:${step === undefined}`).toBe(`${stepName}:false`);
+      expect(step?.if).toBe("needs.changes.outputs.gui == 'true'");
+    }
+
+    const filterStep = (ci.jobs?.changes as {
+      steps?: { with?: Record<string, string> }[];
+    })?.steps?.find(step => step.with?.filters);
+
+    // `base` is not cosmetic. Unset, paths-filter diffs a `dev` push against the
+    // repository default branch (`main`), so everything changed since the last
+    // promotion still reads as changed and the scoped jobs run anyway — the
+    // filter would look correct, stay green, and save nothing.
+    expect(filterStep?.with?.base).toBe("${{ github.ref }}");
+
+    // paths-filter cannot read a PR's file list without this, and a filter that
+    // errors produces empty outputs — which every `== 'true'` condition reads as
+    // "skip". The scoped jobs would silently stop running.
+    expect((ci.jobs?.changes as { permissions?: Record<string, string> })?.permissions)
+      .toEqual({ contents: "read", "pull-requests": "read" });
+
+    // Whole-list comparison, not samples. Every entry is an input to the
+    // published tarball; dropping one silently stops packaging verification for
+    // that surface. `src/**` is the load-bearing one: it keeps a source-only PR
+    // running the Windows packaged-CLI smoke now that the Windows suite only
+    // runs at the shipping boundary.
+    const filters = String(filterStep?.with?.filters ?? "");
+    const packagingBlock = filters.split(/\n\s*packaging:\s*\n/)[1] ?? "";
+    const packaging = [...packagingBlock.matchAll(/-\s*'([^']+)'/g)].map(match => match[1]).sort();
+    expect(packaging).toEqual([
+      ".npmignore",
+      ".gitattributes",
+      "LICENSE",
+      "README.md",
+      "assets/**",
+      "bin/**",
+      "bun.lock",
+      "gui/**",
+      "package.json",
+      "scripts/prepare-package.ts",
+      "src/**",
+    ].sort());
+
+    // A per-job filter can only narrow what the workflow-level filter admits, so
+    // every packaging pattern that names a real path must also appear in the
+    // trigger's own path list. Otherwise the workflow never runs for that file
+    // and the filter entry is decoration.
+    const triggerPaths = (ci.on as { pull_request?: { paths?: string[] } } | undefined)
+      ?.pull_request?.paths ?? [];
+    for (const pattern of packaging) {
+      if (pattern === "scripts/prepare-package.ts") continue; // covered by scripts/**
+      expect(`${pattern}:${triggerPaths.includes(pattern)}`).toBe(`${pattern}:true`);
+    }
   });
 
   test("stale needs-info workflow is schedule-only and least-privilege", async () => {

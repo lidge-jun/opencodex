@@ -83,7 +83,7 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-但模型目录和运行时请求里的 tier id 使用的是 `priority`。opencodex 保留了这个拆分。原生 OpenAI 透传模型保留 fast 支持；路由到非 OpenAI 模型时会移除 service-tier 元数据，因此无法兑现的 fast 选项不会被展示出来。
+但模型目录和运行时请求里的 tier id 使用的是 `priority`。opencodex 保留了这个拆分。原生 OpenAI 透传模型保留 fast 支持；路由的提供商会按能力门控——只有当提供商声明 `supportsServiceTier: false` 时才会剥离 `service_tier`（注册表已将官方 OpenAI 分类为 `true`，DeepSeek 和 Volcengine Ark 分类为 `false`）；未分类的自定义网关会原样保留调用方提供的值且绝不注入，因此无法兑现的 fast 选项不会被展示，自定义网关也可以用 `true` 显式启用。
 
 ## 子代理选择
 

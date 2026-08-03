@@ -32,7 +32,10 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
-export function sanitizeReasoningInputContent(body: unknown): unknown {
+export function sanitizeReasoningInputContent(
+  body: unknown,
+  opts?: { preserveRawReasoningContent?: boolean },
+): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
   if (!Array.isArray(raw.input)) return body;
@@ -47,13 +50,23 @@ export function sanitizeReasoningInputContent(body: unknown): unknown {
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
     if (!hasRawContent && !hasOcxEnvelope) return item;
-    changed = true;
+    if (hasOcxEnvelope) {
+      changed = true;
+      const next: Record<string, unknown> = { ...rec };
+      delete next.encrypted_content;
+      if (!opts?.preserveRawReasoningContent) next.content = [];
+      return next;
+    }
     // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
     // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
     // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.
-    const next: Record<string, unknown> = { ...rec, content: [] };
-    if (hasOcxEnvelope) delete next.encrypted_content;
-    return next;
+    // DeepSeek's Responses API instead ACCEPTS plaintext reasoning replay (its compatibility
+    // guide merges reasoning items into the adjacent assistant message), so providers flagged
+    // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
+    // continuations after tool calls (issue #875 family).
+    if (opts?.preserveRawReasoningContent) return item;
+    changed = true;
+    return { ...rec, content: [] };
   });
 
   return changed ? { ...raw, input } : body;
@@ -1024,7 +1037,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))));
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const body = JSON.stringify(stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

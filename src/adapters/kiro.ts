@@ -39,7 +39,7 @@ import { extractKiroImages, normalizeKiroImages, type KiroImage } from "./kiro-i
 import { sniffImageDimensions } from "./anthropic-image-guard";
 import { fetchKiroWithRetry, noteKiroTransientThrottle } from "./kiro-retry";
 import { convertKiroToolContext } from "./kiro-tools";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeFromNames } from "./tool-catalog-nudge";
 import {
   KIRO_COMPLETION_INSTRUCTIONS,
@@ -381,9 +381,21 @@ function validateKiroConversationState(history: KiroHistoryEntry[], currentMessa
 function boundedInjectedInstruction(text: string, used: { value: number }): string | undefined {
   const remaining = MAX_KIRO_INJECTED_INSTRUCTION_CHARS - used.value;
   if (remaining <= 0 || !text) return undefined;
-  const result = text.length <= remaining ? text : text.slice(0, remaining);
+  let result = text.length <= remaining ? text : text.slice(0, remaining);
+  // Never end the slice on a lone high surrogate: encoding it substitutes
+  // U+FFFD into the injected instruction. One step back keeps a valid pair
+  // out instead of a broken half.
+  if (result.length > 0) {
+    const last = result.charCodeAt(result.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) result = result.slice(0, -1);
+  }
   used.value += result.length;
-  return result;
+  return result.length > 0 ? result : undefined;
+}
+
+/** Test-only: exercise the surrogate-safe instruction bound directly. */
+export function boundedInjectedInstructionForTests(text: string, used: { value: number }): string | undefined {
+  return boundedInjectedInstruction(text, used);
 }
 
 function kiroCompletionTool(): Record<string, unknown> {
@@ -431,9 +443,10 @@ export function buildKiroPayload(
   const nameMap = toolContext.nameMap;
   const systemParts: string[] = [];
   const injectedChars = { value: 0 };
-  // Neutralize Codex's GPT-5 identity line so a routed Kiro model never misreports as GPT-5/OpenAI
-  // and the proxy identity never leaks upstream.
-  if (parsed.context.systemPrompt?.length) systemParts.push(neutralizeIdentity(parsed.context.systemPrompt.join("\n\n")));
+  // Name the Kiro model id actually sent on the wire without leaking the proxy identity upstream.
+  if (parsed.context.systemPrompt?.length) {
+    systemParts.push(identifyRoutedModel(parsed.context.systemPrompt.join("\n\n"), modelId));
+  }
   for (const addition of toolContext.systemAdditions) {
     const boundedAddition = boundedInjectedInstruction(addition, injectedChars);
     if (boundedAddition) systemParts.push(boundedAddition);

@@ -153,6 +153,47 @@ drift the per-phase audits could not see because the later half did not exist.
 Typecheck strictness over the feature surface, escape-hatch review, docs-site
 build, and the unit's own `check-drift` / `check-blocks`.
 
+### Result
+
+**Type safety: nothing to fix.** Across `src/integrations/**`,
+`src/clients/config-export.ts`, `src/server/management/integration-routes.ts`,
+`src/cli/integrations.ts` and `gui/src/pages/integrations/**` there is not one
+`any`, `@ts-ignore`, `@ts-expect-error`, or `as unknown as`. The casts that do
+exist are five `as Record<string, unknown>` narrowings, each on the line after
+the `isPlainRecord` / `typeof` check that makes it safe — the compiler cannot
+carry the guard across the index access, so the cast is the narrowing, not an
+escape from it. `tsconfig.json` is `strict: true`, and the GUI additionally
+enforces `erasableSyntaxOnly`, which is what caught a parameter-property in
+the browser adapter during WP5.
+
+**Two lint suppressions, both deliberate and both explained at the site:**
+`react-hooks/set-state-in-effect` in `use-app-route-state.ts` (reconciles a
+hash changed before the listener existed; the equality check bounds it to one
+render) and `react-doctor/async-await-in-loop` in `IntegrationsOverview.tsx`
+(the bulk loop is serial on purpose — the server's single-flight guard is
+keyed per client and the record file is read-modify-write, so parallelising it
+would drop ownership records).
+
+**Docs: one overpromise corrected.** The page said "every value you had is
+still there and equal", which the audit showed the code cannot guarantee for
+every input — a TOML file using `inf`/`nan` is unreadable through the parser
+available to us. Rather than restate the promise, the page now says what
+actually happens: the round trip covers the value kinds these formats use in
+practice, and where it does not, applying stops and names the file instead of
+writing a changed value. That is the honest version of the same guarantee.
+
+`check-drift` clean across 21 docs; `check-blocks` tsc-clean across 79
+extracted blocks; docs-site builds 211 pages.
+
+### Known limitation, carried forward
+
+The reviewer's architectural point stands and is not closed by this phase: a
+renderer extended case by case is not the same as a serializer whose supported
+domain is the format's own. Each concrete gap they reproduced is fixed and
+refuses safely rather than corrupting, but full fidelity would need a
+document-preserving TOML/YAML pipeline. That is a dependency decision, not a
+patch, and it belongs to whoever picks up comment preservation.
+
 ## Rule for this unit
 
 A test that cannot run on a platform is skipped with a stated specific reason.

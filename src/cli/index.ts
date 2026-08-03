@@ -44,6 +44,7 @@ import { syncModelsToCodex } from "../codex/sync";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { removeOwnedConfigState } from "../lib/config-ownership";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -385,7 +386,7 @@ async function handleEnsure() {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: { ...process.env, OCX_SERVICE: "1" },
+    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
   });
   child.unref();
 
@@ -427,7 +428,7 @@ async function handleTrayProxyStart(): Promise<void> {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: { ...process.env, OCX_SERVICE: "1" },
+        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
       });
       child.unref();
     },
@@ -867,7 +868,7 @@ switch (command) {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: process.env,
+        env: withProcessRuntimeProvenance(process.env),
       });
       child.unref();
       live = await waitForProxy();

@@ -31,7 +31,21 @@ export function parseConfig(text: string | null, format: ConfigFormat): unknown 
       case "json": return JSON.parse(text);
       case "json5": return Bun.JSON5.parse(text);
       case "yaml": return Bun.YAML.parse(text);
-      case "toml": return Bun.TOML.parse(text);
+      case "toml": {
+        /*
+         * Bun's TOML parser mangles the special floats before we ever see the
+         * document: `inf` comes back as the STRING "inf", `-inf` as the number
+         * 0, and `nan` as "nan". Re-serializing that would write those
+         * corruptions back to the user's file while reporting success — a
+         * silent value change is worse than a refusal, so a document
+         * containing them is treated as one we cannot safely rewrite.
+         *
+         * Detected on the raw text, because by the time it is parsed the
+         * evidence is gone.
+         */
+        if (/(^|[\s,[=])[-+]?(?:inf|nan)(?=[\s,\]]|$)/mi.test(text)) return PARSE_FAILED;
+        return Bun.TOML.parse(text);
+      }
     }
   } catch {
     return PARSE_FAILED;

@@ -20,7 +20,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
 import { recordOwnedConfigPath } from "./config-ownership";
-import { durableBunPath } from "./bun-runtime";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./bun-runtime";
+import type { BunRuntimeSource } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
 
 export const WINSW_VERSION = "2.12.0";
@@ -64,6 +65,8 @@ function currentCodexHomeAbsolute(): string {
 
 export interface WinswEntry {
   bun: string;
+  /** Provenance of `bun`, resolved together with it so the two can never disagree. */
+  bunRuntimeSource: BunRuntimeSource;
   cli: string;
 }
 
@@ -95,6 +98,8 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   const aclTimeout = env.OPENCODEX_ACL_TIMEOUT_MS?.trim();
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
+    `  <env name="${BUN_RUNTIME_SOURCE_ENV}" value="${xmlEscape(entry.bunRuntimeSource)}"/>`,
+    `  <env name="${BUN_RUNTIME_PATH_ENV}" value="${xmlEscape(entry.bun)}"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
     `  <env name="PATH" value="${xmlEscape(env.PATH ?? "")}"/>`,
     env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
@@ -371,5 +376,6 @@ export function winswStatusSummary(): string {
 
 /** Default entry mirrors the Task Scheduler baking: durable Bun + cli.ts. */
 export function defaultWinswEntry(cliDir: string): WinswEntry {
-  return { bun: durableBunPath(), cli: join(cliDir, "cli", "index.ts") };
+  const runtime = durableBunRuntime();
+  return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(cliDir, "cli", "index.ts") };
 }

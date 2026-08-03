@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const entry = { bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\Open Codex\\cli & co\\index.ts" };
+const entry = { bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled" as const, cli: "C:\\Open Codex\\cli & co\\index.ts" };
 
 function winswEnvValue(xml: string, name: string): string | null {
   const match = xml.match(new RegExp(`<env name="${name}" value="([^"]*)"/>`));
@@ -45,6 +45,15 @@ describe("winsw xml", () => {
     // Token VALUES never land in the XML — only file pointers / non-secret budgets.
     expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
     expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+  });
+
+  test("carries the Bun provenance paired with the executable it baked (#848)", () => {
+    expect(buildWinswXml(entry, env)).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="bundled"/>');
+    // The marker follows the entry, so an override-baked service says override.
+    const overrideEntry = { ...entry, bun: "C:\\Custom\\bun.exe", bunRuntimeSource: "override" as const };
+    const overrideXml = buildWinswXml(overrideEntry, env);
+    expect(overrideXml).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="override"/>');
+    expect(overrideXml).toContain("<executable>C:\\Custom\\bun.exe</executable>");
   });
 
   test("bakes install-time ACL timeout and never embeds the admin token (#764)", () => {

@@ -14,6 +14,28 @@ const validatorSource = readFileSync(
 );
 
 describe("ocx.mjs npm launcher (source invariants)", () => {
+  test("the Bun child receives the runtime provenance the launcher actually selected (#848)", () => {
+    // The launcher is a plain-Node bin script executing at import time, so this is
+    // asserted at the source level: the marker must reach the spawn env, and it must
+    // carry the source resolved alongside the chosen binary rather than a literal.
+    expect(source).toContain('const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
+    expect(source).toContain("[BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,");
+
+    // The stamp must sit inside the spawn's env object, not merely somewhere in the file.
+    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath");
+    expect(spawnStart).toBeGreaterThanOrEqual(0);
+    const spawnCall = source.slice(spawnStart, source.indexOf("});", spawnStart));
+    expect(spawnCall).toContain("[BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source");
+
+    // Path and source come from one resolution, so the marker cannot describe another binary.
+    expect(source).toContain("const bunRuntime = resolveBun();");
+    expect(source).toContain("const bun = bunRuntime.path;");
+    expect(source).toContain('return { path: bin, source: "bundled" };');
+
+    // The launcher's literal name must match the TypeScript constant it mirrors.
+    expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
+  });
+
   test("Windows npm spawns use the trusted absolute invocation without shell lookup", () => {
     expect(source).toContain("const latestInvocation = npmInvocation(");
     expect(source).toContain("const installInvocation = npmInvocation(");
@@ -43,7 +65,7 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
   test("valid Bun overrides are selected before the bundled runtime", () => {
     expect(source).toContain('const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";');
     expect(source).toContain("const overridePath = resolve(override);");
-    expect(source).toContain("if (isRealBunBinary(overridePath)) return overridePath;");
+    expect(source).toContain('if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };');
 
     const resolveStart = source.indexOf("function resolveBun() {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);

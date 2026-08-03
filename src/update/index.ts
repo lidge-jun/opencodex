@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -364,7 +365,7 @@ export async function runUpdate(): Promise<void> {
               detached: true,
               stdio: "ignore",
               windowsHide: true,
-              env,
+              env: withProcessRuntimeProvenance(env),
             });
             child.unref();
             console.log(`✅ Proxy starting on port ${capturedListen.port}.`);

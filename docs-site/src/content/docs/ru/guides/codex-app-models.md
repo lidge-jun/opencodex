@@ -124,8 +124,9 @@ fast_mode = true
 ```
 
 Но каталог моделей и id tier'а во время выполнения используют `priority`. opencodex сохраняет это
-разделение. Нативные passthrough-модели OpenAI сохраняют поддержку fast; routed не-OpenAI модели
-теряют service-tier metadata, чтобы опция fast не рекламировалась там, где её нельзя выполнить.
+разделение. Нативные passthrough-модели OpenAI сохраняют поддержку fast; routed-провайдеры ограничены
+capability-гейтом — `service_tier` удаляется только когда провайдер объявил `supportsServiceTier: false` (registry классифицирует canonical OpenAI как `true`, DeepSeek и Volcengine Ark как `false`); неклассифицированные custom gateway'и сохраняют значения вызывающего без изменений и не получают подстановку.
+Так что опция fast не рекламируется там, где её нельзя выполнить, а custom gateway'и могут включить её явно через `true`.
 
 ## Выбор подагентов
 

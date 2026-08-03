@@ -22,6 +22,7 @@
  * dashboard drain-and-restart confirm UX — never request bodies or IDs.
  */
 import { selectEagerPath } from "../../lib/bun-stream-caps";
+import { reportedBunRuntimeSource } from "../../lib/bun-runtime";
 import { getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
 import { responseStateMetrics } from "../../responses/state";
@@ -78,6 +79,9 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       pid: process.pid,
       bunVersion: Bun.version,
       bunRevision: Bun.revision,
+      // Recorded at launch, not resolved now: absent means "this service predates the
+      // marker", which callers must report as unknown rather than guess.
+      bunRuntimeSource: reportedBunRuntimeSource(),
       platform: process.platform,
       uptimeSeconds: process.uptime(),
       rss: usage.rss,

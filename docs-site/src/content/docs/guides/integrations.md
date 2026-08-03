@@ -16,7 +16,24 @@ file, and removes it again. Six clients work this way, each with a switch:
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
 
 Paths honor each client's own environment override where it has one, so a relocated
-`HERMES_HOME` or `KIMI_CODE_HOME` is followed rather than guessed at.
+`HERMES_HOME`, `KIMI_CODE_HOME` or `XDG_CONFIG_HOME` is followed rather than guessed
+at. The table lists each client's default; an override always wins.
+
+OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects the
+file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state
+directory, which is also what detection looks at — so a profile or relocated home
+still reads as installed, while a config-path override moves only the file. If you
+are still on the older `.clawdbot` layout, that is found too: the modern directory
+wins when it exists, and the legacy one is used when it is the only one there.
+
+These must be **absolute paths** or start with `~`. A relative one is refused rather
+than resolved, because it would mean whatever directory each process happened to
+start in — and that path is stored with the backup, so it has to name the same file
+tomorrow as it did today.
+
+opencodex reads these from its own environment. If your gateway runs with a profile
+or a relocated home, start opencodex with the same variables set, or it will
+correctly follow a different installation.
 
 ## The other four surfaces are not switches
 
@@ -46,9 +63,17 @@ edits were yours.
 
 **Formatting is not preserved.** Applying parses your config and writes it back out, so
 every format may be reformatted, and YAML, JSON5 and TOML additionally lose their
-comments. Your settings survive — every value you had is still there and equal — but the
-bytes change. If you need the file exactly as it was, use Restore rather than Disable:
-the snapshot is a verbatim copy.
+comments. Your settings survive the round trip and the bytes change. If you need the
+file exactly as it was, use Restore rather than Disable: the snapshot is a verbatim
+copy.
+
+**If a value cannot be rewritten faithfully, the switch refuses instead.** The round
+trip covers the value kinds these formats use in practice, and where it does not —
+a TOML file using `inf` or `nan`, for instance, which the parser available to us
+cannot read back accurately — applying stops and says so rather than writing a
+changed value and calling it success. You will see the file named and nothing on
+disk will have moved. Editing that file by hand still works; it is only our
+automatic rewrite that declines.
 
 **Pi, Kimi Code and Gajae Code only work against a loopback bind.** None of their config
 schemas has a place for the `x-opencodex-api-key` header that a non-loopback bind

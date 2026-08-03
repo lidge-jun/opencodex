@@ -20,7 +20,8 @@
  * targeting it is the caller's explicit act.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { probeHostname } from "../server/proxy-liveness";
@@ -198,12 +199,127 @@ export function hermesConfigPath(env: OpencodeLaunchEnv = process.env, home: str
   return join(hermesHomeDir(env, home), "config.yaml");
 }
 
-export function openclawHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(home, ".openclaw");
+/**
+ * Expand `~` against the effective home; REFUSE anything still relative.
+ *
+ * A first attempt at this called `resolve()` and claimed the path would "mean
+ * the same thing next time". It does not: `resolve()` only anchors the current
+ * invocation, so applying from one directory and disabling from another still
+ * resolved two different files — the second reported "not applied" and left
+ * the managed block behind with nothing claiming it.
+ *
+ * There is no honest way to recover the other process's cwd, so a relative
+ * selector is refused at the boundary instead of being silently anchored to
+ * whichever directory we happened to start in. A `~` path IS stable, because
+ * it anchors to the effective home rather than the cwd.
+ */
+export class ClientPathError extends Error {}
+
+function absoluteClientPath(raw: string, home: string, variable: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "~") return home;
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return join(home, trimmed.slice(2));
+  if (!isAbsolute(trimmed)) {
+    throw new ClientPathError(
+      `${variable} must be an absolute path or start with ~; "${trimmed}" depends on the working directory, `
+      + "so opencodex and the client would disagree about which file it names.",
+    );
+  }
+  return trimmed;
 }
 
+/**
+ * OpenClaw's EFFECTIVE home: `OPENCLAW_HOME` outranks the OS home.
+ *
+ * Everything below derives from this, which is why it is separate: a profile
+ * directory and the default state directory both hang off the effective home,
+ * not off `homedir()`.
+ */
+function openclawEffectiveHome(env: OpencodeLaunchEnv, home: string): string {
+  const override = env.OPENCLAW_HOME?.trim();
+  return override ? absoluteClientPath(override, home, "OPENCLAW_HOME") : home;
+}
+
+/**
+ * OpenClaw's state directory, in the gateway's own precedence order:
+ *
+ * 1. `OPENCLAW_STATE_DIR` — an explicit relocation wins outright.
+ * 2. `OPENCLAW_PROFILE` — a named profile is `.openclaw-<profile>` under the
+ *    effective home. `default` is the unnamed profile, so it stays
+ *    `.openclaw`.
+ * 3. `.openclaw` under the effective home (`OPENCLAW_HOME` or the OS home).
+ *
+ * This is also what "is it installed?" detection looks at, so it has to follow
+ * the same selectors the gateway does — otherwise an operator running a
+ * profile reads as not installed while their gateway runs fine. We honor the
+ * ENVIRONMENT selectors only: a `--profile` flag passed to some other process
+ * is not something we can observe, and guessing it would be worse than
+ * following the same environment the user gave us.
+ */
+export function openclawHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const effectiveHome = openclawEffectiveHome(env, home);
+  if (stateDir) return absoluteClientPath(stateDir, effectiveHome, "OPENCLAW_STATE_DIR");
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  // OpenClaw compares the profile name case-insensitively, so `DEFAULT` is
+  // still the unnamed profile rather than a `.openclaw-DEFAULT` directory.
+  if (profile && profile.toLowerCase() !== "default") return join(effectiveHome, `.openclaw-${profile}`);
+  /*
+   * `.clawdbot` is not migration debris — OpenClaw still treats it as an
+   * active runtime candidate, preferring the modern directory when it exists
+   * and otherwise selecting the legacy one. Mirroring that order is not
+   * guessing: an install that has not migrated is one this integration would
+   * otherwise report as "not installed" while its gateway runs fine.
+   */
+  const modern = join(effectiveHome, ".openclaw");
+  if (existsSync(modern)) return modern;
+  const legacy = join(effectiveHome, ".clawdbot");
+  if (existsSync(legacy)) return legacy;
+  return modern;
+}
+
+/**
+ * The config file OpenClaw actually reads.
+ *
+ * An explicit `OPENCLAW_CONFIG_PATH` wins outright — it is a file selector, so
+ * it does NOT relocate the state directory that detection looks at. Otherwise
+ * `openclaw.json` under the resolved state directory.
+ *
+ * Ignoring these selectors meant the toggle could report success after writing
+ * `~/.openclaw/openclaw.json` while the running gateway read somewhere else —
+ * and snapshot the wrong file, so the rollback promise pointed at a file
+ * nobody loads.
+ */
 export function openclawConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(openclawHomeDir(env, home), "openclaw.json");
+  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
+  if (explicit) return absoluteClientPath(explicit, openclawEffectiveHome(env, home), "OPENCLAW_CONFIG_PATH");
+  /*
+   * OpenClaw searches FILE candidates, not directories: a `.openclaw`
+   * directory that exists but holds no config does not beat an actual
+   * `.clawdbot/clawdbot.json`. Checking the directory first picked an
+   * absent modern file over a real legacy one and wrote where nothing reads.
+   *
+   * An explicit state dir still scopes the search to that directory, because
+   * the operator named it.
+   */
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
+  const effectiveHome = openclawEffectiveHome(env, home);
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  const scoped = stateOverride !== undefined && stateOverride !== ""
+    || (profile !== undefined && profile !== "" && profile.toLowerCase() !== "default");
+  const stateDir = openclawHomeDir(env, home);
+  const candidates = scoped
+    ? [join(stateDir, "openclaw.json"), join(stateDir, "clawdbot.json")]
+    : [
+      join(effectiveHome, ".openclaw", "openclaw.json"),
+      join(effectiveHome, ".openclaw", "clawdbot.json"),
+      join(effectiveHome, ".clawdbot", "openclaw.json"),
+      join(effectiveHome, ".clawdbot", "clawdbot.json"),
+    ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[0]!;
 }
 
 export function kimiHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {

@@ -89,8 +89,16 @@ export class KiroThinkingParser {
       return events;
     }
     if (this.thinkingBuffer.length <= MAX_CLOSE_TAG) return [];
-    const send = this.thinkingBuffer.slice(0, -MAX_CLOSE_TAG);
-    this.replaceCarry("thinkingBuffer", this.thinkingBuffer.slice(-MAX_CLOSE_TAG));
+    // Never split a surrogate pair at the send boundary: a lone high
+    // surrogate at the end of one delta encodes as U+FFFD. Move the cut one
+    // unit earlier so the whole pair stays in the carry.
+    let cut = this.thinkingBuffer.length - MAX_CLOSE_TAG;
+    if (cut > 0 && cut < this.thinkingBuffer.length) {
+      const atCut = this.thinkingBuffer.charCodeAt(cut - 1);
+      if (atCut >= 0xd800 && atCut <= 0xdbff) cut -= 1;
+    }
+    const send = this.thinkingBuffer.slice(0, cut);
+    this.replaceCarry("thinkingBuffer", this.thinkingBuffer.slice(cut));
     return send ? [{ type: "reasoning_raw_delta", text: send }] : [];
   }
 }

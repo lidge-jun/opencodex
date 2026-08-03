@@ -316,7 +316,7 @@ async function handleChatCompletionsWithBudget(
     const classified = classifyError(502, error?.type ?? "server_error", message);
     if (error?.code === "translation_buffer_limit") {
       classified.code = "translation_buffer_limit";
-      classified.type = "invalid_request_error";
+      classified.type = "upstream_error";
     } else if (isCyberPolicyCode(error?.code)) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = "invalid_request_error";
@@ -327,7 +327,7 @@ async function handleChatCompletionsWithBudget(
     }
     return chatCompletionsErrorResponse(
       classified.code === "translation_buffer_limit"
-        ? 413
+        ? 502
         : isCyberPolicyCode(classified.code) ? 400 : 502,
       message,
       classified.type,

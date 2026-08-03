@@ -259,6 +259,10 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // learned this route still gets backfilled.
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
+  // Registry-only metadata (never seeded into saved config): backfill straight from
+  // the entry so an explicit user value stays distinguishable from the default.
+  if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
+  if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];

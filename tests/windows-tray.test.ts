@@ -40,6 +40,7 @@ import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const entry: WindowsTrayEntry = {
   bun: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\bun.exe",
+  bunRuntimeSource: "bundled",
   cli: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\src\\cli\\index.ts",
   script: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\src\\tray\\windows-tray.ps1",
   codexHome: "C:\\사용자 공간\\.codex",
@@ -97,6 +98,20 @@ describe("Windows tray packaging and command safety", () => {
     expect(args).toContain(entry.cli);
     expect(args).not.toContain("-Command");
     expect(windowsTrayProcessArgs(entry, "Run", 4242)).toContain("4242");
+  });
+
+  test("passes the Bun provenance through to the tray host (#848)", () => {
+    // The tray relaunches the proxy itself, so a tray-started service would otherwise
+    // reach doctor with no provenance and get the legacy/unknown treatment.
+    const args = windowsTrayProcessArgs(entry);
+    expect(args).toContain("-BunRuntimeSource");
+    expect(args[args.indexOf("-BunRuntimeSource") + 1]).toBe("bundled");
+
+    const overrideCommand = buildWindowsTrayPowerShellCommand(
+      { ...entry, bunRuntimeSource: "override" },
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
+    expect(overrideCommand).toContain("-BunRuntimeSource override");
   });
 
   test("quotes metacharacter and Unicode paths without shell interpolation", () => {
@@ -415,7 +430,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(tray).toContain('join(getConfigDir(), "opencodex-tray.ps1")');
     expect(tray).toContain('join(import.meta.dir, "assets", name)');
     expect(tray).toContain("installedTrayIconPaths()");
-    expect(tray).toContain("const hardened = hardenSecretPath(target, { required: true })");
+    expect(tray).toContain("const hardened = hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
     expect(tray).toContain("if (!hardened.ok)");
     expect(tray).toContain("if (!hardenedDir.ok)");
     expect(tray).toContain("refusing to replace its persistent script");

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXPORT_CLIENTS, EXPORT_CLIENT_IDS, type ExportModel } from "../src/clients/config-export";
@@ -300,6 +300,279 @@ describe("a container we would have to replace is refused, not overwritten", () 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("unsafe");
     expect(readFileSync(configPath, "utf8")).toBe(seed);
+  });
+});
+
+describe("openclaw follows the config path its gateway actually reads", () => {
+  test("OPENCLAW_CONFIG_PATH is where apply writes and disable removes", () => {
+    /*
+     * End to end, not just the resolver: the writer, the ownership record and
+     * the snapshot must all land on the overridden file. Writing the default
+     * while the gateway reads elsewhere is a success message attached to a
+     * file nobody loads.
+     */
+    const relocated = join(home, "elsewhere", "openclaw-custom.json");
+    mkdirSync(dirname(relocated), { recursive: true });
+    const seed = '{\n  models: {\n    providers: {\n      mine: { api: "http://keep-me" },\n    },\n  },\n}\n';
+    writeFileSync(relocated, seed);
+    const env = { OPENCLAW_CONFIG_PATH: relocated } as NodeJS.ProcessEnv;
+    // Detection still needs a directory to find; the state dir is separate.
+    mkdirSync(INTEGRATION_CLIENTS.openclaw.detectDir(env, home), { recursive: true });
+
+    const write = {
+      clientId: "openclaw" as const, models: MODELS, config: CONFIG, port: 10100,
+      env, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+
+    // The overridden file gained our block…
+    expect(readFileSync(relocated, "utf8")).toContain("opencodex");
+    // …the record points at it, so a later disable cannot go looking elsewhere…
+    expect(store.readRecords().openclaw?.configPath).toBe(relocated);
+    // …and the default path was never created.
+    expect(existsSync(join(home, ".openclaw", "openclaw.json"))).toBe(false);
+
+    expect(disableIntegration(write).ok).toBe(true);
+    expect(readFileSync(relocated, "utf8")).not.toContain("opencodex");
+    expect(readFileSync(relocated, "utf8")).toContain("keep-me");
+  });
+
+  test("OPENCLAW_STATE_DIR relocates the whole install, detection included", () => {
+    const stateDir = join(home, "custom-state");
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+    expect(INTEGRATION_CLIENTS.openclaw.detectDir(env, home)).toBe(stateDir);
+    mkdirSync(stateDir, { recursive: true });
+
+    const write = {
+      clientId: "openclaw" as const, models: MODELS, config: CONFIG, port: 10100,
+      env, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+    expect(existsSync(join(stateDir, "openclaw.json"))).toBe(true);
+    expect(existsSync(join(home, ".openclaw", "openclaw.json"))).toBe(false);
+  });
+});
+
+describe("openclaw's legacy layout is discovered, not declared obsolete", () => {
+  test("an unmigrated .clawdbot install is found instead of reported missing", () => {
+    /*
+     * OpenClaw still treats `.clawdbot` as an active runtime candidate rather
+     * than migration debris: it prefers the modern directory when present and
+     * otherwise selects the legacy one. Without mirroring that, an install
+     * that never migrated reads as "not installed" while its gateway runs
+     * perfectly well — and if we wrote anyway, we would create a modern file
+     * nothing loads.
+     */
+    const legacyDir = join(home, ".clawdbot");
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyFile = join(legacyDir, "clawdbot.json");
+    writeFileSync(legacyFile, '{\n  models: { providers: { mine: { api: "http://keep-me" } } },\n}\n');
+
+    const env = {} as NodeJS.ProcessEnv;
+    expect(INTEGRATION_CLIENTS.openclaw.detectDir(env, home)).toBe(legacyDir);
+    expect(INTEGRATION_CLIENTS.openclaw.configPath(env, home)).toBe(legacyFile);
+
+    const write = {
+      clientId: "openclaw" as const, models: MODELS, config: CONFIG, port: 10100,
+      env, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+    expect(readFileSync(legacyFile, "utf8")).toContain("opencodex");
+    // No modern file conjured beside it.
+    expect(existsSync(join(home, ".openclaw", "openclaw.json"))).toBe(false);
+  });
+
+  test("an empty modern directory does not beat a real legacy config", () => {
+    /*
+     * OpenClaw searches FILE candidates, not directories. Checking the
+     * directory first picked an ABSENT `.openclaw/openclaw.json` over a real
+     * `.clawdbot/clawdbot.json` and wrote where nothing reads — the same
+     * defect the legacy support was added to prevent.
+     */
+    mkdirSync(join(home, ".clawdbot"), { recursive: true });
+    writeFileSync(join(home, ".clawdbot", "clawdbot.json"), "{}\n");
+    mkdirSync(join(home, ".openclaw"), { recursive: true });
+
+    const env = {} as NodeJS.ProcessEnv;
+    expect(INTEGRATION_CLIENTS.openclaw.configPath(env, home))
+      .toBe(join(home, ".clawdbot", "clawdbot.json"));
+  });
+
+  test("a real modern config wins over a legacy one", () => {
+    // The other direction: a migrated user must not have us writing the old file.
+    mkdirSync(join(home, ".clawdbot"), { recursive: true });
+    writeFileSync(join(home, ".clawdbot", "clawdbot.json"), "{}\n");
+    mkdirSync(join(home, ".openclaw"), { recursive: true });
+    writeFileSync(join(home, ".openclaw", "openclaw.json"), "{}\n");
+
+    const env = {} as NodeJS.ProcessEnv;
+    expect(INTEGRATION_CLIENTS.openclaw.configPath(env, home))
+      .toBe(join(home, ".openclaw", "openclaw.json"));
+  });
+});
+
+describe("a real user document is not rejected for being richer than ours", () => {
+  test("hermes: YAML nulls survive an apply and a disable", () => {
+    /*
+     * The serializers were written against our own builder output, so the
+     * first value a real config held that our generators never emit — a
+     * `null` — threw out of the writer and reached the user as a 500. Nothing
+     * was overwritten, but a valid file could not use the feature at all.
+     */
+    const configPath = installClient("hermes");
+    const seed = "providers:\n  mine:\n    api: http://keep-me\n    token: null\n";
+    writeFileSync(configPath, seed);
+
+    const write = {
+      clientId: "hermes" as const, models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+
+    const applied = parseConfig(readFileSync(configPath, "utf8"), "yaml") as Record<string, unknown>;
+    const providers = applied.providers as Record<string, Record<string, unknown>>;
+    expect(providers.mine!.token).toBeNull();
+    expect(providers.opencodex).toBeDefined();
+
+    expect(disableIntegration(write).ok).toBe(true);
+    expect(parseConfig(readFileSync(configPath, "utf8"), "yaml")).toEqual(parseConfig(seed, "yaml"));
+  });
+
+  test("kimi: a numeric TOML array survives an apply and a disable", () => {
+    const configPath = installClient("kimi");
+    const seed = '[providers.mine]\napi = "http://keep-me"\nports = [1, 2]\n';
+    writeFileSync(configPath, seed);
+
+    const write = {
+      clientId: "kimi" as const, models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+    const applied = parseConfig(readFileSync(configPath, "utf8"), "toml") as Record<string, unknown>;
+    const providers = applied.providers as Record<string, Record<string, unknown>>;
+    expect(providers.mine!.ports).toEqual([1, 2]);
+
+    expect(disableIntegration(write).ok).toBe(true);
+    expect(parseConfig(readFileSync(configPath, "utf8"), "toml")).toEqual(parseConfig(seed, "toml"));
+  });
+
+});
+
+describe("we refuse rather than corrupt or crash", () => {
+  test("a TOML file with special floats is refused, not silently rewritten", () => {
+    /*
+     * Bun's TOML parser mangles these before we ever see the document: `inf`
+     * comes back as the STRING "inf", `-inf` as the number 0, `nan` as "nan".
+     * Re-serializing that wrote the corruption back while reporting success —
+     * a silent value change is worse than a refusal.
+     */
+    const configPath = installClient("kimi");
+    const seed = '[providers.mine]\napi = "http://keep-me"\nvalues = [inf, -inf, nan]\n';
+    writeFileSync(configPath, seed);
+
+    const result = applyIntegration({
+      clientId: "kimi", models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(seed);
+  });
+
+  test("an inline table survives, because TOML allows it", () => {
+    const configPath = installClient("kimi");
+    const seed = '[providers.mine]\napi = "http://keep-me"\nitems = [{ x = 1 }]\n';
+    writeFileSync(configPath, seed);
+
+    const write = {
+      clientId: "kimi" as const, models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+    const applied = parseConfig(readFileSync(configPath, "utf8"), "toml") as Record<string, unknown>;
+    const providers = applied.providers as Record<string, Record<string, unknown>>;
+    expect(providers.mine!.items).toEqual([{ x: 1 }]);
+  });
+
+  test("a relative OpenClaw selector refuses instead of throwing a 500", () => {
+    /*
+     * Resolution itself can refuse. Letting that escape as an exception meant
+     * the LIST route answered 500 for the whole Integrations page because one
+     * client was misconfigured.
+     */
+    const env = { OPENCLAW_CONFIG_PATH: "relative/path.json" } as NodeJS.ProcessEnv;
+    const write = {
+      clientId: "openclaw" as const, models: MODELS, config: CONFIG, port: 10100,
+      env, home, store,
+    };
+    const result = applyIntegration(write);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("unsafe");
+      expect(result.message).toContain("OPENCLAW_CONFIG_PATH");
+    }
+
+    // And the read path reports it rather than throwing, so the page renders.
+    const status = readIntegrationState({
+      clientId: "openclaw", models: MODELS, config: CONFIG, port: 10100,
+      env, home, store,
+    });
+    expect(status.state).toBe("unsafe");
+    expect(status.reason).toBe("unresolvable-path");
+  });
+});
+
+describe("an absence is not a drift", () => {
+  test("undoing an apply that created the file needs no drift confirmation", () => {
+    /*
+     * Apply to a missing file journals `resultAbsent: true` with an empty
+     * fingerprint, and restoring it means deleting the file again. The route
+     * represented "missing" as `""` and offered the row as Undo; the writer
+     * hashed `""` into a real digest and called the unchanged absence a drift.
+     * So the button appeared and then demanded confirmation for edits nobody
+     * had made.
+     */
+    const configPath = installClient("hermes");
+    expect(existsSync(configPath)).toBe(false);
+    const write = {
+      clientId: "hermes" as const, models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+    const applyOp = store.listOperations("hermes")[0]!;
+    expect(applyOp.resultAbsent).toBe(false);
+
+    // Restore back to absence: the file we created is removed again.
+    expect(restoreIntegration({ ...write, opId: applyOp.opId }).ok).toBe(true);
+    expect(existsSync(configPath)).toBe(false);
+    const restoreOp = store.listOperations("hermes")[0]!;
+    expect(restoreOp.resultAbsent).toBe(true);
+
+    // Undo THAT restore with no confirmDrift. The file is still absent, which
+    // is exactly the result recorded, so nothing drifted.
+    const undo = restoreIntegration({ ...write, opId: restoreOp.opId });
+    expect(undo.ok).toBe(true);
+    expect(existsSync(configPath)).toBe(true);
+  });
+
+  test("a file that appeared where absence was recorded IS a drift", () => {
+    // The other side of the same rule: absence-vs-present must still be caught.
+    const configPath = installClient("hermes");
+    const write = {
+      clientId: "hermes" as const, models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    };
+    expect(applyIntegration(write).ok).toBe(true);
+    const applyOp = store.listOperations("hermes")[0]!;
+    expect(restoreIntegration({ ...write, opId: applyOp.opId }).ok).toBe(true);
+    const restoreOp = store.listOperations("hermes")[0]!;
+
+    // Someone writes the file back before we undo the restore-to-absence.
+    writeFileSync(configPath, "providers:\n  mine:\n    api: http://new\n");
+    const undo = restoreIntegration({ ...write, opId: restoreOp.opId });
+    expect(undo.ok).toBe(false);
+    if (!undo.ok) expect(undo.reason).toBe("drift_requires_confirm");
+    expect(readFileSync(configPath, "utf8")).toContain("http://new");
   });
 });
 

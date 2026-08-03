@@ -195,6 +195,11 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
+Registry-declared per-model compatibility hints may keep the client-facing WebSocket while asking
+the upstream Responses endpoint for bounded JSON. The bridge reframes that JSON into the same
+Responses event sequence. DeepSeek V4 Flash uses this path because its Codex streaming response can
+deliver output without closing on a terminal event; ordinary HTTP/SSE calls remain streaming.
+
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
 `response.failed` frame is sent; otherwise `response.completed` carries through the original status.
@@ -285,7 +290,7 @@ replays are explicit and receive the same repair.
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
-## Cursor Router optimization levels
+## Cursor parameterized models
 
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
 `cursor/auto` preserves Cursor's team/account default, while `cursor/auto-cost`,
@@ -294,6 +299,12 @@ All four route to the `default` Cursor wire model. Explicit variants additionall
 `AgentRunRequest.requested_model.parameters` with the `optimization` parameter; this is the same
 parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
 must survive a live `GetUsableModels` response that omits `default`.
+
+`cursor/grok-4.5-fast` is also a stable Codex-facing row, but current Cursor clients do not request
+it as a flat model slug. OpenCodex sends `grok-4.5` through `requested_model` with separate `effort`
+and `fast=true` parameters, leaving legacy `model_details` unset for that parameterized external
+selection. Live discovery still recognizes Cursor's flattened `cursor-grok-4.5-{effort}-fast`
+variants, plus the older `grok-4.5-fast-{effort}` ordering, as availability evidence only.
 
 ## Cursor active-context usage
 

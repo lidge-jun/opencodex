@@ -2,9 +2,11 @@ import http2 from "node:http2";
 import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
+  AgentServerMessageSchema,
   GetUsableModelsResponseSchema,
   ModelDetailsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
+import { encodeConnectFrame } from "../src/adapters/cursor/framing";
 import { fetchCursorUsableModels } from "../src/adapters/cursor/live-models";
 import { armTimeoutDestroyFallback, createLiveCursorTransport, createTerminalSettler } from "../src/adapters/cursor/live-transport";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -364,6 +366,281 @@ describe("Cursor live transport unexpected EOF", () => {
       expect(sawMessage).toBe(false);
       expect(failure).toBeDefined();
       expect(failure?.message).toContain("unexpected EOF");
+    });
+  });
+});
+
+describe("Cursor live transport incomplete-frame EOF", () => {
+  function validEmptyFrame(): Uint8Array {
+    return encodeConnectFrame(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {})));
+  }
+
+  // A valid protobuf message whose size comes from an unknown field the decoder
+  // skips — lets tests drive exact payload boundaries with parseable frames.
+  function paddedPayload(totalBytes: number): Uint8Array {
+    const content = totalBytes - 5; // 1-byte tag + 4-byte varint length
+    if (content < 0) throw new Error("payload too small to pad");
+    const out = new Uint8Array(totalBytes);
+    out[0] = (15 << 3) | 2; // unknown field 15, length-delimited
+    out[1] = (content & 0x7f) | 0x80;
+    out[2] = ((content >> 7) & 0x7f) | 0x80;
+    out[3] = ((content >> 14) & 0x7f) | 0x80;
+    out[4] = (content >> 21) & 0x7f;
+    return out;
+  }
+
+  async function runTurn(
+    script: (stream: import("node:http2").ServerHttp2Stream) => void,
+  ): Promise<{ failure: Error | undefined }> {
+    return withDiscoveryServer(script, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        firstFrameTimeoutMs: 2_000,
+      });
+      let failure: Error | undefined;
+      try {
+        for await (const _message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_eof_partial_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          // drain
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
+      return { failure };
+    });
+  }
+
+  test("complete frame followed by a trailing partial frame fails typed frame_incomplete", async () => {
+    const { failure } = await runTurn(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.write(Buffer.from(validEmptyFrame()));
+      // Three bytes of the next header, then the peer drops: previously a silent success.
+      stream.end(Buffer.from([0, 0, 0]));
+    });
+    expect(failure).toBeDefined();
+    expect((failure as { code?: unknown } | undefined)?.code).toBe("frame_incomplete");
+  });
+
+  test("only a partial header before EOF fails typed frame_incomplete", async () => {
+    const { failure } = await runTurn(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end(Buffer.from([0, 0]));
+    });
+    expect(failure).toBeDefined();
+    expect((failure as { code?: unknown } | undefined)?.code).toBe("frame_incomplete");
+  });
+
+  test("chunked delivery of small frames completes cleanly", async () => {
+    const { failure } = await runTurn(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      const frame = validEmptyFrame();
+      // Byte-at-a-time delivery exercises the incremental append path.
+      for (let index = 0; index < frame.byteLength; index += 1) {
+        stream.write(Buffer.from(frame.subarray(index, index + 1)));
+      }
+      stream.write(Buffer.from(validEmptyFrame()));
+      stream.end();
+    });
+    expect(failure).toBeUndefined();
+  });
+
+  test("chunked delivery sweep across chunk sizes decodes identically", async () => {
+    for (const chunkSize of [1, 3, 7, 64 * 1024]) {
+      const { failure } = await runTurn(stream => {
+        stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+        const frame = encodeConnectFrame(paddedPayload(100 * 1024));
+        for (let index = 0; index < frame.byteLength; index += chunkSize) {
+          stream.write(Buffer.from(frame.subarray(index, Math.min(index + chunkSize, frame.byteLength))));
+        }
+        stream.end();
+      });
+      expect(failure).toBeUndefined();
+    }
+  });
+
+  test("an exact 16 MiB effective payload completes at the boundary", async () => {
+    const budget = createTestTranslatorBudget();
+    const result = await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.end(Buffer.from(encodeConnectFrame(paddedPayload(16 * 1024 * 1024))));
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: budget,
+        firstFrameTimeoutMs: 10_000,
+      });
+      let failure: Error | undefined;
+      try {
+        for await (const _message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_boundary_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          // drain
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
+      return { failure };
+    });
+    expect(result.failure).toBeUndefined();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("frame_incomplete EOF releases the backlog lease to zero", async () => {
+    const budget = createTestTranslatorBudget();
+    const result = await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.write(Buffer.from(validEmptyFrame()));
+      stream.end(Buffer.from([0, 0, 0]));
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: budget,
+        firstFrameTimeoutMs: 2_000,
+      });
+      let failure: Error | undefined;
+      try {
+        for await (const _message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_lease_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          // drain
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
+      return { failure };
+    });
+    expect((result.failure as { code?: unknown } | undefined)?.code).toBe("frame_incomplete");
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("a rejected over-cap chunk never debits the pre-existing lease", async () => {
+    const budget = createTestTranslatorBudget();
+    // Transport A parks an incomplete frame (16 MiB + 4 charged) with its
+    // stream open; transport B's own incomplete frame overflows the SHARED
+    // turn budget and must be rejected without debiting A's ownership.
+    // (Filler must be an incomplete frame — zero bytes would decode as free
+    // zero-length frames and never accumulate.)
+    const declared = new Uint8Array(5);
+    new DataView(declared.buffer).setUint32(1, 16 * 1024 * 1024, false);
+    await withDiscoveryServer(streamA => {
+      streamA.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      streamA.write(Buffer.from(declared));
+      streamA.write(Buffer.alloc(16 * 1024 * 1024 - 1));
+      // Stream A stays open: the frame never completes and the lease stays live.
+    }, async baseUrlA => {
+      await withDiscoveryServer(streamB => {
+        streamB.respond({ ":status": 200, "content-type": "application/connect+proto" });
+        streamB.write(Buffer.from(declared));
+        // Body 8 bytes short of the declaration: stays in the backlog, and
+        // (16 MiB + 4) + (5 + 16 MiB - 8) = 32 MiB + 1 overflows the budget.
+        streamB.end(Buffer.alloc(16 * 1024 * 1024 - 8));
+      }, async baseUrlB => {
+        const transportA = createLiveCursorTransport({
+          provider: { adapter: "cursor", baseUrl: baseUrlA, apiKey: "test-token" },
+          translatorBudget: budget,
+          firstFrameTimeoutMs: 30_000,
+        });
+        const transportB = createLiveCursorTransport({
+          provider: { adapter: "cursor", baseUrl: baseUrlB, apiKey: "test-token" },
+          translatorBudget: budget,
+          firstFrameTimeoutMs: 30_000,
+        });
+        const runA = (async () => {
+          try {
+            for await (const _message of transportA.run({
+              modelId: "composer-2",
+              conversationId: "cursor_overflow_lease_a",
+              system: [],
+              messages: [{ role: "user", content: "hello" }],
+            })) {
+              // drain
+            }
+          } catch {
+            // A ends via close() below; the failure shape is not under test here.
+          }
+        })();
+        // Give A a beat to park its incomplete frame before B overflows.
+        for (let attempt = 0; attempt < 200 && budget.snapshot().currentBytes < 16 * 1024 * 1024 + 4; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        expect(budget.snapshot().currentBytes).toBe(16 * 1024 * 1024 + 4);
+        let failureB: Error | undefined;
+        try {
+          for await (const _message of transportB.run({
+            modelId: "composer-2",
+            conversationId: "cursor_overflow_lease_b",
+            system: [],
+            messages: [{ role: "user", content: "hello" }],
+          })) {
+            // drain
+          }
+        } catch (err) {
+          failureB = err instanceof Error ? err : new Error(String(err));
+        }
+        expect(failureB).toBeDefined();
+        // A's lease is untouched by B's rejected reservation and cleanup.
+        expect(budget.snapshot().currentBytes).toBe(16 * 1024 * 1024 + 4);
+        await transportA.close?.();
+        await runA;
+        await transportB.close?.();
+        expect(budget.snapshot().currentBytes).toBe(0);
+      });
+    });
+  }, 20_000);
+
+  test("data arriving after terminal failure is never charged", async () => {
+    const budget = createTestTranslatorBudget();
+    await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      // A complete frame whose payload is NOT valid protobuf: handling fails
+      // and settles the turn. Two more bytes arrive afterwards.
+      stream.write(Buffer.from(encodeConnectFrame(new Uint8Array([1, 2, 3, 4]))));
+      setTimeout(() => {
+        try { stream.write(Buffer.from([0, 0])); } catch { /* closed */ }
+        stream.end();
+      }, 25);
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: budget,
+        firstFrameTimeoutMs: 5_000,
+      });
+      let failure: Error | undefined;
+      try {
+        for await (const _message of transport.run({
+          modelId: "composer-2",
+          conversationId: "cursor_late_data_test",
+          system: [],
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          // drain
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      }
+      expect(failure).toBeDefined();
+      // Let the delayed bytes land, then prove no lease formed.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(budget.snapshot().currentBytes).toBe(0);
+      await transport.close?.();
+      expect(budget.snapshot().currentBytes).toBe(0);
     });
   });
 });

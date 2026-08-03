@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -20,6 +20,7 @@ import {
   resetHardenedStateForTests,
   setIcaclsRunnerForTests,
   setPlatformForTests,
+  timedOutSecretPathCountForTests,
   hardenSecretDir,
 } from "../src/lib/windows-secret-acl";
 
@@ -107,6 +108,65 @@ describe("management and data-plane credential separation", () => {
         throw Object.assign(new Error("injected unlink failure"), { code: "EPERM" });
       });
       expect(hardenedSecretPathCountForTests()).toBe(1);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("stable-path cleanup drops only the success memo; temp cleanup releases all", () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+    const stable = join(testHome, "admin-api-token");
+    const temp = join(testHome, ".admin-token.tmp");
+    writeFileSync(stable, "x", { mode: 0o600 });
+    writeFileSync(temp, "y", { mode: 0o600 });
+    try {
+      // Optional timeouts memoize by path (required:false soft-fails).
+      expect(hardenSecretPath(stable, { required: false }).ok).toBe(false);
+      expect(hardenSecretPath(temp, { required: false }).ok).toBe(false);
+      expect(timedOutSecretPathCountForTests()).toBe(2);
+      // Stable cleanup: success memo gone, timeout memos UNTOUCHED (anti-restall).
+      removeManagementTokenPathBestEffort(stable);
+      expect(timedOutSecretPathCountForTests()).toBe(2);
+      // Temp cleanup with the ephemeral flag: only the temp's memo is released;
+      // the stable destination memo still stands.
+      removeManagementTokenPathBestEffort(temp, unlinkSync, { ephemeral: true });
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("final-path timeout memo survives stable-path cleanup (anti-restall)", async () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    // The temp harden succeeds; the FINAL path harden times out.
+    let calls = 0;
+    setIcaclsRunnerForTests(() => {
+      calls += 1;
+      // Production runs 3 icacls per harden: directory (1-3), temp (4-6),
+      // final token path (7-9) — the timeout must land on the FINAL path.
+      return calls <= 6
+        ? { success: true, exitCode: 0, timedOut: false, stdout: "" }
+        : { success: false, exitCode: null, timedOut: true, stdout: "" };
+    });
+    try {
+      initializeManagementAuthState(remoteConfig());
+      expect(timedOutSecretPathCountForTests()).toBe(1);
     } finally {
       setIcaclsRunnerForTests(null);
       setPlatformForTests(null);

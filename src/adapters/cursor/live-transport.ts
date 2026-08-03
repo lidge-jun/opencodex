@@ -1,7 +1,7 @@
 import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type OcxProviderConfig, type OcxUsage } from "../../types";
-import { CONNECT_FLAG_END_STREAM, decodeAvailableConnectFrames, encodeConnectFrame } from "./framing";
+import { CONNECT_FLAG_END_STREAM, ConnectFrameError, consumeConnectFrames, encodeConnectFrame } from "./framing";
 import {
   CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES,
   CURSOR_MAX_CONNECT_FRAME_BYTES,
@@ -787,6 +787,7 @@ class LiveCursorTransport implements CursorTransport {
       clearTimer: () => this.clearFirstFrameTimer(),
     });
     const failAndClear = (error: Error) => {
+      releaseBacklogLease();
       if (this.expectedClose) {
         // We already emitted a terminal `done` and cancelled the run (client-tool suspension). The
         // RST_STREAM CANCEL surfaces here as a stream error/abort; it is expected, not a failure.
@@ -822,28 +823,53 @@ class LiveCursorTransport implements CursorTransport {
       // close() waits for in-flight frames; a dead socket can ignore it — force-destroy shortly
       // after so a stalled TLS session cannot linger past the timeout.
       armTimeoutDestroyFallback(stream, session, this.input.timeoutDestroyGraceMs ?? CURSOR_TIMEOUT_DESTROY_GRACE_MS);
+      releaseBacklogLease();
       settler.settleFail(new Error("Cursor transport timed out before first response"));
     }, this.input.firstFrameTimeoutMs ?? CURSOR_FIRST_FRAME_TIMEOUT_MS);
 
-    let pending: Uint8Array<ArrayBufferLike> = new Uint8Array();
-    let frameWork: Promise<void> = Promise.resolve();
-    const reservePayloadCopy = (bytes: number) => {
-      if (this.transportBufferedBytes + bytes > CURSOR_TRANSPORT_MAX_BUFFERED_BYTES) {
-        throw new TranslatorBudgetExceededError("cursor_transport", CURSOR_TRANSPORT_MAX_BUFFERED_BYTES);
+    // Raw Connect backlog with a parse cursor: appends copy only the incoming
+    // chunk (amortized capacity growth), the consumed prefix is reclaimed
+    // lazily, and the RAW used length (headers included) is what the 32 MiB
+    // transport cap bounds — payload-only accounting let tiny-frame/header
+    // floods slip through.
+    let backlog = new Uint8Array();
+    let backlogStart = 0;
+    let backlogEnd = 0;
+    const BACKLOG_COMPACT_MIN_SAVINGS = 64 * 1024;
+    const appendBacklog = (chunk: Uint8Array): void => {
+      const used = backlogEnd - backlogStart;
+      let start = backlogStart;
+      let end = backlogEnd;
+      // Reclaim the consumed prefix when it is large or needed for capacity.
+      if (start > 0 && (start >= BACKLOG_COMPACT_MIN_SAVINGS || end + chunk.byteLength > backlog.byteLength)) {
+        backlog = backlog.slice(start, end);
+        start = 0;
+        end = used;
       }
-      const reservation = this.translatorBudget.reserveTransient(bytes, { kind: "cursor_transport" });
-      this.transportBufferedBytes += bytes;
-      this.updateTransportFlowControl();
-      return {
-        commitRetained: () => reservation.commitRetained(),
-        release: () => {
-          reservation.release();
-          this.transportBufferedBytes = Math.max(0, this.transportBufferedBytes - bytes);
-          this.updateTransportFlowControl();
-        },
-      };
+      if (end + chunk.byteLength > backlog.byteLength) {
+        const capacity = Math.max(8192, backlog.byteLength * 2, end + chunk.byteLength);
+        const next = new Uint8Array(Math.min(CURSOR_TRANSPORT_MAX_BUFFERED_BYTES, capacity));
+        next.set(backlog.subarray(start, end), 0);
+        backlog = next;
+      }
+      backlog.set(chunk, end);
+      backlogStart = start;
+      backlogEnd = end + chunk.byteLength;
     };
-    const handleFrame = async (frame: ReturnType<typeof decodeAvailableConnectFrames>["frames"][number]) => {
+    let frameWork: Promise<void> = Promise.resolve();
+    // Idempotent terminal owner for the backlog lease: every settle/close path
+    // must leave the raw charge at zero instead of relying on budget disposal.
+    let backlogLeaseReleased = false;
+    const releaseBacklogLease = () => {
+      if (backlogLeaseReleased) return;
+      backlogLeaseReleased = true;
+      const leftover = backlogEnd - backlogStart;
+      if (leftover > 0) this.releaseTransportBytes(leftover);
+      backlog = new Uint8Array();
+      backlogStart = 0;
+      backlogEnd = 0;
+    };
+    const handleFrame = async (frame: ReturnType<typeof consumeConnectFrames>["frames"][number]) => {
       this.framesReceived++;
       if ((frame.flags & CONNECT_FLAG_END_STREAM) === CONNECT_FLAG_END_STREAM) {
         const endError = parseConnectEndStreamError(frame.payload);
@@ -861,22 +887,25 @@ class LiveCursorTransport implements CursorTransport {
     };
     const drainPendingFrames = () => {
       const availableSlots = CURSOR_MAX_PENDING_FRAMES - this.pendingTransportFrames;
-      if (availableSlots <= 0 || pending.byteLength === 0) {
+      const used = backlogEnd - backlogStart;
+      if (availableSlots <= 0 || used === 0) {
         this.updateTransportFlowControl();
         return;
       }
-      const previousPayloadBytes = connectBufferedPayloadBytes(pending);
-      // The decoder materializes payload and residual copies. Keep the aggregate pending owner
-      // charged until every replacement has been admitted and committed; a failed admission must
-      // leave that predecessor lease intact for deterministic cleanup.
-      const decoded = decodeAvailableConnectFrames(
-        pending,
+      // Cursor decode, zero-copy: frame payloads are views into the backlog, so
+      // the charge TRANSFERS — only consumed header bytes leave the counter
+      // (payload bytes stay charged and are released when each frame's work
+      // finishes). An exact 16 MiB payload therefore peaks at 16 MiB + 5, not
+      // at double its size.
+      const decoded = consumeConnectFrames(
+        backlog.subarray(backlogStart, backlogEnd),
         CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES,
         availableSlots,
-        reservePayloadCopy,
       );
-      pending = decoded.remainder;
-      this.releaseTransportBytes(previousPayloadBytes);
+      if (decoded.frames.length > 0) {
+        backlogStart += decoded.consumedBytes;
+        this.releaseTransportBytes(decoded.consumedBytes - decoded.frames.reduce((n, frame) => n + frame.payload.byteLength, 0));
+      }
       for (const frame of decoded.frames) {
         this.pendingTransportFrames += 1;
         this.updateTransportFlowControl();
@@ -893,32 +922,31 @@ class LiveCursorTransport implements CursorTransport {
     };
     this.stream.on("data", chunk => {
       this.clearFirstFrameTimer();
+      // Once the turn has settled, late network bytes must never be charged —
+      // the backlog lease is already released and nobody would own these.
+      if (settler.settled()) return;
       if (!this.firstFrameLogged) {
         this.firstFrameLogged = true;
         this.firstFrameAt = Date.now();
         debugProviderDiagnostic("cursor", "first-frame", { latencyMs: this.firstFrameAt - this.turnStartedAt });
       }
       const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-      let incomingPayloadBytes = 0;
-      let incomingCharged = false;
-      let replacement: ReturnType<typeof reservePayloadCopy> | undefined;
+      let charged = false;
+      let appended = false;
       try {
-        const previousPendingPayloadBytes = connectBufferedPayloadBytes(pending);
-        const nextPendingPayloadBytes = connectBufferedPayloadBytesAcross(pending, bytes);
-        incomingPayloadBytes = Math.max(0, nextPendingPayloadBytes - previousPendingPayloadBytes);
-        this.reserveTransportBytes(incomingPayloadBytes);
-        incomingCharged = true;
-        replacement = reservePayloadCopy(nextPendingPayloadBytes);
-        const nextPending = concatBytes(pending, bytes);
-        pending = nextPending;
-        replacement.commitRetained();
-        replacement = undefined;
-        this.releaseTransportBytes(previousPendingPayloadBytes + incomingPayloadBytes);
-        incomingCharged = false;
+        // RAW chunk bytes (headers included) join the backlog charge; consumed
+        // bytes leave it at drain. No whole-backlog replacement copy anymore.
+        this.reserveTransportBytes(bytes.byteLength);
+        charged = true;
+        appendBacklog(bytes);
+        appended = true;
         drainPendingFrames();
       } catch (err) {
-        replacement?.release();
-        if (incomingCharged) this.releaseTransportBytes(incomingPayloadBytes);
+        // Release ONLY when the reservation succeeded but the append never
+        // happened. A failed reservation charged nothing — releasing here
+        // would debit unrelated existing ownership; an appended chunk is owned
+        // by the terminal backlog cleanup.
+        if (charged && !appended) this.releaseTransportBytes(bytes.byteLength);
         failAndClear(err instanceof Error ? err : new Error(String(err)));
       }
     });
@@ -954,15 +982,38 @@ class LiveCursorTransport implements CursorTransport {
         expectedClose: this.expectedClose,
         elapsedMs: Date.now() - this.turnStartedAt,
       });
-      // A zero-frame end without an expected close is an unexpected EOF (peer dropped the
-      // connection before any response frame) — surfacing it as success would silently
-      // swallow the turn (WP4 review blocker 1). With frames, the protobuf event state
-      // owns terminal semantics as before.
-      if (this.framesReceived === 0 && !this.expectedClose) {
-        settler.settleFail(new Error("Cursor stream ended before any response frame (unexpected EOF)"));
-        return;
-      }
-      settler.settleFinish();
+      // Settle only after queued frame work drains to quiescence (the chain can
+      // extend itself while draining), then classify the terminal state:
+      // a trailing incomplete frame is a typed failure, and a zero-frame,
+      // zero-byte end without an expected close stays the existing unexpected
+      // EOF — both beat the old silent success.
+      void (async () => {
+        let previous: Promise<void>;
+        do {
+          previous = frameWork;
+          await previous;
+        } while (previous !== frameWork);
+      })().then(() => {
+        if (settler.settled()) return;
+        const leftover = backlogEnd - backlogStart;
+        if (leftover > 0 && !this.expectedClose) {
+          releaseBacklogLease();
+          settler.settleFail(new ConnectFrameError(
+            "frame_incomplete",
+            `Cursor Connect stream ended with ${leftover} unconsumed bytes (incomplete frame)`,
+          ));
+          return;
+        }
+        if (this.framesReceived === 0 && !this.expectedClose) {
+          releaseBacklogLease();
+          settler.settleFail(new Error("Cursor stream ended before any response frame (unexpected EOF)"));
+          return;
+        }
+        releaseBacklogLease();
+        settler.settleFinish();
+      }, (err) => {
+        failAndClear(err instanceof Error ? err : new Error(String(err)));
+      });
     });
 
     signal?.addEventListener("abort", () => {
@@ -1138,47 +1189,6 @@ export function isClientToolFrame(message: AgentServerMessage): boolean {
     default:
       return false;
   }
-}
-
-function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a);
-  out.set(b, a.length);
-  return out;
-}
-
-function connectBufferedPayloadBytes(input: Uint8Array): number {
-  let offset = 0;
-  let payloadBytes = 0;
-  while (input.byteLength - offset >= 5) {
-    const length = new DataView(input.buffer, input.byteOffset + offset, input.byteLength - offset).getUint32(1, false);
-    const available = Math.min(length, input.byteLength - offset - 5);
-    payloadBytes += available;
-    if (available < length) break;
-    offset += 5 + length;
-  }
-  return payloadBytes;
-}
-
-/** Payload-byte count for a virtual concatenation, without allocating the concatenated buffer. */
-function connectBufferedPayloadBytesAcross(first: Uint8Array, second: Uint8Array): number {
-  const totalBytes = first.byteLength + second.byteLength;
-  const byteAt = (index: number): number => index < first.byteLength
-    ? first[index]!
-    : second[index - first.byteLength]!;
-  let offset = 0;
-  let payloadBytes = 0;
-  while (totalBytes - offset >= 5) {
-    const length = (byteAt(offset + 1) * 0x1000000)
-      + (byteAt(offset + 2) << 16)
-      + (byteAt(offset + 3) << 8)
-      + byteAt(offset + 4);
-    const available = Math.min(length, totalBytes - offset - 5);
-    payloadBytes += available;
-    if (available < length) break;
-    offset += 5 + length;
-  }
-  return payloadBytes;
 }
 
 /** Host-only label for Cursor transport diagnostics — never leaks path/query/credentials. */
