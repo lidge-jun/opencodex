@@ -520,6 +520,79 @@ const NVIDIA_NIM_KIMI_MODELS = [
   ...NVIDIA_NIM_KIMI_THINKING_MODELS,
   "moonshotai/kimi-k2-instruct", "moonshotai/kimi-k2-instruct-0905",
 ];
+// 260804 NVIDIA NIM text-only chat/code families (issue #956): the NIM /v1/models catalog
+// carries no input-modality metadata, so the registry is the only source of truth. Snapshot
+// from the live catalog (2026-08-04) plus the documented kimi family above. Vision-capable
+// NIM models (llama-3.2-*-vision-instruct, phi-3-vision, kosmos-2, fuyu-8b, deplot, neva-22b,
+// vila, nemotron-*-vl, nemotron-nano-12b-v2-vl, nemotron-3-nano-omni) and non-chat endpoints
+// (embeddings, guards, translators, detectors, image/video) stay out. New text-only ids must
+// be appended individually.
+const NVIDIA_NIM_NO_VISION_MODELS = [
+  "01-ai/yi-large",
+  "ai21labs/jamba-1.5-large-instruct",
+  "aisingapore/sea-lion-7b-instruct",
+  "bigcode/starcoder2-15b",
+  "databricks/dbrx-instruct",
+  "deepseek-ai/deepseek-coder-6.7b-instruct",
+  "deepseek-ai/deepseek-v4-flash",
+  "deepseek-ai/deepseek-v4-pro",
+  "google/codegemma-1.1-7b",
+  "google/codegemma-7b",
+  "google/gemma-2b",
+  "google/recurrentgemma-2b",
+  "ibm/granite-3.0-3b-a800m-instruct",
+  "ibm/granite-3.0-8b-instruct",
+  "ibm/granite-34b-code-instruct",
+  "ibm/granite-8b-code-instruct",
+  "meta/codellama-70b",
+  "meta/llama-3.1-70b-instruct",
+  "meta/llama-3.1-8b-instruct",
+  "meta/llama-3.2-1b-instruct",
+  "meta/llama-3.2-3b-instruct",
+  "meta/llama-3.3-70b-instruct",
+  "meta/llama2-70b",
+  "microsoft/phi-3.5-moe-instruct",
+  "minimaxai/minimax-m3",
+  "mistralai/codestral-22b-instruct-v0.1",
+  "mistralai/mistral-7b-instruct-v0.3",
+  "mistralai/mistral-large",
+  "mistralai/mistral-large-2-instruct",
+  "mistralai/mistral-medium-3.5-128b",
+  "mistralai/mistral-nemotron",
+  "mistralai/mixtral-8x22b-v0.1",
+  "moonshotai/kimi-k2.6",
+  "moonshotai/kimi-k2.5",
+  "moonshotai/kimi-k2-thinking",
+  "moonshotai/kimi-k2-instruct",
+  "moonshotai/kimi-k2-instruct-0905",
+  "nv-mistralai/mistral-nemo-12b-instruct",
+  "nvidia/llama-3.1-nemotron-51b-instruct",
+  "nvidia/llama-3.1-nemotron-70b-instruct",
+  "nvidia/llama-3.1-nemotron-nano-8b-v1",
+  "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+  "nvidia/llama-3.3-nemotron-super-49b-v1",
+  "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "nvidia/llama3-chatqa-1.5-70b",
+  "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+  "nvidia/nemotron-3-nano-30b-a3b",
+  "nvidia/nemotron-3-super-120b-a12b",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+  "nvidia/nemotron-4-340b-instruct",
+  "nvidia/nemotron-mini-4b-instruct",
+  "nvidia/nemotron-nano-3-30b-a3b",
+  "nvidia/nvidia-nemotron-nano-9b-v2",
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "poolside/laguna-xs-2.1",
+  "stepfun-ai/step-3.7-flash",
+  "thinkingmachines/inkling",
+  "writer/palmyra-creative-122b",
+  "writer/palmyra-fin-70b-32k",
+  "writer/palmyra-med-70b",
+  "writer/palmyra-med-70b-32k",
+  "z-ai/glm-5.2",
+  "zyphra/zamba2-7b-instruct",
+];
 const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   KIMI_CODING_MODELS.map(id => [id, id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
 );
@@ -1230,11 +1303,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   //   family is live-discovered with no capability metadata, so Codex would otherwise send
   //   reasoning_effort=medium. Exact-id lists per modelInList semantics; gpt-oss on NIM keeps
   //   its working reasoning_effort. Future kimi ids must be appended individually.
+  // - NIM exposes no input modalities, so text-only chat/code families are listed in
+  //   noVisionModels (issue #956) to activate the vision sidecar and advertise image input.
   {
     id: "nvidia", label: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://build.nvidia.com",
     // Free pricing, but an API key is still required (free key from build.nvidia.com).
     freeTier: true,
     parallelToolCalls: false,
+    noVisionModels: NVIDIA_NIM_NO_VISION_MODELS,
     noReasoningModels: NVIDIA_NIM_KIMI_MODELS,
     modelReasoningEfforts: Object.fromEntries(NVIDIA_NIM_KIMI_MODELS.map(id => [id, []])),
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,

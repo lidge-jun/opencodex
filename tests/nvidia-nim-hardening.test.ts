@@ -1,11 +1,15 @@
 // 260715 issue #126: NVIDIA NIM hardening — parallel_tool_calls opt-out, kimi
 // reasoning_effort suppression, and openai-chat formatErrorBody detail surfacing.
+// 260804 issue #956: NIM text-only families get noVisionModels so the vision sidecar runs.
 // Plan/evidence: devlog/_plan/260715_issue126_nim_kimi.
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, formatOpenAIChatErrorBody } from "../src/adapters/openai-chat";
 import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { parseRequest } from "../src/responses/parser";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxParsedRequest, OcxTool } from "../src/types";
+import { planVisionSidecar } from "../src/vision";
 
 const tools: OcxTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
 
@@ -85,6 +89,93 @@ describe("nvidia NIM registry hardening (issue #126)", () => {
     expect(hinted.parallelToolCalls).toBeUndefined();
     const entry = normalizeRoutedCatalogEntry({ slug: "nvidia/moonshotai/kimi-k2.6" }, hinted.parallelToolCalls);
     expect(entry.supports_parallel_tool_calls).toBe(false);
+  });
+
+  test("registry nvidia entry declares text-only families and excludes vision-capable models", () => {
+    const nvidia = PROVIDER_REGISTRY.find(entry => entry.id === "nvidia")!;
+    for (const id of [
+      "deepseek-ai/deepseek-v4-flash",
+      "deepseek-ai/deepseek-v4-pro",
+      "z-ai/glm-5.2",
+      "minimaxai/minimax-m3",
+      "moonshotai/kimi-k2.6",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "openai/gpt-oss-120b",
+    ]) {
+      expect(nvidia.noVisionModels).toContain(id);
+    }
+    for (const id of [
+      "meta/llama-3.2-11b-vision-instruct",
+      "meta/llama-3.2-90b-vision-instruct",
+      "microsoft/phi-3-vision-128k-instruct",
+      "adept/fuyu-8b",
+      "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+      "nvidia/nemotron-nano-12b-v2-vl",
+      "nvidia/neva-22b",
+      "nvidia/vila",
+    ]) {
+      expect(nvidia.noVisionModels).not.toContain(id);
+    }
+  });
+
+  test("bare persisted nvidia config inherits noVisionModels from the registry", () => {
+    const route = routeModel(nvidiaConfig(), "nvidia/deepseek-ai/deepseek-v4-flash");
+    expect(route.provider.noVisionModels).toContain("deepseek-ai/deepseek-v4-flash");
+    expect(route.modelId).toBe("deepseek-ai/deepseek-v4-flash");
+  });
+
+  test("vision sidecar plans for text-only NIM models but not vision-capable ones", () => {
+    const config = nvidiaConfig();
+    const openAiSidecar = {
+      providerName: "openai" as const,
+      provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" as const },
+      accountMode: "direct" as const,
+      authContext: { kind: "main" as const, accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    };
+    const withImage = parseRequest({
+      model: "nvidia/deepseek-ai/deepseek-v4-flash",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "What is in this screenshot?" },
+          { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+        ],
+      }],
+    });
+    const noImage = parseRequest({
+      model: "nvidia/deepseek-ai/deepseek-v4-flash",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+
+    const textRoute = routeModel(config, "nvidia/deepseek-ai/deepseek-v4-flash");
+    expect(planVisionSidecar(config, textRoute.provider, textRoute.modelId, withImage, openAiSidecar))
+      .toMatchObject({ backend: "openai" });
+    expect(planVisionSidecar(config, textRoute.provider, textRoute.modelId, noImage, openAiSidecar))
+      .toBeUndefined();
+
+    const visionRoute = routeModel(config, "nvidia/meta/llama-3.2-11b-vision-instruct");
+    expect(planVisionSidecar(config, visionRoute.provider, visionRoute.modelId, withImage, openAiSidecar))
+      .toBeUndefined();
+  });
+
+  test("catalog advertises image input for text-only NIM models, not for vision-capable ones", () => {
+    const config = nvidiaConfig();
+    const textRoute = routeModel(config, "nvidia/deepseek-ai/deepseek-v4-flash");
+    const hinted = applyProviderConfigHints("nvidia", textRoute.provider, {
+      id: "deepseek-ai/deepseek-v4-flash",
+      provider: "nvidia",
+    });
+    expect(hinted.inputModalities).toContain("image");
+
+    const visionRoute = routeModel(config, "nvidia/meta/llama-3.2-11b-vision-instruct");
+    const visionHinted = applyProviderConfigHints("nvidia", visionRoute.provider, {
+      id: "meta/llama-3.2-11b-vision-instruct",
+      provider: "nvidia",
+    });
+    expect(visionHinted.inputModalities).toBeUndefined();
   });
 });
 
