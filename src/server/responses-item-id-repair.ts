@@ -11,7 +11,7 @@ interface ResponsesItemIdRepairState {
   readonly rewriteNonCanonicalIds: boolean;
   readonly placeholders: Record<RepairableItemType, ReadonlySet<string>>;
   readonly outputIds: Record<RepairableItemType, Map<number, string>>;
-  readonly rawToCanonical: Map<string, string>;
+  readonly rawToCanonical: Record<RepairableItemType, Map<string, string>>;
   readonly reasoningTextByOutputIndex: Map<number, string>;
   readonly responseIdMap: Map<string, string>;
   readonly scope: string;
@@ -86,8 +86,13 @@ function mapRawId(
 ): string | null {
   const existing = state.outputIds[type].get(outputIndex);
   if (existing) {
-    if (rawId && shouldRewriteRawId(state, type, rawId) && !state.rawToCanonical.has(rawId)) {
-      state.rawToCanonical.set(rawId, existing);
+    if (rawId && shouldRewriteRawId(state, type, rawId) && !state.rawToCanonical[type].has(rawId)) {
+      // Charge every newly retained raw alias, even when the output_index is already mapped.
+      state.budget?.chargeRetained(
+        new TextEncoder().encode(JSON.stringify([type, outputIndex, rawId, existing])).byteLength,
+        { kind: "item_ids" },
+      );
+      state.rawToCanonical[type].set(rawId, existing);
     }
     return existing;
   }
@@ -110,7 +115,7 @@ function mapRawId(
   if (!mapped) return null;
   state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, rawId, mapped])).byteLength, { kind: "item_ids" });
   state.outputIds[type].set(outputIndex, mapped);
-  if (mapped !== rawId) state.rawToCanonical.set(rawId, mapped);
+  if (mapped !== rawId) state.rawToCanonical[type].set(rawId, mapped);
   return mapped;
 }
 
@@ -126,7 +131,10 @@ function createRepairState(config: ResponsesItemIdRepairConfig, budget?: Transla
       message: new Map<number, string>(),
       reasoning: new Map<number, string>(),
     },
-    rawToCanonical: new Map<string, string>(),
+    rawToCanonical: {
+      message: new Map<string, string>(),
+      reasoning: new Map<string, string>(),
+    },
     reasoningTextByOutputIndex: new Map<number, string>(),
     responseIdMap: new Map<string, string>(),
     scope: randomUUID().replace(/-/g, ""),
@@ -292,27 +300,34 @@ function rewriteItemIdField(
   outputIndex: number,
 ): { event: Record<string, unknown>; changed: boolean } {
   const currentId = typeof event.item_id === "string" ? event.item_id : undefined;
-  const reverseMapped = currentId ? state.rawToCanonical.get(currentId) : undefined;
-  if (reverseMapped && reverseMapped !== currentId) {
-    return { event: { ...event, item_id: reverseMapped }, changed: true };
+  const eventType = typeof event.type === "string" ? ITEM_ID_EVENT_TYPES[event.type] : undefined;
+  if (!eventType) return { event, changed: false };
+
+  // Alias lookup is type-scoped so a shared placeholder cannot rewrite reasoning -> msg_*.
+  if (currentId) {
+    const reverseMapped = state.rawToCanonical[eventType].get(currentId);
+    if (reverseMapped && reverseMapped !== currentId) {
+      const next: Record<string, unknown> = { ...event, item_id: reverseMapped };
+      if (state.rewriteNonCanonicalIds && "logprobs" in next) delete next.logprobs;
+      return { event: next, changed: true };
+    }
   }
 
-  const eventType = typeof event.type === "string" ? ITEM_ID_EVENT_TYPES[event.type] : undefined;
   let mapped: string | null | undefined;
   if (eventType === "message" && (
     event.type === "response.content_part.added"
     || event.type === "response.content_part.done"
   )) {
+    // content_part events can belong to either a message or a reasoning item at the
+    // same output_index; prefer the already-mapped type without inventing a cross-type alias.
     mapped = state.outputIds.message.get(outputIndex)
       ?? state.outputIds.reasoning.get(outputIndex)
       ?? null;
-  } else if (eventType) {
+  } else {
     mapped = state.outputIds[eventType].get(outputIndex);
     if (!mapped && currentId && state.rewriteNonCanonicalIds) {
       mapped = mapRawId(state, eventType, outputIndex, currentId);
     }
-  } else {
-    return { event, changed: false };
   }
   if (!mapped) return { event, changed: false };
   if (currentId === mapped) return { event, changed: false };

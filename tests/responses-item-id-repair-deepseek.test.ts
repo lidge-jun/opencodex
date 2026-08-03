@@ -187,6 +187,54 @@ describe("DeepSeek Responses item-id repair", () => {
     expect(repaired.match(/data: \[DONE\]/g)).toHaveLength(1);
   });
 
+  test("keeps shared placeholder aliases type-scoped", async () => {
+    const upstream = [
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"shared_placeholder"}}\n\n',
+      'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"shared_placeholder","delta":"r"}\n\n',
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"shared_placeholder","role":"assistant"}}\n\n',
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":1,"item_id":"shared_placeholder","delta":"m"}\n\n',
+    ].join("");
+    const events = await parseSse(await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      reasoning: ["shared_placeholder"],
+      message: ["shared_placeholder"],
+    })));
+    const reasoningId = (events[0].item as Record<string, unknown>).id;
+    const messageId = (events[2].item as Record<string, unknown>).id;
+    expect(reasoningId).toMatch(/^rs_ocx_[0-9a-f]+_0$/);
+    expect(messageId).toMatch(/^msg_ocx_[0-9a-f]+_1$/);
+    expect(reasoningId).not.toBe(messageId);
+    expect(events[1].item_id).toBe(reasoningId);
+    expect(events[3].item_id).toBe(messageId);
+  });
+
+  test("charges newly retained raw aliases after an output_index is already mapped", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 512 });
+    const handlers = createResponsesItemIdRepairHandlers({
+      rewriteNonCanonicalIds: true,
+    }, budget);
+    // Establish one mapped reasoning id first.
+    handlers.rewrite(JSON.stringify({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "reasoning", id: "11111111-1111-4111-8111-111111111111" },
+    }));
+    let overflowed = false;
+    try {
+      for (let i = 0; i < 400; i++) {
+        const raw = `${i.toString(16).padStart(8, "0")}-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+        handlers.rewrite(JSON.stringify({
+          type: "response.reasoning_summary_text.delta",
+          output_index: 0,
+          item_id: raw,
+          delta: "x",
+        }));
+      }
+    } catch (error) {
+      overflowed = isTranslatorBudgetExceededError(error);
+    }
+    expect(overflowed).toBe(true);
+  });
+
   test("opt-in flag is recognized", () => {
     expect(hasResponsesItemIdRepair({ rewriteNonCanonicalIds: true })).toBe(true);
   });

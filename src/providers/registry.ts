@@ -184,6 +184,8 @@ export interface ProviderRegistryEntry {
   supportsServiceTier?: boolean;
   /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
+  /** Registry default for client-facing Responses item-id repair (fill-only into runtime provider config). */
+  responsesItemIdRepair?: import("../types").ResponsesItemIdRepairConfig;
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
@@ -1093,6 +1095,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // route REQUIRES replay on tool-call continuations is an inference from the
     // Chat Thinking-Mode docs, not a confirmed Responses contract.)
     preserveResponsesReasoningContent: true,
+    // DeepSeek Responses emits UUID item/response ids and raw reasoning_text streams that
+    // leave Codex App/CLI stuck on Thinking/Working even after HTTP 200 (#938 family).
+    // Enable the client-facing SSE repair by default for the built-in provider so Codex
+    // Desktop/CLI do not need a hand-edited provider config for the native route.
+    responsesItemIdRepair: {
+      rewriteNonCanonicalIds: true,
+      repairMissingTerminalIds: true,
+    },
     // "The API is stateless: responses and conversations are not stored on the
     // server." https://api-docs.deepseek.com/api/create-response/
     statelessResponses: true,
