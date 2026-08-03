@@ -4,6 +4,11 @@ import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
+import {
+  classifyTransportFailureKind,
+  transportErrorCode,
+  transportFailureHost,
+} from "../lib/upstream-reachability";
 import { parseSidecarSSE, type WebSearchResult } from "./parse";
 import type { CodexUpstreamOutcome } from "../codex/routing";
 
@@ -31,7 +36,12 @@ export const IMAGE_INSTRUCTION =
 
 /** A search result, or an `error` string when the search couldn't run (surfaced as a tool result). */
 export type SidecarOutcome = WebSearchResult & { error?: string };
-export type SidecarOutcomeRecorder = (outcome: CodexUpstreamOutcome) => void;
+export type SidecarOutcomeMeta = {
+  /** Host the failure was observed against, for the (provider, host) ledger (#914). */
+  host?: string;
+  lastFailureCode?: string;
+};
+export type SidecarOutcomeRecorder = (outcome: CodexUpstreamOutcome, meta?: SidecarOutcomeMeta) => void;
 
 /**
  * Execute ONE web search via the gpt-mini sidecar through the ChatGPT forward backend — the only path
@@ -94,8 +104,11 @@ export async function runWebSearch(
       detachBodyGuard();
     }
   } catch (e) {
-    recordOutcome?.(e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error");
-    const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
+    const kind = classifyTransportFailureKind(e);
+    recordOutcome?.(kind, {
+      host: transportFailureHost(url) ?? undefined,
+      lastFailureCode: transportErrorCode(e),
+    });
     console.warn(`[web-search] sidecar ${kind} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
     return { text: "", sources: [], error: e instanceof Error ? e.message : String(e) };
   } finally {

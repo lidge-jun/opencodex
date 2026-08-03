@@ -5,6 +5,11 @@ import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
+import {
+  classifyTransportFailureKind,
+  transportErrorCode,
+  transportFailureHost,
+} from "../lib/upstream-reachability";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
 export interface VisionSettings {
@@ -114,8 +119,11 @@ export async function describeImage(
     if (!parsed.text.trim() && parsed.error) return { text: "", error: parsed.error };
     return { text: parsed.text };
   } catch (e) {
-    recordOutcome?.(e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error");
-    const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
+    const kind = classifyTransportFailureKind(e);
+    recordOutcome?.(kind, {
+      host: transportFailureHost(`${forwardProvider.baseUrl}/responses`) ?? undefined,
+      lastFailureCode: transportErrorCode(e),
+    });
     console.warn(`[vision] sidecar ${kind} (${Date.now() - t0}ms)`);
     return { text: "", error: e instanceof Error ? e.message : String(e) };
   } finally {

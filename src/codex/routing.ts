@@ -122,8 +122,8 @@ const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHeal
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
-export type CodexUpstreamOutcome = number | "connect_error" | "timeout";
-export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "unknown";
+export type CodexUpstreamOutcome = number | "connect_error" | "timeout" | "connect_neutral";
+export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "neutral" | "unknown";
 export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
 /**
  * Native Codex quota groups known to be independent upstream. Keep the mapping
@@ -132,6 +132,47 @@ export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
  * confirmed, so shared limits never receive cross-model bypasses.
  */
 export type CodexQuotaScope = "shared" | "spark";
+
+/**
+ * Pre-connection reachability health for a (provider, host) pair (#914).
+ *
+ * DNS and TCP-level failures belong to the host, not to any single credential:
+ * every Codex pool account shares the provider host, so rotating accounts
+ * cannot repair a machine-wide outage. These failures are recorded here
+ * instead of on the account so the account streak, soft-avoid, thread affinity,
+ * and active-account state stay untouched. The ledger is observational today;
+ * {@link isHostConnectOutage} is the hook where a host-level response (for
+ * example a circuit break) would attach with its own audit.
+ */
+export interface HostConnectHealth {
+  consecutiveFailures: number;
+  lastFailureAt: number;
+  lastFailureCode?: string;
+}
+
+/** Consecutive proven reachability failures before a host is in outage. */
+export const HOST_CONNECT_OUTAGE_THRESHOLD = 3;
+
+const hostConnectHealth = new Map<string, HostConnectHealth>();
+
+export function hostConnectHealthKey(providerName: string, host: string): string {
+  return `${providerName.toLowerCase()}:${host.toLowerCase()}`;
+}
+
+export function getHostConnectHealth(key: string): HostConnectHealth | null {
+  return hostConnectHealth.get(key) ?? null;
+}
+
+export function isHostConnectOutage(
+  key: string,
+  threshold = HOST_CONNECT_OUTAGE_THRESHOLD,
+  now = Date.now(),
+): boolean {
+  if (threshold <= 0) return false;
+  const health = hostConnectHealth.get(key);
+  if (!health || now - health.lastFailureAt > CODEX_FAILURE_WINDOW_MS) return false;
+  return health.consecutiveFailures >= threshold;
+}
 
 /**
  * Requests without a resolved native model retain the historic one-account-per-
@@ -197,6 +238,13 @@ export type CodexUpstreamOutcomeMeta = {
    * again (which would advance a round-robin ring twice).
    */
   promoteAccountId?: string;
+  /**
+   * (provider, host) key for a proven pre-connection reachability failure
+   * (#914). Records the failure in the host ledger instead of account health.
+   */
+  hostKey?: string;
+  /** Stable `code` on the classified rejection, kept for the host ledger. */
+  lastFailureCode?: string;
   /** Generation captured when this routed account was selected. */
   writerGeneration?: number;
 };
@@ -238,6 +286,7 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 export function clearCodexUpstreamHealth(): void {
   upstreamHealth.clear();
   quotaScopedHealth.clear();
+  hostConnectHealth.clear();
   runtimeActiveCodexAccountId = undefined;
 }
 
@@ -307,9 +356,15 @@ export function computeCodexUsageScore(quota: {
 }
 
 export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): CodexUpstreamOutcomeClass {
+  if (outcome === "connect_neutral") return "neutral";
   if (outcome === "connect_error" || outcome === "timeout") return "transient";
   if (!Number.isFinite(outcome)) return "unknown";
   if (outcome >= 200 && outcome < 300) return "success";
+  // Explicit 3xx policy (#914): a redirect response is relayed as-is and is
+  // never account or host health evidence — it proves the host is reachable
+  // and says nothing about the credential. Relayed as the neutral class so a
+  // stray 3xx cannot increment an account's transient streak.
+  if (outcome >= 300 && outcome < 400) return "neutral";
   if (outcome === 401 || outcome === 403) return "credential";
   // 402 Payment Required is treated as quota exhaustion for pool cooldown/failover
   // (same-request alternate retry records this outcome for the depleted account).
@@ -1359,6 +1414,37 @@ export function recordCodexUpstreamOutcome(
     }
     if (ownsProbeLease(current, meta)) {
       upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
+    }
+    return;
+  }
+
+  if (outcomeClass === "neutral") {
+    // A proven pre-connection reachability failure (DNS / TCP refusal) is host-
+    // wide: every pool account shares the provider host, so rotation cannot
+    // repair it and must not happen (#914). Conclude any owned probe lease
+    // without treating the failure as account evidence, record the failure
+    // under the (provider, host) ledger, and leave account health, thread
+    // affinity, and the active account untouched.
+    const current = upstreamHealth.get(accountId);
+    const scopedProbe = meta.probeQuotaScope
+      ? scopedHealthFor(accountId, meta.probeQuotaScope)
+      : undefined;
+    if (scopedProbe && meta.probeQuotaScope && ownsProbeLease(scopedProbe, meta)) {
+      setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
+    }
+    if (ownsProbeLease(current, meta)) {
+      upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
+    }
+    if (meta.hostKey) {
+      const prior = hostConnectHealth.get(meta.hostKey);
+      const stale = !!prior && now - prior.lastFailureAt > CODEX_FAILURE_WINDOW_MS;
+      hostConnectHealth.set(meta.hostKey, {
+        consecutiveFailures: stale ? 1 : (prior?.consecutiveFailures ?? 0) + 1,
+        lastFailureAt: now,
+        ...(typeof meta.lastFailureCode === "string"
+          ? { lastFailureCode: meta.lastFailureCode }
+          : {}),
+      });
     }
     return;
   }

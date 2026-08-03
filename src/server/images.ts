@@ -24,7 +24,13 @@ import {
 } from "../codex/auth-context";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
+import {
+  classifyTransportFailureKind,
+  transportErrorCode,
+  transportFailureHost,
+} from "../lib/upstream-reachability";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import type { SidecarOutcomeMeta } from "../web-search/executor";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -467,12 +473,15 @@ export async function handleImages(
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
     }
-    if (err instanceof Error && err.name === "TimeoutError") {
-      forward?.recordOutcome?.("timeout");
-      // codex retries 5xx up to 4 more times; a retried 504 is acceptable for a transient hang.
+    const kind = classifyTransportFailureKind(err);
+    forward?.recordOutcome?.(kind, {
+      host: transportFailureHost(url) ?? undefined,
+      lastFailureCode: transportErrorCode(err),
+    });
+    // codex retries 5xx up to 4 more times; a retried 504 is acceptable for a transient hang.
+    if (kind === "timeout") {
       return formatErrorResponse(504, "upstream_error", `image ${endpoint} upstream timed out`);
     }
-    forward?.recordOutcome?.("connect_error");
     return formatErrorResponse(
       502,
       "upstream_error",

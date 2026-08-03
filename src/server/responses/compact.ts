@@ -59,9 +59,11 @@ import {
 } from "../../codex/auth-context";
 import {
   formatCodexProviderForLog,
+  hostConnectHealthKey,
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
+import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
@@ -361,6 +363,8 @@ export async function handleResponsesCompact(
         retryAfter?: string | null;
         resetAt?: unknown | unknown[];
         promoteAccountId?: string;
+        hostKey?: string;
+        lastFailureCode?: string;
       } = {},
     ) => {
       if (!usesCodexForwardPoolAuth(ctx, route.provider)) return;
@@ -397,6 +401,7 @@ export async function handleResponsesCompact(
         connectMs,
         false,
         providerFetch(sendProvider),
+        usesCodexForwardPoolAuth(authCtx, route.provider),
       );
       return recovery === "single"
         ? doFetch()
@@ -416,8 +421,15 @@ export async function handleResponsesCompact(
         recordCompactPoolOutcome(outcomeCtx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-      recordCompactPoolOutcome(outcomeCtx, outcome);
+      const outcome = classifyTransportFailureKind(err);
+      recordCompactPoolOutcome(outcomeCtx, outcome, {
+        ...(outcome === "connect_neutral"
+          ? {
+            hostKey: hostConnectHealthKey(route.providerName, safeHostLabel(compactUrl)),
+            lastFailureCode: transportErrorCode(err),
+          }
+          : {}),
+      });
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
 
@@ -484,8 +496,15 @@ export async function handleResponsesCompact(
             recordCompactPoolOutcome(outcomeCtx, 499);
             return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
           }
-          const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-          recordCompactPoolOutcome(outcomeCtx, outcome);
+          const outcome = classifyTransportFailureKind(err);
+          recordCompactPoolOutcome(outcomeCtx, outcome, {
+            ...(outcome === "connect_neutral"
+              ? {
+                hostKey: hostConnectHealthKey(route.providerName, safeHostLabel(compactUrl)),
+                lastFailureCode: transportErrorCode(err),
+              }
+              : {}),
+          });
           return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
         }
       }

@@ -8,6 +8,7 @@ import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   CODEX_THREAD_AFFINITY_MAX_ENTRIES,
   CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS,
+  HOST_CONNECT_OUTAGE_THRESHOLD,
   classifyCodexUpstreamOutcome,
   clearCodexAccountCooldown,
   clearCodexUpstreamHealth,
@@ -20,8 +21,11 @@ import {
   getCodexQuotaHealthSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
+  getHostConnectHealth,
+  hostConnectHealthKey,
   isCodexAccountInCooldown,
   isCodexAccountSoftAvoided,
+  isHostConnectOutage,
   pickLowestUsageCodexAccount,
   parseRetryAfterMs,
   recordCodexUpstreamOutcome,
@@ -319,10 +323,13 @@ describe("codex routing", () => {
     expect(classifyCodexUpstreamOutcome(403)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(429)).toBe("quota");
     expect(classifyCodexUpstreamOutcome(402)).toBe("quota");
+    expect(classifyCodexUpstreamOutcome(307)).toBe("neutral");
+    expect(classifyCodexUpstreamOutcome(302)).toBe("neutral");
     expect(classifyCodexUpstreamOutcome(422)).toBe("caller");
     expect(classifyCodexUpstreamOutcome(503)).toBe("transient");
     expect(classifyCodexUpstreamOutcome("connect_error")).toBe("transient");
     expect(classifyCodexUpstreamOutcome("timeout")).toBe("transient");
+    expect(classifyCodexUpstreamOutcome("connect_neutral")).toBe("neutral");
     expect(classifyCodexUpstreamOutcome(102)).toBe("unknown");
   });
 
@@ -386,6 +393,117 @@ describe("codex routing", () => {
     recordCodexUpstreamOutcome(config, "a", "connect_error");
     expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 3, lastFailureStatus: 0 });
     expect(resolveCodexAccountForThread("connect-next", config)).toBe("b");
+  });
+
+  test("three neutral reachability failures never touch account health or routing state", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    const thread = "neutral-reachability-thread";
+    expect(resolveCodexAccountForThread(thread, config)).toBe("a");
+    const key = hostConnectHealthKey("openai", "api.chatgpt.com");
+
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", {
+      hostKey: key,
+      lastFailureCode: "ConnectionRefused",
+    });
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", {
+      hostKey: key,
+      lastFailureCode: "FailedToOpenSocket",
+    });
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", {
+      hostKey: key,
+      lastFailureCode: "ConnectionRefused",
+    });
+
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(getCodexAccountSoftAvoidUntil("a")).toBeNull();
+    expect(isCodexAccountSoftAvoided("a")).toBe(false);
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    // The failure streak that would previously have tripped failover is gone:
+    // the bound thread and future threads both stay on "a".
+    expect(resolveCodexAccountForThread(thread, config)).toBe("a");
+    expect(resolveCodexAccountForThread("neutral-next", config)).toBe("a");
+    // The failures are recorded where they belong: the (provider, host) ledger.
+    expect(getHostConnectHealth(key)).toMatchObject({
+      consecutiveFailures: 3,
+      lastFailureCode: "ConnectionRefused",
+    });
+    expect(isHostConnectOutage(key, HOST_CONNECT_OUTAGE_THRESHOLD)).toBe(true);
+    expect(isHostConnectOutage("openai:other.example", HOST_CONNECT_OUTAGE_THRESHOLD)).toBe(false);
+  });
+
+  test("the host ledger forgets failures outside the failure window", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const key = hostConnectHealthKey("openai", "api.chatgpt.com");
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", { hostKey: key, now });
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", { hostKey: key, now: now + 1_000 });
+
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", {
+      hostKey: key,
+      now: now + 2 * CODEX_FAILURE_WINDOW_MS,
+    });
+
+    expect(getHostConnectHealth(key)).toMatchObject({ consecutiveFailures: 1 });
+    expect(isHostConnectOutage(key, HOST_CONNECT_OUTAGE_THRESHOLD, now + 2 * CODEX_FAILURE_WINDOW_MS)).toBe(false);
+  });
+
+  test("a neutral reachability failure releases an owned probe lease without clearing the cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+    const key = hostConnectHealthKey("openai", "api.chatgpt.com");
+
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", {
+      now: probeAt + 500,
+      probeLeaseId,
+      hostKey: key,
+    });
+
+    // The lease is handed back so a later probe can run, but the 429 cooldown
+    // itself is untouched (a reachability failure is not account evidence).
+    expect(getCodexUpstreamHealth("a")).toMatchObject({
+      consecutiveFailures: 0,
+      cooldownUntil: now + 15 * 60_000,
+    });
+    expect(getCodexUpstreamHealth("a")?.probeLeaseId).toBeUndefined();
+    expect(isCodexAccountInCooldown("a", probeAt + 500)).toBe(true);
+    expect(getHostConnectHealth(key)).toMatchObject({ consecutiveFailures: 1 });
+  });
+
+  test("a neutral failure never releases someone else's probe lease", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", "connect_neutral", {
+      now: probeAt + 500,
+      probeLeaseId: "someone-else",
+      hostKey: hostConnectHealthKey("openai", "api.chatgpt.com"),
+    });
+
+    expect(getCodexUpstreamHealth("a")?.probeLeaseId).toBe(probeLeaseId);
+  });
+
+  test("a recorded 3xx is relayed-class neutral and never increments the transient streak", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("3xx-thread", config)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 307);
+    recordCodexUpstreamOutcome(config, "a", 302);
+    recordCodexUpstreamOutcome(config, "a", 308);
+
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(resolveCodexAccountForThread("3xx-next", config)).toBe("a");
   });
 
   test("429 with Retry-After records an account cooldown", () => {

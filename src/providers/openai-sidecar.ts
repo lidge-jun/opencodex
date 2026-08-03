@@ -8,9 +8,10 @@ import {
   type CodexAccountSelectionAdmission,
   type CodexAuthContext,
 } from "../codex/auth-context";
-import { recordCodexUpstreamOutcome, type CodexUpstreamOutcome } from "../codex/routing";
+import { hostConnectHealthKey, recordCodexUpstreamOutcome, type CodexUpstreamOutcome } from "../codex/routing";
 import { extractAccountId } from "../oauth/chatgpt";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../server/auth-cors";
+import type { SidecarOutcomeMeta } from "../web-search/executor";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import {
   isCanonicalOpenAiForwardProvider,
@@ -28,7 +29,7 @@ export interface OpenAiForwardSidecarCandidate {
 export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandidate {
   authContext: CodexAuthContext;
   headers: Headers;
-  recordOutcome?: (outcome: CodexUpstreamOutcome) => void;
+  recordOutcome?: (outcome: CodexUpstreamOutcome, meta?: SidecarOutcomeMeta) => void;
 }
 
 /**
@@ -157,13 +158,15 @@ export async function resolveFirstUsableOpenAiSidecar(
       headers: headersForCodexAuthContext(incomingHeaders, authContext),
       ...(authContext.kind === "pool" || authContext.kind === "main-pool"
         ? {
-          recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(
+          recordOutcome: (outcome: CodexUpstreamOutcome, meta: SidecarOutcomeMeta = {}) => recordCodexUpstreamOutcome(
             config,
             authContext.accountId,
             outcome,
             {
               probeLeaseId: authContext.probeLeaseId,
               writerGeneration: authContext.writerGeneration,
+              ...(meta.host ? { hostKey: hostConnectHealthKey(candidate.providerName, meta.host) } : {}),
+              ...(meta.lastFailureCode ? { lastFailureCode: meta.lastFailureCode } : {}),
             },
           ),
         }

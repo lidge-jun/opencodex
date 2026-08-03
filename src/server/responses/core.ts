@@ -83,10 +83,12 @@ import {
 import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
+  hostConnectHealthKey,
   previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
+import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
@@ -425,6 +427,7 @@ async function retryCodexPoolOnAlternateAccount(
       connectMs,
       stream,
       providerFetch(route.provider),
+      true,
     );
     return {
       kind: "retried",
@@ -1710,7 +1713,7 @@ async function handleResponsesInner(
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
       if (options.abortSignal?.aborted) return clientCancelledResponse();
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+      const outcome = classifyTransportFailureKind(err);
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
@@ -1719,6 +1722,15 @@ async function handleResponsesInner(
           probeLeaseId: codexProbeLeaseId(authCtx),
           probeQuotaScope: codexProbeQuotaScope(authCtx),
           writerGeneration: authCtx.writerGeneration,
+          // Proven pre-connection reachability failures (DNS / TCP refusal) are
+          // host-wide, not account evidence: record them in the (provider, host)
+          // ledger instead of the account's failure streak (#914).
+          ...(outcome === "connect_neutral"
+            ? {
+              hostKey: hostConnectHealthKey(route.providerName, safeHostLabel(request.url)),
+              lastFailureCode: transportErrorCode(err),
+            }
+            : {}),
         });
       }
       const msg = outcome === "timeout"
@@ -1727,6 +1739,10 @@ async function handleResponsesInner(
       return formatErrorResponse(502, "upstream_error", msg);
     };
     try {
+      // Manual redirect on pool sends: a 3xx surfaces as a Response instead of a
+      // followed redirect, so a server that redirects to a dead host can never
+      // masquerade as a pre-connection failure (recorded rejection class #914).
+      const poolUpstreamSend = usesCodexForwardPoolAuth(authCtx, route.provider);
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
@@ -1737,7 +1753,8 @@ async function handleResponsesInner(
             method: request.method,
             headers: request.headers,
             body: request.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+            poolUpstreamSend);
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );

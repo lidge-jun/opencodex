@@ -21,6 +21,11 @@ import {
 import { codexAccountNamespaceForModel } from "../codex/account-namespace-match";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
+import {
+  classifyTransportFailureKind,
+  transportErrorCode,
+  transportFailureHost,
+} from "../lib/upstream-reachability";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import {
@@ -163,11 +168,12 @@ export async function handleSearch(
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
     }
-    if (err instanceof Error && err.name === "TimeoutError") {
-      upstream.recordOutcome?.("timeout");
-      return formatErrorResponse(504, "upstream_error", "search upstream timed out");
-    }
-    upstream.recordOutcome?.("connect_error");
+    const kind = classifyTransportFailureKind(err);
+    upstream.recordOutcome?.(kind, {
+      host: transportFailureHost(url) ?? undefined,
+      lastFailureCode: transportErrorCode(err),
+    });
+    if (kind === "timeout") return formatErrorResponse(504, "upstream_error", "search upstream timed out");
     return formatErrorResponse(
       502,
       "upstream_error",

@@ -14,6 +14,8 @@ import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   getCodexUpstreamHealth,
+  getHostConnectHealth,
+  hostConnectHealthKey,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import { loadConfig, saveConfig } from "../src/config";
@@ -2634,7 +2636,7 @@ describe("server local API auth", () => {
     }
   }, { timeout: 30_000 });
 
-  test("passthrough connect failure records selected pool account health", async () => {
+  test("passthrough pre-connect reachability failure is account-neutral (#914)", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -2678,9 +2680,12 @@ describe("server local API auth", () => {
       });
 
       expect(response.status).toBe(502);
-      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+      // A real Bun pre-connect rejection (FailedToOpenSocket/ConnectionRefused)
+      // belongs to the (provider, host) pair, never to the credential: the
+      // account streak, soft-avoid, and affinity stay untouched (#914).
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toMatchObject({
         consecutiveFailures: 1,
-        lastFailureStatus: 0,
       });
     } finally {
       await server.stop(true);

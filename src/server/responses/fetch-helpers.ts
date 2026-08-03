@@ -133,6 +133,7 @@ export async function fetchWithHeaderTimeout(
   timeoutMs: number,
   preferIdentityEncoding = false,
   executor: typeof globalThis.fetch = globalThis.fetch,
+  manualRedirect = false,
 ): Promise<Response> {
   const timeout = new AbortController();
   const timer = setTimeout(() => {
@@ -148,10 +149,13 @@ export async function fetchWithHeaderTimeout(
     return await executor(url, {
       ...init,
       headers,
+      // Pool sends opt into manual redirects so a 3xx is relayed as a Response
+      // instead of being followed into a rejection that is indistinguishable
+      // from a pre-connection failure (#914).
+      ...(manualRedirect ? { redirect: "manual" as const } : {}),
       signal: AbortSignal.any([abortSignal, timeout.signal]),
     });
   } finally {
     clearTimeout(timer);
   }
 }
-

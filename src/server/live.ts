@@ -33,7 +33,13 @@ import {
 } from "../codex/auth-context";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
+import {
+  classifyTransportFailureKind,
+  transportErrorCode,
+  transportFailureHost,
+} from "../lib/upstream-reachability";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import type { SidecarOutcomeMeta } from "../web-search/executor";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
@@ -151,7 +157,7 @@ export type LiveRelayTarget = {
   providerBaseUrl: string;
   usesBackendShape: boolean;
   keyed: boolean;
-  recordOutcome?: (status: number | "timeout" | "connect_error") => void;
+  recordOutcome?: (status: number | "timeout" | "connect_error" | "connect_neutral", meta?: SidecarOutcomeMeta) => void;
 };
 
 function isChatGptBackendBaseUrl(baseUrl: string): boolean {
@@ -487,7 +493,7 @@ export async function resolveLiveRelay(
       providerBaseUrl: provider.baseUrl,
       usesBackendShape: isChatGptBackendBaseUrl(provider.baseUrl),
       keyed: false,
-      recordOutcome: status => forward.recordOutcome?.(status),
+      recordOutcome: (status, meta) => forward.recordOutcome?.(status, meta),
     };
   }
   if (forwardAuthError) return forwardAuthError;
@@ -575,11 +581,14 @@ export async function handleLive(
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", "live request canceled by client");
     }
-    if (err instanceof Error && err.name === "TimeoutError") {
-      relay.recordOutcome?.("timeout");
+    const kind = classifyTransportFailureKind(err);
+    relay.recordOutcome?.(kind, {
+      host: transportFailureHost(url) ?? undefined,
+      lastFailureCode: transportErrorCode(err),
+    });
+    if (kind === "timeout") {
       return formatErrorResponse(504, "upstream_error", "live upstream timed out");
     }
-    relay.recordOutcome?.("connect_error");
     return formatErrorResponse(
       502,
       "upstream_error",
