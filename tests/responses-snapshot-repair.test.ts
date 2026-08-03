@@ -199,6 +199,11 @@ describe("Responses sparse-snapshot repair", () => {
   test("reconstructs missing terminal output only from contiguous done indexes", () => {
     const rewrite = createResponsesSnapshotPayloadRewrite();
     rewrite(JSON.stringify({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { id: "msg_0", type: "message" },
+    }));
+    rewrite(JSON.stringify({
       type: "response.output_item.done",
       output_index: 0,
       item: {
@@ -255,6 +260,27 @@ describe("Responses sparse-snapshot repair", () => {
 
       expect(terminal.response.output).toEqual([]);
     }
+  });
+
+  test("suppresses reconstruction while an observed added item remains unfinished", () => {
+    const rewrite = createResponsesSnapshotPayloadRewrite();
+    rewrite(JSON.stringify({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { id: "msg_done", type: "message", content: [{ type: "output_text", text: "partial" }] },
+    }));
+    rewrite(JSON.stringify({
+      type: "response.output_item.added",
+      output_index: 1,
+      item: { id: "msg_pending", type: "message" },
+    }));
+
+    const terminal = JSON.parse(rewrite(JSON.stringify({
+      type: "response.completed",
+      response: { id: "resp_pending_item", object: "response" },
+    }))) as { response: { output?: unknown } };
+
+    expect(terminal.response.output).toEqual([]);
   });
 
   test("suppresses reconstruction after malformed done events", () => {
@@ -373,6 +399,24 @@ describe("Responses sparse-snapshot repair", () => {
       }],
     });
     expect(repairResponsesSnapshotJson("{not-json}")).toBe("{not-json}");
+  });
+
+  test("does not complete sparse output items in an incomplete non-streaming response", () => {
+    const repaired = JSON.parse(repairResponsesSnapshotJson(JSON.stringify({
+      id: "resp_incomplete_json",
+      object: "response",
+      status: "incomplete",
+      output: [{ id: "msg_partial", type: "message" }],
+    }))) as { status?: unknown; output: Array<Record<string, unknown>> };
+
+    expect(repaired.status).toBe("incomplete");
+    expect(repaired.output[0]).toEqual({
+      id: "msg_partial",
+      type: "message",
+      role: "assistant",
+      status: "incomplete",
+      content: [],
+    });
   });
 
   test("handleResponses keeps SSE repair default-off and preserves the existing relay gate", async () => {

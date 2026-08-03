@@ -103,7 +103,12 @@ function repairResponseSnapshot(
 ): Record<string, unknown> {
   const repaired = { ...response };
   let changed = false;
-  const outputStatus = defaultStatus === "completed" ? "completed" : undefined;
+  const effectiveResponseStatus = typeof response.status === "string" && response.status.trim().length > 0
+    ? response.status
+    : defaultStatus;
+  const outputStatus = effectiveResponseStatus === "completed" || effectiveResponseStatus === "incomplete"
+    ? effectiveResponseStatus
+    : undefined;
 
   if (reconstructedOutput) {
     repaired.output = reconstructedOutput;
@@ -151,14 +156,16 @@ export function createResponsesSnapshotPayloadRewrite(
 ): SsePayloadRewrite {
   const defaults = requestDefaults(requestBody);
   const completedItems = new Map<number, RetainedOutputItem>();
+  const unfinishedItemIndexes = new Set<number>();
   let aggregateItemBytes = 0;
   let reconstructionTainted = false;
 
-  const clearCompletedItems = (): void => {
+  const clearReconstructionState = (): void => {
     if (aggregateItemBytes > 0) {
       budget?.releaseRetained(aggregateItemBytes, { kind: "retained_collectors" });
     }
     completedItems.clear();
+    unfinishedItemIndexes.clear();
     aggregateItemBytes = 0;
     reconstructionTainted = false;
   };
@@ -212,6 +219,19 @@ export function createResponsesSnapshotPayloadRewrite(
     const type = typeof event.type === "string" ? event.type : "";
     let nextEvent = event;
     let changed = false;
+    const outputIndex = Number.isInteger(event.output_index) && (event.output_index as number) >= 0
+      ? event.output_index as number
+      : undefined;
+
+    if (type === "response.output_item.added") {
+      if (outputIndex === undefined) reconstructionTainted = true;
+      else if (!unfinishedItemIndexes.has(outputIndex)
+        && unfinishedItemIndexes.size >= MAX_COMPLETED_OUTPUT_ITEMS) {
+        reconstructionTainted = true;
+      } else {
+        unfinishedItemIndexes.add(outputIndex);
+      }
+    }
 
     if (type === "response.output_item.done" && !isPlainObject(event.item)) {
       reconstructionTainted = true;
@@ -226,11 +246,10 @@ export function createResponsesSnapshotPayloadRewrite(
         changed = true;
       }
       if (type === "response.output_item.done") {
-        if (Number.isInteger(event.output_index)
-          && (event.output_index as number) >= 0
-          && typeof item.type === "string") {
+        if (outputIndex !== undefined && typeof item.type === "string") {
+          unfinishedItemIndexes.delete(outputIndex);
           retainCompletedItem(
-            event.output_index as number,
+            outputIndex,
             item,
             Buffer.byteLength(JSON.stringify(item), "utf8"),
           );
@@ -249,6 +268,7 @@ export function createResponsesSnapshotPayloadRewrite(
       if ((type === "response.completed" || type === "response.incomplete")
         && outputIsAbsent
         && !reconstructionTainted
+        && unfinishedItemIndexes.size === 0
         && completedItems.size > 0) {
         const orderedItems = [...completedItems.entries()]
           .sort(([left], [right]) => left - right);
@@ -272,7 +292,7 @@ export function createResponsesSnapshotPayloadRewrite(
       }
     }
 
-    const clearsCompletedItems = type === "response.completed"
+    const shouldClearReconstructionState = type === "response.completed"
       || type === "response.failed"
       || type === "response.incomplete";
 
@@ -305,7 +325,7 @@ export function createResponsesSnapshotPayloadRewrite(
     }
 
     const result = changed ? JSON.stringify(nextEvent) : payload;
-    if (clearsCompletedItems) clearCompletedItems();
+    if (shouldClearReconstructionState) clearReconstructionState();
     return result;
   };
 }
