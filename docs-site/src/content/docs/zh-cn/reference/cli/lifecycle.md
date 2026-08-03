@@ -135,7 +135,7 @@ ocx status --json
 
 ## 后台服务
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 将 opencodex 作为登录管理的后台服务运行（macOS **launchd**、Linux **systemd user unit**、Windows **Task Scheduler**），在登录时自动启动，在崩溃时自动重启。服务运行会设置 `OCX_SERVICE=1`，因此重启时不会反复改动 Codex 配置。
 
@@ -143,6 +143,7 @@ ocx status --json
 | --- | --- |
 | none | 创建/更新并启动服务。 |
 | `install` | 创建并启动服务。 |
+| `repair` | 刷新并重启已安装的服务，但不重新注册。 |
 | `start` | 启动已安装的服务。 |
 | `stop` | 停止服务并恢复原生 Codex。 |
 | `status` | 报告服务和代理诊断信息及日志路径。 |
@@ -152,9 +153,12 @@ ocx status --json
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
+
+`ocx repair` 是 `ocx service repair` 的别名。对于现有且已启用的服务，若服务正常但已停止，请使用 `start`；若生成的资源已过期或服务状态异常，请使用 `repair`。`install` 仅用于新注册或明确需要重新注册的情况，在 Windows 上可能需要管理员批准。
 
 在 Windows 上，`ocx service status` 会单独报告 Task Scheduler 注册状态和已身份验证的 OpenCodex 代理可达性。它不会打印本地化的 `schtasks` 表格，因此在不同 Windows 代码页下摘要仍然可读。
 
@@ -197,7 +201,7 @@ ocx codex-shim uninstall
 
 ### `ocx update [--tag latest|preview]`
 
-从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。在替换文件之前会先停止正在运行的代理；已安装的服务会自动重建并启动，而前台安装则会打印 `ocx start` 作为下一步。
+从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。在替换文件之前会先停止正在运行的代理；现有服务会通过无需重新注册的 repair 路径刷新并自动启动。只有服务确实不存在时才使用常规 install 路径，而前台安装则会打印 `ocx start` 作为下一步。
 
 ```bash
 ocx update

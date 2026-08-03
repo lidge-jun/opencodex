@@ -176,7 +176,7 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 
 ## 백그라운드 서비스
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 로그인 관리형 백그라운드 서비스로 opencodex를 실행합니다(macOS **launchd**, Linux **systemd** 사용자
 유닛, Windows **Task Scheduler**). 로그인 시 자동 시작하고 충돌 시 자동 재시작합니다. 서비스 실행은
@@ -186,6 +186,7 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 | --- | --- |
 | 없음 | 서비스를 생성/업데이트하고 시작합니다. |
 | `install` | 서비스를 생성하고 시작합니다. |
+| `repair` | 기존 서비스를 다시 등록하지 않고 새로 고친 뒤 재시작합니다. |
 | `start` | 설치된 서비스를 시작합니다. |
 | `stop` | 서비스를 중지하고 기본 Codex를 복원합니다. |
 | `status` | 서비스와 프록시 진단, 로그 경로를 보고합니다. |
@@ -195,9 +196,12 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
+
+`ocx repair`는 `ocx service repair`의 별칭입니다. 기존의 활성 서비스가 정상적으로 중지된 상태라면 `start`를, 생성된 자산이 오래되었거나 서비스가 비정상이라면 `repair`를 사용하세요. `install`은 새 등록이나 명시적인 재등록에만 사용하며, Windows에서는 관리자 승인이 필요할 수 있습니다.
 
 Windows에서는 `ocx service status`가 Task Scheduler 등록 상태를 ID가 검증된 OpenCodex 프록시
 도달 가능성과 별도로 보고합니다. 로컬라이즈된 `schtasks` 표는 출력하지 않으므로, 요약은 Windows
@@ -260,8 +264,9 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 npm에서 opencodex를 자체 업데이트합니다. 안정판 설치는 `@latest`를 사용하고, 미리보기 설치는
 `--tag latest|preview`를 주지 않으면 `@preview`를 유지합니다. 소스 체크아웃을 감지하면 대신
 `git pull && bun install`을 실행하라고 안내하고, 해당 태그에서 이미 최신 버전이면 아무 동작도 하지
-않습니다. 실행 중인 프록시가 있으면 파일을 교체하기 전에 중지합니다. 설치된 서비스는 자동으로 다시
-빌드해 시작하며, 포그라운드 설치에서는 다음 단계로 `ocx start`를 출력합니다.
+않습니다. 실행 중인 프록시가 있으면 파일을 교체하기 전에 중지합니다. 기존 서비스는 다시 등록하지
+않는 repair 경로로 새로 고친 뒤 자동으로 시작합니다. 서비스가 실제로 없을 때만 일반 install 경로를
+사용하며, 포그라운드 설치에서는 다음 단계로 `ocx start`를 출력합니다.
 
 ```bash
 ocx update

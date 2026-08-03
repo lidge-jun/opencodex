@@ -39,6 +39,12 @@ The same action is available from the web dashboard's **Stop** button (`POST /ap
 Run `stop` followed by `ensure`: stop the proxy/service, restore native Codex, start the proxy in the
 background, and sync the live port back into Codex.
 
+### `ocx repair`
+
+Alias of `ocx service repair`. Refresh and restart an installed background service without
+re-registering it with launchd, systemd, or Windows Task Scheduler. Use this when the service
+already exists but its generated launcher assets are stale or it is registered but not serving.
+
 ### `ocx ensure`
 
 Idempotently ensure a background proxy is running, then sync its live model catalog. If
@@ -175,7 +181,7 @@ same stale-`app-server` warning and optional `--restart-codex` behavior as `ocx 
 
 ## Background service
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 Run opencodex as a login-managed background service (macOS **launchd**, Linux **systemd user unit**,
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
@@ -185,6 +191,7 @@ Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash
 | --- | --- |
 | none | Create/update and start the service. |
 | `install` | Create and start the service. |
+| `repair` | Refresh and restart an installed service without re-registering it. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
 | `status` | Report service and proxy diagnostics plus log paths. |
@@ -194,9 +201,15 @@ Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
+
+Use `install` only to create or deliberately re-register a service. On Windows that registration
+may require administrator approval. For an existing enabled service, use `start` when it is clean
+but stopped, or `repair` when its generated assets are stale or it is registered but unhealthy.
+The shorter `ocx repair` command is an alias of `ocx service repair`.
 
 `install`, `start`, and `repair` confirm that a proxy actually answers on the port
 baked into the installed service before reporting success — on all three platforms.
@@ -232,7 +245,7 @@ log named in the message, and use `ocx start` to serve in the foreground meanwhi
    launchd is running an OLDER plist than the one on disk.
    Fix:    launchctl bootout gui/$(id -u)/com.opencodex.proxy && ocx service install
    Log:    ~/.opencodex/service.log
-   Repair: ocx service install
+   Repair: ocx service repair
    Meanwhile: ocx start           (serves in the foreground)
 ```
 
@@ -311,8 +324,9 @@ if it is not running.
 Self-update opencodex from npm. Stable installs use `@latest`; preview installs stay on `@preview`
 unless you pass `--tag latest|preview`. It detects a source checkout and tells you to
 `git pull && bun install` instead, and is a no-op if you are already on the newest version for that
-tag. A running proxy is stopped before files are replaced; an installed service is rebuilt and
-started automatically, while a foreground installation prints `ocx start` as the next step.
+tag. A running proxy is stopped before files are replaced; an existing service is refreshed through
+the non-registering repair path and started automatically, while a foreground installation prints
+`ocx start` as the next step. A genuinely missing service still uses the normal install path.
 
 ```bash
 ocx update

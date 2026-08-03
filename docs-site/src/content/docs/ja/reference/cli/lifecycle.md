@@ -135,7 +135,7 @@ Codex のローカル モデル ピッカー キャッシュを無効にし、�
 
 ## バックグラウンドサービス
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 opencodex を、ログイン時に自動起動し、クラッシュ時に自動再起動するログイン管理バックグラウンド サービス (macOS **launchd**、Linux **systemd ユーザー ユニット**、Windows **タスク スケジューラ**) として実行します。サービスは `OCX_SERVICE=1` を設定して実行されるため、再起動によって Codex 設定が変更されることはありません。
 
@@ -143,6 +143,7 @@ opencodex を、ログイン時に自動起動し、クラッシュ時に自動�
 | --- | --- |
 |なし |サービスを作成/更新して開始します。 |
 | `install` |サービスを作成して開始します。 |
+| `repair` |既存のサービスを再登録せずに更新して再起動します。 |
 | `start` |インストールされているサービスを開始します。 |
 | `stop` |サービスを停止し、ネイティブ Codex を復元します。 |
 | `status` |サービスとプロキシの診断とログ パスをレポートします。 |
@@ -152,9 +153,12 @@ opencodex を、ログイン時に自動起動し、クラッシュ時に自動�
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
+
+`ocx repair` は `ocx service repair` の別名です。既存の有効なサービスには、正常だが停止している場合は `start`、生成されたアセットが古い、または異常な場合は `repair` を使用します。`install` は新規登録または明示的な再登録にのみ使用し、Windows では管理者の承認が必要になる場合があります。
 
 Windows では、`ocx service status` は、ID 検証済みの OpenCodex プロキシの到達可能性とは別に、タスク スケジューラの登録を報告します。ローカライズされた `schtasks` テーブルは出力されないため、概要は Windows コード ページ間で読み取れるままです。
 
@@ -197,7 +201,7 @@ Windows ステータス トレイ アイコンをインストールして制御�
 
 ### `ocx update [--tag latest|preview]`
 
-npm から opencodex を自己更新します。安定したインストールでは `@latest` を使用します。 `--tag latest|preview` を渡さない限り、プレビュー インストールは `@preview` に残ります。ソース チェックアウトを検出し、代わりに `git pull && bun install` を使用するように指示しますが、そのタグの最新バージョンをすでに使用している場合は何もしません。実行中のプロキシは、ファイルが置き換えられる前に停止されます。インストールされたサービスは再構築されて自動的に開始されますが、フォアグラウンド インストールでは次のステップとして `ocx start` が出力されます。
+npm から opencodex を自己更新します。安定したインストールでは `@latest` を使用します。 `--tag latest|preview` を渡さない限り、プレビュー インストールは `@preview` に残ります。ソース チェックアウトを検出し、代わりに `git pull && bun install` を使用するように指示しますが、そのタグの最新バージョンをすでに使用している場合は何もしません。実行中のプロキシは、ファイルが置き換えられる前に停止されます。既存のサービスは再登録しない repair パスで更新され、自動的に開始されます。サービスが実際に存在しない場合のみ通常の install パスを使用し、フォアグラウンド インストールでは次のステップとして `ocx start` が出力されます。
 
 ```bash
 ocx update

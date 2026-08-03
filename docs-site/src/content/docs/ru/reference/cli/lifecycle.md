@@ -191,7 +191,7 @@ opencodex. Предупреждение о stale-`app-server` и optional `--res
 
 ## Фоновая служба
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 Запустить opencodex как login-managed background service (macOS **launchd**, Linux **systemd user
 unit**, Windows **Task Scheduler**), которая автоматически стартует при логине и сама
@@ -202,6 +202,7 @@ unit**, Windows **Task Scheduler**), которая автоматически �
 | --- | --- |
 | none | Создать/обновить и запустить службу. |
 | `install` | Создать и запустить службу. |
+| `repair` | Обновить и перезапустить установленную службу без повторной регистрации. |
 | `start` | Запустить уже установленную службу. |
 | `stop` | Остановить службу и восстановить native Codex. |
 | `status` | Показать диагностику службы и прокси, а также пути к логам. |
@@ -211,9 +212,12 @@ unit**, Windows **Task Scheduler**), которая автоматически �
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
+
+`ocx repair` — alias команды `ocx service repair`. Для существующей включённой службы используйте `start`, если она исправна, но остановлена, и `repair`, если сгенерированные файлы устарели или служба работает некорректно. `install` предназначен только для новой или намеренной повторной регистрации; в Windows для этого может потребоваться одобрение администратора.
 
 На Windows `ocx service status` отдельно показывает регистрацию в Task Scheduler и
 identity-проверенную достижимость прокси OpenCodex. Он не печатает локализованную таблицу
@@ -281,8 +285,9 @@ one-click управление прокси. `start` и `stop` управляю�
 остаются на `@preview`, если только вы не передадите `--tag latest|preview`. Команда распознаёт
 source checkout и предлагает вместо этого `git pull && bun install`, а если у вас уже новейшая
 версия для выбранного тега, становится no-op. Перед заменой файлов работающий прокси
-останавливается; установленная служба автоматически пересобирается и запускается заново, а для
-foreground-установки печатается подсказка `ocx start`.
+останавливается; существующая служба обновляется через repair без повторной регистрации и
+автоматически запускается. Обычный install используется только если служба действительно
+отсутствует, а для foreground-установки печатается подсказка `ocx start`.
 
 ```bash
 ocx update
