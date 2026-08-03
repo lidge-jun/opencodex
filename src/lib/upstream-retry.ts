@@ -234,11 +234,24 @@ export async function fetchWithAttemptDeadline(
   }
 }
 
+export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
+
+/**
+ * Ordered, privacy-safe evidence for one physical upstream send. Callers own the
+ * surrounding provider/account/host context; this leaf records no URL, headers,
+ * credentials, or error text.
+ */
+export type UpstreamAttemptObservation =
+  | { kind: "response"; status: number; recovery?: UpstreamSendRecovery }
+  | { kind: "rejection"; recovery?: UpstreamSendRecovery };
+
 export interface ResetRetryOptions {
   abortSignal?: AbortSignal;
   /** Short host/path label for the retry warn log (no secrets/query strings). */
   label?: string;
   attempts?: number;
+  /** Ordered physical-send observer. It must not throw. */
+  onAttempt?: (observation: UpstreamAttemptObservation) => void;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
@@ -246,8 +259,28 @@ export interface TransientRetryOptions extends ResetRetryOptions {
   slowAttemptMs?: number;
 }
 
-export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
+
+export function lastUpstreamAttemptResponseStatus(
+  observations: readonly UpstreamAttemptObservation[],
+): number | undefined {
+  for (let index = observations.length - 1; index >= 0; index--) {
+    const observation = observations[index];
+    if (observation?.kind === "response") return observation.status;
+  }
+  return undefined;
+}
+
+function notifyUpstreamAttempt(
+  observer: ResetRetryOptions["onAttempt"],
+  observation: UpstreamAttemptObservation,
+): void {
+  try {
+    observer?.(observation);
+  } catch {
+    // Observation is diagnostic bookkeeping and must never alter transport behavior.
+  }
+}
 
 /**
  * Opt out of Bun's keep-alive pool after a connection-reset retry.
@@ -284,9 +317,17 @@ export async function fetchWithResetRetry(
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
+    const recovery = attempt === 0 ? firstRecovery : "connection-reset";
     try {
-      return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      const response = await doFetch(recovery);
+      notifyUpstreamAttempt(opts.onAttempt, {
+        kind: "response",
+        status: response.status,
+        ...(recovery ? { recovery } : {}),
+      });
+      return response;
     } catch (err) {
+      notifyUpstreamAttempt(opts.onAttempt, { kind: "rejection", ...(recovery ? { recovery } : {}) });
       if (opts.abortSignal?.aborted || !isConnectionResetError(err) || attempt === attempts - 1) throw err;
       lastError = err;
       console.warn(

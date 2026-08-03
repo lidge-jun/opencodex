@@ -21,7 +21,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
-| `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。 |
+| `upstreamFailoverThreshold?` | `number` | `3` | 新会话允许执行账户故障转移前所需的连续账户级瞬态 HTTP 或语义失败结果数；`0` 仅禁用账户故障转移。未收到 HTTP 响应的拒绝、连接/响应头 `TimeoutError`，以及保守判定的 read-then-close 故障，只更新以 `(provider, canonical HTTP(S) origin)` 为键的进程内主机健康状态，不改变账户健康状态或 affinity。五分钟内出现三次逻辑请求级最终主机故障时，主机熔断器打开 30 秒；之后只允许一个 half-open 逻辑请求，并继续阻止并发请求。任何实际 HTTP 响应都会清除先前主机状态。若先收到 `503` 后发生拒绝，`503` 保留为账户证据，后续事件记录为主机故障。池化普通 Responses 和 native compact 请求的 Codex bearer 重定向采用手动处理：不跟随、不暴露 `Location`，并转换为大小受限的账户级 `502`。对于凭据可见的 read-then-close 故障，peer 可能已经消费请求，因此不会使用其他凭据重放，这可能会暂时阻止原本健康的备用账户。`200` 之后的响应体/流处理保持不变，不属于此设置的范围。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |

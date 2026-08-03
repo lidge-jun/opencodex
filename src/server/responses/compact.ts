@@ -66,8 +66,19 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
+  lastUpstreamAttemptResponseStatus,
+  type UpstreamAttemptObservation,
   type UpstreamSendRecovery,
 } from "../../lib/upstream-retry";
+import {
+  acquireCodexUpstreamHostAdmission,
+  canonicalCodexUpstreamHostKey,
+  isCodexUpstreamRedirectStatus,
+  recordCodexUpstreamHostFailure,
+  recordCodexUpstreamHostResponse,
+  releaseCodexUpstreamHostProbeLease,
+  type CodexUpstreamHostProbeLease,
+} from "../../codex/upstream-host-health";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
@@ -351,6 +362,10 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
+    const compactHostKey = usesCodexForwardPoolAuth(authCtx, route.provider)
+      ? canonicalCodexUpstreamHostKey(route.providerName, compactUrl)
+      : null;
+    let compactHostProbeLease: CodexUpstreamHostProbeLease | null = null;
     // Takes its context explicitly: the alternate-account flow below records a rejection
     // against A while promoting B, then records B's own outcome. A closure over a single
     // `authCtx` cannot express either.
@@ -381,10 +396,11 @@ export async function handleResponsesCompact(
     // wrapping reset retry — because those retries happen before any alternate is even
     // considered. The alternate is one bounded send: a second ladder would multiply the
     // work an already-rejecting pool is doing.
-    const sendCompactAttempt = (
+    const sendCompactAttempt = async (
       sendProvider: OcxProviderConfig,
       sendHeaders: Headers,
       recovery: "normal" | "single",
+      attempts: UpstreamAttemptObservation[],
     ): Promise<Response> => {
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
@@ -392,33 +408,82 @@ export async function handleResponsesCompact(
           method: "POST",
           headers: sendHeaders,
           body: JSON.stringify({ ...compactBody, model: route.modelId }),
+          ...(compactHostKey ? { redirect: "manual" as const } : {}),
         }, upstreamRecovery),
         req.signal,
         connectMs,
         false,
         providerFetch(sendProvider),
       );
-      return recovery === "single"
-        ? doFetch()
-        : fetchWithTransientRetry(doFetch, { abortSignal: req.signal, label: safeHostLabel(compactUrl) });
+      if (recovery === "normal") {
+        return fetchWithTransientRetry(doFetch, {
+          abortSignal: req.signal,
+          label: safeHostLabel(compactUrl),
+          onAttempt: observation => attempts.push(observation),
+        });
+      }
+      try {
+        const response = await doFetch();
+        attempts.push({ kind: "response", status: response.status });
+        return response;
+      } catch (error) {
+        attempts.push({ kind: "rejection" });
+        throw error;
+      }
+    };
+
+    const compactTransportFailureResponse = (
+      ctx: CodexAuthContext,
+      err: unknown,
+      attempts: readonly UpstreamAttemptObservation[],
+    ): Response => {
+      if (req.signal.aborted) {
+        releaseCodexUpstreamHostProbeLease(compactHostProbeLease);
+        recordCompactPoolOutcome(ctx, 499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
+      const observedStatus = lastUpstreamAttemptResponseStatus(attempts);
+      if (observedStatus !== undefined) {
+        recordCompactPoolOutcome(ctx, observedStatus);
+        if (compactHostKey) recordCodexUpstreamHostResponse(compactHostKey);
+      } else if (compactHostKey) {
+        releaseCodexAuthContextProbeLease(ctx);
+      }
+      if (compactHostKey) recordCodexUpstreamHostFailure(compactHostKey);
+      return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     };
 
     // The account each outcome belongs to. Reassigned only when the alternate send below
     // actually happens, so every recorder call names the context that produced it.
     let outcomeCtx = authCtx;
     let upstream: Response;
+    if (req.signal.aborted) {
+      recordCompactPoolOutcome(authCtx, 499);
+      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    }
+    const compactHostAdmission = compactHostKey
+      ? acquireCodexUpstreamHostAdmission(compactHostKey)
+      : null;
+    if (compactHostAdmission?.kind === "blocked") {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
+        retryAfter: String(compactHostAdmission.retryAfterSeconds),
+      });
+    }
+    compactHostProbeLease = compactHostAdmission?.probeLease ?? null;
+    const primaryAttempts: UpstreamAttemptObservation[] = [];
     try {
       // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
       // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
-      upstream = await sendCompactAttempt(compactProvider, headers, "normal");
+      upstream = await sendCompactAttempt(compactProvider, headers, "normal", primaryAttempts);
+      if (compactHostKey) recordCodexUpstreamHostResponse(compactHostKey);
     } catch (err) {
-      if (req.signal.aborted) {
-        recordCompactPoolOutcome(outcomeCtx, 499);
-        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-      }
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-      recordCompactPoolOutcome(outcomeCtx, outcome);
-      return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+      return compactTransportFailureResponse(outcomeCtx, err, primaryAttempts);
+    }
+    if (compactHostKey && isCodexUpstreamRedirectStatus(upstream.status)) {
+      recordCompactPoolOutcome(outcomeCtx, 502);
+      await upstream.body?.cancel().catch(() => undefined);
+      return formatErrorResponse(502, "upstream_error", "Provider returned an unsupported redirect");
     }
 
     // Bounded same-request alternate: the regular /v1/responses path already does this
@@ -454,6 +519,7 @@ export async function handleResponsesCompact(
       // quota is not ours to spend on a request nobody is waiting for.
       if (alternate && req.signal.aborted) {
         releaseCodexAuthContextProbeLease(alternate.authCtx);
+        releaseCodexUpstreamHostProbeLease(compactHostProbeLease);
         recordCompactPoolOutcome(outcomeCtx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
@@ -477,16 +543,17 @@ export async function handleResponsesCompact(
         });
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
+        const alternateAttempts: UpstreamAttemptObservation[] = [];
         try {
-          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single");
+          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternateAttempts);
+          if (compactHostKey) recordCodexUpstreamHostResponse(compactHostKey);
         } catch (err) {
-          if (req.signal.aborted) {
-            recordCompactPoolOutcome(outcomeCtx, 499);
-            return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-          }
-          const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-          recordCompactPoolOutcome(outcomeCtx, outcome);
-          return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+          return compactTransportFailureResponse(outcomeCtx, err, alternateAttempts);
+        }
+        if (compactHostKey && isCodexUpstreamRedirectStatus(upstream.status)) {
+          recordCompactPoolOutcome(outcomeCtx, 502);
+          await upstream.body?.cancel().catch(() => undefined);
+          return formatErrorResponse(502, "upstream_error", "Provider returned an unsupported redirect");
         }
       }
     }

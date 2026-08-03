@@ -18,6 +18,13 @@ import {
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
+import {
+  CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD,
+  canonicalCodexUpstreamHostKey,
+  clearCodexUpstreamHostHealth,
+  getCodexUpstreamHostHealth,
+  recordCodexUpstreamHostFailure,
+} from "../src/codex/upstream-host-health";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
   releaseCodexAuthContextProbeLease,
@@ -32,6 +39,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearCodexUpstreamHostHealth();
 });
 
 function keyProviderConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
@@ -387,6 +395,140 @@ describe("native Codex pool compaction", () => {
       else process.env.CODEX_HOME = previousCodexHome;
     }
   });
+  test("a bare compact transport rejection releases its recovery probe lease", async () => {
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-compact-host-probe-"));
+    const previousOpencodexHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const config = nativePoolConfig();
+    try {
+      process.env.OPENCODEX_HOME = testDir;
+      process.env.CODEX_HOME = testDir;
+      Date.now = () => now;
+      clearCodexUpstreamHealth();
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-access-token",
+        refreshToken: "pool-refresh-token",
+        expiresAt: now + 30 * 60_000,
+        chatgptAccountId: "pool_acc",
+      });
+      recordCodexUpstreamOutcome(config, "pool-a", 429, {
+        now,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.3-codex-spark",
+      });
+      Date.now = () => probeAt;
+      globalThis.fetch = (async () => { throw new Error("opaque compact rejection"); }) as typeof fetch;
+      const failed = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(failed.status).toBe(502);
+
+      Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      const nextProbe = await resolveCodexAuthContext(
+        new Headers({ authorization: "Bearer main-token" }),
+        config,
+        "pool",
+        { modelId: "gpt-5.3-codex-spark" },
+      );
+      expect(nextProbe).toMatchObject({ probeQuotaScope: "spark" });
+      releaseCodexAuthContextProbeLease(nextProbe);
+    } finally {
+      Date.now = originalNow;
+      globalThis.fetch = originalFetch;
+      clearCodexUpstreamHealth();
+      rmSync(testDir, { recursive: true, force: true });
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  });
+
+  for (const endpoint of ["regular", "compact"] as const) {
+    test(`${endpoint} prefers an already-aborted 499 over an open host circuit and releases recovery`, async () => {
+      const testDir = mkdtempSync(join(tmpdir(), `ocx-${endpoint}-abort-host-probe-`));
+      const previousOpencodexHome = process.env.OPENCODEX_HOME;
+      const previousCodexHome = process.env.CODEX_HOME;
+      const originalNow = Date.now;
+      const now = 1_810_000_000_000;
+      const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      const config = nativePoolConfig();
+      try {
+        process.env.OPENCODEX_HOME = testDir;
+        process.env.CODEX_HOME = testDir;
+        Date.now = () => now;
+        clearCodexUpstreamHealth();
+        clearCodexUpstreamHostHealth();
+        saveCodexAccountCredential("pool-a", {
+          accessToken: "pool-access-token",
+          refreshToken: "pool-refresh-token",
+          expiresAt: now + 30 * 60_000,
+          chatgptAccountId: "pool_acc",
+        });
+        recordCodexUpstreamOutcome(config, "pool-a", 429, {
+          now,
+          resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+          modelId: "gpt-5.3-codex-spark",
+        });
+        Date.now = () => probeAt;
+        const hostKey = canonicalCodexUpstreamHostKey(
+          "openai",
+          "https://chatgpt.com/backend-api/codex/responses",
+        )!;
+        for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
+          recordCodexUpstreamHostFailure(hostKey);
+        }
+        let physicalSends = 0;
+        globalThis.fetch = (async () => {
+          physicalSends += 1;
+          return Response.json({ id: "must-not-send", status: "completed", output: [] });
+        }) as typeof fetch;
+        const controller = new AbortController();
+        controller.abort();
+        const request = compactionRequest(
+          endpoint === "regular"
+            ? { model: "gpt-5.3-codex-spark", input: "cancelled", stream: false }
+            : baseCompactionBody({ model: "gpt-5.3-codex-spark" }),
+          controller.signal,
+        );
+        const response = endpoint === "regular"
+          ? await handleResponses(
+            request,
+            config,
+            { model: "", provider: "" },
+            { abortSignal: controller.signal },
+          )
+          : await handleResponsesCompact(request, config, { model: "", provider: "" });
+        expect(response.status).toBe(499);
+        expect(physicalSends).toBe(0);
+
+        Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+        const nextProbe = await resolveCodexAuthContext(
+          new Headers({ authorization: "Bearer main-token" }),
+          config,
+          "pool",
+          { modelId: "gpt-5.3-codex-spark" },
+        );
+        expect(nextProbe).toMatchObject({ probeQuotaScope: "spark" });
+        releaseCodexAuthContextProbeLease(nextProbe);
+      } finally {
+        Date.now = originalNow;
+        globalThis.fetch = originalFetch;
+        clearCodexUpstreamHealth();
+        clearCodexUpstreamHostHealth();
+        rmSync(testDir, { recursive: true, force: true });
+        if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousOpencodexHome;
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
+    });
+  }
 });
 
 describe("routed compaction for key-mode openai-responses (#422)", () => {
@@ -571,6 +713,7 @@ describe("compact alternate-account attempt (#913)", () => {
     process.env.OPENCODEX_HOME = testDir;
     process.env.CODEX_HOME = testDir;
     clearCodexUpstreamHealth();
+    clearCodexUpstreamHostHealth();
     clearAccountQuota();
     for (const id of ["pool-a", "pool-b"]) {
       saveCodexAccountCredential(id, {
@@ -584,6 +727,7 @@ describe("compact alternate-account attempt (#913)", () => {
     return run(twoAccountPoolConfig()).finally(() => {
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
+      clearCodexUpstreamHostHealth();
       clearAccountQuota();
       rmSync(testDir, { recursive: true, force: true });
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -927,6 +1071,116 @@ describe("compact alternate-account attempt (#913)", () => {
       // Whichever account routing picked first carries the 429; the other carries B's 402.
       const statuses = ["pool-a", "pool-b"].map(id => health(id)?.lastFailureStatus).sort();
       expect(statuses).toEqual([402, 429]);
+    });
+  });
+
+  test("a bare primary rejection changes host health without changing account health", async () => {
+    await withPoolEnv("ocx-compact-host-primary-", async config => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        throw new Error("opaque compact rejection");
+      }) as typeof fetch;
+      const response = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+      );
+      const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/backend-api/codex/responses/compact")!;
+      expect(response.status).toBe(502);
+      expect(sends).toBe(1);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHostHealth(key)?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  test("a primary 503 followed by rejection keeps the last account evidence and records terminal host failure", async () => {
+    await withPoolEnv("ocx-compact-host-history-", async config => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        if (sends === 1) return new Response("busy", { status: 503, headers: { "retry-after": "0" } });
+        throw new Error("opaque compact rejection");
+      }) as typeof fetch;
+      const response = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+      );
+      const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/backend-api/codex/responses/compact")!;
+      expect(response.status).toBe(502);
+      expect(sends).toBe(2);
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(503);
+      expect(getCodexUpstreamHostHealth(key)?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  test("a compact connect timeout changes host health without changing account health", async () => {
+    await withPoolEnv("ocx-compact-host-timeout-", async config => {
+      const timeout = new Error("header timeout");
+      timeout.name = "TimeoutError";
+      globalThis.fetch = (async () => { throw timeout; }) as typeof fetch;
+      const response = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+      );
+      const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/backend-api/codex/responses/compact")!;
+      expect(response.status).toBe(502);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHostHealth(key)?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  test("an open compact host circuit returns Retry-After without another send", async () => {
+    await withPoolEnv("ocx-compact-host-circuit-", async config => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        throw new Error("opaque compact rejection");
+      }) as typeof fetch;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect((await handleResponsesCompact(
+          compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+        )).status).toBe(502);
+      }
+      const blocked = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+      );
+      expect(blocked.status).toBe(502);
+      expect(sends).toBe(3);
+      expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  test("manual compact redirect is bounded and Location is not exposed", async () => {
+    await withPoolEnv("ocx-compact-host-redirect-", async config => {
+      let redirectMode: RequestRedirect | undefined;
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        redirectMode = init?.redirect;
+        return new Response(null, { status: 307, headers: { location: "https://dead.example/private-path" } });
+      }) as typeof fetch;
+      const response = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+      );
+      expect(response.status).toBe(502);
+      expect(response.headers.get("location")).toBeNull();
+      expect(redirectMode).toBe("manual");
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(502);
+    });
+  });
+
+  test("alternate compact bare rejection is host-only and remains one B send", async () => {
+    await withPoolEnv("ocx-compact-host-alternate-", async config => {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        if (sends === 1) return new Response("quota", { status: 429 });
+        throw new Error("opaque alternate rejection");
+      }) as typeof fetch;
+      const response = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
+      );
+      const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/backend-api/codex/responses/compact")!;
+      expect(response.status).toBe(502);
+      expect(sends).toBe(2);
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(429);
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(getCodexUpstreamHostHealth(key)?.consecutiveFailures).toBe(1);
     });
   });
 });

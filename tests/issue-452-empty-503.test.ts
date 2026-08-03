@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
-import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../src/codex/routing";
+import {
+  canonicalCodexUpstreamHostKey,
+  clearCodexUpstreamHostHealth,
+  getCodexUpstreamHostHealth,
+} from "../src/codex/upstream-host-health";
 import { saveConfig } from "../src/config";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
@@ -55,6 +60,7 @@ afterEach(() => {
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
+  clearCodexUpstreamHostHealth();
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
@@ -118,12 +124,14 @@ describe("formatPassthroughUpstreamError (#452)", () => {
 async function withPoolPassthrough(
   reply: (request: Request) => Response | Promise<Response>,
   run: (serverUrl: string) => Promise<void>,
+  options: { twoAccounts?: boolean } = {},
 ): Promise<void> {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   clearCodexUpstreamHealth();
+  clearCodexUpstreamHostHealth();
   clearThreadAccountMap();
   clearAccountQuota();
   clearAccountNeedsReauth("pool-a");
@@ -151,6 +159,9 @@ async function withPoolPassthrough(
     codexAccounts: [
       { id: "main", email: "main@example.test", isMain: true },
       { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      ...(options.twoAccounts
+        ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
+        : []),
     ],
     activeCodexAccountId: "pool-a",
   } as OcxConfig);
@@ -161,6 +172,15 @@ async function withPoolPassthrough(
     chatgptAccountId: "acct-pool-a",
   });
   updateAccountQuota("pool-a", 10);
+  if (options.twoAccounts) {
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool-b-token",
+      refreshToken: "pool-b-refresh",
+      expiresAt: Date.now() + 10 * 60_000,
+      chatgptAccountId: "acct-pool-b",
+    });
+    updateAccountQuota("pool-b", 20);
+  }
 
   const server = startServer(0);
   try {
@@ -170,6 +190,127 @@ async function withPoolPassthrough(
     await upstream.stop(true);
   }
 }
+
+function installCodexTransport(
+  send: (init: RequestInit | undefined) => Response | Promise<Response>,
+): void {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const value = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(value);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      return Promise.resolve(send(init));
+    }
+    return originalGlobalFetch(input, init);
+  }) as typeof fetch;
+}
+
+async function sendRegularPoolRequest(serverUrl: string): Promise<Response> {
+  return originalGlobalFetch(new URL("/v1/responses", serverUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+    body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: false }),
+  });
+}
+
+describe("regular Codex provider-host settlement (#914)", () => {
+  const hostKey = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/backend-api/codex/responses")!;
+
+  test("a bare rejection changes host health but not account health", async () => {
+    await withPoolPassthrough(() => new Response("unused"), async serverUrl => {
+      let sends = 0;
+      installCodexTransport(() => {
+        sends += 1;
+        throw new Error("opaque transport rejection");
+      });
+      const response = await sendRegularPoolRequest(serverUrl);
+      expect(response.status).toBe(502);
+      expect(sends).toBe(1);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHostHealth(hostKey)?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  test("a 503 followed by rejection records one account outcome and a terminal host failure", async () => {
+    await withPoolPassthrough(() => new Response("unused"), async serverUrl => {
+      let sends = 0;
+      installCodexTransport(() => {
+        sends += 1;
+        if (sends === 1) return new Response("busy", { status: 503, headers: { "retry-after": "0" } });
+        throw new Error("opaque transport rejection");
+      });
+      const response = await sendRegularPoolRequest(serverUrl);
+      expect(response.status).toBe(502);
+      expect(sends).toBe(2);
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(503);
+      expect(getCodexUpstreamHostHealth(hostKey)?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  test("a connect timeout changes host health without changing account health", async () => {
+    await withPoolPassthrough(() => new Response("unused"), async serverUrl => {
+      const timeout = new Error("header timeout");
+      timeout.name = "TimeoutError";
+      installCodexTransport(() => { throw timeout; });
+      const response = await sendRegularPoolRequest(serverUrl);
+      expect(response.status).toBe(502);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHostHealth(hostKey)?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  test("an open host circuit returns a bounded Retry-After without another send", async () => {
+    await withPoolPassthrough(() => new Response("unused"), async serverUrl => {
+      let sends = 0;
+      installCodexTransport(() => {
+        sends += 1;
+        throw new Error("opaque transport rejection");
+      });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect((await sendRegularPoolRequest(serverUrl)).status).toBe(502);
+      }
+      const blocked = await sendRegularPoolRequest(serverUrl);
+      expect(blocked.status).toBe(502);
+      expect(sends).toBe(3);
+      expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  test("manual redirect is credential-visible, bounded, and does not expose Location", async () => {
+    await withPoolPassthrough(() => new Response("unused"), async serverUrl => {
+      let redirectMode: RequestRedirect | undefined;
+      installCodexTransport(init => {
+        redirectMode = init?.redirect;
+        return new Response(null, {
+          status: 307,
+          headers: { location: "https://dead.example/private-path" },
+        });
+      });
+      const response = await sendRegularPoolRequest(serverUrl);
+      expect(response.status).toBe(502);
+      expect(response.headers.get("location")).toBeNull();
+      expect(redirectMode).toBe("manual");
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(502);
+      expect(getCodexUpstreamHostHealth(hostKey)).toBeNull();
+    });
+  });
+
+  test("alternate-account bare rejection remains one B send and host-only", async () => {
+    await withPoolPassthrough(() => new Response("unused"), async serverUrl => {
+      let sends = 0;
+      installCodexTransport(() => {
+        sends += 1;
+        if (sends === 1) return new Response("quota", { status: 429 });
+        throw new Error("opaque alternate rejection");
+      });
+      const response = await sendRegularPoolRequest(serverUrl);
+      expect(response.status).toBe(502);
+      expect(sends).toBe(2);
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(429);
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(getCodexUpstreamHostHealth(hostKey)?.consecutiveFailures).toBe(1);
+    }, { twoAccounts: true });
+  });
+});
 
 describe("passthrough empty 503 (#452)", () => {
   test("ChatGPT passthrough empty-body 503 becomes JSON Codex can parse", async () => {

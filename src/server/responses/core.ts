@@ -91,8 +91,20 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
+  lastUpstreamAttemptResponseStatus,
   prepareSameTarget429Wait,
+  type UpstreamAttemptObservation,
 } from "../../lib/upstream-retry";
+import {
+  acquireCodexUpstreamHostAdmission,
+  canonicalCodexUpstreamHostKey,
+  isCodexUpstreamRedirectStatus,
+  recordCodexUpstreamHostFailure,
+  recordCodexUpstreamHostResponse,
+  releaseCodexUpstreamHostProbeLease,
+  type CodexUpstreamHostKey,
+  type CodexUpstreamHostProbeLease,
+} from "../../codex/upstream-host-health";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
@@ -310,6 +322,8 @@ type CodexPoolAccountRetryResult =
     kind: "transport";
     error: unknown;
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+    attempts: UpstreamAttemptObservation[];
+    hostKey: CodexUpstreamHostKey | null;
   };
 
 function codexQuotaOutcomeMeta(response: Response): {
@@ -423,6 +437,8 @@ async function retryCodexPoolOnAlternateAccount(
     config,
   );
 
+  const hostKey = canonicalCodexUpstreamHostKey(route.providerName, request.url);
+  const attempts: UpstreamAttemptObservation[] = [];
   noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
   try {
     const upstreamResponse = await fetchWithHeaderTimeout(
@@ -431,12 +447,15 @@ async function retryCodexPoolOnAlternateAccount(
         method: request.method,
         headers: request.headers,
         body: request.body,
+        redirect: "manual",
       },
       upstream.signal,
       connectMs,
       stream,
       providerFetch(route.provider),
     );
+    attempts.push({ kind: "response", status: upstreamResponse.status });
+    if (hostKey) recordCodexUpstreamHostResponse(hostKey);
     return {
       kind: "retried",
       authCtx: retryAuthCtx,
@@ -445,8 +464,8 @@ async function retryCodexPoolOnAlternateAccount(
       selectedForwardHeaders: retryHeaders,
     };
   } catch (error) {
-    // Attribute the transport failure to the alternate account (already selected).
-    return { kind: "transport", error, authCtx: retryAuthCtx };
+    attempts.push({ kind: "rejection" });
+    return { kind: "transport", error, authCtx: retryAuthCtx, attempts, hostKey };
   } finally {
     request.releaseBodyObservation?.();
   }
@@ -1731,26 +1750,60 @@ async function handleResponsesInner(
     linkAbortSignal(upstream, options.abortSignal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
-    const transportFailureResponse = (err: unknown): Response => {
+    const tracksCodexPoolHost = usesCodexForwardPoolAuth(authCtx, route.provider);
+    const hostKey = tracksCodexPoolHost
+      ? canonicalCodexUpstreamHostKey(route.providerName, request.url)
+      : null;
+    let hostProbeLease: CodexUpstreamHostProbeLease | null = null;
+    const attemptHistory: UpstreamAttemptObservation[] = [];
+    const recordPoolTransportOutcome = (outcome: CodexUpstreamOutcome): void => {
+      if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
+      recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+        threadId: req.headers.get("x-codex-parent-thread-id"),
+        fixedAccount: authCtx.fixedAccount,
+        modelId: route.modelId,
+        probeLeaseId: codexProbeLeaseId(authCtx),
+        probeQuotaScope: codexProbeQuotaScope(authCtx),
+        writerGeneration: authCtx.writerGeneration,
+      });
+    };
+    const transportFailureResponse = (
+      err: unknown,
+      observations: readonly UpstreamAttemptObservation[] = attemptHistory,
+      failedHostKey: CodexUpstreamHostKey | null = hostKey,
+    ): Response => {
       upstream.abort();
-      if (options.abortSignal?.aborted) return clientCancelledResponse();
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-      if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
-        recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-          threadId: req.headers.get("x-codex-parent-thread-id"),
-          fixedAccount: authCtx.fixedAccount,
-          modelId: route.modelId,
-          probeLeaseId: codexProbeLeaseId(authCtx),
-          probeQuotaScope: codexProbeQuotaScope(authCtx),
-          writerGeneration: authCtx.writerGeneration,
-        });
+      if (options.abortSignal?.aborted) {
+        releaseCodexAuthContextProbeLease(authCtx);
+        releaseCodexUpstreamHostProbeLease(hostProbeLease);
+        return clientCancelledResponse();
       }
-      const msg = outcome === "timeout"
+      const observedStatus = lastUpstreamAttemptResponseStatus(observations);
+      if (observedStatus !== undefined) {
+        recordPoolTransportOutcome(observedStatus);
+        if (failedHostKey) recordCodexUpstreamHostResponse(failedHostKey);
+      } else if (failedHostKey) {
+        releaseCodexAuthContextProbeLease(authCtx);
+      }
+      if (failedHostKey) recordCodexUpstreamHostFailure(failedHostKey);
+      const msg = err instanceof Error && err.name === "TimeoutError"
         ? `Provider connect timeout after ${connectMs}ms`
         : describeUpstreamConnectFailure(err, connectMs);
       return formatErrorResponse(502, "upstream_error", msg);
     };
     try {
+      if (options.abortSignal?.aborted) {
+        releaseCodexAuthContextProbeLease(authCtx);
+        return clientCancelledResponse();
+      }
+      const hostAdmission = hostKey ? acquireCodexUpstreamHostAdmission(hostKey) : null;
+      if (hostAdmission?.kind === "blocked") {
+        releaseCodexAuthContextProbeLease(authCtx);
+        return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
+          retryAfter: String(hostAdmission.retryAfterSeconds),
+        });
+      }
+      hostProbeLease = hostAdmission?.probeLease ?? null;
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
@@ -1761,15 +1814,21 @@ async function handleResponsesInner(
             method: request.method,
             headers: request.headers,
             body: request.body,
+            ...(hostKey ? { redirect: "manual" as const } : {}),
           }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        {
+          abortSignal: upstream.signal,
+          label: safeHostLabel(request.url),
+          onAttempt: observation => attemptHistory.push(observation),
+        },
       );
     } catch (err) {
       return transportFailureResponse(err);
     } finally {
       request.releaseBodyObservation?.();
     }
+    if (hostKey) recordCodexUpstreamHostResponse(hostKey);
 
     // Same-target 429 wait-and-retry (opt-in `retryOn429`) for key-auth providers on the
     // passthrough wire. This branch returns before the recovery loop below, so Responses-shaped
@@ -1855,7 +1914,7 @@ async function handleResponsesInner(
         });
         if (retry.kind === "transport") {
           authCtx = retry.authCtx;
-          return transportFailureResponse(retry.error);
+          return transportFailureResponse(retry.error, retry.attempts, retry.hostKey);
         }
         if (retry.kind === "retried") {
           authCtx = retry.authCtx;
@@ -1866,6 +1925,11 @@ async function handleResponsesInner(
           subagentFallbackAccountId = retry.authCtx.accountId;
         }
       }
+    }
+    if (hostKey && isCodexUpstreamRedirectStatus(upstreamResponse.status)) {
+      recordPoolTransportOutcome(502);
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return formatErrorResponse(502, "upstream_error", "Provider returned an unsupported redirect");
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();

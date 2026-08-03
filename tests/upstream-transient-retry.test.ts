@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { fetchWithTransientRetry, isTransientUpstreamStatus } from "../src/lib/upstream-retry";
+import {
+  fetchWithResetRetry,
+  fetchWithTransientRetry,
+  isTransientUpstreamStatus,
+  lastUpstreamAttemptResponseStatus,
+  type UpstreamAttemptObservation,
+} from "../src/lib/upstream-retry";
 
 function bodyResponse(status: number, headers?: Record<string, string>): Response {
   // ReadableStream body so cancel() is observable.
@@ -19,6 +25,41 @@ describe("isTransientUpstreamStatus", () => {
 });
 
 describe("fetchWithTransientRetry", () => {
+  test("preserves ordered physical evidence when a 503 is followed by rejection", async () => {
+    const observations: UpstreamAttemptObservation[] = [];
+    const rejection = new Error("opaque transport rejection");
+    let calls = 0;
+    await expect(fetchWithTransientRetry(async () => {
+      calls += 1;
+      if (calls === 1) return bodyResponse(503, { "retry-after": "0" });
+      throw rejection;
+    }, {
+      slowAttemptMs: 60_000,
+      onAttempt: observation => observations.push(observation),
+    })).rejects.toBe(rejection);
+
+    expect(calls).toBe(2);
+    expect(observations).toEqual([
+      { kind: "response", status: 503 },
+      { kind: "rejection", recovery: "transient-5xx" },
+    ]);
+    expect(lastUpstreamAttemptResponseStatus(observations)).toBe(503);
+  });
+
+  test("observer exceptions do not replace a successful response", async () => {
+    const response = await fetchWithResetRetry(async () => bodyResponse(200), {
+      onAttempt: () => { throw new Error("observer failed"); },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  test("observer exceptions do not replace the original rejection", async () => {
+    const rejection = new Error("opaque transport rejection");
+    await expect(fetchWithResetRetry(async () => { throw rejection; }, {
+      onAttempt: () => { throw new Error("observer failed"); },
+    })).rejects.toBe(rejection);
+  });
+
   test("retries a 502 then returns the 200; failed body is cancelled", async () => {
     const first = bodyResponse(502) as Response & { __wasCancelled: () => boolean };
     const responses = [first, bodyResponse(200)];
