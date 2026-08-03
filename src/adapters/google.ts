@@ -12,7 +12,7 @@ import type {
   OcxToolCall,
   OcxUsage,
 } from "../types";
-import { isAllowedToolChoice, namespacedToolName, toolAllowedByChoice } from "../types";
+import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
@@ -232,6 +232,28 @@ function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
   }];
 }
 
+/**
+ * Client tool_choice enforcement on the wire. The catalog nudge states the same contract in
+ * prose, but without functionCallingConfig the model is free to ignore it. "auto" stays absent
+ * so the common case is byte-identical. The allowedTools variant already filters the
+ * declarations in toolsToGeminiFormat; only its "required" half needs a wire mode.
+ */
+function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, unknown> | undefined {
+  const choice = parsed.options.toolChoice;
+  if (!choice || choice === "auto") return undefined;
+  if (choice === "none") return { functionCallingConfig: { mode: "NONE" } };
+  if (choice === "required") return { functionCallingConfig: { mode: "ANY" } };
+  if (isAllowedToolChoice(choice)) {
+    return choice.mode === "required" ? { functionCallingConfig: { mode: "ANY" } } : undefined;
+  }
+  return {
+    functionCallingConfig: {
+      mode: "ANY",
+      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name)],
+    },
+  };
+}
+
 function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | undefined {
   if (!usage) return undefined;
   return {
@@ -307,6 +329,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const body: Record<string, unknown> = { contents };
       if (systemInstruction) body.systemInstruction = systemInstruction;
       if (tools) body.tools = tools;
+      // Only meaningful with declarations on the wire: mode ANY with an empty
+      // catalog is a guaranteed upstream 400.
+      const toolConfig = tools ? toolChoiceToGeminiToolConfig(parsed) : undefined;
+      if (toolConfig) body.toolConfig = toolConfig;
 
       const generationConfig: Record<string, unknown> = {};
       if (parsed.options.maxOutputTokens) generationConfig.maxOutputTokens = parsed.options.maxOutputTokens;
