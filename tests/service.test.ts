@@ -795,6 +795,8 @@ describe("service diagnostics", () => {
     });
     expect(missingAssets).toMatchObject({ installed: true, viable: false, stale: true, startable: false });
     expect(missingAssets.summary).toContain("stale or missing service assets");
+    expect(missingAssets.summary).toContain("ocx service repair");
+    expect(missingAssets.summary).not.toContain("ocx service install");
   });
 
   test("a stopped healthy WinSW service remains startable from the tray", () => {
@@ -852,6 +854,8 @@ describe("service diagnostics", () => {
       const diagnostic = bakedServicePathsDiagnostic();
       expect(diagnostic).toContain("STALE baked paths");
       expect(diagnostic).toContain(missing);
+      expect(diagnostic).toContain("ocx service repair");
+      expect(diagnostic).not.toContain("ocx service install");
 
       writeFileSync(statePath, JSON.stringify({
         version: 1,
@@ -1273,7 +1277,8 @@ describe("service serving confirmation", () => {
         matchesPlist: () => ({ loaded: true, matchesPlist: true }),
       });
       expect(out).toContain("no proxy is answering on port 10100");
-      expect(out).toContain("ocx service install");
+      expect(out).toContain("ocx service repair");
+      expect(out).not.toContain("ocx service install");
       expect(out).toContain("ocx start");
     });
 

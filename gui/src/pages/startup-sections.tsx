@@ -10,6 +10,8 @@ import {
   PROTECTION_KEYS,
   STATUS_KEYS,
   SUMMARY_KEYS,
+  startupServiceNeedsRepair,
+  startupServiceRecoveryCommand,
 } from "./startup-shared";
 
 function StartupStateBadge({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
@@ -90,8 +92,9 @@ export function StartupDetailsSection({
   onInstall: (action: StartupInstallAction, opts?: { repair?: boolean }) => void;
 }) {
   const { t } = useI18n();
-  // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
-  const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
+  // Repair refreshes assets and restarts an existing enabled manager without
+  // permission-sensitive re-registration. Conflict/disabled states still need reinstall.
+  const serviceNeedsRepair = startupServiceNeedsRepair(data);
   const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
   const actionsDisabled = installBusy !== null || failed || loading;
 
@@ -224,6 +227,7 @@ export function StartupRecoverySection({
   onCopy: (command: string) => void;
 }) {
   const { t } = useI18n();
+  const serviceCommand = startupServiceRecoveryCommand(data);
 
   return (
     <section className="panel startup-actions">
@@ -237,10 +241,10 @@ export function StartupRecoverySection({
           <div className="startup-command-row">
             <div>
               <strong>{t("startup.command.service")}</strong>
-              <code>{data.commands.installService}</code>
+              <code>{serviceCommand}</code>
             </div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(data.commands.installService)}>
-              {copied === data.commands.installService ? t("startup.copied") : t("startup.copy")}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(serviceCommand)}>
+              {copied === serviceCommand ? t("startup.copied") : t("startup.copy")}
             </button>
           </div>
         )}

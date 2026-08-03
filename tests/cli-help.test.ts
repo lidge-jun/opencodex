@@ -87,6 +87,27 @@ describe("CLI subcommand help", () => {
     expect(result.stdout).toContain("--no-start");
   });
 
+  test("service help includes the non-registering repair route", () => {
+    const result = runCli(["help", "service"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: ocx service [install|repair|start|stop|status|uninstall|remove]");
+    expect(result.stdout).toContain("ocx service repair");
+    expect(result.stdout).toContain("without re-registering");
+  });
+
+  test("top-level repair is a documented alias of service repair", () => {
+    const result = runCli(["help", "repair"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: ocx repair");
+    expect(result.stdout).toContain("Alias of: ocx service repair");
+
+    const source = readFileSync(cliPath, "utf8");
+    expect(source).toContain('case "repair":');
+    expect(source).toContain('await serviceCommand("repair");');
+  });
+
   test("unknown command with help flag remains an error", () => {
     const result = runCli(["foobar", "--help"]);
     expect(result.status).toBe(1);

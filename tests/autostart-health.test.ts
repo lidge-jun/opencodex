@@ -43,6 +43,43 @@ describe("Codex startup health", () => {
     });
   });
 
+  test("starts an existing stopped service without re-registering it", () => {
+    const health = deriveStartupHealth({
+      ...base,
+      serviceInstalled: true,
+      serviceEnabled: true,
+      serviceRunning: false,
+    });
+    expect(health).toMatchObject({
+      status: "at-risk",
+      recommendedCommand: "ocx service start",
+    });
+    expect(startupHealthSummary(health)).toContain("ocx service start");
+  });
+
+  test("repairs stale or running-unhealthy services but installs a missing service", () => {
+    expect(deriveStartupHealth({
+      ...base,
+      serviceInstalled: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+      serviceStale: true,
+    }).recommendedCommand).toBe("ocx service repair");
+    expect(deriveStartupHealth({
+      ...base,
+      serviceInstalled: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+    }).recommendedCommand).toBe("ocx service repair");
+    expect(deriveStartupHealth({
+      ...base,
+      serviceInstalled: true,
+      serviceEnabled: false,
+      serviceStale: true,
+    }).recommendedCommand).toBe("ocx service install");
+    expect(deriveStartupHealth(base).recommendedCommand).toBe("ocx service install");
+  });
+
   test("never preserves a green local-routing claim when diagnostics are stale", () => {
     const protectedHealth = deriveStartupHealth({ ...base, serviceInstalled: true, serviceViable: true, serviceEnabled: true, serviceRunning: true });
     expect(markStartupHealthDiagnosticStale(protectedHealth)).toMatchObject({
@@ -50,6 +87,7 @@ describe("Codex startup health", () => {
       rebootSafe: false,
       protection: "none",
       diagnosticStale: true,
+      recommendedCommand: "ocx service repair",
     });
   });
 
@@ -171,6 +209,8 @@ describe("Codex startup health", () => {
     expect(typeof body.routingInjected).toBe("boolean");
     expect(body.commands).toEqual({
       installService: "ocx service install",
+      startService: "ocx service start",
+      repairService: "ocx service repair",
       installShim: "ocx codex-shim install",
       restoreNative: "ocx restore",
     });

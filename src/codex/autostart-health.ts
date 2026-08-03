@@ -47,6 +47,8 @@ export interface StartupHealth {
   recommendedCommand: string | null;
   commands: {
     installService: string;
+    startService: string;
+    repairService: string;
     installShim: string;
     restoreNative: string;
   };
@@ -54,6 +56,8 @@ export interface StartupHealth {
 
 const COMMANDS = {
   installService: "ocx service install",
+  startService: "ocx service start",
+  repairService: "ocx service repair",
   installShim: "ocx codex-shim install",
   restoreNative: "ocx restore",
 } as const;
@@ -88,7 +92,15 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
     : inputs.routingKind === "custom-local" || inputs.routingKind === "unknown"
       ? COMMANDS.restoreNative
     : inputs.serviceSupported
-      ? COMMANDS.installService
+      ? inputs.serviceInstalled && !inputs.serviceConflict
+        ? !inputs.serviceEnabled
+          ? COMMANDS.installService
+          : inputs.serviceStale || (inputs.serviceRunning && !inputs.serviceViable)
+            ? COMMANDS.repairService
+            : !inputs.serviceRunning
+              ? COMMANDS.startService
+              : COMMANDS.installService
+        : COMMANDS.installService
       : COMMANDS.restoreNative;
   return {
     ...inputs,

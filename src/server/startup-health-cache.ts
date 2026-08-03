@@ -14,6 +14,10 @@ const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 let cached: { timestamp: number; value: StartupHealth } | null = null;
 let inflight: Promise<StartupHealth> | null = null;
 let generation = 0;
+// A single probe blip (spawn hiccup, busy machine, Defender scan) must not flip
+// the GUI to its error state for a whole cache window. Only consecutive
+// failures downgrade the last known-good result.
+let consecutiveProbeFailures = 0;
 
 export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupHealth {
   if (!value.localRoutingDependency) return { ...value, diagnosticStale: true };
@@ -25,7 +29,10 @@ export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupH
     diagnosticStale: true,
     recommendedCommand: value.routingKind === "custom-local" || value.routingKind === "unknown"
       ? value.commands.restoreNative
-      : value.commands.installService,
+      : value.recommendedCommand
+        ?? (value.serviceInstalled && !value.serviceConflict
+          ? value.commands.repairService
+          : value.commands.installService),
   };
 }
 
@@ -65,6 +72,7 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
           try {
             const parsed = JSON.parse(lines[index]) as StartupHealth;
             if (["native", "protected", "at-risk"].includes(parsed.status) && typeof parsed.rebootSafe === "boolean") {
+              consecutiveProbeFailures = 0;
               resolve({
                 ...parsed,
                 recommendedCommand: parsed.recommendedCommand === null
@@ -72,6 +80,8 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
                   : truncateRetainedUtf8(parsed.recommendedCommand, MAX_DIAGNOSTIC_VALUE_BYTES),
                 commands: {
                   installService: truncateRetainedUtf8(parsed.commands.installService, MAX_DIAGNOSTIC_VALUE_BYTES),
+                  startService: truncateRetainedUtf8(parsed.commands.startService ?? "ocx service start", MAX_DIAGNOSTIC_VALUE_BYTES),
+                  repairService: truncateRetainedUtf8(parsed.commands.repairService ?? "ocx service repair", MAX_DIAGNOSTIC_VALUE_BYTES),
                   installShim: truncateRetainedUtf8(parsed.commands.installShim, MAX_DIAGNOSTIC_VALUE_BYTES),
                   restoreNative: truncateRetainedUtf8(parsed.commands.restoreNative, MAX_DIAGNOSTIC_VALUE_BYTES),
                 },
@@ -81,6 +91,11 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
             }
           } catch { /* scan earlier output; config repair messages may precede JSON */ }
         }
+      }
+      consecutiveProbeFailures += 1;
+      if (cached && consecutiveProbeFailures < 2) {
+        resolve(cached.value);
+        return;
       }
       resolve(cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config));
     });
@@ -103,11 +118,14 @@ function refreshInBackground(config: Pick<OcxConfig, "codexAutoStart">): void {
 export async function getCachedStartupHealth(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHealth> {
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
   refreshInBackground(config);
-  return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
+  // A routine revalidation is in flight, so the last result remains the best
+  // available answer. runProbe marks a real repeated failure as stale.
+  return cached ? cached.value : conservativeFallback(config);
 }
 
 export function invalidateStartupHealthCache(): void {
   generation += 1;
   cached = null;
   inflight = null;
+  consecutiveProbeFailures = 0;
 }

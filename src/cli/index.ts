@@ -734,6 +734,9 @@ switch (command) {
   case "start":
     await handleStart();
     break;
+  case "repair":
+    await serviceCommand("repair");
+    break;
   case "stop": {
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
     // re-start the proxy immediately, so warning there would contradict the next line.

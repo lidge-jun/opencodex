@@ -729,12 +729,21 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
 export function proxyDownRestartHint(input: {
   proxyRunning: boolean;
   port: number;
+  serviceInstalled: boolean;
+  serviceEnabled: boolean;
+  serviceRunning: boolean;
+  serviceStale: boolean;
+  serviceConflict: boolean;
   serviceViable: boolean;
 }): string | null {
   if (input.proxyRunning) return null;
-  const restart = input.serviceViable
-    ? "Restart it with 'ocx service start' (service installed) or 'ocx start'."
-    : "Restart it with 'ocx start', or install the persistent service: 'ocx service install'.";
+  const restart = !input.serviceInstalled
+    ? "Restart it with 'ocx start', or install the persistent service: 'ocx service install'."
+    : !input.serviceEnabled || input.serviceConflict
+      ? "The service needs re-registration. Use Install on the Startup page (Windows administrator approval is required), or run 'ocx service install' from an Administrator PowerShell. Meanwhile, use 'ocx start'."
+      : input.serviceStale || (input.serviceRunning && !input.serviceViable)
+        ? "Repair and restart the installed service with 'ocx service repair', or use 'ocx start' in the foreground."
+        : "Restart it with 'ocx service start' (service installed) or 'ocx start'.";
   return `The ocx proxy is not running. Codex/Claude clients pinned to 127.0.0.1:${input.port} fail with errors like "error sending request for url (http://127.0.0.1:${input.port}/v1/responses)". ${restart}`;
 }
 
@@ -949,6 +958,11 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const proxyDown = proxyDownRestartHint({
     proxyRunning: Boolean(live),
     port: live?.port ?? doctorConfig.port ?? 10100,
+    serviceInstalled: startup.serviceInstalled,
+    serviceEnabled: startup.serviceEnabled,
+    serviceRunning: startup.serviceRunning,
+    serviceStale: startup.serviceStale,
+    serviceConflict: startup.serviceConflict,
     serviceViable: startup.serviceViable,
   });
   if (proxyDown) hints.push(proxyDown);

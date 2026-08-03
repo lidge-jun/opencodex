@@ -27,9 +27,27 @@ export interface StartupHealthData {
   diagnosticStale: boolean;
   commands: {
     installService: string;
+    startService: string;
+    repairService: string;
     installShim: string;
     restoreNative: string;
   };
+}
+
+export function startupServiceNeedsRepair(data: StartupHealthData): boolean {
+  return data.serviceSupported
+    && data.serviceInstalled
+    && data.serviceEnabled
+    && !data.serviceViable
+    && !data.serviceConflict;
+}
+
+export function startupServiceRecoveryCommand(data: StartupHealthData): string {
+  if (!data.serviceInstalled) return data.commands.installService;
+  if (!data.serviceConflict && data.serviceStale) return data.commands.repairService;
+  if (!data.serviceConflict && data.serviceEnabled && !data.serviceRunning) return data.commands.startService;
+  if (!data.serviceConflict && data.serviceEnabled && !data.serviceViable) return data.commands.repairService;
+  return data.commands.installService;
 }
 
 export interface TrayStatusData {

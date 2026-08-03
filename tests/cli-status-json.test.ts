@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveStatusPid, selectListenTarget } from "../src/cli/status";
+import { registeredServiceRecoveryCommand, registeredServiceRecoveryInstruction, resolveStatusPid, selectListenTarget } from "../src/cli/status";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -18,6 +18,16 @@ function runStatusJson(opencodexHome: string) {
 }
 
 describe("CLI status JSON", () => {
+  test("an existing non-serving service uses start, repair, or re-registration according to its state", () => {
+    const healthyStopped = { enabled: true, running: false, viable: false, stale: false, conflict: false };
+    expect(registeredServiceRecoveryCommand(healthyStopped)).toBe("ocx service start");
+    expect(registeredServiceRecoveryCommand({ ...healthyStopped, running: true })).toBe("ocx service repair");
+    expect(registeredServiceRecoveryCommand({ ...healthyStopped, stale: true })).toBe("ocx service repair");
+    expect(registeredServiceRecoveryCommand({ ...healthyStopped, enabled: false })).toBe("ocx service install");
+    expect(registeredServiceRecoveryCommand({ ...healthyStopped, conflict: true })).toBe("ocx service install");
+    expect(registeredServiceRecoveryInstruction({ ...healthyStopped, enabled: false })).toContain("Administrator PowerShell");
+  });
+
   test("status --json prints valid read-only diagnostics without secrets", () => {
     const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-status-json-"));
     try {

@@ -506,18 +506,9 @@ async function reportServiceServing(
   process.exitCode = 1;
 }
 
-/**
- * The reinstall command for the CURRENTLY INSTALLED backend.
- *
- * Plain `ocx service install` on a native/WinSW install runs installWindows's
- * transactional backend switch, which tears down WinSW and replaces it with the Task
- * Scheduler backend. Advising it in a repair hint would silently change the user's
- * backend, so the hint has to carry `--native` when that is what is installed.
- */
+/** Repair the currently installed backend without re-registering or switching it. */
 function serviceRepairCommand(): string {
-  return process.platform === "win32" && readServiceBackend() === "native"
-    ? "ocx service install --native"
-    : "ocx service install";
+  return "ocx service repair";
 }
 
 function systemdQuote(value: string): string {
@@ -1933,7 +1924,7 @@ export function bakedServicePathsDiagnostic(): string | null {
   if (!state?.bunPath || !state?.cliPath) return null;
   const missing = [state.bunPath, state.cliPath].filter(path => !existsSync(path));
   if (missing.length === 0) return null;
-  return `STALE baked paths (missing: ${missing.join(", ")}) — run 'ocx service install' to re-bake`;
+  return `STALE baked paths (missing: ${missing.join(", ")}) — run 'ocx service repair' to re-bake`;
 }
 
 function serviceDiagnosticsSummary(): string {
@@ -2350,7 +2341,7 @@ export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticI
   const detail = conflict
     ? "CONFLICT: Task Scheduler and native WinSW are both present — run 'ocx service uninstall' then reinstall one"
     : stale
-      ? "stale or missing service assets — run 'ocx service install' to repair"
+      ? "stale or missing service assets — run 'ocx service repair'"
       : schedulerInstalled
         ? schedulerEnabled ? "Task Scheduler enabled" : "Task Scheduler disabled"
         : nativeInstalled

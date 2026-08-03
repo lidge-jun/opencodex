@@ -511,12 +511,22 @@ describe("service memory section (#314 WP4)", () => {
   });
 
   test("proxyDownRestartHint is null while a live proxy exists", () => {
-    expect(proxyDownRestartHint({ proxyRunning: true, port: 10100, serviceViable: false })).toBeNull();
-    expect(proxyDownRestartHint({ proxyRunning: true, port: 10100, serviceViable: true })).toBeNull();
+    const stopped = { serviceEnabled: true, serviceRunning: false, serviceStale: false, serviceConflict: false };
+    expect(proxyDownRestartHint({ proxyRunning: true, port: 10100, serviceInstalled: false, serviceViable: false, ...stopped })).toBeNull();
+    expect(proxyDownRestartHint({ proxyRunning: true, port: 10100, serviceInstalled: true, serviceViable: true, ...stopped })).toBeNull();
   });
 
   test("proxyDownRestartHint names the symptom and both restart paths", () => {
-    const hint = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false });
+    const hint = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 10100,
+      serviceInstalled: false,
+      serviceEnabled: false,
+      serviceRunning: false,
+      serviceStale: false,
+      serviceConflict: false,
+      serviceViable: false,
+    });
     expect(hint).toContain("error sending request for url");
     expect(hint).toContain("127.0.0.1:10100");
     expect(hint).toContain("ocx start");
@@ -524,9 +534,50 @@ describe("service memory section (#314 WP4)", () => {
   });
 
   test("proxyDownRestartHint prefers 'ocx service start' when a service is installed", () => {
-    const hint = proxyDownRestartHint({ proxyRunning: false, port: 12000, serviceViable: true });
+    const hint = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 12000,
+      serviceInstalled: true,
+      serviceEnabled: true,
+      serviceRunning: false,
+      serviceStale: false,
+      serviceConflict: false,
+      serviceViable: false,
+    });
     expect(hint).toContain("ocx service start");
     expect(hint).toContain("127.0.0.1:12000");
     expect(hint).not.toContain("ocx service install");
+  });
+
+  test("proxyDownRestartHint repairs an installed unhealthy service without re-registering", () => {
+    const hint = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 10100,
+      serviceInstalled: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+      serviceStale: false,
+      serviceConflict: false,
+      serviceViable: false,
+    });
+    expect(hint).toContain("ocx service repair");
+    expect(hint).toContain("ocx start");
+    expect(hint).not.toContain("ocx service install");
+  });
+
+  test("proxyDownRestartHint explains administrator approval when re-registration is genuinely required", () => {
+    const hint = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 10100,
+      serviceInstalled: true,
+      serviceEnabled: false,
+      serviceRunning: false,
+      serviceStale: false,
+      serviceConflict: false,
+      serviceViable: false,
+    });
+    expect(hint).toContain("administrator approval is required");
+    expect(hint).toContain("Administrator PowerShell");
+    expect(hint).toContain("ocx service install");
   });
 });

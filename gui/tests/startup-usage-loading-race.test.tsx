@@ -96,7 +96,13 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
     platform: "darwin",
     recommendedCommand,
     diagnosticStale: false,
-    commands: { installService: "ocx service install", installShim: "ocx shim install", restoreNative: "ocx restore" },
+    commands: {
+      installService: "ocx service install",
+      startService: "ocx service start",
+      repairService: "ocx service repair",
+      installShim: "ocx shim install",
+      restoreNative: "ocx restore",
+    },
   });
   const STALE = health("stale-startup-marker");
   const FRESH = health("fresh-startup-marker");

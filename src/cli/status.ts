@@ -3,7 +3,7 @@ import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
-import { diagnoseService, serviceLogPath } from "../service";
+import { diagnoseService, serviceLogPath, type ServiceDiagnostic } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
@@ -84,6 +84,23 @@ export type ListenTarget = {
   healthUrl: string;
   dashboardUrl: string;
 };
+
+export function registeredServiceRecoveryCommand(
+  service: Pick<ServiceDiagnostic, "enabled" | "running" | "viable" | "stale" | "conflict">,
+): "ocx service install" | "ocx service start" | "ocx service repair" {
+  if (!service.enabled || service.conflict) return "ocx service install";
+  if (service.stale || (service.running && !service.viable)) return "ocx service repair";
+  return "ocx service start";
+}
+
+export function registeredServiceRecoveryInstruction(
+  service: Pick<ServiceDiagnostic, "enabled" | "running" | "viable" | "stale" | "conflict">,
+): string {
+  const command = registeredServiceRecoveryCommand(service);
+  return command === "ocx service install"
+    ? "use Install on the Startup page (administrator approval required), or run 'ocx service install' from an Administrator PowerShell"
+    : `run '${command}'`;
+}
 
 export function selectListenTarget(
   config: Pick<OcxConfig, "port" | "hostname">,
@@ -173,7 +190,7 @@ export async function collectStatus(): Promise<CliStatusView> {
   // either way. `live` was already identity-probed a few lines above, so cross-check
   // rather than print registration as if it were service.
   const serviceSummary = service.installed && !live
-    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service install'`
+    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and ${registeredServiceRecoveryInstruction(service)}`
     : service.summary;
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;

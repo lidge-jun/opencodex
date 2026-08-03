@@ -14,6 +14,11 @@ const helpEntries: Record<string, HelpEntry> = {
   init: { usage: "ocx init", summary: "Interactive setup for providers and Codex config injection." },
   setup: { usage: "ocx setup", summary: "Interactive setup for providers and Codex config injection (alias of init)." },
   start: { usage: "ocx start [--port <port>]", summary: "Start the proxy server and sync models to Codex." },
+  repair: {
+    usage: "ocx repair",
+    summary: "Repair and restart the installed background service without re-registering it.",
+    details: ["Alias of: ocx service repair"],
+  },
   stop: { usage: "ocx stop", summary: "Stop the proxy and restore native Codex config." },
   restore: {
     usage: "ocx restore [back]",
@@ -44,10 +49,11 @@ const helpEntries: Record<string, HelpEntry> = {
     ],
   },
   service: {
-    usage: "ocx service [install|start|stop|status|uninstall|remove]",
+    usage: "ocx service [install|repair|start|stop|status|uninstall|remove]",
     summary: "Run as a background service.",
     details: [
       "With no subcommand, installs/updates and starts the background service.",
+      "Use `ocx service repair` to refresh and restart an installed service without re-registering it.",
       "Use `ocx service status` to see diagnostics and log paths.",
     ],
   },
@@ -267,6 +273,7 @@ export function printUsage(): void {
 Usage:
   ocx setup                   Interactive setup (alias: init)
   ocx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
+  ocx repair                  Repair/restart the installed service without re-registering it
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
