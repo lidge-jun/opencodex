@@ -259,6 +259,17 @@ describe("claude outbound SSE", () => {
     expect(msg2.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking).toBe("AB");
   });
 
+  test("indexed reasoning content parts get the separator too", async () => {
+    const indexedContent = [
+      sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      sse("response.reasoning_text.delta", { item_id: "rs_1", output_index: 0, content_index: 0, delta: "A" }),
+      sse("response.reasoning_text.delta", { item_id: "rs_1", output_index: 0, content_index: 1, delta: "B" }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } }),
+    ].join("");
+    const msg = await collectAnthropicMessage(responsesSseToAnthropicSse(streamFrom(indexedContent), "m"), "m") as Record<string, any>;
+    expect(msg.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking).toBe("A\n\nB");
+  });
+
   test("data-only Responses frames infer event names from payload types", async () => {
     const upstream = [
       dataOnlySse({ type: "response.created", response: { id: "resp_data_only", status: "in_progress" } }),
