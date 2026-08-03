@@ -416,6 +416,18 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           : null;
         const thinkingText = envelope?.txt || text;
 
+        // Kiro reasoning round-trip: a krc-only item carries nothing renderable — it is provider
+        // state for the assistant turn that ALREADY closed, because Kiro emits its
+        // reasoningContentEvent at the END of a turn (after content AND tool calls, verified
+        // against kiro-cli 2.14.1/2.16.0). Folding it into the FOLLOWING turn like ordinary
+        // reasoning would attach turn N's blob to turn N+1, so attach it backwards instead. With
+        // no assistant turn to own it the blob is dropped rather than mis-paired.
+        if (envelope?.krc && thinkingText.length === 0) {
+          const previous = messages[messages.length - 1];
+          if (previous?.role === "assistant") previous.kiroRedactedReasoning = envelope.krc;
+          continue;
+        }
+
         // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
         // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
         if (thinkingText.length > 0) {

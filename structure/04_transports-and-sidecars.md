@@ -381,6 +381,30 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
   timeout race.
 
+## Kiro reasoning round-trip (`redactedContent`)
+
+Kiro never returns plaintext reasoning for its Sol-family models: `reasoningContentEvent` carries a
+KMS-encrypted `redactedContent` blob, and `gpt-5.6-sol`'s `additionalModelRequestFieldsSchema`
+(`ListAvailableModels`) accepts only `reasoning.effort` — there is no display/summary opt-in. Kiro's
+own CLI replays that blob on the matching `assistantResponseMessage.reasoningContent` to preserve
+model reasoning across turns; dropping it makes every turn restart without the previous turn's
+reasoning. Verified against kiro-cli 2.14.1 and 2.16.0.
+
+- The blob rides the existing `ocxr1:` envelope as `krc` (`src/responses/reasoning-envelope.ts`) on
+  an envelope-only reasoning item — `summary: []`, no text deltas — so it stays invisible in the
+  Codex app while round-tripping, exactly like the hidden-thinking path.
+- **Pairing is backwards.** Kiro emits `reasoningContentEvent` at the END of an assistant turn,
+  after content AND tool calls. A `krc`-only item therefore belongs to the turn that already
+  closed, so the parser attaches it to the PRECEDING assistant message rather than folding it into
+  the following turn like ordinary reasoning (`src/responses/parser.ts`). With no assistant turn to
+  own it, the blob is dropped rather than mis-paired.
+- The blob lives on `OcxAssistantMessage.kiroRedactedReasoning`, not on a thinking content part, so
+  no other adapter replays provider-private state if the conversation switches providers.
+
+Kiro also reports context pressure in its own `contextUsageEvent`; `metadataEvent` carries only
+`stopReason`. Spend arrives in `meteringEvent` as **credits, not tokens** — there is no `tokenUsage`
+on this wire at all, which is why Kiro usage stays estimated.
+
 ## Parallel tool calls (default-on for chat providers)
 
 The openai-chat adapter buffers ALL streamed `tool_calls` deltas (keyed by `index`, falling back to

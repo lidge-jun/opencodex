@@ -1306,6 +1306,40 @@ describe("kiro adapter — parseStream", () => {
     ]);
   });
 
+  // Kiro's Sol-family models never return plaintext reasoning: reasoningContentEvent carries an
+  // encrypted `redactedContent` blob (verified against kiro-cli 2.14.1 and 2.16.0), which the
+  // official client replays on the matching assistantResponseMessage to preserve reasoning across
+  // turns. Reading only `text` dropped it entirely.
+  test("reasoningContentEvent redactedContent is captured for round-trip", async () => {
+    const events = await collectAdapterEvents(createKiroAdapter(provider).parseStream(new Response(streamOf(
+      eventFrame({ content: "visible answer" }),
+      eventFrame({ redactedContent: "LktUUn5+encrypted" }, "reasoningContentEvent"),
+    ))));
+    expect(events).toEqual([
+      { type: "text_delta", text: "visible answer" },
+      { type: "kiro_redacted_reasoning", data: "LktUUn5+encrypted" },
+      expect.objectContaining({ type: "done", endTurn: true }),
+    ]);
+  });
+
+  test("reasoningContentEvent carrying both text and redactedContent emits both", async () => {
+    const events = await collectAdapterEvents(createKiroAdapter(provider).parseStream(new Response(streamOf(
+      eventFrame({ text: "plain", redactedContent: "blob" }, "reasoningContentEvent"),
+    ))));
+    expect(events).toEqual([
+      { type: "reasoning_raw_delta", text: "plain" },
+      { type: "kiro_redacted_reasoning", data: "blob" },
+      expect.objectContaining({ type: "done" }),
+    ]);
+  });
+
+  // Kiro reports context pressure in its own event type; metadataEvent carries only stopReason, so
+  // reading contextUsagePercentage from metadataEvent alone never saw a value.
+  test("contextUsageEvent supplies the absolute context usage percentage", () => {
+    const parsed = parseKiroEvent("contextUsageEvent", enc.encode(JSON.stringify({ contextUsagePercentage: 42.5 })));
+    expect(parsed).toEqual({ type: "context_usage", contextUsagePercentage: 42.5 });
+  });
+
   test("thinking tags split across chunks are parsed as reasoning", async () => {
     const frames = [
       eventFrame({ content: "<think" }),

@@ -99,7 +99,11 @@ interface KiroUserInputMessage {
 }
 interface KiroHistoryEntry {
   userInputMessage?: KiroUserInputMessage;
-  assistantResponseMessage?: { content: string; toolUses?: KiroToolUse[] };
+  assistantResponseMessage?: {
+    content: string;
+    toolUses?: KiroToolUse[];
+    reasoningContent?: { redactedContent: string };
+  };
 }
 
 function kiroToolWireNames(tools: readonly unknown[]): string[] {
@@ -326,7 +330,7 @@ function validateKiroCapabilities(parsed: OcxParsedRequest): void {
 
 type KiroTurn =
   | { kind: "user"; content: string; images: KiroImage[]; toolResults: KiroToolResult[] }
-  | { kind: "assistant"; content: string; toolUses: KiroToolUse[] };
+  | { kind: "assistant"; content: string; toolUses: KiroToolUse[]; redactedReasoning?: string };
 
 function appendTurnText(target: string, next: string): string {
   if (!next) return target;
@@ -471,13 +475,15 @@ export function buildKiroPayload(
       turns.push({ kind: "user", content, images: [...images], toolResults: [...toolResults] });
     }
   };
-  const pushAssistant = (content: string, toolUses: KiroToolUse[]): void => {
+  const pushAssistant = (content: string, toolUses: KiroToolUse[], redactedReasoning?: string): void => {
     const last = turns.at(-1);
     if (last?.kind === "assistant") {
       last.content = appendTurnText(last.content, content);
       last.toolUses.push(...toolUses);
+      // Merged turns keep the newest blob: it covers the reasoning up to the merged turn's end.
+      if (redactedReasoning) last.redactedReasoning = redactedReasoning;
     } else {
-      turns.push({ kind: "assistant", content, toolUses: [...toolUses] });
+      turns.push({ kind: "assistant", content, toolUses: [...toolUses], ...(redactedReasoning ? { redactedReasoning } : {}) });
     }
   };
 
@@ -507,7 +513,7 @@ export function buildKiroPayload(
         const hasReasoning = aMsg.content.some(part => part.type === "thinking" && part.thinking.trim());
         if (hasReasoning) continue;
       }
-      pushAssistant(text, toolUses);
+      pushAssistant(text, toolUses, aMsg.kiroRedactedReasoning);
     } else if (msg.role === "toolResult") {
       const tr = msg as OcxToolResultMessage;
       if (tr.containsEncryptedContent) {
@@ -561,6 +567,7 @@ export function buildKiroPayload(
         assistantResponseMessage: {
           content: turn.content,
           ...(turn.toolUses.length > 0 ? { toolUses: turn.toolUses } : {}),
+          ...(turn.redactedReasoning ? { reasoningContent: { redactedContent: turn.redactedReasoning } } : {}),
         },
       }
     : {
@@ -1183,6 +1190,12 @@ async function* parseKiroAttemptEvents(
           if (ev.data) {
             yield* emitRetained(stage({ type: "reasoning_raw_delta", text: ev.data }));
           }
+          if (ev.redactedContent) {
+            yield* emitRetained(stage({ type: "kiro_redacted_reasoning", data: ev.redactedContent }));
+          }
+          break;
+        case "context_usage":
+          if (ev.contextUsagePercentage > 0) contextUsagePercentage = ev.contextUsagePercentage;
           break;
         case "tool": {
           for (const contentEvent of thinking.flush()) {

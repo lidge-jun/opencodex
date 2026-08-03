@@ -869,6 +869,21 @@ export function bridgeToResponsesSSE(
               pendingRedacted.push(event.data);
               break;
             }
+            case "kiro_redacted_reasoning": {
+              // Opaque and unrenderable: emit an envelope-only reasoning item (no summary, no text
+              // deltas) so it stays invisible in the app while still round-tripping. Kiro sends it
+              // once the turn's content and tool calls are done, so nothing open is disturbed.
+              const encrypted = encodeReasoningEnvelope({ krc: event.data });
+              const reservation = budget?.reserveTransient(bytesOf(encrypted), { kind: "reasoning" });
+              const itemId = `rs_${uuid()}`;
+              const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
+              emit("response.output_item.added", { output_index: outputIndex, item });
+              emit("response.output_item.done", { output_index: outputIndex, item });
+              reservation?.commitRetained();
+              retainFinishedItem(item as OutputItem, bytesOf(encrypted), "reasoning");
+              outputIndex++;
+              break;
+            }
             case "reasoning_raw_delta": {
               if (options?.hideThinkingSummary) {
                 ({ value: hiddenRawReasoningText, bytes: hiddenRawReasoningBytes } = appendString(
@@ -1527,6 +1542,15 @@ function buildResponseJSONWithBudget(
           batchRedactedBytes += dataBytes;
         }
         batchRedacted.push(e.data);
+        break;
+      case "kiro_redacted_reasoning":
+        // Envelope-only reasoning item, same contract as the streaming path.
+        {
+          const encrypted = encodeReasoningEnvelope({ krc: e.data });
+          pushOutput({
+            type: "reasoning", id: `rs_${uuid()}`, summary: [], encrypted_content: encrypted,
+          }, bytesOf(encrypted), "reasoning");
+        }
         break;
       case "reasoning_raw_delta":
         if (currentText) flushText("commentary");

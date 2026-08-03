@@ -268,6 +268,32 @@ describe("kiro adapter — buildRequest", () => {
     expect(results[0].status).toBe("success");
   });
 
+  // Kiro's own client replays the encrypted reasoning blob on the assistant turn it belongs to;
+  // dropping it makes every turn start without the previous turn's reasoning.
+  test("assistant history replays the Kiro redacted reasoning blob", async () => {
+    const messages = [
+      { role: "user", content: "think" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }], kiroRedactedReasoning: "LktUUn5+blob" },
+      { role: "user", content: "again" },
+    ];
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages));
+    const arm = JSON.parse(body).conversationState.history
+      .find((h: { assistantResponseMessage?: unknown }) => h.assistantResponseMessage)?.assistantResponseMessage;
+    expect(arm.reasoningContent).toEqual({ redactedContent: "LktUUn5+blob" });
+  });
+
+  test("assistant history omits reasoningContent when no blob was captured", async () => {
+    const messages = [
+      { role: "user", content: "think" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+      { role: "user", content: "again" },
+    ];
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages));
+    const arm = JSON.parse(body).conversationState.history
+      .find((h: { assistantResponseMessage?: unknown }) => h.assistantResponseMessage)?.assistantResponseMessage;
+    expect(arm).not.toHaveProperty("reasoningContent");
+  });
+
   test("empty tool output is normalized to a non-empty Kiro result block", async () => {
     const messages = [
       { role: "user", content: "run it" },
