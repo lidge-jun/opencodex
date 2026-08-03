@@ -207,6 +207,58 @@ describe("claude outbound SSE", () => {
     expect(startIndexes).toEqual([0, 1, 2]);
   });
 
+  test("multi-part reasoning summaries keep the JSON path's part separator", async () => {
+    const upstream = [
+      sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      sse("response.output_item.added", { output_index: 0, item: { type: "reasoning", id: "rs_1" } }),
+      sse("response.reasoning_summary_part.added", { item_id: "rs_1", output_index: 0, summary_index: 0, part: { type: "summary_text", text: "" } }),
+      sse("response.reasoning_summary_text.delta", { item_id: "rs_1", output_index: 0, summary_index: 0, delta: "**A**\n\nOne." }),
+      sse("response.reasoning_summary_part.added", { item_id: "rs_1", output_index: 0, summary_index: 1, part: { type: "summary_text", text: "" } }),
+      sse("response.reasoning_summary_text.delta", { item_id: "rs_1", output_index: 0, summary_index: 1, delta: "**B**\n\nTwo." }),
+      sse("response.output_item.done", { output_index: 0, item: { type: "reasoning", id: "rs_1" } }),
+      sse("response.output_item.added", { output_index: 1, item: { type: "reasoning", id: "rs_2" } }),
+      sse("response.reasoning_summary_text.delta", { item_id: "rs_2", output_index: 1, summary_index: 0, delta: "Three." }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } }),
+    ].join("");
+    const msg = await collectAnthropicMessage(responsesSseToAnthropicSse(streamFrom(upstream), "m"), "m") as Record<string, any>;
+    // Parts within an item are separated; a new reasoning item opens its own block.
+    const thinkingBlocks = msg.content.filter((b: Record<string, unknown>) => b.type === "thinking");
+    expect(thinkingBlocks.map((b: Record<string, unknown>) => b.thinking)).toEqual([
+      "**A**\n\nOne.\n\n**B**\n\nTwo.",
+      "Three.",
+    ]);
+
+    // Parity: the non-streaming translator joins the same summary parts identically.
+    const json = responsesJsonToAnthropicMessage({
+      id: "resp_1",
+      status: "completed",
+      output: [{ type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "**A**\n\nOne." }, { type: "summary_text", text: "**B**\n\nTwo." }] }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }, "m") as Record<string, any>;
+    const jsonThinking = json.content.find((b: Record<string, unknown>) => b.type === "thinking");
+    expect(jsonThinking.thinking).toBe("**A**\n\nOne.\n\n**B**\n\nTwo.");
+  });
+
+  test("same-part deltas and index-free reasoning frames never get a separator", async () => {
+    const samePart = [
+      sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      sse("response.reasoning_summary_text.delta", { item_id: "rs_1", output_index: 0, summary_index: 0, delta: "Hel" }),
+      sse("response.reasoning_summary_text.delta", { item_id: "rs_1", output_index: 0, summary_index: 0, delta: "lo" }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } }),
+    ].join("");
+    const msg1 = await collectAnthropicMessage(responsesSseToAnthropicSse(streamFrom(samePart), "m"), "m") as Record<string, any>;
+    expect(msg1.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking).toBe("Hello");
+
+    const indexFree = [
+      sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      sse("response.reasoning_text.delta", { delta: "A" }),
+      sse("response.reasoning_text.delta", { delta: "B" }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } }),
+    ].join("");
+    const msg2 = await collectAnthropicMessage(responsesSseToAnthropicSse(streamFrom(indexFree), "m"), "m") as Record<string, any>;
+    expect(msg2.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking).toBe("AB");
+  });
+
   test("data-only Responses frames infer event names from payload types", async () => {
     const upstream = [
       dataOnlySse({ type: "response.created", response: { id: "resp_data_only", status: "in_progress" } }),

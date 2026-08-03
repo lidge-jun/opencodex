@@ -187,6 +187,8 @@ interface OpenBlock {
   argsBufBytes?: number;
   webSearchArgsEmitted?: boolean;
   callId?: string;
+  /** Last reasoning part identity (item + summary/content index) seen by this thinking block. */
+  reasoningPartKey?: string;
 }
 
 /** Streaming: Responses SSE bytes -> Anthropic Messages SSE bytes. */
@@ -353,6 +355,21 @@ export function responsesSseToAnthropicSse(
           case "response.reasoning_text.delta": {
             if (typeof data.delta !== "string" || data.delta.length === 0) break;
             ensureBlock("thinking");
+            // The JSON path joins reasoning summary/content parts with "\n\n"
+            // (responsesJsonToAnthropicMessage); mirror that at part and item boundaries
+            // so multi-part summaries do not glue into one run-on paragraph. Frames
+            // without part indices produce a constant key and never get a separator.
+            const slot = eventName === "response.reasoning_summary_text.delta"
+              ? `s${String(data.summary_index)}`
+              : `c${String(data.content_index)}`;
+            const partKey = `${String(data.item_id)}:${slot}`;
+            if (open!.reasoningPartKey !== undefined && open!.reasoningPartKey !== partKey) {
+              emit("content_block_delta", {
+                type: "content_block_delta", index: open!.index,
+                delta: { type: "thinking_delta", thinking: "\n\n" },
+              });
+            }
+            open!.reasoningPartKey = partKey;
             emit("content_block_delta", {
               type: "content_block_delta", index: open!.index,
               delta: { type: "thinking_delta", thinking: data.delta },
