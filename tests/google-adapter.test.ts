@@ -256,7 +256,8 @@ describe("google adapter — tool_choice on the wire", () => {
     // Gemini on the same route has no VALIDATED override, so NONE rides with the catalog intact.
     const geminiParsed = parsedWithChoice("none");
     const geminiRequest = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(geminiParsed)).body).request as Record<string, unknown>;
-    expect(geminiRequest.tools).toBeDefined();
+    const declared = (geminiRequest.tools as { functionDeclarations: { name: string }[] }[])[0].functionDeclarations.map(d => d.name);
+    expect(declared).toEqual(["get_weather", "mcp__chrome__shot"]);
     expect(geminiRequest.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
   });
 
