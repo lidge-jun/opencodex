@@ -506,6 +506,10 @@ export async function handleResponsesCompact(
     // Always record the real upstream status: a local buffering failure after a
     // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
     recordCompactPoolOutcome(outcomeCtx, upstream.status, { retryAfter, resetAt });
+    // Lift usage and response metadata from the buffered upstream JSON into the
+    // request log; the routed branch gets the same through handleResponses. The
+    // synthetic buffer errors are not upstream bodies and stay uninspected.
+    if (buffered.ok) inspectResponseLogJson(logCtx, await buffered.clone().text());
     return buffered;
   }
 
