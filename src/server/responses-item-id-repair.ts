@@ -16,7 +16,8 @@ interface ResponsesItemIdRepairState {
   readonly responseIdMap: Map<string, string>;
   readonly scope: string;
   readonly budget?: TranslatorBudget;
-  sawCompleted: boolean;
+  /** True once a terminal response event is observed (completed/failed/incomplete). */
+  sawTerminal: boolean;
   sawDoneTrailer: boolean;
 }
 
@@ -40,6 +41,12 @@ const ITEM_ID_EVENT_TYPES: Readonly<Record<string, RepairableItemType>> = {
   "response.reasoning_text.delta": "reasoning",
   "response.reasoning_text.done": "reasoning",
 };
+
+const TERMINAL_RESPONSE_TYPES = new Set([
+  "response.completed",
+  "response.failed",
+  "response.incomplete",
+]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -124,7 +131,7 @@ function createRepairState(config: ResponsesItemIdRepairConfig, budget?: Transla
     responseIdMap: new Map<string, string>(),
     scope: randomUUID().replace(/-/g, ""),
     budget,
-    sawCompleted: false,
+    sawTerminal: false,
     sawDoneTrailer: false,
   };
   budget?.chargeRetained(new TextEncoder().encode(JSON.stringify({
@@ -155,8 +162,51 @@ function mapResponseId(state: ResponsesItemIdRepairState, rawId: string | undefi
   if (existing) return existing;
   // Keep each distinct upstream response id unique within the request-local scope.
   const minted = `resp_ocx_${state.scope}_${state.responseIdMap.size}`;
+  state.budget?.chargeRetained(
+    new TextEncoder().encode(JSON.stringify([rawId, minted])).byteLength,
+    { kind: "item_ids" },
+  );
   state.responseIdMap.set(rawId, minted);
   return minted;
+}
+
+function releaseReasoningText(state: ResponsesItemIdRepairState, outputIndex: number): void {
+  const existing = state.reasoningTextByOutputIndex.get(outputIndex);
+  if (existing === undefined) return;
+  state.budget?.releaseRetained(new TextEncoder().encode(existing).byteLength, { kind: "reasoning" });
+  state.reasoningTextByOutputIndex.delete(outputIndex);
+}
+
+function setReasoningText(
+  state: ResponsesItemIdRepairState,
+  outputIndex: number,
+  text: string,
+): void {
+  const existing = state.reasoningTextByOutputIndex.get(outputIndex);
+  if (existing === text) return;
+  if (existing !== undefined) {
+    state.budget?.releaseRetained(new TextEncoder().encode(existing).byteLength, { kind: "reasoning" });
+  }
+  if (!text) {
+    state.reasoningTextByOutputIndex.delete(outputIndex);
+    return;
+  }
+  state.budget?.chargeRetained(new TextEncoder().encode(text).byteLength, { kind: "reasoning" });
+  state.reasoningTextByOutputIndex.set(outputIndex, text);
+}
+
+function accumulateReasoningText(
+  state: ResponsesItemIdRepairState,
+  outputIndex: number,
+  delta: string,
+): void {
+  if (!delta) return;
+  // Charge only the newly retained delta bytes; release the whole entry when the stream ends.
+  state.budget?.chargeRetained(new TextEncoder().encode(delta).byteLength, { kind: "reasoning" });
+  state.reasoningTextByOutputIndex.set(
+    outputIndex,
+    (state.reasoningTextByOutputIndex.get(outputIndex) ?? "") + delta,
+  );
 }
 
 function normalizeReasoningItem(
@@ -173,15 +223,24 @@ function normalizeReasoningItem(
         .map(part => String(part.text))
         .join("")
       : "");
-  if (text) state.reasoningTextByOutputIndex.set(outputIndex, text);
+  if (text && !state.reasoningTextByOutputIndex.has(outputIndex)) {
+    // Snapshot content-derived text into the budgeted map only when we still need it later.
+    if (!terminal) setReasoningText(state, outputIndex, text);
+  }
   const next: Record<string, unknown> = {
     type: "reasoning",
     id: mapped,
     summary: Array.isArray(item.summary) ? item.summary : [],
   };
   if (terminal || text) {
+    // Codex consumes encrypted_content; DeepSeek tool-call continuations need plaintext
+    // reasoning_text after sanitizeReasoningInputContent strips the proxy-only ocxr1 envelope.
     next.encrypted_content = encodeReasoningEnvelope({ txt: text || " " });
+    if (text) {
+      next.content = [{ type: "reasoning_text", text }];
+    }
   }
+  if (terminal) releaseReasoningText(state, outputIndex);
   return next;
 }
 
@@ -286,17 +345,6 @@ function rewriteResponseSnapshot(
   return changed ? { response: { ...next, output }, changed: true } : { response: next, changed };
 }
 
-function accumulateReasoningText(
-  state: ResponsesItemIdRepairState,
-  outputIndex: number,
-  delta: string,
-): void {
-  state.reasoningTextByOutputIndex.set(
-    outputIndex,
-    (state.reasoningTextByOutputIndex.get(outputIndex) ?? "") + delta,
-  );
-}
-
 function repairEventPayload(
   payload: string,
   state: ResponsesItemIdRepairState,
@@ -327,7 +375,7 @@ function repairEventPayload(
     }
     if (type === "response.reasoning_text.done") {
       if (outputIndex !== null && typeof event.text === "string") {
-        state.reasoningTextByOutputIndex.set(outputIndex, event.text);
+        setReasoningText(state, outputIndex, event.text);
       }
       return null;
     }
@@ -337,7 +385,7 @@ function repairEventPayload(
       && event.part.type === "reasoning_text"
     ) {
       if (outputIndex !== null && typeof event.part.text === "string" && event.part.text) {
-        state.reasoningTextByOutputIndex.set(outputIndex, event.part.text);
+        setReasoningText(state, outputIndex, event.part.text);
       }
       return null;
     }
@@ -369,7 +417,7 @@ function repairEventPayload(
     }
   }
 
-  if (type === "response.completed") state.sawCompleted = true;
+  if (type && TERMINAL_RESPONSE_TYPES.has(type)) state.sawTerminal = true;
 
   if (state.rewriteNonCanonicalIds && isPlainObject(nextEvent.part) && nextEvent.part.type === "output_text") {
     nextEvent = {
@@ -380,10 +428,6 @@ function repairEventPayload(
         annotations: Array.isArray(nextEvent.part.annotations) ? nextEvent.part.annotations : [],
       },
     };
-    if ("logprobs" in nextEvent) {
-      const { logprobs: _lp, ...rest } = nextEvent;
-      nextEvent = rest;
-    }
     changed = true;
   }
   if (state.rewriteNonCanonicalIds && "logprobs" in nextEvent) {
@@ -413,6 +457,11 @@ function repairEventPayload(
 export interface ResponsesItemIdRepairHandlers {
   rewrite: SsePayloadRewrite;
   trailer: () => string | undefined;
+  /**
+   * Map a provider-raw response id to the client-visible id emitted on the repaired
+   * stream. Used to alias local previous_response_id continuation state.
+   */
+  clientResponseId: (rawId: string | undefined) => string | undefined;
 }
 
 export function createResponsesItemIdRepairHandlers(
@@ -423,9 +472,10 @@ export function createResponsesItemIdRepairHandlers(
   return {
     rewrite: (payload) => repairEventPayload(payload, state),
     trailer: () => {
-      if (state.sawCompleted && !state.sawDoneTrailer) return "data: [DONE]\n\n";
+      if (state.sawTerminal && !state.sawDoneTrailer) return "data: [DONE]\n\n";
       return undefined;
     },
+    clientResponseId: (rawId) => mapResponseId(state, rawId),
   };
 }
 

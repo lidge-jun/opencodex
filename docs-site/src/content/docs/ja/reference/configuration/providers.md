@@ -84,7 +84,7 @@ namespace 付き combo alias はその namespace prefix に selector を再利�
 | `noTopPModels?` | `string[]` |発信者指定の`top_p`を拒否するモデル。 |
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
-| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` |正確なプレースホルダー ID および欠落している端末 ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。 |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; rewriteNonCanonicalIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および非標準の UUID 形式 response/item ID（`rewriteNonCanonicalIds`）に対するダウンストリーム SSE 修復はデフォルトで無効です。関数呼び出し ID は決して書き換えられません。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
 | `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |
 | `thinkingToggleModels?` | `string[]` |エフォート ラダーではなく `thinking.enabled` を使用してモデルをチャットします。 |
@@ -197,7 +197,8 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
       "responsesItemIdRepair": {
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
-        "repairMissingTerminalIds": true
+        "repairMissingTerminalIds": true,
+        "rewriteNonCanonicalIds": true
       }
     }
   }

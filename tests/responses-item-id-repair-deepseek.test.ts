@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createResponsesItemIdRepairHandlers,
   hasResponsesItemIdRepair,
   relaySseWithResponsesItemIdRepair as relaySseWithResponsesItemIdRepairProduction,
 } from "../src/server/responses-item-id-repair";
-import { finalizeTranslatorBudgetResponse } from "../src/lib/translator-budget";
+import { finalizeTranslatorBudgetResponse, isTranslatorBudgetExceededError } from "../src/lib/translator-budget";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import { relaySseEagerBounded } from "../src/server/relay-eager";
 
 function relaySseWithResponsesItemIdRepair(
   body: ReadableStream<Uint8Array>,
   config: Parameters<typeof relaySseWithResponsesItemIdRepairProduction>[1],
+  budget = createTestTranslatorBudget(),
 ): ReadableStream<Uint8Array> {
-  const budget = createTestTranslatorBudget();
   return finalizeTranslatorBudgetResponse(
     new Response(relaySseWithResponsesItemIdRepairProduction(body, config, budget)),
     budget,
@@ -86,9 +88,12 @@ describe("DeepSeek Responses item-id repair", () => {
     expect(completed.id).toMatch(/^resp_ocx_[0-9a-f]+_\d+$/);
     expect(completed.output[0].id).toBe(reasoningAdded.id);
     expect(String(completed.output[0].encrypted_content)).toMatch(/^ocxr1:/);
+    expect((completed.output[0].content as Array<{ type: string; text: string }>)[0]).toEqual({
+      type: "reasoning_text",
+      text: "think",
+    });
     expect(completed.output[1].id).toBe(messageAdded.id);
   });
-
 
   test("mints unique response ids for distinct upstream response ids", async () => {
     const upstream = [
@@ -127,6 +132,58 @@ describe("DeepSeek Responses item-id repair", () => {
     const repaired = await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
       rewriteNonCanonicalIds: true,
     }));
+    expect(repaired.match(/data: \[DONE\]/g)).toHaveLength(1);
+  });
+
+  test("emits [DONE] for response.failed and response.incomplete", async () => {
+    for (const type of ["response.failed", "response.incomplete"] as const) {
+      const upstream = `event: ${type}\ndata: {"type":"${type}","response":{"id":"58786d76-18be-43d9-b6f5-8922796fbe28","status":"${type === "response.failed" ? "failed" : "incomplete"}","output":[]}}\n\n`;
+      const repaired = await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+        rewriteNonCanonicalIds: true,
+      }));
+      expect(repaired.match(/data: \[DONE\]/g)).toHaveLength(1);
+    }
+  });
+
+  test("charges responseIdMap through TranslatorBudget", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 256 });
+    const handlers = createResponsesItemIdRepairHandlers({ rewriteNonCanonicalIds: true }, budget);
+    let overflowed = false;
+    try {
+      for (let i = 0; i < 200; i++) {
+        const raw = `${i.toString(16).padStart(8, "0")}-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+        handlers.rewrite(JSON.stringify({
+          type: "response.completed",
+          response: { id: raw, status: "completed", output: [] },
+        }));
+      }
+    } catch (error) {
+      overflowed = isTranslatorBudgetExceededError(error);
+    }
+    expect(overflowed).toBe(true);
+  });
+
+  test("eager relay emits exactly one [DONE] trailer without upstream DONE", async () => {
+    const budget = createTestTranslatorBudget();
+    const handlers = createResponsesItemIdRepairHandlers({ rewriteNonCanonicalIds: true }, budget);
+    const upstream = [
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"58786d76-18be-43d9-b6f5-8922796fbe28","status":"completed","output":[]}}\n\n`,
+    ].join("");
+    const body = streamFromText(upstream);
+    const ac = new AbortController();
+    const relayed = relaySseEagerBounded(body, ac, {
+      inspectChunk: () => {},
+      finishInspection: () => {},
+      sawTerminal: () => true,
+      onSynthetic: () => {},
+      onClientCancel: () => {},
+      onDone: () => {},
+      rewritePayload: handlers.rewrite,
+    }, {
+      rewriteBudget: budget,
+      trailer: handlers.trailer,
+    });
+    const repaired = await readAll(relayed);
     expect(repaired.match(/data: \[DONE\]/g)).toHaveLength(1);
   });
 

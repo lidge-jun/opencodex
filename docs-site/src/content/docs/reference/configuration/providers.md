@@ -91,7 +91,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `parallelToolCalls?` | `boolean` | Toggle parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise only on explicit `true`. |
-| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | Disabled-by-default downstream SSE repair for exact placeholder ids and missing terminal ids. Function-call ids are never rewritten. |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; rewriteNonCanonicalIds?: boolean }` | Disabled-by-default downstream SSE repair for exact placeholder ids, missing terminal ids, and non-canonical UUID-style response/item ids (`rewriteNonCanonicalIds`). Function-call ids are never rewritten. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Models whose `tool_choice` accepts only `auto` or `none`; forced choices are downgraded. |
 | `preserveReasoningContentModels?` | `string[]` | Models requiring prior assistant `reasoning_content` in chat history. |
 | `thinkingToggleModels?` | `string[]` | Chat models using `thinking.enabled` rather than an effort ladder. |
@@ -237,15 +237,15 @@ For a broken `openai-responses` gateway, repair belongs on the provider object:
       "responsesItemIdRepair": {
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
-        "repairMissingTerminalIds": true
+        "repairMissingTerminalIds": true,
+        "rewriteNonCanonicalIds": true
       }
     }
   }
 }
 ```
 
-Placeholder lists are exact matches. Leave the field unset for normal/stateful Responses providers
-so passthrough stays byte-for-byte identical.
+Placeholder lists are exact matches. Set `rewriteNonCanonicalIds` for gateways such as DeepSeek Responses that emit UUID item/response ids and raw `reasoning_text` streams; OpenCodex rewrites those ids to Codex-friendly prefixes, folds reasoning into `encrypted_content` (while keeping plaintext `content` for replay), and ensures a terminal `[DONE]`. Leave the field unset for normal/stateful Responses providers so passthrough stays byte-for-byte identical.
 
 ## Cursor provider (`adapter: "cursor"`)
 

@@ -83,7 +83,7 @@ pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex 
 | `noTopPModels?` | `string[]` | 会拒绝调用方指定 `top_p` 的模型。 |
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 |
 | `parallelToolCalls?` | `boolean` | 切换并行工具调用。OpenAI Chat 默认开启；非 chat 适配器只有显式 `true` 时才会声明支持。 |
-| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id 和缺失的终止 id。function-call id 永远不会被重写。 |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; rewriteNonCanonicalIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及非标准 UUID 风格的 response/item id（`rewriteNonCanonicalIds`）。function-call id 永远不会被重写。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；强制选择会被降级。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。 |
 | `thinkingToggleModels?` | `string[]` | 使用 `thinking.enabled` 而不是 effort 阶梯的 chat 模型。 |
@@ -193,14 +193,15 @@ affinity。这些策略不能规避 provider enforcement。
       "responsesItemIdRepair": {
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
-        "repairMissingTerminalIds": true
+        "repairMissingTerminalIds": true,
+        "rewriteNonCanonicalIds": true
       }
     }
   }
 }
 ```
 
-占位列表必须精确匹配。对于正常/有状态的 Responses 提供者，请保持该字段未设置，以便转发能保持逐字节一致。
+占位列表必须精确匹配。对 DeepSeek Responses 这类会返回 UUID item/response id 与原始 `reasoning_text` 流的网关，请设置 `rewriteNonCanonicalIds`：OpenCodex 会把 id 改写成 Codex 友好前缀，把 reasoning 折叠进 `encrypted_content`（同时保留明文 `content` 便于回放），并补齐终端 `[DONE]`。对于正常/有状态的 Responses 提供者，请保持该字段未设置，以便转发能保持逐字节一致。
 
 ## Cursor 提供者（`adapter: "cursor"`）
 

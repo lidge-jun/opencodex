@@ -1643,9 +1643,19 @@ async function handleResponsesInner(
     // recording it would let a later expansion rehydrate the chain Codex just replaced.
     const passthroughRecordEligible = parsed._compactionRequest !== true
       && (!parsed.previousResponseId || parsed._previousResponseInputExpanded === true);
+    // When item-id repair rewrites response ids, the inspector still sees the raw
+    // upstream UUID while Codex chains previous_response_id with the client-visible
+    // resp_ocx_* id. Alias both keys into the local continuation cache.
+    let mapClientResponseId: ((rawId: string | undefined) => string | undefined) | undefined;
     const rememberPassthroughResponse = passthroughRecordEligible
-      ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
-        rememberResponseState(parsed._rawBody, response, undefined, { force: true })
+      ? (response: { id?: unknown; output?: unknown; status?: unknown }) => {
+        rememberResponseState(parsed._rawBody, response, undefined, { force: true });
+        if (typeof response.id !== "string" || !mapClientResponseId) return;
+        const clientId = mapClientResponseId(response.id);
+        if (clientId && clientId !== response.id) {
+          rememberResponseState(parsed._rawBody, { ...response, id: clientId }, undefined, { force: true });
+        }
+      }
       : undefined;
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
@@ -1854,6 +1864,7 @@ async function handleResponsesInner(
       const itemIdRepair = hasResponsesItemIdRepair(repairConfig)
         ? createResponsesItemIdRepairHandlers(repairConfig!, translatorBudget)
         : undefined;
+      if (itemIdRepair) mapClientResponseId = itemIdRepair.clientResponseId;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
