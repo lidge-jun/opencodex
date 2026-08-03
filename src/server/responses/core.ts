@@ -1870,7 +1870,9 @@ async function handleResponsesInner(
           inspectChunk: chunk => inspector.feed(chunk),
           finishInspection: () => inspector.finish(),
           disposeInspection: () => inspector.dispose(),
-          sawTerminal: () => inspector.reported(),
+          // Stream lifetime follows the protocol terminal even when this request
+          // has no outcome callback configured (reported() would stay false).
+          sawTerminal: () => inspector.terminalSeen(),
           ...(win32EagerRewrite
             ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
             : {}),
@@ -1888,9 +1890,10 @@ async function handleResponsesInner(
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
         }, win32EagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
-        // selectEagerPath admits only no-rewrite traffic on both eligible platforms;
-        // win32 rewrite traffic reaches this relay too, but with the payload rewrite
-        // applied inline — never via an image/item-id JS pull wrapper (#32111, #864).
+        // When selected, this relay closes response.completed even if upstream
+        // keeps the connection alive. Windows rewrite traffic applies its
+        // payload transform inline — never via the Bun#32111-unsafe
+        // tee()+JS-pull chain (#864).
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
         return markEagerRelaySseResponse(
           markNativePassthroughSseResponse(new Response(eagerBody, {
@@ -1957,15 +1960,13 @@ async function handleResponsesInner(
         );
       }
       if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
-      // win32 must keep the pure native relay (Bun#32111 JS-sink segfault); elsewhere a JS pull
-      // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
-      // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
+      // Windows was handled by the eager terminal-aware branch above. Remaining
+      // tee traffic can use the JS relay to close on a protocol terminal and to
+      // convert a mid-stream reset into a clean response.failed event.
       const rewrittenBody = payloadRewrites.length > 0
         ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
         : nativeBody;
-      const clientBody = process.platform === "win32" && !needsClientRewrite
-        ? nativeBody
-        : relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
+      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,

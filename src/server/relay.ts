@@ -95,6 +95,79 @@ export function buildFailedTailPayload(err: unknown): string {
   });
 }
 
+export type SseTerminalOutputBoundary = {
+  feed(chunk: Uint8Array): Uint8Array;
+  finish(): Uint8Array;
+  terminalSeen(): boolean;
+  doneSeen(): boolean;
+  dispose(): void;
+};
+
+/**
+ * Frame-aware client output boundary shared by both native Responses relays.
+ * It buffers only the current incomplete SSE block, forwards complete blocks
+ * through the first Responses terminal, and drops every later block/byte.
+ */
+export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
+  let decoder: TextDecoder | null = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+  let terminal = false;
+  let done = false;
+  let disposed = false;
+
+  const process = (flush: boolean): Uint8Array => {
+    if (disposed || terminal) return new Uint8Array(0);
+    let output = "";
+    let responsesTerminal = false;
+    for (;;) {
+      const next = nextSseBlock(buffer);
+      if (!next) break;
+      buffer = next.rest;
+      const payload = sseDataPayload(next.block);
+      if (!responsesTerminal) output += next.block + next.delimiter;
+      if (payload === "[DONE]") {
+        done = true;
+        if (responsesTerminal) output += next.block + next.delimiter;
+        continue;
+      }
+      if (!responsesTerminal && payload && terminalStatusFromSsePayload(payload)) {
+        responsesTerminal = true;
+      }
+    }
+    if (responsesTerminal) {
+      terminal = true;
+      buffer = "";
+    }
+    if (flush && !terminal && buffer.length > 0) {
+      output += buffer;
+      buffer = "";
+    }
+    return encoder.encode(output);
+  };
+
+  return {
+    feed(chunk) {
+      if (disposed || terminal) return new Uint8Array(0);
+      buffer += decoder!.decode(chunk, { stream: true });
+      return process(false);
+    },
+    finish() {
+      if (disposed || terminal) return new Uint8Array(0);
+      buffer += decoder!.decode();
+      return process(true);
+    },
+    terminalSeen: () => terminal,
+    doneSeen: () => done,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      decoder = null;
+      buffer = "";
+    },
+  };
+}
+
 /**
  * Relay a passthrough SSE body like relayWithAbort, but convert a MID-STREAM failure (upstream
  * reset after headers) into a clean terminal: any partial block is closed off, then a synthetic
@@ -110,18 +183,57 @@ export function relaySseWithFailedTail(
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
+  const terminalBoundary = createSseTerminalOutputBoundary();
+  let closed = false;
+  const relayChunk = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    value: Uint8Array,
+  ): "terminal" | "output" | "buffered" => {
+    const outbound = terminalBoundary.feed(value);
+    if (outbound.byteLength > 0) controller.enqueue(outbound);
+    if (!terminalBoundary.terminalSeen()) return outbound.byteLength > 0 ? "output" : "buffered";
+
+    // A Responses terminal frame is the protocol boundary. Some compatible
+    // gateways leave the HTTP connection open after response.completed, which
+    // otherwise leaves Codex waiting forever even though the model turn is done.
+    // Preserve through the terminal block only, add the conventional sentinel
+    // when there was no real [DONE] data event, then stop reading upstream.
+    if (!terminalBoundary.doneSeen()) {
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+    }
+    closed = true;
+    controller.close();
+    const reason = "Responses terminal event received";
+    // Notify the tee inspection branch as well. It has already received the
+    // same terminal-bearing upstream chunk, so its bounded drain records the
+    // real terminal and then releases the turn/upstream keep-alive connection.
+    onClientGone?.(reason);
+    reader.cancel(reason).catch(() => {});
+    terminalBoundary.dispose();
+    return "terminal";
+  };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        const { done, value } = await reader.read();
-        if (done) {
-          controller.close();
-          return;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            const tail = terminalBoundary.finish();
+            if (tail.byteLength > 0) controller.enqueue(tail);
+            terminalBoundary.dispose();
+            controller.close();
+            return;
+          }
+          const result = relayChunk(controller, value);
+          if (result !== "buffered") return;
         }
-        controller.enqueue(value);
       } catch (err) {
+        const partial = terminalBoundary.finish();
+        terminalBoundary.dispose();
+        if (closed) return;
         const payload = buildFailedTailPayload(err);
         try {
+          if (partial.byteLength > 0) controller.enqueue(partial);
           // Leading blank line terminates a partial SSE block so the failed frame parses cleanly.
           controller.enqueue(encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\ndata: [DONE]\n\n`));
           controller.close();
@@ -130,6 +242,7 @@ export function relaySseWithFailedTail(
       }
     },
     cancel(reason) {
+      terminalBoundary.dispose();
       if (onClientGone) onClientGone(reason);
       else upstream.abort(reason);
       reader.cancel(reason).catch(() => {});
@@ -137,11 +250,12 @@ export function relaySseWithFailedTail(
   });
 }
 
-export function nextSseBlock(buffer: string): { block: string; rest: string } | null {
+export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
   const match = buffer.match(/\r?\n\r?\n/);
   if (!match || match.index === undefined) return null;
   return {
     block: buffer.slice(0, match.index),
+    delimiter: match[0],
     rest: buffer.slice(match.index + match[0].length),
   };
 }

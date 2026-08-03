@@ -6,7 +6,8 @@
  * PR #32120, merged 2026-06-21). No RELEASED Bun version is proven to carry
  * that fix yet, so `MIN_FIXED_BUN_VERSION` is null: every runtime is
  * "known-bad" until a bundle-bump commit sets it. Windows no-rewrite traffic
- * follows this runtime/config decision. Darwin no-rewrite traffic stays on tee
+ * follows this runtime/config decision, preserving the explicit legacy-tee
+ * safety pin. Darwin no-rewrite traffic stays on tee
  * for `auto` regardless of runtime capability and reaches eager relay only via
  * explicit `streamMode: "eager-relay"` opt-in (see
  * devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).

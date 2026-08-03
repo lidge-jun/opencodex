@@ -176,8 +176,10 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     expect(text).toContain("RESTORED");
     expect(text).not.toContain("image_gen__gen");
     expect(text).toContain("response.completed");
-    // A partial trailing block reaches the client verbatim at EOF.
-    expect(text).toContain("trailing-partial");
+    // The protocol terminal ends the client stream; bytes produced after it
+    // belong to the gateway's retained connection and must not hold Codex open.
+    expect(text).not.toContain("trailing-partial");
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
   });
 
   test("identity rewrite preserves framing byte-for-byte", async () => {
@@ -198,9 +200,35 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     up.close();
 
     const text = await reading;
-    expect(text).toBe(new TextDecoder().decode(joinBytes([first, enc.encode(second)])));
+    expect(text).toBe(
+      new TextDecoder().decode(joinBytes([first, enc.encode(second)])) + "data: [DONE]\n\n",
+    );
     // The rewrite actually ran — this is what makes the test red pre-fix.
     expect(rewriteCalls).toBeGreaterThan(0);
+  });
+
+  test("drops coalesced post-terminal frames and detects only a real DONE event", async () => {
+    for (const realDone of [false, true]) {
+      const up = controlledUpstream();
+      const { hooks } = makeHooks();
+      const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+      const reading = readAll(relayed);
+      const completed = JSON.stringify({
+        type: "response.completed",
+        response: { status: "completed", note: "data: [DONE]" },
+      });
+      up.push(enc.encode(
+        `event: response.completed\ndata: ${completed}\n\n`
+        + (realDone ? "data: [DONE]\n\n" : "")
+        + `data: {"type":"response.output_text.delta","delta":"must not leak"}\n\n`,
+      ));
+      up.close();
+
+      const text = await reading;
+      expect(text).not.toContain("must not leak");
+      expect(countOccurrences(text, "\ndata: [DONE]\n\n")).toBe(1);
+      expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
+    }
   });
 
   test("unchanged multi-data-line events keep their original framing", async () => {
@@ -238,7 +266,7 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     expect(text).toBe("data: �");
   });
 
-  test("retained rewrite-budget bytes are released on upstream abort", async () => {
+  test("terminal framing keeps partial blocks out of the rewrite budget", async () => {
     const budget = createTranslatorBudget();
     const up = controlledUpstream();
     const ac = new AbortController();
@@ -248,13 +276,15 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
 
     up.push(enc.encode(`data: {"type":"unterminated"`));
     await settle();
-    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+    // The shared terminal boundary now owns incomplete SSE framing, so the
+    // downstream rewrite stage never retains an unterminated block.
+    expect(budget.snapshot().currentBytes).toBe(0);
     ac.abort(new Error("test abort"));
     await settle();
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
-  test("blocks without a data field pass through untouched", async () => {
+  test("blocks without a data field pass through untouched before the terminal", async () => {
     const up = controlledUpstream();
     const { hooks } = makeHooks();
     let rewriteCalls = 0;
@@ -265,8 +295,8 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
     const reading = readAll(relayed);
 
-    up.push(enc.encode(`event: response.completed\ndata: ${COMPLETED}\n\n`));
     up.push(enc.encode(`: keepalive comment\n\n`));
+    up.push(enc.encode(`event: response.completed\ndata: ${COMPLETED}\n\n`));
     up.close();
 
     const text = await reading;
@@ -362,7 +392,7 @@ describe("relaySseEagerBounded — side-effect parity", () => {
 
     const clientBytes = await readAllBytes(relayed);
     await settle();
-    expect(clientBytes).toEqual(joinBytes(frames));
+    expect(clientBytes).toEqual(joinBytes([...frames, enc.encode("data: [DONE]\n\n")]));
     const wireText = new TextDecoder().decode(clientBytes);
     expect(wireText).not.toContain('"output":');
     expect(rec.completed).toHaveLength(1);
@@ -467,6 +497,45 @@ describe("relaySseEagerBounded — #44 cancel semantics", () => {
     await settle(20);
     expect(rec.terminals).toEqual([{ status: "completed", httpStatus: undefined }]);
     expect(rec.cancels).toBe(0);
+    expect(rec.dones).toBe(1);
+  });
+
+  test("post-cancel terminal ends metadata-only drain without waiting for timeout", async () => {
+    const inspector = createSseInspector({});
+    const up = controlledUpstream();
+    const rec = { cancels: 0, dones: 0, synthetics: [] as string[] };
+    let resolveDone!: () => void;
+    const relayDone = new Promise<void>(resolve => { resolveDone = resolve; });
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), {
+      inspectChunk: chunk => inspector.feed(chunk),
+      finishInspection: () => inspector.finish(),
+      disposeInspection: () => inspector.dispose(),
+      // Mirrors the no-onTerminal wiring in responses/core.ts.
+      sawTerminal: () => inspector.terminalSeen(),
+      onSynthetic: kind => { rec.synthetics.push(kind); },
+      onClientCancel: () => { rec.cancels += 1; },
+      onDone: () => { rec.dones += 1; resolveDone(); },
+    }, { postCancelDrainMs: 5_000 });
+    const reader = relayed.getReader();
+    up.push(sse(DELTA));
+    await settle(5);
+    await reader.cancel();
+
+    // Keep upstream open after delivering the terminal. The protocol terminal,
+    // not EOF or the five-second drain timer, must finish the relay lifecycle.
+    up.push(sse(COMPLETED));
+    await Promise.race([
+      relayDone,
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error("metadata-only terminal drain waited for timeout")),
+        200,
+      )),
+    ]);
+
+    expect(inspector.reported()).toBe(false);
+    expect(inspector.terminalSeen()).toBe(true);
+    expect(rec.cancels).toBe(0);
+    expect(rec.synthetics).toEqual([]);
     expect(rec.dones).toBe(1);
   });
 

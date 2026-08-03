@@ -24,7 +24,7 @@
  * up to the drain window.
  */
 
-import { buildFailedTailPayload } from "./relay";
+import { buildFailedTailPayload, createSseTerminalOutputBoundary } from "./relay";
 import {
   nextSseBlock,
   replaceSseDataPayload,
@@ -92,6 +92,7 @@ export function relaySseEagerBounded(
   const now = opts?.now ?? Date.now;
 
   const reader = body.getReader();
+  const terminalBoundary = createSseTerminalOutputBoundary();
   const rewrite = hooks.rewritePayload;
   const rewriteDecoder = rewrite ? new TextDecoder() : null;
   const rewriteEncoder = rewrite ? new TextEncoder() : null;
@@ -161,6 +162,7 @@ export function relaySseEagerBounded(
   let queuedBytes = 0;
   let cancelled = false;
   let done = false;
+  const terminalSentinel = new TextEncoder().encode("data: [DONE]\n\n");
   // Pause gate: resolved by client pull, client cancel, or upstream abort so a
   // paused producer ALWAYS resumes (audit blocker 2 — no deadlock; onDone and
   // turn unregistration stay reachable, drainAndShutdown never hangs).
@@ -216,12 +218,17 @@ export function relaySseEagerBounded(
         if (upstream.signal.aborted) break;
         if (upstreamDone) {
           hooks.finishInspection();
+          const boundedTail = terminalBoundary.finish();
           if (rewrite) {
-            const tail = flushRewriteTail();
+            const rewritten = rewriteOutbound(boundedTail);
+            const tail = joinUint8Arrays(rewritten, flushRewriteTail());
             if (tail.byteLength > 0 && !cancelled) {
               queuedBytes += tail.byteLength;
               try { controllerRef?.enqueue(tail); } catch { /* client already gone */ }
             }
+          } else if (boundedTail.byteLength > 0 && !cancelled) {
+            queuedBytes += boundedTail.byteLength;
+            try { controllerRef?.enqueue(boundedTail); } catch { /* client already gone */ }
           }
           if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
             syntheticKind = "incomplete";
@@ -237,17 +244,30 @@ export function relaySseEagerBounded(
           }
           continue;
         }
-        const outbound = rewrite ? rewriteOutbound(value) : value;
-        if (outbound.byteLength === 0) continue;
-        queuedBytes += outbound.byteLength;
-        try {
-          controllerRef?.enqueue(outbound);
-        } catch {
-          // Controller already torn down (client went away without cancel()).
-          cancelled = true;
-          drainDeadline = now() + drainMs;
-          armDrainTimer();
-          continue;
+        const terminalBounded = terminalBoundary.feed(value);
+        const outbound = rewrite ? rewriteOutbound(terminalBounded) : terminalBounded;
+        if (outbound.byteLength > 0) {
+          queuedBytes += outbound.byteLength;
+          try {
+            controllerRef?.enqueue(outbound);
+          } catch {
+            // Controller already torn down (client went away without cancel()).
+            cancelled = true;
+            drainDeadline = now() + drainMs;
+            armDrainTimer();
+            continue;
+          }
+        }
+        if (terminalBoundary.terminalSeen()) {
+          // The Responses terminal event ends the turn even when a compatible
+          // gateway keeps its HTTP connection alive. Add the conventional
+          // sentinel and stop the single-reader relay at that protocol boundary.
+          if (!terminalBoundary.doneSeen()) {
+            queuedBytes += terminalSentinel.byteLength;
+            try { controllerRef?.enqueue(terminalSentinel); } catch { /* client already gone */ }
+          }
+          reader.cancel("Responses terminal event received").catch(() => {});
+          break;
         }
         while (queuedBytes > maxQueueBytes && !cancelled && !upstream.signal.aborted) {
           await paused();
@@ -279,6 +299,7 @@ export function relaySseEagerBounded(
         try { rewriteBudget.releaseRetained(frameBufferBytes, { kind: "live_transient" }); } catch { /* teardown must not throw */ }
         frameBufferBytes = 0;
       }
+      terminalBoundary.dispose();
       if (syntheticKind) hooks.onSynthetic(syntheticKind);
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
@@ -317,4 +338,13 @@ export function relaySseEagerBounded(
       wakeUp();
     },
   });
+}
+
+function joinUint8Arrays(first: Uint8Array, second: Uint8Array): Uint8Array {
+  if (first.byteLength === 0) return second;
+  if (second.byteLength === 0) return first;
+  const joined = new Uint8Array(first.byteLength + second.byteLength);
+  joined.set(first);
+  joined.set(second, first.byteLength);
+  return joined;
 }
