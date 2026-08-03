@@ -848,6 +848,62 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
   });
 });
 
+test("a custom row inherits provider reasoning metadata from the provider-derived row it replaces (#962)", async () => {
+  clearModelCache("ollama");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => { throw new Error("fetch should not be called"); }) as typeof fetch;
+  try {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "ollama",
+      providers: {
+        ollama: {
+          baseUrl: "http://localhost:11434/v1",
+          adapter: "openai-chat",
+          authMode: "key",
+          liveModels: false,
+          models: ["qwen-coder-3b"],
+          selectedModels: ["qwen-coder-3b"],
+          noReasoningModels: ["qwen-coder-3b"],
+          modelReasoningEfforts: { "qwen-coder-3b": [] },
+        },
+      },
+      customModels: [
+        {
+          id: "cm-962",
+          provider: "ollama",
+          modelId: "qwen-coder-3b",
+          displayName: "Qwen Coder 3B (local)",
+          contextWindow: 32768,
+          inputModalities: ["text"],
+          addedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+
+    // Explicit custom fields stay verbatim; provider capability metadata is inherited from the
+    // replaced provider-derived row (noReasoningModels -> empty reasoning ladder, openai-chat
+    // adapter -> parallel tool calls).
+    const custom = models.find(m => m.provider === "ollama" && m.id === "qwen-coder-3b");
+    expect(custom?.displayName).toBe("Qwen Coder 3B (local)");
+    expect(custom?.contextWindow).toBe(32768);
+    expect(custom?.inputModalities).toEqual(["text"]);
+    expect(custom?.reasoningEfforts).toEqual([]);
+    expect(custom?.parallelToolCalls).toBe(true);
+
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const row = entries.find(e => e.slug === "ollama/qwen-coder-3b");
+    expect(row?.display_name).toBe("Qwen Coder 3B (local)");
+    // The catalog must expose no reasoning levels and no default reasoning level for this model;
+    // the generic low..ultra ladder and the medium default must not be synthesized.
+    expect(row?.supported_reasoning_levels).toEqual([]);
+    expect(row?.default_reasoning_level).toBeUndefined();
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearModelCache("ollama");
+  }
+});
+
 function openAiApiCatalogConfig(overrides: Record<string, unknown> = {}): OcxConfig {
   return {
     port: 10100,

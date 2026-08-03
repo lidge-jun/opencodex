@@ -782,6 +782,9 @@ async function gatherRoutedModelsUncached(
   // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
   // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
   const enrichedByName = new Map(activeProviders);
+  // Provider-derived rows keyed by their Codex-facing slug: a custom override replaces the row
+  // with the same slug below, so that row's provider capability metadata is the inheritance source.
+  const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
   const customModels = (config.customModels ?? []).map(cm => {
     const rawProvider = config.providers[cm.provider];
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
@@ -794,19 +797,38 @@ async function gatherRoutedModelsUncached(
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     };
+    // #962: the dedupe below drops the provider-derived row this custom row replaces. Inherit that
+    // row's provider capability metadata (reasoning ladder, default effort, parallel tool calls,
+    // context, ...) so the generated catalog keeps advertising what the router actually provides.
+    // Explicit custom fields win by construction; this only fills gaps. Without it a
+    // noReasoningModels model loses its empty ladder and the catalog synthesizes the generic one,
+    // which Codex then rejects for spawn_agent with effort "none".
+    const replaced = replacedByRoutedSlug.get(routedSlug(cm.provider, cm.modelId));
+    const merged: CatalogModel = replaced ? {
+      ...base,
+      ...(base.contextWindow === undefined && replaced.contextWindow !== undefined ? { contextWindow: replaced.contextWindow } : {}),
+      ...(base.maxInputTokens === undefined && replaced.maxInputTokens !== undefined ? { maxInputTokens: replaced.maxInputTokens } : {}),
+      ...(base.inputModalities === undefined && replaced.inputModalities !== undefined ? { inputModalities: replaced.inputModalities } : {}),
+      ...(base.reasoningEfforts === undefined && replaced.reasoningEfforts !== undefined ? { reasoningEfforts: replaced.reasoningEfforts } : {}),
+      ...(base.defaultReasoningEffort === undefined && replaced.defaultReasoningEffort !== undefined ? { defaultReasoningEffort: replaced.defaultReasoningEffort } : {}),
+      ...(base.parallelToolCalls === undefined && replaced.parallelToolCalls !== undefined ? { parallelToolCalls: replaced.parallelToolCalls } : {}),
+      ...(base.supportsVerbosity === undefined && replaced.supportsVerbosity !== undefined ? { supportsVerbosity: replaced.supportsVerbosity } : {}),
+      ...(base.supportsReasoningSummaries === undefined && replaced.supportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: replaced.supportsReasoningSummaries } : {}),
+      ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
+    } : base;
     // Vision-sidecar coverage ONLY: if the custom model is in the enriched provider's
     // noVisionModels, advertise image input so the Codex app lets images reach the sidecar
     // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
     // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
     // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
     const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
-    if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, base.id)) {
-      const current = base.inputModalities ?? ["text"];
+    if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, merged.id)) {
+      const current = merged.inputModalities ?? ["text"];
       if (!current.includes("image")) {
-        return { ...base, inputModalities: [...current, "image"] };
+        return { ...merged, inputModalities: [...current, "image"] };
       }
     }
-    return base;
+    return merged;
   });
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
