@@ -244,11 +244,10 @@ export function createResponsesSnapshotPayloadRewrite(
       ? RESPONSE_EVENT_STATUSES[type]
       : undefined;
     if (responseStatus && isPlainObject(event.response)) {
-      const hasAuthoritativeOutput = Array.isArray(event.response.output)
-        && event.response.output.length > 0;
+      const outputIsAbsent = !Object.hasOwn(event.response, "output");
       let reconstructedOutput: Record<string, unknown>[] | undefined;
       if ((type === "response.completed" || type === "response.incomplete")
-        && !hasAuthoritativeOutput
+        && outputIsAbsent
         && !reconstructionTainted
         && completedItems.size > 0) {
         const orderedItems = [...completedItems.entries()]

@@ -197,34 +197,28 @@ describe("Responses sparse-snapshot repair", () => {
   });
 
   test("reconstructs missing terminal output only from contiguous done indexes", () => {
-    for (const sparseOutput of [undefined, null, [], "invalid"]) {
-      const rewrite = createResponsesSnapshotPayloadRewrite();
-      rewrite(JSON.stringify({
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          id: "msg_0",
-          type: "message",
-          content: [{ type: "output_text", text: "hello" }],
-        },
-      }));
-      const terminal = JSON.parse(rewrite(JSON.stringify({
-        type: "response.completed",
-        response: {
-          id: "resp_reconstructed",
-          object: "response",
-          ...(sparseOutput === undefined ? {} : { output: sparseOutput }),
-        },
-      }))) as { response: { output?: unknown } };
-
-      expect(terminal.response.output).toEqual([{
+    const rewrite = createResponsesSnapshotPayloadRewrite();
+    rewrite(JSON.stringify({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
         id: "msg_0",
         type: "message",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text: "hello", annotations: [] }],
-      }]);
-    }
+        content: [{ type: "output_text", text: "hello" }],
+      },
+    }));
+    const reconstructed = JSON.parse(rewrite(JSON.stringify({
+      type: "response.completed",
+      response: { id: "resp_reconstructed", object: "response" },
+    }))) as { response: { output?: unknown } };
+
+    expect(reconstructed.response.output).toEqual([{
+      id: "msg_0",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "hello", annotations: [] }],
+    }]);
 
     const gapped = createResponsesSnapshotPayloadRewrite();
     for (const outputIndex of [0, 2]) {
@@ -239,6 +233,28 @@ describe("Responses sparse-snapshot repair", () => {
       response: { id: "resp_gapped", object: "response" },
     }))) as { response: { output?: unknown } };
     expect(terminal.response.output).toEqual([]);
+  });
+
+  test("preserves empty terminal output and repairs malformed values without reconstruction", () => {
+    for (const output of [[], null, "invalid"]) {
+      const rewrite = createResponsesSnapshotPayloadRewrite();
+      rewrite(JSON.stringify({
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "msg_explicit_output",
+          type: "message",
+          content: [{ type: "output_text", text: "must-not-be-reconstructed" }],
+        },
+      }));
+
+      const terminal = JSON.parse(rewrite(JSON.stringify({
+        type: "response.completed",
+        response: { id: "resp_explicit_output", object: "response", output },
+      }))) as { response: { output?: unknown } };
+
+      expect(terminal.response.output).toEqual([]);
+    }
   });
 
   test("suppresses reconstruction after malformed done events", () => {
@@ -434,6 +450,84 @@ describe("Responses sparse-snapshot repair", () => {
           }],
         });
       }
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("handleResponses canonicalizes the exact sparse added-delta-completed stream from issue #893", async () => {
+    const savedFetch = globalThis.fetch;
+    const upstream = [
+      'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_example","object":"response"}}\n\n',
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","item":{"id":"msg_example","type":"message"}}\n\n',
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello"}\n\n',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_example","object":"response"}}\n\n',
+      "data: [DONE]\n\n",
+    ].join("");
+    globalThis.fetch = (async () => new Response(upstream, {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+
+    try {
+      const config = {
+        port: 0,
+        defaultProvider: "fixture",
+        providers: {
+          fixture: {
+            adapter: "openai-responses",
+            baseUrl: "https://fixture.test/v1",
+            authMode: "key",
+            apiKey: "fixture-key",
+            responsesSnapshotRepair: true,
+          },
+        },
+      } as OcxConfig;
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/example-model", stream: true, input: "hello" }),
+      }), config, { model: "", provider: "" });
+      const events = parseSseEvents(await response.text());
+
+      // The issue fixture has no output_item.done, so the safe contract is to preserve its text
+      // delta and emit a canonical empty terminal output, not invent a completed message item.
+      expect(events).toEqual([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_example",
+            object: "response",
+            status: "in_progress",
+            output: [],
+            parallel_tool_calls: true,
+            tool_choice: "auto",
+            tools: [],
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            id: "msg_example",
+            type: "message",
+            status: "in_progress",
+            role: "assistant",
+            content: [],
+          },
+        },
+        { type: "response.output_text.delta", delta: "hello", logprobs: [] },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_example",
+            object: "response",
+            status: "completed",
+            output: [],
+            parallel_tool_calls: true,
+            tool_choice: "auto",
+            tools: [],
+          },
+        },
+      ]);
     } finally {
       globalThis.fetch = savedFetch;
     }
