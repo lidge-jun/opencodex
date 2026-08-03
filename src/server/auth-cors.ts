@@ -4,6 +4,7 @@ import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  modelPreferHostedToolsConfigError,
   codexAutoStartEnabled,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
@@ -432,6 +433,13 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
+  const preferHostedToolsError = modelPreferHostedToolsConfigError(
+    raw.modelPreferHostedTools,
+    "modelPreferHostedTools",
+    name,
+    typed,
+  );
+  if (preferHostedToolsError) return `provider ${name} ${preferHostedToolsError}`;
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
@@ -509,6 +517,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "modelOpenRouterRouting",
       "reasoningEfforts",
       "modelReasoningEfforts",
+      "reasoningWireFormat",
       "noVisionModels",
       "noReasoningModels",
       "noTemperatureModels",

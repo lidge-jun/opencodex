@@ -49,6 +49,6 @@ bun run setup:hooks             # pre-push runs doctor when gui/ changed
 | Tool | Role |
 |------|------|
 | **ESLint** (`bun run lint`) | Hard gate in CI and expected before merge |
-| **React Doctor** (`bun run doctor`) | Gating React health check pinned to react-doctor 0.9.2 (`blocking: warning`). Pre-push runs it only if `gui/` changed and fails the push on findings. The CI workflow fails the job on any finding |
+| **React Doctor** (`bun run doctor`) | Gating React health check pinned to react-doctor 0.9.3 (`blocking: warning`). Pre-push runs it only if `gui/` changed and fails the push on findings. The CI workflow fails the job on any finding |
 
 Fix ESLint errors first. Use `doctor` / `doctor:full` for deeper React triage.

@@ -21,6 +21,12 @@ ocx start
 bun run dev:gui
 ```
 
+## 로그인
+
+`localhost`나 `127.0.0.1` 같은 loopback 주소에서 연 대시보드는 짧게 유지되는 GUI 세션을 자동으로 받으므로 보통 토큰을 입력할 필요가 없습니다. loopback이 아닌 호스트로 공개한 대시보드에는 `OPENCODEX_ADMIN_AUTH_TOKEN` 또는 자동 생성되는 `~/.opencodex/admin-api-token` 파일의 관리자 토큰이 필요합니다.
+
+원격 대시보드는 표준 비밀번호 폼을 표시하므로 브라우저 비밀번호 관리자가 토큰 저장과 자동 완성을 제안할 수 있습니다. 대시보드 자체는 토큰을 메모리에만 보관하며 `localStorage`나 `sessionStorage`에 쓰지 않습니다. 저장 여부는 전적으로 브라우저 또는 비밀번호 관리자가 결정합니다.
+
 ## 할 수 있는 일
 
 | 영역 | 기능 |

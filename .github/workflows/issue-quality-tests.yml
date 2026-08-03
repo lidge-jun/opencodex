@@ -11,6 +11,10 @@ on:
       - ".github/scripts/pr-labeler.cjs"
       - ".github/scripts/pr-labeler.test.cjs"
       - ".github/scripts/enforce-pr-target.test.cjs"
+      - ".github/scripts/pr-hygiene.cjs"
+      - ".github/scripts/pr-hygiene.test.cjs"
+      - ".github/scripts/pr-sponsored-surface.cjs"
+      - ".github/scripts/pr-sponsored-surface.test.cjs"
       - ".github/scripts/issue-translation.cjs"
       - ".github/scripts/issue-translation.test.cjs"
       - ".github/scripts/issue-triage.cjs"
@@ -22,6 +26,7 @@ on:
       - ".github/workflows/pr-labeler.yml"
       - ".github/workflows/issue-triage.yml"
       - ".github/workflows/issue-quality-tests.yml"
+      - ".github/workflows/pr-hygiene.yml"
   push:
     paths:
       - ".github/ISSUE_TEMPLATE/**"
@@ -32,6 +37,10 @@ on:
       - ".github/scripts/pr-labeler.cjs"
       - ".github/scripts/pr-labeler.test.cjs"
       - ".github/scripts/enforce-pr-target.test.cjs"
+      - ".github/scripts/pr-hygiene.cjs"
+      - ".github/scripts/pr-hygiene.test.cjs"
+      - ".github/scripts/pr-sponsored-surface.cjs"
+      - ".github/scripts/pr-sponsored-surface.test.cjs"
       - ".github/scripts/issue-translation.cjs"
       - ".github/scripts/issue-translation.test.cjs"
       - ".github/scripts/issue-triage.cjs"
@@ -43,6 +52,7 @@ on:
       - ".github/workflows/pr-labeler.yml"
       - ".github/workflows/issue-triage.yml"
       - ".github/workflows/issue-quality-tests.yml"
+      - ".github/workflows/pr-hygiene.yml"
 
 permissions:
   contents: read
@@ -63,6 +73,8 @@ jobs:
           node --test .github/scripts/pr-quality.test.cjs
           node --test .github/scripts/pr-labeler.test.cjs
           node --test .github/scripts/enforce-pr-target.test.cjs
+          node --test .github/scripts/pr-hygiene.test.cjs
+          node --test .github/scripts/pr-sponsored-surface.test.cjs
           node --test .github/scripts/issue-translation.test.cjs
           node --test .github/scripts/issue-triage.test.cjs
           node --test .github/scripts/parse-issue-translation-response.test.cjs

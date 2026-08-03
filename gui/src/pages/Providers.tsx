@@ -45,7 +45,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // effect and its deferred load is deliberately uncancellable, so the guard lives here.
   const bootstrapKeyRef = useRef<string | null>(null);
   const removeBusyRef = useRef(false);
-  const oauthLoginGenerationRef = useRef<Map<string, number>>(new Map());
 
   const notify = useCallback((msg: string, ok: boolean = true) => {
     setStatus(msg);
@@ -174,7 +173,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
   const { cancelLoginOAuth, loginOAuth, logoutOAuth } = useProvidersOAuth({
-    apiBase, t, aliveRef, oauthLoginGenerationRef, accountSets,
+    apiBase, t, aliveRef, accountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
   });

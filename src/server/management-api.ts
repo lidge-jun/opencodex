@@ -68,6 +68,7 @@ import { handleSystemRoutes } from "./management/system-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import type { ManagementContext } from "./management/context";
+import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
@@ -82,7 +83,13 @@ export const VERSION = (() => {
   }
 })();
 
-export async function handleManagementAPI(req: Request, url: URL, config: OcxConfig, deps: ManagementApiDeps = {}): Promise<Response | null> {
+export async function handleManagementAPI(
+  req: Request,
+  url: URL,
+  config: OcxConfig,
+  deps: ManagementApiDeps = {},
+  principal?: ManagementPrincipal,
+): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
   }
@@ -125,7 +132,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       }
     } catch { /* best-effort */ }
   }
-  const ctx: ManagementContext = { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort };
+  const ctx: ManagementContext = { req, url, config, deps, principal, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort };
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))

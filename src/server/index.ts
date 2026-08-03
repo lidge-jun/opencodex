@@ -158,7 +158,7 @@ import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
-import { initializeManagementAuthState, issueGuiSession, requireManagementAuth } from "./management-auth";
+import { initializeManagementAuthState, issueGuiSession, managementPrincipal, requireManagementAuth } from "./management-auth";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -449,7 +449,11 @@ export function startServer(port?: number) {
       if (url.pathname.startsWith("/api/")) {
         const apiAuthError = requireManagementAuth(req, managementAuth, config);
         if (apiAuthError) return withManagementCors(apiAuthError, req, config);
-        const mgmtResponse = await handleManagementAPI(req, url, config);
+        // Which credential passed the gate, resolved from the same session table the
+        // gate used. Consent-bearing routes need this: request headers are forgeable
+        // by anything holding the admin token, the credential is not.
+        const principal = managementPrincipal(req, managementAuth, config) ?? undefined;
+        const mgmtResponse = await handleManagementAPI(req, url, config, {}, principal);
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }

@@ -126,15 +126,31 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 66 встроенными пресетами: 55 на основе ключей, семь OAuth, три локальных и
-пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
-выдачи ключей провайдера, проверяет ключ и сохраняет его. Наиболее заметные записи:
+opencodex поставляется с 69 встроенными пресетами: 58 на основе ключей, семь OAuth, три локальных и
+один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
+выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера, а публичный
+каталог Command Code сообщает ключ как непроверенный. Наиболее заметные записи:
+
+**ClinePass** подключается с помощью Cline API key к [официальному каталогу подписки](https://docs.cline.bot/getting-started/clinepass)
+и [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions). Оператор — Cline Bot Inc., указанный в
+[условиях Cline](https://cline.bot/tos). Маршрут вида `cline-pass/cline-pass/kimi-k3`
+намеренный: первая часть выбирает провайдера opencodex, а полный slug `cline-pass/kimi-k3`
+отправляется upstream. Использование учитывается в общих для аккаунта скользящем 5-часовом,
+недельном и месячном лимитах. Сейчас opencodex публикует только проверенный на живом API reasoning tier
+`low`; более высокие запросы ограничиваются до `low`, пока шлюз не опубликует или не подтвердит более широкий диапазон.
+
+**Cline** использует тот же ключ и эндпоинт с оплатой по мере использования и доступом к 100+ моделям
+(ID в формате OpenRouter, например `anthropic/claude-sonnet-4-6`). Промо-бесплатные модели Cline
+доступны только в IDE/CLI Cline, а не через API; `minimax/minimax-m2.5` документирован как
+бесплатная модель для экспериментов через API.
 
 | Провайдер | Базовый URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **Cline** | `https://api.cline.bot/api/v1` |
+| **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
@@ -146,6 +162,7 @@ opencodex поставляется с 66 встроенными пресетам
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
+| Command Code | `https://api.commandcode.ai/provider/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -189,6 +206,13 @@ Volcengine Agent Plan использует нативную конечную т�
 нативные id моделей со знаком `/` и ограничивает live discovery размером 256 KiB и 256 исходными
 строками. Он охватывает только serverless text и vision-language chat; отдельные image, audio и GPU
 endpoint в него не входят. Ключи создаются в [Hyperbolic](https://app.hyperbolic.ai).
+
+**Discovery для Command Code.** Пресет читает публичный список `/provider/v1/models` с фиксированного
+хоста Provider API, сохраняет нативные id моделей со знаком `/` и ограничивает live discovery размером
+256 KiB и 256 исходными строками. Каталог моделей не требует аутентификации, поэтому CLI-флоу входа
+сообщает ключ как непроверенный, а не как ложноположительно действительный. Запросы чата используют
+настроенный bearer-ключ; для доступа к API требуется план Provider, а CLI-мост аутентификации для
+подписок Go/Pro пока недоступен. Ключи создаются в [Command Code Studio](https://commandcode.ai/studio/).
 
 > **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),

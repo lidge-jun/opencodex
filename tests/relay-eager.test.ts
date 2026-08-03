@@ -111,6 +111,51 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
+  test("neither relay races reads against a shared abort promise", async () => {
+    // Retention shape, not behavior: racing every read against ONE never-settled
+    // promise attaches a reaction per completed read and holds it until abort, so a
+    // long stream retains O(chunk-count) callbacks. Both relays relay identically
+    // either way, which is exactly why no behavioral assertion catches a regression
+    // here — relay.ts already states the rule in prose at its own drain, and this
+    // pins it for both files. The sanctioned shape is: cancel the reader on abort.
+    const eager = await Bun.file(new URL("../src/server/relay-eager.ts", import.meta.url)).text();
+    const relay = await Bun.file(new URL("../src/server/relay.ts", import.meta.url)).text();
+
+    // Strip comments first: both files DESCRIBE the banned shape in prose, and the
+    // rule is about the code, not the explanation of why the code avoids it.
+    const stripComments = (source: string): string =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+    for (const [name, source] of [["relay-eager.ts", eager], ["relay.ts", relay]] as const) {
+      const racesReads = /Promise\.race\(\s*\[\s*reader\.read\(\)/.test(stripComments(source));
+      expect(`${name} races reads: ${racesReads}`).toBe(`${name} races reads: false`);
+    }
+    // And the eager producer must keep the reader-cancel wake-up that replaced it.
+    expect(eager).toMatch(/reader\.cancel\(upstream\.signal\.reason\)/);
+  });
+
+  test("a terminal frame settling in the same tick as abort is still recorded", async () => {
+    // Post-cancel drain: the terminal arrives, and the drain deadline aborts
+    // upstream in the same tick. Honoring the signal before examining the settled
+    // read discarded that frame, so the turn was accounted as a cancel instead of
+    // the completion it actually reached.
+    const up = controlledUpstream();
+    const { hooks, rec } = makeHooks();
+    const upstream = new AbortController();
+    const relayed = relaySseEagerBounded(up.stream, upstream, hooks);
+    const reading = readAll(relayed);
+
+    up.push(sse(DELTA));
+    await settle();
+    // Enqueue the terminal and abort without yielding in between.
+    up.push(enc.encode(`event: response.completed\ndata: ${COMPLETED}\n\n`));
+    upstream.abort(new Error("drain window expired"));
+    up.close();
+    await reading;
+
+    expect(rec.terminals.map(t => t.status)).toContain("completed");
+  });
+
   test("rewrites complete blocks across fragmented chunks and flushes the tail at EOF", async () => {
     const up = controlledUpstream();
     const { hooks } = makeHooks();

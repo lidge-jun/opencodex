@@ -1,0 +1,160 @@
+name: PR hygiene
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+# Trusted default-branch script only. Patches are read through the GitHub API;
+# PR-head code is never checked out or executed.
+# Least privilege: no default permissions; the hygiene job grants only what it needs.
+permissions: {}
+
+concurrency:
+  group: pr-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    # contents: read for the trusted script checkout; issues/pull-requests write
+    # maintain the blocked label and one bot comment.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted hygiene script
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Enforce deterministic PR hygiene
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const path = require("node:path");
+            const { assessHygiene } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
+            );
+            const { assessSponsoredSurface } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-sponsored-surface.cjs"),
+            );
+
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const marker = "<!-- pr-hygiene -->";
+            const blockedLabel = "intake: hygiene-blocked";
+            const labelDefinitions = {
+              [blockedLabel]: ["b60205", "Deterministic PR hygiene checks failed"],
+              "test-exception-approved": ["5319e7", "Maintainer approved a non-automated regression-test exception"],
+              "suppression-approved": ["5319e7", "Maintainer approved a new type or lint suppression"],
+              "generated-change-approved": ["5319e7", "Maintainer approved committed generated output"],
+              "dependency-change-approved": ["5319e7", "Maintainer approved exceptional dependency or lockfile handling"],
+              "maintainer-sponsored": ["5319e7", "Maintainer sponsors this change to an auth, workflow, release, or dependency surface"],
+            };
+
+            async function ensureLabel(name) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                const [color, description] = labelDefinitions[name];
+                try {
+                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
+                } catch (createError) {
+                  if (createError.status !== 422) throw createError;
+                }
+              }
+            }
+            for (const name of Object.keys(labelDefinitions)) await ensureLabel(name);
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            const labels = new Set(pr.labels.map((label) => label.name));
+            // Exception approvals are head-specific: a new commit invalidates
+            // them, so a contributor cannot obtain one narrow exception and
+            // then push unreviewed violations under the same label.
+            if (context.payload.action === "synchronize") {
+              for (const name of [
+                "test-exception-approved",
+                "suppression-approved",
+                "generated-change-approved",
+                "dependency-change-approved",
+              ]) {
+                if (labels.has(name)) {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: pull_number, name,
+                  });
+                  labels.delete(name);
+                }
+              }
+            }
+            // Sponsorship is head-independent: it is about which surfaces the
+            // change touches, not about the state of a particular revision, so
+            // it is NOT cleared by the synchronize sweep above.
+            const failures = [
+              ...assessHygiene({ files, labels: [...labels] }),
+              ...assessSponsoredSurface({
+                authorHasPushPermission: ["OWNER", "MEMBER", "COLLABORATOR"].includes(
+                  pr.author_association,
+                ),
+                changedFiles: files.map((file) => file.filename),
+                labels: [...labels],
+              }),
+            ];
+
+            async function setBlocked(blocked) {
+              if (blocked && !labels.has(blockedLabel)) {
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number: pull_number, labels: [blockedLabel],
+                });
+              } else if (!blocked && labels.has(blockedLabel)) {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number: pull_number, name: blockedLabel,
+                });
+              }
+            }
+
+            async function upsert(body) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pull_number, per_page: 100,
+              });
+              const existing = comments.find(
+                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker),
+              );
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+              }
+            }
+
+            if (failures.length === 0) {
+              await setBlocked(false);
+              await upsert(`${marker}\n\n✅ **Deterministic PR hygiene checks passed.**`);
+              return;
+            }
+
+            const explanations = {
+              missing_regression_test: "Behavior changed under `src/` or `gui/src/` without a test change. Add focused coverage or obtain `test-exception-approved`.",
+              generated_output: "Generated build output is committed. Remove it or obtain `generated-change-approved`.",
+              orphan_lockfile: "`bun.lock` changed without `package.json`. Revert accidental churn or obtain `dependency-change-approved`.",
+              new_suppression: "A new TypeScript, lint, formatter, or similar suppression was added. Fix the underlying issue or obtain `suppression-approved`.",
+              focused_or_skipped_test: "A focused or skipped test was added. Restore the complete suite or obtain `test-exception-approved`.",
+              empty_catch: "An empty catch block was added. Handle, report, or deliberately propagate the error.",
+              unsponsored_surface: "This changes an authentication, workflow, release-automation, or dependency surface. `MAINTAINERS.md` requires security review for these; ask a maintainer to apply `maintainer-sponsored` once they have reviewed it.",
+            };
+            const lines = failures.map((failure) => {
+              const paths = failure.paths?.length
+                ? ` Paths: ${failure.paths.map((p) => `\`${p}\``).join(", ")}.`
+                : "";
+              return `- **${failure.code}** — ${explanations[failure.code]}${paths}`;
+            });
+
+            await setBlocked(true);
+            await upsert([marker, "", "⚠️ **Deterministic hygiene checks failed.**", "", ...lines].join("\n"));
+            core.setFailed(`PR hygiene failed: ${failures.map((f) => f.code).join(", ")}`);

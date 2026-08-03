@@ -29,6 +29,7 @@ import {
   startServer,
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
+import { providerManagementConfigError } from "../src/server/auth-cors";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -123,6 +124,74 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider management validates model hosted-tool preferences", () => {
+    const provider = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    };
+    expect(providerManagementConfigError("custom", provider)).toBeNull();
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      modelAdapters: { "provider-image-model": "openai-responses" },
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    })).toBeNull();
+    expect(providerManagementConfigError("openai-apikey", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    })).toBeNull();
+    expect(providerManagementConfigError("openai-apikey", {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      modelAdapters: { "gpt-5.6-sol": "openai-chat" },
+      modelPreferHostedTools: { "gpt-5.6-sol-pro": ["image_generation"] },
+    })).toContain("requires the openai-responses wire");
+
+    for (const modelPreferHostedTools of [
+      [],
+      { "": ["image_generation"] },
+      { model: [] },
+      { model: "image_generation" },
+      { model: ["web_search"] },
+    ]) {
+      expect(providerManagementConfigError("custom", {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        modelPreferHostedTools,
+      })).toContain("modelPreferHostedTools");
+    }
+
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    })).toContain("requires the openai-responses wire");
+    expect(providerManagementConfigError("openrouter", {
+      adapter: "openai-responses",
+      baseUrl: "https://openrouter.ai/api/v1",
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    })).toContain("requires the openai-responses wire");
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      modelAdapters: { "provider-image-model": "openai-chat" },
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    })).toContain("requires the openai-responses wire");
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      modelPreferHostedTools: { "gpt-5.3-codex-spark": ["image_generation"] },
+    })).toContain("does not support");
+    expect(providerManagementConfigError("custom-forward", {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+    })).toContain("not supported on forward-auth");
+  });
+
   test("provider discovery status is additive and omitted before an attempt", async () => {
     markProviderDiscoveryFailed("auth-broken", { reason: "http", httpStatus: 401 });
     try {

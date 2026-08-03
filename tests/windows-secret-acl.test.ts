@@ -626,6 +626,12 @@ describe("ephemeral ACL memo release (#840 refinement)", () => {
   test("ephemeral release clears temp-keyed timeout memos in BOTH namespaces", () => {
     setPlatformForTests("win32");
     setIcaclsRunnerForTests(() => timeout);
+    // Own the environment this test needs. It used to inherit USERNAME from an
+    // earlier describe's `??=`, which never restores it: run this file's blocks in
+    // another order, or this test alone, and the harden fails before it ever
+    // reaches the memo behavior under test.
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
     const tempA = join(testDir, "dest.ocx.1.1.tmp");
     const tempB = join(testDir, "dest.ocx.1.2.tmp");
     writeFileSync(tempA, "a", "utf-8");
@@ -642,6 +648,8 @@ describe("ephemeral ACL memo release (#840 refinement)", () => {
     } finally {
       setIcaclsRunnerForTests(null);
       setPlatformForTests(null);
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
     }
   });
 

@@ -52,6 +52,10 @@ export async function validateApiKey(
   key: string,
 ): Promise<boolean | "unknown"> {
   try {
+    // A public model catalog cannot prove that the supplied key is valid. Returning unknown keeps
+    // the best-effort login flow available without persisting a false-positive validation result.
+    if (provider.apiKeyValidation === "unknown") return "unknown";
+
     if (provider.adapter === "anthropic") {
       const base = provider.baseUrl.replace(/\/v1\/?$/, "");
       const res = await fetch(`${base}/v1/messages`, {

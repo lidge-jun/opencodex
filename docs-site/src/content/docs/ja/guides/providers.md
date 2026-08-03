@@ -119,15 +119,31 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 66 個含まれています。キー方式 55、OAuth 7、ローカル 3、
+opencodex には組み込みプリセットが 69 個含まれています。キー方式 58、OAuth 7、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
-入力したキーを検証した後保存します。主な項目は以下のとおりです:
+入力したキーを検証した後保存します(検証はプロバイダー固有で、Command Code の公開カタログはキーを
+検証不能として報告します)。主な項目は以下のとおりです:
+
+**ClinePass** は Cline API キーで[公式サブスクリプションカタログ](https://docs.cline.bot/getting-started/clinepass)と
+[Chat Completions エンドポイント](https://docs.cline.bot/api/chat-completions)に接続します。運営主体は
+[Cline の利用規約](https://cline.bot/tos)に記載された Cline Bot Inc. です。`cline-pass/cline-pass/kimi-k3` のようなルーティング ID は
+意図した形式です。先頭は opencodex のプロバイダー、残りの `cline-pass/kimi-k3` は upstream に送信する
+完全なモデル slug です。使用量はアカウントのローリング 5 時間、週次、月次の各上限で共有されます。
+現在 opencodex が公開する reasoning tier は実機検証済みの `low` のみで、より高い要求は公式範囲が
+公開または検証されるまで `low` にクランプされます。
+
+**Cline** は同じ API キー・エンドポイントを従量課金で使い、100 以上のモデルにアクセスできます
+(OpenRouter 形式の ID、例: `anthropic/claude-sonnet-4-6`)。Cline の期間限定無料モデルは
+Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` は API で利用できる
+無料試用モデルとして文書化されています。
 
 | プロバイダー | ベース URL |
  --- | --- |
 | **OpenAI (API キー)** | `https://api.openai.com/v1` |
 | **Anthropic (API キー)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **Cline** | `https://api.cline.bot/api/v1` |
+| **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
@@ -139,6 +155,7 @@ opencodex には組み込みプリセットが 66 個含まれています。キ
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
+| Command Code | `https://api.commandcode.ai/provider/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -180,6 +197,13 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 ネイティブモデル ID を保持し、live discovery を 256 KiB と raw 256 行に制限します。serverless text /
 vision-language chat のみを対象とし、別系統の image、audio、GPU endpoint は対象外です。キーは
 [Hyperbolic](https://app.hyperbolic.ai) で作成します。
+
+**Command Code の discovery:** preset は Command Code の公開 `/provider/v1/models` リストを固定の
+Provider API ホストから読み、スラッシュを含むネイティブモデル ID を保持し、live discovery を
+256 KiB と raw 256 行に制限します。モデルカタログは未認証のため、CLI ログインフローはキーを
+誤って有効と報告せず、検証不能として報告します。チャットリクエストは設定済みの bearer キーを使います。
+API アクセスには Provider プランが必要で、Go/Pro サブスクリプション向けの CLI 認証ブリッジはまだ利用できません。
+キーは [Command Code Studio](https://commandcode.ai/studio/) で作成します。
 
 > **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > のみを対象とします。ローカル利用では個人の [API キー](https://docs.baseten.co/organization/api-keys)を、

@@ -22,6 +22,8 @@ export const LOCALES: { code: Locale; name: string; htmlLang: string }[] = [
 
 const LANG_KEY = "ocx-lang";
 
+let activeLocale: Locale | null = null;
+
 export function detectInitial(): Locale {
   try {
     const stored = localStorage.getItem(LANG_KEY);
@@ -34,6 +36,15 @@ export function detectInitial(): Locale {
   if (nav.startsWith("ru")) return "ru";
   if (nav.startsWith("ja")) return "ja";
   return "en";
+}
+
+/** Current LanguageProvider locale for non-React UI such as the auth fetch dialog. */
+export function getActiveLocale(): Locale {
+  return activeLocale ?? detectInitial();
+}
+
+export function setActiveLocale(locale: Locale): void {
+  activeLocale = locale;
 }
 
 export type Vars = Record<string, string | number>;

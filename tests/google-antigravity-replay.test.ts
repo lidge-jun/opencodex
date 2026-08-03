@@ -413,6 +413,25 @@ describe("antigravity replay fixed-size key identities", () => {
     expect(antigravityCanonicalJsonBoundedForTests({ a: [1, "x"] }, 1024)).toBe('{"a":[1,"x"]}');
   });
 
+  test("pathological nesting is refused by the depth cap, not by a stack overflow", () => {
+    // The byte and key budgets do not bound RECURSION: a deeply nested argument
+    // shape is tiny on the wire. Without the depth cap this walk exhausts the
+    // stack and throws RangeError out of a replay observation, which is a crash
+    // path rather than a skipped replay. Removing MAX_CANONICAL_DEPTH left every
+    // other antigravity test green, so this is the only case that pins it.
+    const nest = (levels: number): unknown => {
+      let value: unknown = 1;
+      for (let i = 0; i < levels; i++) value = { n: value };
+      return value;
+    };
+
+    // Comfortably inside the cap: canonicalizes normally.
+    expect(antigravityCanonicalJsonBoundedForTests(nest(120), 1024 * 1024)).toContain('{"n":');
+    // Past the cap: a null refusal, never a thrown RangeError.
+    expect(antigravityCanonicalJsonBoundedForTests(nest(200), 1024 * 1024)).toBeNull();
+    expect(antigravityCanonicalJsonBoundedForTests(nest(50_000), 8 * 1024 * 1024)).toBeNull();
+  });
+
   test("overflow aborts the walk near the cap, proven by scan instrumentation", () => {
     resetCanonicalScanUnitsForTests();
     const hugeString = "y".repeat(10 * 1024 * 1024);

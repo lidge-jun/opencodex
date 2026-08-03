@@ -19,6 +19,16 @@ const FORBIDDEN_TRACKED_DIRS = [".codexclaw", ".omo", ".claude", "node_modules",
 
 const FORBIDDEN_TRACKED_FILENAMES = [".DS_Store", "Thumbs.db"];
 
+/**
+ * The retired Go native-runtime experiment. Nothing in `src/`, the build, the
+ * typecheck, or the test path reads from `go/`, so a tracked file there is always
+ * an accident — and this specific one is a repeat offender: `git add -A` pulled
+ * `go/internal/cli/config_parity.go` back into the index three times during the
+ * #820 campaign, and the third one rode a merge into `dev`. `.gitignore` cannot
+ * catch that on its own, because an already-tracked path ignores the rule.
+ */
+const RETIRED_TRACKED_DIRS = ["go"];
+
 function trackedFiles(): string[] {
   const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot });
   if (result.exitCode !== 0) {
@@ -64,10 +74,22 @@ describe("repository hygiene", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("the retired Go runtime stays untracked", () => {
+    const offenders = trackedFiles().filter((path) =>
+      RETIRED_TRACKED_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`)),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
   test("gitignore still declares the agent-state directories", async () => {
     const ignore = await Bun.file(new URL("../.gitignore", import.meta.url)).text();
 
     for (const dir of FORBIDDEN_TRACKED_DIRS) {
+      expect(ignore).toContain(`${dir}/`);
+    }
+
+    for (const dir of RETIRED_TRACKED_DIRS) {
       expect(ignore).toContain(`${dir}/`);
     }
   });

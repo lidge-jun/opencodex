@@ -119,15 +119,32 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 66개 들어 있습니다. 키 방식 55개, OAuth 7개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 69개 들어 있습니다. 키 방식 58개, OAuth 7개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
-입력한 키를 검증한 뒤 저장합니다. 주요 항목은 다음과 같습니다:
+입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다르며, Command Code의 공개 카탈로그는 키를
+검증 불가로 보고합니다). 주요 항목은 다음과 같습니다:
+
+**ClinePass**는 Cline API 키로 [공식 구독 카탈로그](https://docs.cline.bot/getting-started/clinepass)와
+[Chat Completions 엔드포인트](https://docs.cline.bot/api/chat-completions)에 연결합니다. 운영 주체는
+[Cline 약관](https://cline.bot/tos)에 명시된 Cline Bot Inc.입니다. `cline-pass/cline-pass/kimi-k3`
+같은 라우팅 ID는 정상입니다.
+앞의 `cline-pass`는 opencodex 프로바이더이고, 뒤의 `cline-pass/kimi-k3`는 upstream에 보내는
+전체 모델 slug입니다. ClinePass 사용량은 계정의 5시간 롤링·주간·월간 한도를 함께 사용합니다.
+현재 opencodex는 실측된 `low` reasoning 단계만 광고하며, 더 높은 요청은 공식 지원 범위가
+게시되거나 검증될 때까지 `low`로 제한합니다.
+
+**Cline**은 동일한 API 키·엔드포인트를 종량제로 사용하며 100개 이상의 모델에 접근합니다
+(OpenRouter 형식 ID, 예: `anthropic/claude-sonnet-4-6`). Cline의 프로모션 무료 모델은
+Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minimax/minimax-m2.5`는 API에서
+사용할 수 있는 무료 체험 모델로 문서화되어 있습니다.
 
 | 프로바이더 | 베이스 URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **Cline** | `https://api.cline.bot/api/v1` |
+| **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
@@ -139,6 +156,7 @@ opencodex에는 빌트인 프리셋이 66개 들어 있습니다. 키 방식 55�
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
+| Command Code | `https://api.commandcode.ai/provider/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -179,6 +197,13 @@ Bearer API 키를 사용합니다. registry가 소유하는 DeepInfra 모델 목
 보존하며 live discovery를 256 KiB와 raw 행 256개로 제한합니다. serverless text 및 vision-language chat만
 대상으로 하며 별도 image, audio, GPU 엔드포인트는 범위에서 제외합니다. 키는
 [Hyperbolic](https://app.hyperbolic.ai)에서 생성합니다.
+
+**Command Code 검색:** 프리셋은 Command Code의 공개 `/provider/v1/models` 목록을 고정된 Provider API
+호스트에서 읽고, 슬래시가 포함된 네이티브 모델 ID를 보존하며 live discovery를 256 KiB와 raw 행
+256개로 제한합니다. 모델 카탈로그는 인증이 없으므로 CLI 로그인 흐름은 키를 유효하다고 잘못 보고하지
+않고 검증 불가로 보고합니다. 채팅 요청은 설정된 bearer 키를 사용하며, API 액세스에는 Provider 플랜이
+필요하고 Go/Pro 구독자용 CLI 인증 브리지는 아직 제공되지 않습니다. 키는
+[Command Code Studio](https://commandcode.ai/studio/)에서 생성합니다.
 
 > **Baseten 범위:** 이 프리셋은 Baseten의 공유 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)만
 > 지원합니다. 로컬 사용에는 개인 [API 키](https://docs.baseten.co/organization/api-keys)를, 공유/프로덕션

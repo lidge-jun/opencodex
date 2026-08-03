@@ -111,6 +111,11 @@ export interface ProviderRegistryEntry {
   allowPrivateNetworkByDefault?: boolean;
   keyOptional?: boolean;
   /**
+   * Registry-only key-login policy for public model catalogs that cannot authenticate a key.
+   * The dashboard flow then reports the key as unverifiable instead of a false positive.
+   */
+  apiKeyValidation?: "unknown";
+  /**
    * Free-tier pricing (no paid subscription required). Distinct from `keyOptional`:
    * free tiers may still require an API key (e.g. NVIDIA NIM free credits).
    */
@@ -190,6 +195,7 @@ export interface ProviderRegistryEntry {
   modelDefaultReasoningEfforts?: Record<string, string>;
   reasoningEffortMap?: Record<string, string>;
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
+  reasoningWireFormat?: OcxProviderConfig["reasoningWireFormat"];
   noVisionModels?: string[];
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
@@ -221,7 +227,7 @@ export type ProviderConfigSeed = Pick<
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
-  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
+  | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
@@ -584,6 +590,44 @@ const UMANS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 const UMANS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   UMANS_MODELS.map(id => [id, UMANS_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
+const CLINE_PASS_MODELS = [
+  "cline-pass/glm-5.2",
+  "cline-pass/kimi-k3",
+  "cline-pass/kimi-k2.7-code",
+  "cline-pass/kimi-k2.6",
+  "cline-pass/deepseek-v4-pro",
+  "cline-pass/deepseek-v4-flash",
+  "cline-pass/mimo-v2.5",
+  "cline-pass/mimo-v2.5-pro",
+  "cline-pass/minimax-m3",
+  "cline-pass/qwen3.7-max",
+  "cline-pass/qwen3.7-plus",
+];
+const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "cline-pass/glm-5.2": 1_048_576,
+  "cline-pass/kimi-k3": 1_048_576,
+  "cline-pass/kimi-k2.7-code": 262_144,
+  "cline-pass/kimi-k2.6": 262_144,
+  "cline-pass/deepseek-v4-pro": 1_048_576,
+  "cline-pass/deepseek-v4-flash": 1_048_576,
+  "cline-pass/mimo-v2.5": 1_050_000,
+  "cline-pass/mimo-v2.5-pro": 1_050_000,
+  "cline-pass/minimax-m3": 1_048_576,
+  "cline-pass/qwen3.7-max": 1_000_000,
+  "cline-pass/qwen3.7-plus": 1_000_000,
+};
+const CLINE_PASS_IMAGE_MODELS = new Set([
+  "cline-pass/kimi-k3",
+  "cline-pass/kimi-k2.7-code",
+  "cline-pass/kimi-k2.6",
+  "cline-pass/mimo-v2.5",
+  "cline-pass/minimax-m3",
+  "cline-pass/qwen3.7-plus",
+]);
+const CLINE_PASS_TEXT_ONLY_MODELS = CLINE_PASS_MODELS.filter(id => !CLINE_PASS_IMAGE_MODELS.has(id));
+const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  CLINE_PASS_MODELS.map(id => [id, CLINE_PASS_IMAGE_MODELS.has(id) ? ["text", "image"] : ["text"]]),
+);
 
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
@@ -890,6 +934,56 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
   {
+    // Primary sources checked 2026-08-02:
+    // - docs.cline.bot/getting-started/clinepass publishes this exact catalog and explicitly
+    //   authorizes using the full slugs through Cline's external API.
+    // - docs.cline.bot/api/chat-completions and /api/errors define the endpoint, reasoning delta,
+    //   and choice-scoped mid-stream error contract.
+    // - Cline's official catalog source resolves per-model capabilities through OpenRouter data;
+    //   the static context/modality snapshot below was cross-checked against that catalog.
+    // - cline.bot/tos identifies Cline Bot Inc. as the operator. Maintenance owner: @lidge-jun.
+    id: "cline-pass",
+    label: "ClinePass",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cline.bot/api/v1",
+    authKind: "key",
+    dashboardUrl: "https://app.cline.bot",
+    defaultModel: "cline-pass/kimi-k3",
+    models: CLINE_PASS_MODELS,
+    modelContextWindows: CLINE_PASS_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: CLINE_PASS_MODEL_INPUT_MODALITIES,
+    noVisionModels: CLINE_PASS_TEXT_ONLY_MODELS,
+    // Only low and the `reasoning: { enabled, effort }` request shape have been accepted by a live
+    // ClinePass request. Neither wire detail is currently documented, so clamp higher Codex
+    // requests to the verified tier until the gateway documents or is live-probed more broadly.
+    reasoningEfforts: ["low"],
+    reasoningWireFormat: "gateway-object",
+    preserveCustomDestination: true,
+    note: "ClinePass subscription API. Uses a Cline API key and the full cline-pass/<model> upstream slug; quota is shared across the account's rolling 5-hour, weekly, and monthly limits.",
+  },
+  // Cline API (usage-billing): OpenAI-compatible Chat Completions. Model IDs follow the
+  // OpenRouter-style `provider/model` convention. Live /models discovery is key-gated (401
+  // without auth), so the static seed is the cold-start fallback. Evidence: docs.cline.bot/api/*.
+  {
+    id: "cline",
+    label: "Cline",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cline.bot/api/v1",
+    authKind: "key",
+    dashboardUrl: "https://app.cline.bot",
+    liveModels: true,
+    defaultModel: "anthropic/claude-sonnet-4-6",
+    models: [
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-4o",
+      "google/gemini-2.5-pro",
+      "deepseek/deepseek-chat",
+      "minimax/minimax-m2.5",
+    ],
+    preserveCustomDestination: true,
+    note: "Cline usage-billing API: one key, 100+ models, OpenRouter-style ids. Promotional free models are IDE/CLI-only per Cline docs; minimax/minimax-m2.5 is the documented API free experimentation model.",
+  },
+  {
     // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
     // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
     // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also
@@ -1078,6 +1172,32 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       maxModels: 256,
     },
     note: "Shared Model APIs only (personal API key, or team key with Call Model APIs access); dedicated Truss predict endpoints are outside this preset.",
+  },
+  {
+    id: "commandcode",
+    label: "Command Code",
+    adapter: "openai-chat",
+    baseUrl: "https://api.commandcode.ai/provider/v1",
+    authKind: "key",
+    dashboardUrl: "https://commandcode.ai/studio/",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek/deepseek-v4-flash",
+    // The default is also the cold-start seed: live discovery failure must not empty the catalog
+    // for a freshly configured provider with no stale cache (issue #308 pattern).
+    models: ["deepseek/deepseek-v4-flash"],
+    // The public model catalog is unauthenticated, so a Bearer probe cannot prove key validity.
+    apiKeyValidation: "unknown",
+    // The public catalog reports ids/context windows only; no trustworthy reasoning contract.
+    reasoningEfforts: [],
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 256 * 1024,
+      maxModels: 256,
+    },
+    // Verified 2026-08-03: public /provider/v1/models returns 51 rows; /chat/completions returns
+    // 401 UNAUTHORIZED without a Bearer key. Primary source: https://commandcode.ai/docs/provider.
+    note: "Command Code Provider API (OpenAI-compatible); API access requires the Provider plan. CLI auth bridging for Go/Pro subscriptions is not yet available. Docs: https://commandcode.ai/docs/provider.",
   },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },

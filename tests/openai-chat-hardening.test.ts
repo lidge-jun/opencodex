@@ -62,11 +62,45 @@ describe("openai-chat non-stream response hardening", () => {
     }]);
   });
 
+  test("treats falsey upstream error payloads as errors", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const error of [0, ""]) {
+      const events = await adapter.parseResponse!(new Response(JSON.stringify({ error })));
+      expect(events).toEqual([{ type: "error", message: "upstream error" }]);
+    }
+  });
+
   test("rejects an empty choices array", async () => {
     const adapter = createOpenAIChatAdapter(provider());
     const events = await adapter.parseResponse!(new Response(JSON.stringify({ choices: [] })));
 
     expect(events).toEqual([{ type: "error", message: "upstream response contained no choices" }]);
+  });
+
+  test("preserves usage when an upstream response has no choices", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 7, completion_tokens: 2 },
+    })));
+
+    expect(events).toEqual([{
+      type: "error",
+      message: "upstream response contained no choices",
+      usage: { inputTokens: 7, outputTokens: 2 },
+    }]);
+  });
+
+  test("keeps ordinary and data-wrapped responses compatible for non-Cline providers", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const body of [
+      { choices: [{ message: { content: "plain" } }] },
+      { success: true, data: { choices: [{ message: { content: "wrapped" } }] } },
+    ]) {
+      const events = await adapter.parseResponse!(new Response(JSON.stringify(body)));
+      expect(events.find(event => event.type === "error")).toBeUndefined();
+      expect(events.at(-1)?.type).toBe("done");
+    }
   });
 
   test("rejects a choice with no message", async () => {
@@ -75,9 +109,44 @@ describe("openai-chat non-stream response hardening", () => {
 
     expect(events).toEqual([{ type: "error", message: "upstream response contained no choices" }]);
   });
+
+  test("rejects a null choice without throwing", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({ choices: [null] })));
+
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid choices" }]);
+  });
 });
 
 describe("openai-chat stream response hardening", () => {
+  test("treats falsey upstream error payloads as terminal errors", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const error of [0, ""]) {
+      const response = new Response([
+        `data: ${JSON.stringify({ error })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""));
+
+      const events = await collect(adapter.parseStream(response));
+      expect(events).toEqual([{ type: "error", message: "upstream error" }]);
+    }
+  });
+
+  test("rejects a non-array choices payload without throwing", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      'data: {"choices":{},"usage":{"prompt_tokens":7,"completion_tokens":2}}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{
+      type: "error",
+      message: "upstream response contained invalid choices",
+      usage: { inputTokens: 7, outputTokens: 2 },
+    }]);
+  });
+
   test("malformed SSE data is terminal even when followed by [DONE]", async () => {
     const adapter = createOpenAIChatAdapter(provider());
     const response = new Response([

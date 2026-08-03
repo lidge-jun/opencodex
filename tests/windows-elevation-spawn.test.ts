@@ -22,6 +22,7 @@ import {
 import {
   evaluateSchedulerInstallRestartReconciliation,
   finalizeWindowsSchedulerServiceRegistration,
+  schedulerVerificationMaySettle,
   setFinalizeWindowsSchedulerHooksForTests,
 } from "../src/service";
 import type { WindowsSchedulerInstallVerification } from "../src/service";
@@ -985,6 +986,43 @@ describe("finalizeWindowsSchedulerServiceRegistration", () => {
     expect(delays).toEqual([]);
     expect(writeCount).toBe(0);
     expect(parentRollbackLaunches).toBe(0);
+  });
+
+  test("the settle predicate refuses every unproven state on its own terms", () => {
+    // The end-to-end unknown-SCM test above cannot isolate this: its fixture has
+    // taskInstalled and registrationHealthy both true, so the FINAL clause is
+    // already false and deleting an earlier guard leaves it green. Exercising the
+    // predicate directly with a transient-looking tail (invisible task) is what
+    // proves each guard carries its own weight.
+    const transientTail: WindowsSchedulerInstallVerification = {
+      taskInstalled: false,
+      registrationHealthy: false,
+      registrationInvalid: false,
+      assetsHealthy: true,
+      nativeServiceAbsent: true,
+      nativeStatusUnknown: false,
+      conflict: false,
+      ok: false,
+      detail: "Task Scheduler task is not installed.",
+    };
+
+    // Baseline: a scheduler view that has genuinely not caught up may settle.
+    expect(schedulerVerificationMaySettle(transientTail)).toBe(true);
+
+    // Each of these is unproven or permanent, and must refuse even though the
+    // transient tail below it still looks retryable.
+    expect(schedulerVerificationMaySettle({ ...transientTail, ok: true })).toBe(false);
+    expect(schedulerVerificationMaySettle({ ...transientTail, conflict: true })).toBe(false);
+    expect(schedulerVerificationMaySettle({ ...transientTail, assetsHealthy: false })).toBe(false);
+    expect(schedulerVerificationMaySettle({ ...transientTail, nativeServiceAbsent: false })).toBe(false);
+    expect(schedulerVerificationMaySettle({ ...transientTail, registrationInvalid: true })).toBe(false);
+
+    // And a fully healthy-but-not-ok view has nothing left to wait for.
+    expect(schedulerVerificationMaySettle({
+      ...transientTail,
+      taskInstalled: true,
+      registrationHealthy: true,
+    })).toBe(false);
   });
 
   test("ownership lost during a settle delay stops without rollback or state write", async () => {

@@ -187,6 +187,9 @@ async function startPoolRetryHarness(
     visionSidecarModel?: string;
     websockets?: boolean;
     forwardApiKey?: string;
+    pausedAccountIds?: string[];
+    reauthAccountIds?: string[];
+    omitCredentialAccountIds?: string[];
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -239,27 +242,33 @@ async function startPoolRetryHarness(
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
+    ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
   } as OcxConfig;
   saveConfig(config);
-  saveCodexAccountCredential("pool-a", {
-    accessToken: "pool-a-token",
-    refreshToken: "pool-a-refresh",
-    expiresAt: Date.now() + 10 * 60_000,
-    chatgptAccountId: "acct-pool-a",
-  });
+  if (!options.omitCredentialAccountIds?.includes("pool-a")) {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-a-token",
+      refreshToken: "pool-a-refresh",
+      expiresAt: Date.now() + 10 * 60_000,
+      chatgptAccountId: "acct-pool-a",
+    });
+  }
   updateAccountQuota("pool-a", 10);
   if (secondAccount) {
-    saveCodexAccountCredential("pool-b", {
-      accessToken: "pool-b-token",
-      refreshToken: "pool-b-refresh",
-      expiresAt: Date.now() + 10 * 60_000,
-      chatgptAccountId: "acct-pool-b",
-    });
+    if (!options.omitCredentialAccountIds?.includes("pool-b")) {
+      saveCodexAccountCredential("pool-b", {
+        accessToken: "pool-b-token",
+        refreshToken: "pool-b-refresh",
+        expiresAt: Date.now() + 10 * 60_000,
+        chatgptAccountId: "acct-pool-b",
+      });
+    }
     updateAccountQuota("pool-b", 20);
   }
+  for (const accountId of options.reauthAccountIds ?? []) markAccountNeedsReauth(accountId);
 
   const server = startServer(0);
   return {
@@ -384,6 +393,7 @@ describe("server local API auth", () => {
       apiKeyPool: [{ id: "pool-id", key: "pool-secret", label: "private-pool-label" }],
       modelMaxInputTokens: { "gpt-test": 1000 },
       codexAccountMode: "pool",
+      reasoningWireFormat: "gateway-object",
       virtualModels: { "gpt-test-pro": { wireModelId: "gpt-test", reasoningMode: "pro" } },
       codexAuthContext: { accessToken: "runtime-token" },
       selectedForwardHeaders: { authorization: "Bearer runtime-token" },
@@ -410,6 +420,7 @@ describe("server local API auth", () => {
       hasApiKey: true,
       hasHeaders: true,
       codexAccountMode: "pool",
+      reasoningWireFormat: "gateway-object",
     });
     expect(dto.providers.openai).not.toHaveProperty("apiKey");
     expect(dto.providers.openai).not.toHaveProperty("headers");
@@ -2053,6 +2064,127 @@ describe("server local API auth", () => {
       expect(loadConfig().activeCodexAccountId).toBe("pool-b");
     } finally {
       ws?.close();
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("translated Chat Completions and Claude Messages preserve an exact account binding", async () => {
+    const wireModels: string[] = [];
+    const authorizationHeaders: string[] = [];
+    const harness = await startPoolRetryHarness(async (_accountId, request) => {
+      const body = await request.json() as { model?: string };
+      wireModels.push(body.model ?? "missing");
+      authorizationHeaders.push(request.headers.get("authorization") ?? "missing");
+      return Response.json({
+        id: "resp_exact_translated",
+        object: "response",
+        status: "completed",
+        model: POOL_RETRY_MODEL,
+        output: [{
+          id: "msg_exact_translated",
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok", annotations: [] }],
+        }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }, {
+      accountMode: "direct",
+      activeAccountId: "pool-b",
+      accountNamespaces: { side: "pool-a" },
+    });
+    try {
+      const cases = [
+        {
+          path: "/v1/chat/completions",
+          headers: {},
+          body: {
+            model: `side/${POOL_RETRY_MODEL}`,
+            messages: [{ role: "user", content: "hello" }],
+          },
+        },
+        {
+          path: "/v1/messages",
+          headers: { "anthropic-version": "2023-06-01" },
+          body: {
+            model: `side/${POOL_RETRY_MODEL}`,
+            max_tokens: 32,
+            messages: [{ role: "user", content: "hello" }],
+          },
+        },
+      ] as const;
+
+      for (const { path, headers, body } of cases) {
+        const response = await originalGlobalFetch(new URL(path, harness.server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(200);
+        await response.arrayBuffer();
+      }
+
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+      expect(authorizationHeaders).toEqual(["Bearer pool-a-token", "Bearer pool-a-token"]);
+      expect(wireModels).toEqual([POOL_RETRY_MODEL, POOL_RETRY_MODEL]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test.each([
+    ["paused", { pausedAccountIds: ["pool-a"] }, "Selected Codex account is unavailable"],
+    ["reauth", { reauthAccountIds: ["pool-a"] }, "Selected Codex account needs reauthentication"],
+    ["missing credential", { omitCredentialAccountIds: ["pool-a"] }, "Selected Codex account is unavailable"],
+  ] as const)("WebSocket exact-account %s failures stay 401 and never fall back", async (_state, options, expectedMessage) => {
+    const harness = await startPoolRetryHarness(
+      () => Response.json({ id: "unexpected-dispatch", status: "completed", output: [] }),
+      {
+        accountMode: "direct",
+        activeAccountId: "pool-b",
+        accountNamespaces: { side: "pool-a" },
+        websockets: true,
+        ...options,
+      },
+    );
+    const wsUrl = new URL("/v1/responses", harness.server.url);
+    wsUrl.protocol = "ws:";
+    const ws = new WebSocket(wsUrl);
+    try {
+      const frame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("exact websocket auth failure timed out")),
+          INTERNAL_DEADLINE_MS,
+        );
+        ws.addEventListener("open", () => {
+          ws.send(JSON.stringify({ type: "response.create", model: `side/${POOL_RETRY_MODEL}`, input: "hello" }));
+        }, { once: true });
+        ws.addEventListener("message", event => {
+          const candidate = JSON.parse(String(event.data)) as Record<string, unknown>;
+          if (candidate.type !== "error") return;
+          clearTimeout(timer);
+          resolve(candidate);
+        });
+        ws.addEventListener("error", () => reject(new Error("exact websocket auth failure failed")), { once: true });
+      });
+
+      expect(frame).toMatchObject({
+        type: "error",
+        status: 401,
+        error: { type: "authentication_error", message: expectedMessage },
+      });
+      const serialized = JSON.stringify(frame);
+      for (const privateValue of ["pool-a", "acct-pool-a", "pool-a-token", "pool-a@example.test"]) {
+        expect(serialized).not.toContain(privateValue);
+      }
+      expect(harness.dispatches).toEqual([]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      ws.close();
       await stopPoolRetryHarness(harness);
     }
   }, { timeout: SERVER_BUDGET_MS });

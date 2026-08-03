@@ -111,15 +111,30 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 66 个预设：55 个密钥预设、7 个 OAuth 预设、3 个本地预设，以及默认的
+opencodex 内置 69 个预设：58 个密钥预设、7 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
-主要条目包括：
+验证因提供商而异，Command Code 的公开目录会将密钥报告为无法验证。主要条目包括：
+
+**ClinePass** 使用 Cline API 密钥连接[官方订阅目录](https://docs.cline.bot/getting-started/clinepass)和
+[Chat Completions 端点](https://docs.cline.bot/api/chat-completions)。运营主体是
+[Cline 条款](https://cline.bot/tos)所列的 Cline Bot Inc.。
+`cline-pass/cline-pass/kimi-k3` 这样的路由 ID 是预期格式：第一段选择 opencodex 提供商，
+其余的 `cline-pass/kimi-k3` 是发送到上游的完整模型 slug。用量由账户的滚动 5 小时、每周和
+每月限额共同管理。当前 opencodex 仅公开经过实测的 `low` reasoning 档位；在网关公布或验证更宽
+档位之前，更高请求会被限制为 `low`。
+
+**Cline** 使用相同的 API 密钥和端点，按用量计费，可访问 100 多个模型
+(OpenRouter 风格 ID，如 `anthropic/claude-sonnet-4-6`)。Cline 的促销免费模型仅在
+Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是文档中通过 API
+免费试用的模型。
 
 | 提供商 | 基础 URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **Cline** | `https://api.cline.bot/api/v1` |
+| **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
@@ -131,6 +146,7 @@ ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
+| Command Code | `https://api.commandcode.ai/provider/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -168,6 +184,12 @@ OpenAI Chat Completions 提供商。registry 固定的 DeepInfra 模型列表 UR
 **Hyperbolic 发现：**该预设会使用已配置的 bearer 密钥读取 `/v1/models`，保留含 `/` 的原生模型 id，
 并将实时发现限制为 256 KiB 和 256 条原始记录。它仅覆盖 serverless text 与 vision-language chat；独立的
 image、audio 和 GPU 端点不在范围内。密钥可在 [Hyperbolic](https://app.hyperbolic.ai) 创建。
+
+**Command Code 发现：**该预设从固定的 Provider API 主机读取 Command Code 公开的
+`/provider/v1/models` 列表，保留含 `/` 的原生模型 id，并将实时发现限制为 256 KiB 和 256 条原始记录。
+模型目录无需认证，因此 CLI 登录流程会将密钥报告为无法验证，而不是误报为有效。聊天请求使用已配置的
+bearer 密钥；API 访问需要 Provider 套餐，Go/Pro 订阅用户的 CLI 认证桥接尚不可用。
+密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
 
 > **Baseten 范围：**该预设仅覆盖 Baseten 的共享 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)。
 > 本地使用可选择个人 [API 密钥](https://docs.baseten.co/organization/api-keys)；共享或生产用途请使用具备

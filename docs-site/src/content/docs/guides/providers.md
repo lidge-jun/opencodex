@@ -190,15 +190,31 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 66 built-in presets: 55 key-based, seven OAuth, three local, and the default
+opencodex ships 69 built-in presets: 58 key-based, seven OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it. Notable entries:
+validates the key, and stores it; validation is provider-specific, and Command Code's public
+catalog reports keys as unverifiable. Notable entries:
+
+**ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
+and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
+[Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
+intentional: the first segment selects the opencodex provider, while `cline-pass/kimi-k3` is the
+full model slug sent upstream. ClinePass quota is shared by the account across rolling 5-hour,
+weekly, and monthly limits. opencodex currently advertises the live-verified `low` reasoning tier;
+higher requested tiers clamp to `low` until the gateway publishes or verifies a wider ladder.
+
+**Cline** is the same API key and endpoint on pay-as-you-go usage billing across 100+ models
+(OpenRouter-style ids like `anthropic/claude-sonnet-4-6`). Cline's promotional free models are only
+available in the Cline IDE/CLI, not through the API; `minimax/minimax-m2.5` is the documented API
+free-experimentation model.
 
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
+| **Cline** | `https://api.cline.bot/api/v1` |
+| **ClinePass** | `https://api.cline.bot/api/v1` |
 | **Ollama Cloud** | `https://ollama.com/v1` |
 | Google Gemini · Google Vertex AI | `https://generativelanguage.googleapis.com` · `https://aiplatform.googleapis.com` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai` |
@@ -210,6 +226,7 @@ validates the key, and stores it. Notable entries:
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
+| Command Code | `https://api.commandcode.ai/provider/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -257,6 +274,13 @@ rows. Create keys in [DeepInfra's dashboard](https://deepinfra.com/dash/api_keys
 slash-containing native model ids, and caps live discovery at 256 KiB and 256 raw rows. It covers
 serverless text and vision-language chat only; Hyperbolic's separate image, audio, and GPU endpoints
 are out of scope. Create keys at [Hyperbolic](https://app.hyperbolic.ai).
+
+**Command Code discovery.** The preset reads Command Code's public `/provider/v1/models` list from
+the fixed Provider API host, preserves provider-native ids, and caps discovery at 256 KiB and 256 raw
+rows. The model catalog is unauthenticated, so the CLI login flow reports the key as unverifiable
+instead of a false positive. Chat requests use the configured Bearer key; API access requires the
+Provider plan, and CLI auth bridging for Go/Pro subscriptions is not yet available. Create keys at
+[Command Code Studio](https://commandcode.ai/studio/).
 
 > **Baseten scope:** The preset covers Baseten's shared [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > only. Use a personal [API key](https://docs.baseten.co/organization/api-keys) for local use, or a team key

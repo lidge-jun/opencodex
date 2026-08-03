@@ -293,6 +293,9 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     // opt-in, while an explicit user `false` keeps overriding registry `true`.
     ...(provider.parallelToolCalls === undefined && registryEntry.parallelToolCalls !== undefined ? { parallelToolCalls: registryEntry.parallelToolCalls } : {}),
     ...(provider.promptCacheKey === undefined && registryEntry.promptCacheKey !== undefined ? { promptCacheKey: registryEntry.promptCacheKey } : {}),
+    ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
+      ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
+      : {}),
     ...(provider.defaultMaxOutputTokens === undefined && registryEntry.defaultMaxOutputTokens !== undefined
       ? { defaultMaxOutputTokens: registryEntry.defaultMaxOutputTokens }
       : {}),

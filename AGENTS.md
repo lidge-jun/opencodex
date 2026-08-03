@@ -130,6 +130,16 @@ with regression coverage in `tests/startup-prompt.test.ts`,
 another action that spends the user's identity, credits, or reputation, gate it
 the same way rather than relying on a prompt an agent can answer.
 
+**Be clear about what that enforcement is and is not.** The management endpoint
+requires a dashboard session, which stops the casual path — an agent that would
+have POSTed there because the endpoint existed, and one holding only the admin
+token. It is not a technical barrier against a determined local agent: a process
+running as the user can mint its own session from the loopback dashboard
+bootstrap, and can skip the proxy entirely by running `gh` itself. Every local
+credential is equally reachable by both the browser and the agent, so no check
+inside this process can tell them apart. The real boundary is the rule above, and
+it binds you regardless of which mechanism is within reach.
+
 ## Commands
 
 ```bash

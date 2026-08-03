@@ -152,6 +152,23 @@ describe("request log metadata", () => {
     }
   });
 
+  test("records a gateway reasoning disable as a boolean", () => {
+    const logCtx: RequestLogContext = { model: "m", provider: "cline-pass" };
+    recordAdapterReasoning(logCtx, {
+      url: "https://api.cline.bot/api/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: "none",
+        wireField: "reasoning.enabled",
+        wireValue: false,
+      },
+    });
+
+    expect(logCtx.reasoningWireValue).toBe(false);
+  });
+
   test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
     const attempt = beginRequestAttempt(1, "a", "m1", "openai-chat");
     const logCtx: RequestLogContext = {

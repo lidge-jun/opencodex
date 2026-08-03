@@ -31,6 +31,9 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
 
 - Converts internal messages to OpenAI roles; maps tools to `{type:"function", function:{…}}` and
   `tool_choice` (`auto`/`none`/`required` or a named function).
+- **Tool-result images** ride in a follow-up user vision message (`image_url` parts) released once
+  the tool round closes, since `role:"tool"` content is text-only; the `[image]` marker stays in the
+  tool message as the anchor.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
 - **Clamps `reasoning_effort`** to the model's advertised subset when an exact tier is unavailable;
@@ -38,6 +41,11 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   adapter **omits it entirely** for ids in `provider.noReasoningModels`.
 - Streams `delta.content` (text), `delta.reasoning_content` (thinking), and `delta.tool_calls[]`;
   collects `usage`.
+- ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort: "low" }`
+  (or `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
+  this request shape. The adapter clamps other effort requests to the verified `low` tier, accepts
+  reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests streamed
+  usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
 
 ## `openai-responses`
 

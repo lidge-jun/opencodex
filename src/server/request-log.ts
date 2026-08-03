@@ -15,6 +15,7 @@ import {
   isKnownAdmissionKind,
   isKnownInboundProtocol,
   isKnownUsageSurface,
+  isValidReasoningWireValue,
   readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
@@ -58,7 +59,7 @@ export interface RequestLogContext {
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -121,7 +122,7 @@ export interface RequestLogEntry {
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -399,12 +400,11 @@ export function recordAdapterReasoning(
     const reasoning = raw as Record<string, unknown>;
     if (typeof reasoning.effectiveEffort !== "string" || !reasoning.effectiveEffort
       || (reasoning.wireField !== "reasoning_effort"
+        && reasoning.wireField !== "reasoning.enabled"
+        && reasoning.wireField !== "reasoning.effort"
         && reasoning.wireField !== "thinking_budget"
         && reasoning.wireField !== "thinking.type")
-      || (!(typeof reasoning.wireValue === "string" && reasoning.wireValue)
-        && !(typeof reasoning.wireValue === "number"
-          && Number.isFinite(reasoning.wireValue)
-          && reasoning.wireValue >= 0))) {
+      || !isValidReasoningWireValue(reasoning.wireField, reasoning.wireValue)) {
       return;
     }
 

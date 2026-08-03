@@ -86,6 +86,56 @@ describe("openai-chat stream EOF fail-closed", () => {
     expect(events.find(e => e.type === "error")).toMatchObject({ message: "Rate limit reached for model" });
   });
 
+  test("choice-scoped finish_reason error yields a terminal error", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+      'data: {"choices":[{"finish_reason":"error","error":{"code":"rate_limit","message":"ClinePass limit reached"}}]}\n\n',
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "rate_limit",
+      message: "ClinePass limit reached",
+    });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("terminal errors discard a pending tool call instead of completing it", async () => {
+    for (const terminal of [
+      'data: {"choices":[{"finish_reason":"error","error":{"code":"server_error","message":"upstream failed"}}]}\n\n',
+      'data: {"error":{"code":"server_error","message":"upstream failed"}}\n\n',
+    ]) {
+      const body = [
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"shell","arguments":"{\\"cmd\\":\\"l"}}]}}]}\n\n',
+        terminal,
+      ].join("");
+      const adapter = createOpenAIChatAdapter(provider);
+      const events = await collect(adapter.parseStream(new Response(body)));
+
+      expect(events).toEqual([{ type: "error", code: "server_error", message: "upstream failed" }]);
+
+      const bridged = await new Response(bridgeToResponsesSSE(
+        adapter.parseStream(new Response(body)),
+        "openai-chat/test-model",
+      )).text();
+      expect(bridged).toContain("event: response.failed");
+      expect(bridged).not.toContain("response.function_call_arguments.done");
+      expect(bridged).not.toContain('"status":"completed"');
+    }
+  });
+
+  test("Cline-compatible delta.reasoning is preserved as reasoning output", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"reasoning":"considering"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\n',
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+
+    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "considering" });
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test("finish-only chunk with no delta (provider omits [DONE]) is accepted as done", async () => {
     const response = new Response([
       'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',

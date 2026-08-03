@@ -237,6 +237,38 @@ export function issueGuiSession(
   return { token, ...session };
 }
 
+/**
+ * Which credential actually authorized a management request.
+ *
+ * `admin-token` is the raw token from disk/env: anything running as the user can
+ * read it, including a coding agent. `gui-session` is a session token this process
+ * minted for a browser, and it only authorizes a mutation after the origin and the
+ * per-session CSRF token match. Consent-bearing routes must key off this value
+ * rather than off request headers, which the token holder can forge freely.
+ */
+export type ManagementPrincipal = "admin-token" | "gui-session";
+
+/**
+ * The principal for a request that already passed `requireManagementAuth`. Kept as a
+ * separate resolution (rather than a changed return type) so every existing caller
+ * keeps its `Response | null` contract; the value is derived from the same session
+ * table and the same CSRF comparison the gate uses, so the two cannot disagree.
+ */
+export function managementPrincipal(
+  req: Request,
+  state: ManagementAuthState,
+  config?: OcxConfig,
+): ManagementPrincipal | null {
+  if (!state.available) return null;
+  const actual = req.headers.get("x-opencodex-api-key")?.trim()
+    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!actual) return null;
+  if (equalSecret(actual, state.token)) return "admin-token";
+  if (!config) return null;
+  removeExpiredSessions(state);
+  return state.sessions.has(actual) ? "gui-session" : null;
+}
+
 export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,

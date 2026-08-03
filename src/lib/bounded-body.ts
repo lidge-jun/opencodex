@@ -39,6 +39,19 @@ export interface BoundedBodyResult {
 const TOTAL_TIMEOUT = Symbol("bounded body total timeout");
 const INACTIVITY_TIMEOUT = Symbol("bounded body inactivity timeout");
 
+/**
+ * Test-only instrumentation: how many times the retained buffer was reallocated
+ * during the most recent read. The accumulator grows geometrically, so this is
+ * logarithmic in the body size and independent of how many chunks the peer sends.
+ * The per-chunk array it replaced retained one object per chunk instead, which a
+ * fragmenting peer can inflate far past the payload ceiling — a property no
+ * correctness assertion can see, which is why it is observable here.
+ */
+let bufferGrowthsForTests = 0;
+export function boundedBodyBufferGrowthsForTests(): number {
+	return bufferGrowthsForTests;
+}
+
 function timeoutPromise(ms: number, value: symbol): { promise: Promise<symbol>; clear: () => void } {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const promise = new Promise<symbol>((resolve) => {
@@ -105,6 +118,7 @@ export async function readBoundedResponseBody(
 	// beyond the payload ceiling on large budgets.
 	let retained = new Uint8Array(Math.min(maxBytes, 64 * 1024));
 	let retainedBytes = 0;
+	bufferGrowthsForTests = 0;
 	let mustCancel = false;
 	let cancelReason: unknown;
 	const total = timeoutPromise(options.totalTimeoutMs ?? BOUNDED_BODY_TIMEOUT_MS, TOTAL_TIMEOUT);
@@ -197,6 +211,7 @@ export async function readBoundedResponseBody(
 				);
 				grown.set(retained.subarray(0, retainedBytes));
 				retained = grown;
+				bufferGrowthsForTests += 1;
 			}
 			retained.set(value, retainedBytes);
 			retainedBytes += value.byteLength;

@@ -39,3 +39,10 @@ devlog/**/security-advisory-draft*
 # Test-generated artifacts
 tests/.tmp-*/
 .claude/
+
+# Retired Go native-runtime experiment. `go/` is not part of the build, the
+# typecheck, or the test path, and nothing in `src/` imports it. A single file
+# from it (go/internal/cli/config_parity.go) has now been committed by a broad
+# `git add` three separate times and reached `dev` once — see
+# tests/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
+go/

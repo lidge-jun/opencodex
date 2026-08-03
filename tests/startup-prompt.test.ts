@@ -115,12 +115,18 @@ describe("startup star prompt", () => {
 
     // The CLI deferral is worthless if an agent can reach the same write over
     // HTTP: it runs on the user's machine and can read the admin token from disk.
-    expect(routes).toContain("isAgentDriven()");
     expect(routes).toContain("agent_consent_required");
-    // A dashboard click must still work when an agent started the proxy, so the
-    // refusal is conditioned on the absence of browser-session evidence.
     expect(routes).toContain("hasBrowserSessionEvidence");
-    expect(routes).toMatch(/isAgentDriven\(\)\s*&&\s*!hasBrowserSessionEvidence\(req\)/);
+    // The requirement is UNCONDITIONAL. Gating it on isAgentDriven() reads the
+    // server's environment, not the caller's, so a service-run proxy (no agent
+    // markers) accepted a raw-token star from any agent on the machine.
+    expect(routes).toMatch(/if\s*\(!hasBrowserSessionEvidence\(ctx\)\)/);
+    expect(routes).not.toMatch(/isAgentDriven\(\)\s*&&/);
+    // And that evidence must be the authenticating CREDENTIAL, never a request
+    // header: the admin token is readable by anything running as the user, so a
+    // header-shaped check is forgeable by the exact caller this guard refuses.
+    expect(routes).toMatch(/principal === "gui-session"/);
+    expect(routes).not.toMatch(/hasBrowserSessionEvidence[\s\S]*?headers\.get\("x-opencodex-csrf-token"\)/);
   });
 
   test("the consent rule is written down where agents and users read it", async () => {

@@ -27,11 +27,19 @@ interface ProviderAdapter {
 
 - 内部メッセージを OpenAI role に変換し、ツールは `{type:"function", function:{…}}` と
   `tool_choice`（`auto`/`none`/`required` または指定関数）にマッピングします。
+- **ツール結果内の画像**は、`role:"tool"` がテキスト専用のため、ツールラウンドが閉じた後に後続の
+  user vision メッセージ（`image_url` パート）として送られます。ツールメッセージ側には `[image]`
+  マーカーがアンカーとして残ります。
 - **Codex の GPT-5 アイデンティティプロンプトを書き直し**、モデル中立な紹介に変えます。そのためルーティングされたモデルが自分を OpenAI だと主張しません。
 - 正確な段階がないときは **`reasoning_effort` をモデルが公表したサブセットに合わせて調整**します。
   プロバイダーが明示的に alias を設定しない限り、`xhigh` と `max` は異なるラベルのまま保ちます。`provider.noReasoningModels` に含まれる id には値を **一切送りません**。
 - `delta.content`（テキスト）、`delta.reasoning_content`（thinking）、`delta.tool_calls[]` を
   ストリーミングし、`usage` を収集します。
+- ClinePass は、ライブ検証済みのゲートウェイ形式 `reasoning: { enabled: true, effort: "low" }`
+  （reasoning を無効にする場合は `{ enabled: false }`）を使用します。公開 API ドキュメントには
+  現在このリクエスト形式が明記されていません。アダプターは他の effort リクエストを検証済みの
+  `low` に調整し、`delta.reasoning_content` または `delta.reasoning` を reasoning delta として扱い、
+  `stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
 
 ## `openai-responses`
 

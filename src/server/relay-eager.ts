@@ -194,18 +194,26 @@ export function relaySseEagerBounded(
     let syntheticKind: "incomplete" | "failed" | null = null;
     // reader.read() is not intrinsically tied to the upstream AbortController
     // (a fetch body usually rejects on abort, but that coupling is the fetch
-    // implementation's, not the stream's). Race every read against the abort
-    // signal so cancel-drain expiry and shutdown teardown ALWAYS break the
-    // loop even on a silent upstream.
-    const aborted: Promise<"aborted"> = new Promise(resolve => {
-      if (upstream.signal.aborted) resolve("aborted");
-      else upstream.signal.addEventListener("abort", () => resolve("aborted"), { once: true });
-    });
+    // implementation's, not the stream's), so abort must break a parked read on
+    // a silent upstream. Cancelling the reader does that: the pending read
+    // settles and the loop observes the abort. This is deliberately NOT a
+    // shared `Promise.race([reader.read(), aborted])` companion — racing every
+    // read against one never-settled promise retains a reaction per chunk, and
+    // that is the exact retention class relay.ts avoids at its own drain.
+    const wakeParkedRead = () => { reader.cancel(upstream.signal.reason).catch(() => {}); };
+    if (upstream.signal.aborted) wakeParkedRead();
+    else upstream.signal.addEventListener("abort", wakeParkedRead, { once: true });
     try {
       for (;;) {
-        const result = await Promise.race([reader.read(), aborted]);
-        if (result === "aborted") break;
+        const result = await reader.read();
         const { done: upstreamDone, value } = result;
+        // A chunk that already settled is INSPECTED before abort is honored. A read
+        // can settle with a real chunk in the same tick the signal fires (post-cancel
+        // drain: the terminal frame arrives, then the drain timer aborts upstream).
+        // Checking the signal first discarded that frame, so the terminal was never
+        // recorded and the turn was accounted as a plain cancel.
+        if (!upstreamDone && value !== undefined) hooks.inspectChunk(value);
+        if (upstream.signal.aborted) break;
         if (upstreamDone) {
           hooks.finishInspection();
           if (rewrite) {
@@ -220,7 +228,6 @@ export function relaySseEagerBounded(
           }
           break;
         }
-        hooks.inspectChunk(value);
         if (cancelled) {
           // Discard-drain: inspection only, nothing queued. Stop at terminal
           // or when the bounded window expires.
