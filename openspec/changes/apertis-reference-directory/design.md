@@ -29,6 +29,9 @@ unsafe. The repository already has a directory isolation boundary for reference 
   keeps the entry structurally inert without duplicating an integration definition.
 - Do not add an Apertis entry to the canonical registry or GUI catalog-name map. Registry absence
   preserves a same-named custom provider's adapter and destination.
+- Invoke the ESLint package through `bun --bun` in the GUI scripts. The existing configuration
+  imports local `.ts` modules, which direct Node execution rejects before linting; Bun preserves
+  ESLint's package resolution while loading those modules.
 
 ## Risks / Trade-offs
 
@@ -38,3 +41,5 @@ unsafe. The repository already has a directory isolation boundary for reference 
   change with routing/resale authorization and a canonical integration test suite.
 - [Users cannot one-click configure Apertis] → this is intentional until the required evidence is
   available; manual custom-provider configuration remains unchanged.
+- [The lint command could be run by a Node-only launcher] → the documented package scripts now
+  force Bun, while direct external Node invocations remain outside this repository contract.

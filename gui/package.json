@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "bun --bun eslint .",
     "test": "bun test tests",
-    "lint:i18n": "eslint src/pages src/components src/App.tsx src/ui.tsx",
+    "lint:i18n": "bun --bun eslint src/pages src/components src/App.tsx src/ui.tsx",
     "doctor": "npx --yes react-doctor@0.9.3 --verbose --scope changed --base origin/main --no-telemetry",
     "doctor:full": "npx --yes react-doctor@0.9.3 --verbose --scope full --no-telemetry",
     "preview": "vite preview"
