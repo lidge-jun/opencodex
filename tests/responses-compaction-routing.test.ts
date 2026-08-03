@@ -182,15 +182,26 @@ describe("native compact usage reporting", () => {
     } as unknown as OcxConfig;
     globalThis.fetch = (async () => jsonResponse(completedPayload("native summary"))) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
-    const response = await handleResponsesCompact(
-      compactionRequest(baseCompactionBody({ model: "openai-apikey/gpt-5.5" })),
-      config,
-      logCtx,
-    );
+    const previousUsageDebug = process.env.OPENCODEX_USAGE_DEBUG;
+    process.env.OPENCODEX_USAGE_DEBUG = "1";
+    let response: Response;
+    try {
+      response = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({ model: "openai-apikey/gpt-5.5" })),
+        config,
+        logCtx,
+      );
+    } finally {
+      if (previousUsageDebug === undefined) delete process.env.OPENCODEX_USAGE_DEBUG;
+      else process.env.OPENCODEX_USAGE_DEBUG = previousUsageDebug;
+    }
     expect(response.status).toBe(200);
-    const body = await response.json() as { usage?: Record<string, unknown> };
-    expect(body.usage).toMatchObject({ input_tokens: 10, output_tokens: 5, total_tokens: 15 });
+    expect(await response.json()).toEqual(completedPayload("native summary"));
     expect(logCtx.usage).toMatchObject({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+    // The compact body is replacement history; even with usage debug on it must
+    // never be sampled into the debug log.
+    expect(logCtx.usageDebugBodyKind).toBeUndefined();
+    expect(logCtx.usageDebugBodySample).toBeUndefined();
   });
 });
 

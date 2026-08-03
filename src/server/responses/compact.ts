@@ -86,10 +86,10 @@ import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { supportedLadderFor } from "../effort-policy";
 import {
+  applyResponseLogMetadata,
   beginRequestAttempt,
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
-  inspectResponseLogJson,
   noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
@@ -507,9 +507,16 @@ export async function handleResponsesCompact(
     // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
     recordCompactPoolOutcome(outcomeCtx, upstream.status, { retryAfter, resetAt });
     // Lift usage and response metadata from the buffered upstream JSON into the
-    // request log; the routed branch gets the same through handleResponses. The
-    // synthetic buffer errors are not upstream bodies and stay uninspected.
-    if (buffered.ok) inspectResponseLogJson(logCtx, await buffered.clone().text());
+    // request log; the routed branch gets the same through handleResponses. Only
+    // the parsed fields are read: a compact body is replacement history derived
+    // from the conversation, so it must never reach the usage debug body sampler.
+    if (buffered.ok) {
+      try {
+        applyResponseLogMetadata(logCtx, JSON.parse(await buffered.clone().text()));
+      } catch {
+        /* body may not be JSON; usage stays unreported */
+      }
+    }
     return buffered;
   }
 
