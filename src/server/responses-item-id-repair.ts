@@ -86,7 +86,9 @@ function mapRawId(
   }
 
   if (!rawId) {
-    if (!state.repairMissingTerminalIds) return null;
+    // When non-canonical rewrite is active, mint a request-local id even if the upstream
+    // omitted the terminal id, so Codex lifecycle correlation stays stable.
+    if (!state.repairMissingTerminalIds && !state.rewriteNonCanonicalIds) return null;
     const minted = mintCanonicalId(type, state.scope, outputIndex);
     state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, minted])).byteLength, { kind: "item_ids" });
     state.outputIds[type].set(outputIndex, minted);
@@ -151,7 +153,8 @@ function mapResponseId(state: ResponsesItemIdRepairState, rawId: string | undefi
   if (rawId.startsWith("resp_")) return rawId;
   const existing = state.responseIdMap.get(rawId);
   if (existing) return existing;
-  const minted = `resp_ocx_${state.scope}`;
+  // Keep each distinct upstream response id unique within the request-local scope.
+  const minted = `resp_ocx_${state.scope}_${state.responseIdMap.size}`;
   state.responseIdMap.set(rawId, minted);
   return minted;
 }
@@ -220,7 +223,7 @@ function rewriteOutputItem(
   if (!mapped) return { item, changed: false };
   const currentId = typeof item.id === "string" ? item.id : undefined;
   if (currentId === mapped) return { item, changed: false };
-  if (currentId === undefined && !state.repairMissingTerminalIds) return { item, changed: false };
+  if (currentId === undefined && !state.repairMissingTerminalIds && !state.rewriteNonCanonicalIds) return { item, changed: false };
   return { item: { ...item, id: mapped }, changed: true };
 }
 
@@ -254,7 +257,7 @@ function rewriteItemIdField(
   }
   if (!mapped) return { event, changed: false };
   if (currentId === mapped) return { event, changed: false };
-  if (currentId === undefined && !state.repairMissingTerminalIds) return { event, changed: false };
+  if (currentId === undefined && !state.repairMissingTerminalIds && !state.rewriteNonCanonicalIds) return { event, changed: false };
   const next: Record<string, unknown> = { ...event, item_id: mapped };
   if (state.rewriteNonCanonicalIds && "logprobs" in next) delete next.logprobs;
   return { event: next, changed: true };
@@ -403,26 +406,35 @@ function repairEventPayload(
  * rewriteNonCanonicalIds rewrites DeepSeek-style UUID item/response ids, converts
  * reasoning_text streams into Codex-friendly encrypted_content reasoning items, and
  * ensures a terminal [DONE] trailer so CLI/TUI turns finish.
+ *
+ * The rewrite and trailer share one request-local state object via closure so
+ * composition cannot lose the trailer state.
  */
+export interface ResponsesItemIdRepairHandlers {
+  rewrite: SsePayloadRewrite;
+  trailer: () => string | undefined;
+}
+
+export function createResponsesItemIdRepairHandlers(
+  config: ResponsesItemIdRepairConfig,
+  budget?: TranslatorBudget,
+): ResponsesItemIdRepairHandlers {
+  const state = createRepairState(config, budget);
+  return {
+    rewrite: (payload) => repairEventPayload(payload, state),
+    trailer: () => {
+      if (state.sawCompleted && !state.sawDoneTrailer) return "data: [DONE]\n\n";
+      return undefined;
+    },
+  };
+}
+
+/** Backward-compatible helper used by existing tests and callers. */
 export function createResponsesItemIdPayloadRewrite(
   config: ResponsesItemIdRepairConfig,
   budget?: TranslatorBudget,
 ): SsePayloadRewrite {
-  const state = createRepairState(config, budget);
-  const rewrite: SsePayloadRewrite = (payload) => repairEventPayload(payload, state);
-  (rewrite as SsePayloadRewrite & { __state?: ResponsesItemIdRepairState }).__state = state;
-  return rewrite;
-}
-
-export function createResponsesItemIdDoneTrailer(
-  rewrite: SsePayloadRewrite,
-): () => string | undefined {
-  return () => {
-    const state = (rewrite as SsePayloadRewrite & { __state?: ResponsesItemIdRepairState }).__state;
-    if (!state) return undefined;
-    if (state.sawCompleted && !state.sawDoneTrailer) return "data: [DONE]\n\n";
-    return undefined;
-  };
+  return createResponsesItemIdRepairHandlers(config, budget).rewrite;
 }
 
 export function relaySseWithResponsesItemIdRepair(
@@ -430,9 +442,9 @@ export function relaySseWithResponsesItemIdRepair(
   config: ResponsesItemIdRepairConfig,
   budget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
-  const rewrite = createResponsesItemIdPayloadRewrite(config, budget);
-  return relaySseWithPayloadRewrite(body, rewrite, budget, {
-    trailer: createResponsesItemIdDoneTrailer(rewrite),
+  const handlers = createResponsesItemIdRepairHandlers(config, budget);
+  return relaySseWithPayloadRewrite(body, handlers.rewrite, budget, {
+    trailer: handlers.trailer,
   });
 }
 

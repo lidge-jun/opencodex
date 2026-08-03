@@ -147,7 +147,7 @@ import { relaySseEagerBounded } from "../relay-eager";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import {
-  createResponsesItemIdPayloadRewrite,
+  createResponsesItemIdRepairHandlers,
   hasResponsesItemIdRepair,
 } from "../responses-item-id-repair";
 import {
@@ -1851,12 +1851,13 @@ async function handleResponsesInner(
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      const itemIdRepair = hasResponsesItemIdRepair(repairConfig)
+        ? createResponsesItemIdRepairHandlers(repairConfig!, translatorBudget)
+        : undefined;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
-        hasResponsesItemIdRepair(repairConfig)
-          ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
-          : undefined,
+        itemIdRepair?.rewrite,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
@@ -1920,7 +1921,12 @@ async function handleResponsesInner(
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
-        }, win32EagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
+        }, win32EagerRewrite
+          ? {
+            rewriteBudget: translatorBudget,
+            ...(itemIdRepair ? { trailer: itemIdRepair.trailer } : {}),
+          }
+          : undefined);
         // selectEagerPath admits only no-rewrite traffic on both eligible platforms;
         // win32 rewrite traffic reaches this relay too, but with the payload rewrite
         // applied inline — never via an image/item-id JS pull wrapper (#32111, #864).
@@ -1994,7 +2000,12 @@ async function handleResponsesInner(
       // relay is established practice (relayWithAbort, relaySseWithHeartbeat) and lets a
       // mid-stream reset end with a clean response.failed terminal instead of a raw socket error.
       const rewrittenBody = payloadRewrites.length > 0
-        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
+        ? relaySseWithPayloadRewrite(
+          nativeBody,
+          composeSsePayloadRewrites(...payloadRewrites),
+          translatorBudget,
+          itemIdRepair ? { trailer: itemIdRepair.trailer } : undefined,
+        )
         : nativeBody;
       const clientBody = process.platform === "win32" && !needsClientRewrite
         ? nativeBody

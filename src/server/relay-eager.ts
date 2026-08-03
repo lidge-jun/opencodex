@@ -58,6 +58,8 @@ export type EagerRelayHooks = {
 };
 
 export type EagerRelayOptions = {
+  /** Optional trailer emitted after rewrite flush (e.g. data: [DONE]). */
+  trailer?: string | (() => string | undefined);
   /** Bounded client queue in bytes; producer pauses above it. Default 8 MiB. */
   maxQueueBytes?: number;
   /** Transient-budget owner for the inline-rewrite frame buffer. */
@@ -231,6 +233,12 @@ export function relaySseEagerBounded(
             if (tail.byteLength > 0 && !cancelled) {
               queuedBytes += tail.byteLength;
               try { controllerRef?.enqueue(tail); } catch { /* client already gone */ }
+            }
+            const trailer = typeof opts?.trailer === "function" ? opts.trailer() : opts?.trailer;
+            if (trailer && !cancelled) {
+              const trailerBytes = new TextEncoder().encode(trailer);
+              queuedBytes += trailerBytes.byteLength;
+              try { controllerRef?.enqueue(trailerBytes); } catch { /* client already gone */ }
             }
           }
           if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {

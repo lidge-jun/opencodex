@@ -83,10 +83,51 @@ describe("DeepSeek Responses item-id repair", () => {
     expect(reasoningAdded.id).toMatch(/^rs_ocx_[0-9a-f]+_0$/);
     expect(messageAdded.id).toMatch(/^msg_ocx_[0-9a-f]+_1$/);
     expect(textDelta.item_id).toBe(messageAdded.id);
-    expect(completed.id).toMatch(/^resp_ocx_[0-9a-f]+$/);
+    expect(completed.id).toMatch(/^resp_ocx_[0-9a-f]+_\d+$/);
     expect(completed.output[0].id).toBe(reasoningAdded.id);
     expect(String(completed.output[0].encrypted_content)).toMatch(/^ocxr1:/);
     expect(completed.output[1].id).toBe(messageAdded.id);
+  });
+
+
+  test("mints unique response ids for distinct upstream response ids", async () => {
+    const upstream = [
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"11111111-1111-1111-1111-111111111111","status":"completed","output":[]}}\n\n`,
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"22222222-2222-2222-2222-222222222222","status":"completed","output":[]}}\n\n`,
+    ].join("");
+    const events = await parseSse(await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      rewriteNonCanonicalIds: true,
+    })));
+    const first = (events[0].response as { id: string }).id;
+    const second = (events[1].response as { id: string }).id;
+    expect(first).toMatch(/^resp_ocx_[0-9a-f]+_0$/);
+    expect(second).toMatch(/^resp_ocx_[0-9a-f]+_1$/);
+    expect(first).not.toBe(second);
+  });
+
+  test("mints reasoning ids when rewriteNonCanonicalIds is enabled without repairMissingTerminalIds", async () => {
+    const upstream = [
+      `event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[]}}\n\n`,
+      `event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","summary":[]}}\n\n`,
+    ].join("");
+    const events = await parseSse(await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      rewriteNonCanonicalIds: true,
+    })));
+    const added = events[0].item as Record<string, unknown>;
+    const done = events[1].item as Record<string, unknown>;
+    expect(added.id).toMatch(/^rs_ocx_[0-9a-f]+_0$/);
+    expect(done.id).toBe(added.id);
+  });
+
+  test("does not duplicate an upstream [DONE] trailer", async () => {
+    const upstream = [
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"58786d76-18be-43d9-b6f5-8922796fbe28","status":"completed","output":[]}}\n\n`,
+      `data: [DONE]\n\n`,
+    ].join("");
+    const repaired = await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      rewriteNonCanonicalIds: true,
+    }));
+    expect(repaired.match(/data: \[DONE\]/g)).toHaveLength(1);
   });
 
   test("opt-in flag is recognized", () => {

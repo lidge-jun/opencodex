@@ -141,7 +141,7 @@ export function relaySseWithPayloadRewrite(
     while ((next = nextSseBlock(buffer))) {
       replaceBuffer(next.rest);
       const payload = sseDataPayload(next.block);
-      if (payload) {
+      if (payload !== null) {
         const rewrittenPayload = rewrite(payload);
         if (rewrittenPayload === null) continue;
         const block = rewrittenPayload !== payload
@@ -156,7 +156,7 @@ export function relaySseWithPayloadRewrite(
     }
     if (flushFinal && buffer.length > 0) {
       const payload = sseDataPayload(buffer);
-      if (payload) {
+      if (payload !== null) {
         const rewrittenPayload = rewrite(payload);
         if (rewrittenPayload !== null) {
           const block = rewrittenPayload !== payload
