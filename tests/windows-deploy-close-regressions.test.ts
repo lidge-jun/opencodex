@@ -17,7 +17,7 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
   });
   test("bun/source restart uses the runtime executable + launcher (a real .exe, no shell)", () => {
     // restartCommand's non-npm branch resolves to process.execPath + the package launcher.
-    // Proxy mode may pin --port via startArgs; service mode stays install-only.
+    // Proxy mode may pin --port via startArgs; service mode stays repair-only.
     // Service mode now uses svcArgs (which accepts a serviceArgs parameter to preserve the backend).
     expect(src).toMatch(/const bin = process\.execPath;\s*\n\s*const args = svcArgs;/);
     expect(src).toContain('? [launcher, "start", "--port", String(Math.trunc(port))]');
@@ -25,7 +25,7 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
   });
   test("service update restart bakes OCX_BAKE_PORT so wrappers hard-pin the captured port", () => {
     expect(src).toContain("OCX_BAKE_PORT");
-    // Service reinstall still runs (with bake) even when reclaim warns; direct start refuses to hop.
+    // Service repair still runs (with bake) even when reclaim warns; direct start refuses to hop.
     expect(src).toContain("refusing to hop");
     expect(src).toContain("runtimeTrusted");
     expect(read("src/cli/index.ts")).toContain("allowEphemeralFallback: !hardPin");
@@ -42,7 +42,10 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     expect(src).toContain("spawnWorkerFn: spawnGuiUpdateWorker");
     // Foreign listeners must stay fail-closed; npm rename is covered by ocx identity.
     expect(src).not.toContain("killAnyListenPidOnPort");
-    expect(src).toContain('process.platform === "win32" && process.env.OCX_SERVICE === "1"');
+    // Existing service registrations use the permission-safe repair route. Fresh installation
+    // remains a separate, explicitly elevated operation.
+    expect(src).toContain('serviceArgs ?? ["service", "repair"]');
+    expect(src).not.toContain('serviceArgs ?? ["service", "install"]');
     // Native WinSW installs must stop via stopWinswService, not Task Scheduler /end only.
     expect(src).toContain("readServiceBackend");
     expect(src).toContain("stopWinswService");
