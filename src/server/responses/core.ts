@@ -151,6 +151,11 @@ import {
   hasResponsesItemIdRepair,
 } from "../responses-item-id-repair";
 import {
+  createResponsesSnapshotPayloadRewrite,
+  hasResponsesSnapshotRepair,
+  repairResponsesSnapshotJson,
+} from "../responses-snapshot-repair";
+import {
   createImageGenCallRestoreRewrite,
   imageGenToolCallAliases,
   restoreImageGenCallsInJson,
@@ -1817,12 +1822,17 @@ async function handleResponsesInner(
     // The bundled known-bad runtime remains on tee by default on both platforms.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      const needsClientRewrite = imageGenCallAliases.size > 0
+        || hasResponsesItemIdRepair(repairConfig)
+        || hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
+          : undefined,
+        hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
+          ? createResponsesSnapshotPayloadRewrite(parsed._rawBody, translatorBudget)
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
@@ -1996,7 +2006,11 @@ async function handleResponsesInner(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
+      const restoredText = restoreImageGenCallsInJson(text, imageGenCallAliases);
+      const clientText = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
+        ? repairResponsesSnapshotJson(restoredText, parsed._rawBody)
+        : restoredText;
+      return new Response(clientText, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,

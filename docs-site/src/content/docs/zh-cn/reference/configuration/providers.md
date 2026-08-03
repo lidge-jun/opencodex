@@ -77,6 +77,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 |
 | `parallelToolCalls?` | `boolean` | 切换并行工具调用。OpenAI Chat 默认开启；非 chat 适配器只有显式 `true` 时才会声明支持。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id 和缺失的终止 id。function-call id 永远不会被重写。 |
+| `responsesSnapshotRepair?` | `boolean` | 默认关闭的客户端修复，用于补全 SSE 与 JSON 中稀疏 Responses 生命周期快照缺失的 status、output 和工具元数据；原始检查与持久化保持不变。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；强制选择会被降级。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。 |
 | `thinkingToggleModels?` | `string[]` | 使用 `thinking.enabled` 而不是 effort 阶梯的 chat 模型。 |
@@ -187,7 +188,8 @@ affinity。这些策略不能规避 provider enforcement。
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
         "repairMissingTerminalIds": true
-      }
+      },
+      "responsesSnapshotRepair": true
     }
   }
 }

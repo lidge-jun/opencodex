@@ -77,6 +77,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` |正確なプレースホルダー ID および欠落している端末 ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。 |
+| `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
 | `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |
 | `thinkingToggleModels?` | `string[]` |エフォート ラダーではなく `thinking.enabled` を使用してモデルをチャットします。 |
@@ -190,7 +191,8 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
         "repairMissingTerminalIds": true
-      }
+      },
+      "responsesSnapshotRepair": true
     }
   }
 }

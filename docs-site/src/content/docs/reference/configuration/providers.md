@@ -88,6 +88,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `parallelToolCalls?` | `boolean` | Toggle parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise only on explicit `true`. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | Disabled-by-default downstream SSE repair for exact placeholder ids and missing terminal ids. Function-call ids are never rewritten. |
+| `responsesSnapshotRepair?` | `boolean` | Disabled-by-default client-facing repair for sparse Responses lifecycle snapshots in SSE and JSON. Fills missing canonical status, output, and tool metadata while raw inspection and persistence remain unchanged. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Models whose `tool_choice` accepts only `auto` or `none`; forced choices are downgraded. |
 | `preserveReasoningContentModels?` | `string[]` | Models requiring prior assistant `reasoning_content` in chat history. |
 | `thinkingToggleModels?` | `string[]` | Chat models using `thinking.enabled` rather than an effort ladder. |
@@ -234,7 +235,8 @@ For a broken `openai-responses` gateway, repair belongs on the provider object:
         "reasoning": ["rs_0"],
         "message": ["msg_0"],
         "repairMissingTerminalIds": true
-      }
+      },
+      "responsesSnapshotRepair": true
     }
   }
 }

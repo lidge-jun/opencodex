@@ -1102,6 +1102,12 @@ export interface OcxProviderConfig {
    * Disabled by default; function_call ids and call_id pairing are never rewritten.
    */
   responsesItemIdRepair?: ResponsesItemIdRepairConfig;
+  /**
+   * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical fields.
+   * Disabled by default and applied only to client-facing SSE/JSON; raw inspection state remains
+   * authoritative.
+   */
+  responsesSnapshotRepair?: boolean;
   /** Model ids whose tool_choice only accepts `auto` or `none`; forced/named choices are downgraded. */
   autoToolChoiceOnlyModels?: string[];
   /** Model ids that expect prior assistant `reasoning_content` to be preserved in chat history. */
