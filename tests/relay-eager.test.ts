@@ -284,6 +284,52 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
+  test("client cancel during a partial frame drains and leaves the rewrite budget clear", async () => {
+    const budget = createTranslatorBudget();
+    const up = controlledUpstream();
+    const upstream = new AbortController();
+    const { hooks, rec } = makeHooks();
+    hooks.rewritePayload = (payload: string) => payload;
+    let resolveDone!: () => void;
+    const done = new Promise<void>(resolve => { resolveDone = resolve; });
+    const previousOnDone = hooks.onDone;
+    hooks.onDone = () => {
+      try { previousOnDone(); } finally { resolveDone(); }
+    };
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      const relayed = relaySseEagerBounded(up.stream, upstream, hooks, {
+        rewriteBudget: budget,
+        postCancelDrainMs: 20,
+      });
+      const reader = relayed.getReader();
+
+      up.push(enc.encode(`data: {"type":"response.created","padding":"${"x".repeat(256 * 1024)}`));
+      await settle();
+      // The terminal boundary owns incomplete SSE framing, so the downstream
+      // rewrite stage must not retain or charge this partial block.
+      expect(budget.snapshot().currentBytes).toBe(0);
+
+      await reader.cancel();
+      await Promise.race([
+        done,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("relay cleanup timed out")), 2_000);
+        }),
+      ]);
+
+      expect(upstream.signal.aborted).toBe(true);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      expect(rec.cancels).toBe(1);
+      expect(rec.dones).toBe(1);
+      expect(rec.synthetics).toEqual([]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      budget.dispose();
+    }
+  });
+
   test("blocks without a data field pass through untouched before the terminal", async () => {
     const up = controlledUpstream();
     const { hooks } = makeHooks();

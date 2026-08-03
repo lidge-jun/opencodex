@@ -91,9 +91,13 @@ restart it.
    applies to new turns without a restart. **Crash risk warning:** on Bun
    1.3.14 this uses the stream shape affected by #32111, which can crash the
    process mid-stream (on any OS, not just Windows). The service manager will
-   restart it, but in-flight requests fail. `"legacy-tee"` pins the current
-   default. On Windows, `"auto"` (default) lets the runtime gate decide. On
-   macOS, `"auto"` always stays on tee; explicit `"eager-relay"` is the opt-in.
+   restart it, but in-flight requests fail. For ordinary streams,
+   `"legacy-tee"` pins the current default. Requests that need a client-facing
+   payload rewrite use the bounded single-reader relay automatically on Windows
+   and macOS because the tee/rewrite chain can stall; `streamMode` does not
+   override that transport-safety exception. On Windows, `"auto"` (default)
+   lets the runtime gate decide for ordinary streams. On macOS, ordinary
+   `"auto"` traffic stays on tee; explicit `"eager-relay"` is the opt-in.
 
 If you try any of these on a real Windows workload, please report the before
 and after `ocx doctor` memory sections on

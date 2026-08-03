@@ -9,8 +9,10 @@
  * follows this runtime/config decision, preserving the explicit legacy-tee
  * safety pin. Darwin no-rewrite traffic stays on tee
  * for `auto` regardless of runtime capability and reaches eager relay only via
- * explicit `streamMode: "eager-relay"` opt-in (see
- * devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
+ * explicit `streamMode: "eager-relay"` opt-in. On Windows and Darwin, traffic
+ * that needs a client payload rewrite always uses the eager single-reader path:
+ * the tee()+JS-pull rewrite chain can stall before delivering any client frames
+ * (see #864 and devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
  *
  * Prerelease conservatism: a version carrying a prerelease suffix (e.g.
  * `1.4.0-canary.3`) is NEVER treated as fixed even when its numeric triple
@@ -94,7 +96,8 @@ export function decideEagerRelay(
  * Windows preserves the decision for no-rewrite traffic. Darwin permits only
  * explicit config opt-in; `auto` remains tee even on a future fixed runtime.
  * Returns the normalized effective decision, or null when platform policy,
- * rewrite needs, or a Darwin non-config-eager mode selects tee.
+ * rewrite needs, or a Darwin non-config-eager mode selects tee. Rewrite traffic
+ * is handled separately by `requiresEagerRewriteRelay`.
  */
 export function selectEagerPath(
   platform: NodeJS.Platform,
@@ -113,15 +116,16 @@ export function selectEagerPath(
 }
 
 /**
- * #864 transport gate: win32 traffic that needs a client payload rewrite must
- * use the eager single reader with the rewrite applied inline, because the
- * alternative tee()+JS-pull chain is the Bun#32111-unsafe path that loses the
- * terminal SSE block on Windows. Independent of the version-based eager
- * policy: the pull chain is unsafe on the AFFECTED runtimes by definition.
+ * Transport safety gate: Windows and Darwin traffic that needs a client payload
+ * rewrite must use the eager single reader with the rewrite applied inline.
+ * The alternative tee()+JS-pull chain can lose the terminal block on Windows
+ * (#864) and can stall before the first client frame on Darwin when a Desktop-
+ * shaped request produces large SSE events. This overrides `streamMode`, since
+ * pinning the known-bad chain would reintroduce a turn that never completes.
  */
-export function isWin32EagerRewrite(
+export function requiresEagerRewriteRelay(
   platform: NodeJS.Platform,
   needsClientRewrite: boolean,
 ): boolean {
-  return platform === "win32" && needsClientRewrite;
+  return (platform === "win32" || platform === "darwin") && needsClientRewrite;
 }

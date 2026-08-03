@@ -4,18 +4,19 @@ import {
   compareBunVersions,
   decideEagerRelay,
   isStreamMode,
-  isWin32EagerRewrite,
+  requiresEagerRewriteRelay,
   MIN_FIXED_BUN_VERSION,
   parseBunVersion,
   selectEagerPath,
 } from "../src/lib/bun-stream-caps";
 
-describe("isWin32EagerRewrite (#864 transport gate)", () => {
-  test("win32 + rewrite → eager inline rewrite; everything else stays out", () => {
-    expect(isWin32EagerRewrite("win32", true)).toBe(true);
-    expect(isWin32EagerRewrite("win32", false)).toBe(false);
-    expect(isWin32EagerRewrite("darwin", true)).toBe(false);
-    expect(isWin32EagerRewrite("linux", true)).toBe(false);
+describe("requiresEagerRewriteRelay (rewrite transport safety gate)", () => {
+  test("Windows and Darwin rewrite inline; no-rewrite and unverified platforms stay out", () => {
+    expect(requiresEagerRewriteRelay("win32", true)).toBe(true);
+    expect(requiresEagerRewriteRelay("darwin", true)).toBe(true);
+    expect(requiresEagerRewriteRelay("win32", false)).toBe(false);
+    expect(requiresEagerRewriteRelay("darwin", false)).toBe(false);
+    expect(requiresEagerRewriteRelay("linux", true)).toBe(false);
   });
 });
 
@@ -122,7 +123,7 @@ describe("selectEagerPath (platform policy matrix)", () => {
     expect(selectEagerPath("darwin", false, "auto", "1.4.0", "1.4.0")).toBeNull();
   });
 
-  test("darwin + rewrite + config-eager → tee", () => {
+  test("darwin rewrite selection is delegated to the separate safety gate", () => {
     expect(selectEagerPath("darwin", true, "eager-relay", "1.3.14", null)).toBeNull();
   });
 

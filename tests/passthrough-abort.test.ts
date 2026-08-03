@@ -53,13 +53,16 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
     expect(sseBranch).toContain("new Response(eagerBody");
     expect(sseBranch).toContain("const rewrittenBody = payloadRewrites.length > 0");
-    expect(sseBranch).toContain("eagerPath?.useEagerRelay || win32EagerRewrite");
+    // Windows/Darwin traffic that needs a client rewrite takes the eager single
+    // reader with the payload rewrite applied inline. It never enters the
+    // tee()+JS-pull chain that loses delivery on these runtimes.
+    expect(sseBranch).toContain("requiresEagerRewriteRelay");
+    expect(sseBranch).toContain("eagerRewrite");
+    expect(sseBranch).toContain("eagerPath?.useEagerRelay || eagerRewrite");
     expect(sseBranch).not.toContain("win32TerminalRelay");
-    // #864: win32 traffic that DOES need a client rewrite takes the eager single
-    // reader with the payload rewrite applied inline — never the tee()+JS-pull
-    // chain that loses the terminal block on Windows (Bun#32111).
-    expect(sseBranch).toContain("win32EagerRewrite");
+    expect(sseBranch).not.toContain("win32EagerRewrite");
     expect(sseBranch).toContain("rewritePayload: composeSsePayloadRewrites(...payloadRewrites)");
+    expect(sseBranch).toContain("sawTerminal: () => inspector.terminalSeen()");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
     expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
     expect(sseBranch).toContain("new Response(clientBody");

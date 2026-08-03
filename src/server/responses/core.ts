@@ -158,7 +158,7 @@ import {
   sanitizePassthroughHeaders,
 } from "../relay";
 import { relaySseEagerBounded } from "../relay-eager";
-import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
+import { requiresEagerRewriteRelay, selectEagerPath } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import {
   createResponsesItemIdPayloadRewrite,
@@ -1974,16 +1974,17 @@ async function handleResponsesInner(
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
-      // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
-      // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
-      // lost). The eager single reader applies the same rewrites inline.
-      const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
+      // Rewrite traffic on Windows or Darwin must never enter the tee()+JS-pull
+      // chain: Windows can lose the terminal block (#864), while Darwin can stall
+      // before delivering the first large Desktop-shaped SSE frame. The eager
+      // single reader applies the same bounded rewrites inline on both platforms.
+      const eagerRewrite = requiresEagerRewriteRelay(process.platform, needsClientRewrite);
       const eagerPath = selectEagerPath(
         process.platform,
         needsClientRewrite,
         config.streamMode ?? "auto",
       );
-      if (eagerPath?.useEagerRelay || win32EagerRewrite) {
+      if (eagerPath?.useEagerRelay || eagerRewrite) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
         registerTurn(turnAc, options.turnAdmissionLease);
@@ -2022,7 +2023,7 @@ async function handleResponsesInner(
           // Stream lifetime follows the protocol terminal even when this request
           // has no outcome callback configured (reported() would stay false).
           sawTerminal: () => inspector.terminalSeen(),
-          ...(win32EagerRewrite
+          ...(eagerRewrite
             ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
             : {}),
           onSynthetic: kind => {
@@ -2038,11 +2039,12 @@ async function handleResponsesInner(
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
-        }, win32EagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
-        // When selected, this relay closes response.completed even if upstream
-        // keeps the connection alive. Windows rewrite traffic applies its
-        // payload transform inline — never via the Bun#32111-unsafe
-        // tee()+JS-pull chain (#864).
+        }, eagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
+        // selectEagerPath admits only no-rewrite traffic on both eligible platforms;
+        // Windows/Darwin rewrite traffic reaches this relay through the safety gate,
+        // with the payload rewrite inline rather than an image/item-id JS pull
+        // wrapper. The relay closes at response.completed even if upstream keeps
+        // the connection alive.
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
         return markEagerRelaySseResponse(
           markNativePassthroughSseResponse(new Response(eagerBody, {

@@ -43,18 +43,24 @@ Native passthrough SSE has TWO shapes, selected per request in
   drained eagerly by `consumeForInspection`/`consumeForResponseLogMetadata`
   for terminal-outcome recording, quota, the passthrough continuation cache,
   and request logs. This remains the default shape on bundled Bun 1.3.14.
-- **Terminal-aware eager bounded relay** (`src/server/relay-eager.ts`). Windows
-  uses this single-reader shape for rewrite traffic and for no-rewrite traffic
-  selected by `selectEagerPath` in `src/lib/bun-stream-caps.ts`; the latter keeps
-  `legacy-tee` and known-bad-runtime `auto` on tee as documented. When selected,
-  `response.completed` closes the client stream even if upstream keeps HTTP/SSE
-  alive. Darwin uses it for no-client-rewrite traffic only (neither image-gen
-  aliases nor item-id repair) and is explicit-only: `auto` stays tee even after
-  a future threshold bump. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee and goes
-  directly to the response without a JS rewrite wrapper, preserving the full
-  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
-  including the #44 late-terminal semantics.
+- **Terminal-aware eager bounded relay** (`src/server/relay-eager.ts`). No-client-rewrite
+  traffic (neither image-gen aliases nor item-id repair) is gated by
+  `selectEagerPath` in `src/lib/bun-stream-caps.ts`. Windows `auto` becomes eager
+  only on runtimes proven to carry the Bun#32111 fix (`MIN_FIXED_BUN_VERSION`,
+  null until a bundle bump), while explicit `streamMode: "eager-relay"` opts in
+  today. Darwin is explicit-only for ordinary traffic: `auto` stays tee even
+  after a future threshold bump. Separately, passthrough SSE that needs a
+  client-facing payload rewrite uses this relay on Windows and Darwin regardless
+  of `streamMode`: the tee plus JS-pull rewrite chain can lose the terminal block
+  on Windows and can stall before the first large Codex Desktop frame on Darwin.
+  The single reader applies that rewrite inline, keeps its frame buffer charged
+  to the turn's translator budget, and feeds raw upstream bytes to inspection
+  and continuation state first. When selected, `response.completed` closes the
+  client stream even if upstream keeps HTTP/SSE alive. Its byte-bounded client
+  queue and post-cancel bounded discard-drain preserve the full inspection
+  side-effect set (shared `createSseInspector` factory in `relay.ts`), including
+  the #44 late-terminal semantics. Linux and no-rewrite traffic outside the gates
+  remain unchanged.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 `core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,

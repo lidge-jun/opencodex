@@ -5,6 +5,7 @@ import {
   restoreImageGenCallsInJson,
 } from "../src/server/responses-image-gen-repair";
 import { handleResponses } from "../src/server/responses";
+import { isEagerRelaySseResponse } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 import { finalizeTranslatorBudgetResponse } from "../src/lib/translator-budget";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -274,6 +275,7 @@ describe("Responses image-gen call restoration", () => {
   test("handleResponses restores client-facing SSE calls on the passthrough rewrite path", async () => {
     const savedFetch = globalThis.fetch;
     let outboundBody: Record<string, unknown> | undefined;
+    const largeEcho = "x".repeat(256 * 1024);
     const item = {
       type: "function_call",
       id: "fc_1",
@@ -283,6 +285,10 @@ describe("Responses image-gen call restoration", () => {
       status: "completed",
     };
     const upstream = [
+      `event: response.created\ndata: ${JSON.stringify({
+        type: "response.created",
+        response: { id: "resp_1", status: "in_progress", output: [], instructions: largeEcho },
+      })}\n\n`,
       `event: response.output_item.added\ndata: ${JSON.stringify({
         type: "response.output_item.added",
         output_index: 0,
@@ -306,6 +312,9 @@ describe("Responses image-gen call restoration", () => {
     const config = {
       port: 0,
       defaultProvider: "fixture",
+      // Rewrite traffic must stay off the tee()+JS-pull chain on Windows and
+      // Darwin even when an operator pins the legacy path for ordinary streams.
+      streamMode: "legacy-tee",
       providers: {
         fixture: {
           adapter: "openai-responses",
@@ -335,8 +344,13 @@ describe("Responses image-gen call restoration", () => {
       const outboundTools = outboundBody?.tools as Array<{ name?: string }> | undefined;
 
       expect(outboundTools?.[0]?.name).toBe("image_gen__imagegen");
+      expect(isEagerRelaySseResponse(response)).toBe(
+        process.platform === "win32" || process.platform === "darwin",
+      );
+      expect(clientBody.length).toBeGreaterThan(largeEcho.length);
       expect(clientBody).not.toContain("image_gen__imagegen");
       expect(clientBody.match(/\"namespace\":\"image_gen\"/g)).toHaveLength(3);
+      expect(clientBody.match(/event: response\.completed/g)).toHaveLength(1);
       expect(clientBody).toContain("data: [DONE]");
     } finally {
       globalThis.fetch = savedFetch;

@@ -38,8 +38,8 @@ export type EagerRelayHooks = {
   inspectChunk: (chunk: Uint8Array) => void;
   /**
    * Optional inline client-facing payload rewrite, framed to complete SSE
-   * blocks inside the single reader. This is what lets win32 rewrite traffic
-   * (image_gen restore, item-id repair) use this relay instead of the
+   * blocks inside the single reader. This is what lets Windows/Darwin rewrite
+   * traffic (image_gen restore, item-id repair) use this relay instead of the
    * Bun#32111-unsafe tee()+JS-pull chain (#864).
    */
   rewritePayload?: SsePayloadRewrite;
