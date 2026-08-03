@@ -100,25 +100,31 @@ describe("kiro redacted-reasoning round-trip (bridge → parse)", () => {
     // the finalized item that embeds its base64.
     const bigBlob = "X".repeat(4000);
     const budget = createTranslatorBudget();
-    const response = buildResponseJSON(
-      [
-        { type: "text_delta", text: "the answer" },
-        { type: "kiro_redacted_reasoning", data: bigBlob },
-        { type: "done", usage: { inputTokens: 1, outputTokens: 2 }, endTurn: true },
-      ],
-      "kiro/gpt-5.6-sol",
-      { translatorBudget: budget },
-    );
-    const items = response.output as Record<string, unknown>[];
-    const finalizedBytes = items.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0);
-    const { currentBytes, highWaterBytes, overflows } = budget.snapshot();
+    // The budget registers in module-global aggregate accounting, so it must be disposed even if an
+    // assertion throws — otherwise this test leaks retained bytes into every later test.
+    try {
+      const response = buildResponseJSON(
+        [
+          { type: "text_delta", text: "the answer" },
+          { type: "kiro_redacted_reasoning", data: bigBlob },
+          { type: "done", usage: { inputTokens: 1, outputTokens: 2 }, endTurn: true },
+        ],
+        "kiro/gpt-5.6-sol",
+        { translatorBudget: budget },
+      );
+      const items = response.output as Record<string, unknown>[];
+      const finalizedBytes = items.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0);
+      const { currentBytes, highWaterBytes, overflows } = budget.snapshot();
 
-    // EXACTLY the finalized output items remain retained. A raw blob still held would show up as
-    // ~4000 extra bytes here; releasing bytes that were never charged would show up as a shortfall.
-    expect(currentBytes).toBe(finalizedBytes);
-    // ...and it really was charged while held, rather than never accounted for at all.
-    expect(highWaterBytes).toBeGreaterThanOrEqual(finalizedBytes + bigBlob.length);
-    expect(overflows).toBe(0);
+      // EXACTLY the finalized output items remain retained. A raw blob still held would show up as
+      // ~4000 extra bytes here; releasing bytes that were never charged would show up as a shortfall.
+      expect(currentBytes).toBe(finalizedBytes);
+      // ...and it really was charged while held, rather than never accounted for at all.
+      expect(highWaterBytes).toBeGreaterThanOrEqual(finalizedBytes + bigBlob.length);
+      expect(overflows).toBe(0);
+    } finally {
+      budget.dispose();
+    }
   });
 
   test("a turn ending in a tool call still pairs the blob with that assistant turn", async () => {

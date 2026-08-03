@@ -413,8 +413,9 @@ Kiro reports context pressure in its own `contextUsageEvent`, which is the autho
 every capture taken (2.14.1 and 2.16.0) `metadataEvent` carried only `stopReason` — which is why
 reading the percentage from `metadataEvent` alone never saw a value — but the parser still accepts a
 finite `contextUsagePercentage` (and a `tokenUsage` block) there as a fallback, so a value parsed
-from `metadataEvent` is legitimate rather than impossible. Both feed the same field, and any
-positive value overwrites an earlier one.
+from `metadataEvent` is legitimate rather than impossible. Precedence is by SOURCE, not arrival
+order: once a `contextUsageEvent` value lands, a later `metadataEvent` percentage is ignored, so a
+trailing fallback frame cannot clobber the authoritative one.
 
 Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
 `tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently

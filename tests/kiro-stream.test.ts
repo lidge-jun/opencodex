@@ -1407,6 +1407,35 @@ describe("kiro adapter — parseStream", () => {
     expect(done.contextTotalTokens).toBeGreaterThan(done.inputTokens + done.outputTokens);
   });
 
+  // contextUsageEvent is authoritative; metadataEvent's percentage is a fallback. Both fed the same
+  // field with last-write-wins, so a trailing metadataEvent could clobber the authoritative value
+  // and let event order alone decide. Both orders must settle on the contextUsageEvent value.
+  test("contextUsageEvent wins over metadataEvent in either event order", async () => {
+    const checkpointFor = async (...frames: Uint8Array[]) => {
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(4_000) }]));
+      const done = await doneUsage(adapter, eventFrame({ content: "answer" }), ...frames);
+      return done.contextTotalTokens;
+    };
+    const authoritativeOnly = await checkpointFor(eventFrame({ contextUsagePercentage: 80 }, "contextUsageEvent"));
+    const fallbackOnly = await checkpointFor(eventFrame({ contextUsagePercentage: 10 }, "metadataEvent"));
+    // Guard the guard: 80% and 10% must be distinguishable for the ordering assertions to mean
+    // anything, and the fallback must still work on its own.
+    expect(fallbackOnly).toBeGreaterThan(0);
+    expect(authoritativeOnly).toBeGreaterThan(fallbackOnly!);
+
+    const fallbackFirst = await checkpointFor(
+      eventFrame({ contextUsagePercentage: 10 }, "metadataEvent"),
+      eventFrame({ contextUsagePercentage: 80 }, "contextUsageEvent"),
+    );
+    const authoritativeFirst = await checkpointFor(
+      eventFrame({ contextUsagePercentage: 80 }, "contextUsageEvent"),
+      eventFrame({ contextUsagePercentage: 10 }, "metadataEvent"),
+    );
+    expect(fallbackFirst).toBe(authoritativeOnly!);
+    expect(authoritativeFirst).toBe(authoritativeOnly!);
+  });
+
   test("authoritative metadata token usage overrides estimates and preserves cache splits", async () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(700) }]));

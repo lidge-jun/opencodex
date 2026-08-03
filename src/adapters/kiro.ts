@@ -891,6 +891,10 @@ async function* parseKiroAttemptEvents(
   let outputChars = "";
   let outputCharsBytes = 0;
   let contextUsagePercentage: number | undefined;
+  // `contextUsageEvent` is the authoritative source; `metadataEvent.contextUsagePercentage` is a
+  // fallback for wires that carry it there. Once an authoritative value lands, a later fallback
+  // must not clobber it — otherwise event order alone decides which value survives.
+  let contextUsageIsAuthoritative = false;
   let returnedConversationId = conversationId;
   let assistantText = "";
   let assistantTextBytes = 0;
@@ -1161,7 +1165,11 @@ async function* parseKiroAttemptEvents(
       switch (ev.type) {
         case "metadata":
           if (ev.usage) authoritativeUsage = ev.usage;
-          if (ev.contextUsagePercentage !== undefined && ev.contextUsagePercentage > 0) {
+          if (
+            !contextUsageIsAuthoritative
+            && ev.contextUsagePercentage !== undefined
+            && ev.contextUsagePercentage > 0
+          ) {
             contextUsagePercentage = ev.contextUsagePercentage;
           }
           if (ev.stopReason !== undefined) stopReason = ev.stopReason;
@@ -1195,7 +1203,10 @@ async function* parseKiroAttemptEvents(
           }
           break;
         case "context_usage":
-          if (ev.contextUsagePercentage > 0) contextUsagePercentage = ev.contextUsagePercentage;
+          if (ev.contextUsagePercentage > 0) {
+            contextUsagePercentage = ev.contextUsagePercentage;
+            contextUsageIsAuthoritative = true;
+          }
           break;
         case "tool": {
           for (const contentEvent of thinking.flush()) {
