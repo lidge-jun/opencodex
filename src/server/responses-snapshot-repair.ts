@@ -246,7 +246,9 @@ export function createResponsesSnapshotPayloadRewrite(
         changed = true;
       }
       if (type === "response.output_item.done") {
-        if (outputIndex !== undefined && typeof item.type === "string") {
+        if (outputIndex !== undefined
+          && typeof item.type === "string"
+          && item.type.trim().length > 0) {
           unfinishedItemIndexes.delete(outputIndex);
           retainCompletedItem(
             outputIndex,

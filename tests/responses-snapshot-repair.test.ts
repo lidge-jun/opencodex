@@ -289,6 +289,8 @@ describe("Responses sparse-snapshot repair", () => {
       { type: "response.output_item.done", output_index: 1, item: "invalid" },
       { type: "response.output_item.done", output_index: "1", item: { type: "message" } },
       { type: "response.output_item.done", output_index: 1, item: { id: "msg_1" } },
+      { type: "response.output_item.done", output_index: 1, item: { id: "msg_1", type: "" } },
+      { type: "response.output_item.done", output_index: 1, item: { id: "msg_1", type: "   " } },
     ];
 
     for (const malformedDoneEvent of malformedDoneEvents) {
