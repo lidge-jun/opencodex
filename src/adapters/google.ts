@@ -17,7 +17,7 @@ import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
-import { isVertexTruncationReason, vertexTruncationErrorMessage } from "./google-truncation";
+import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-truncation";
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import { identifyRoutedModel } from "./identity";
@@ -596,7 +596,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
         if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-          && toolCallsStarted > 0 && isVertexTruncationReason(lastFinishReason)) {
+          && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
           yield { type: "error", message: vertexTruncationErrorMessage(lastFinishReason) };
           return;
         }
@@ -752,7 +752,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
       if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-        && toolCallsStarted > 0 && isVertexTruncationReason(candidates?.[0]?.finishReason)) {
+        && isVertexTruncatedTurn(candidates?.[0]?.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
       }
 
