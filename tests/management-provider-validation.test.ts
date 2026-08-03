@@ -192,6 +192,71 @@ describe("provider management validation", () => {
     })).toContain("not supported on forward-auth");
   });
 
+  test("provider management permits snapshot repair only on canonical OpenAI forward seeds", () => {
+    for (const mode of ["pool", "direct"] as const) {
+      expect(providerManagementConfigError("openai", {
+        ...canonicalDirect,
+        codexAccountMode: mode,
+        responsesSnapshotRepair: true,
+      })).toBeNull();
+    }
+
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      responsesSnapshotRepair: { enabled: true },
+    })).toBe("provider openai responsesSnapshotRepair must be a boolean");
+
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      responsesSnapshotRepair: true,
+      noVisionModels: ["gpt-5.6"],
+    })).toContain("canonical built-in provider seed");
+
+    expect(providerManagementConfigError("custom-forward", {
+      adapter: "openai-responses",
+      baseUrl: canonicalDirect.baseUrl,
+      authMode: "forward",
+      responsesSnapshotRepair: true,
+    })).toContain('authMode "forward"');
+  });
+
+  test("provider management persists snapshot repair for canonical OpenAI pool and direct modes", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: { openai: canonicalDirect },
+    };
+    saveConfig(liveConfig);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+
+    try {
+      for (const mode of ["pool", "direct"] as const) {
+        const request = new Request("http://127.0.0.1/api/providers", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "openai",
+            provider: { ...canonicalDirect, codexAccountMode: mode, responsesSnapshotRepair: true },
+          }),
+        });
+        const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
+          refreshCodexCatalog: async () => undefined,
+        });
+        expect(response?.status).toBe(200);
+        expect(loadConfig().providers.openai).toMatchObject({
+          codexAccountMode: mode,
+          responsesSnapshotRepair: true,
+        });
+      }
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
   test("provider discovery status is additive and omitted before an attempt", async () => {
     markProviderDiscoveryFailed("auth-broken", { reason: "http", httpStatus: 401 });
     try {
@@ -247,6 +312,7 @@ describe("provider management validation", () => {
             adapter: "openai-responses",
             baseUrl: "https://attacker.example/backend-api/codex",
             authMode: "forward",
+            responsesSnapshotRepair: true,
           },
         }),
       });
