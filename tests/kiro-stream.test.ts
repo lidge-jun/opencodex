@@ -1434,6 +1434,16 @@ describe("kiro adapter — parseStream", () => {
     );
     expect(fallbackFirst).toBe(authoritativeOnly!);
     expect(authoritativeFirst).toBe(authoritativeOnly!);
+
+    // 0% is a real reading (fresh conversation), so it claims authority like any other. If it were
+    // treated as "absent", the trailing fallback below would win and report 10% occupancy.
+    const baseline = await checkpointFor();
+    const zeroThenFallback = await checkpointFor(
+      eventFrame({ contextUsagePercentage: 0 }, "contextUsageEvent"),
+      eventFrame({ contextUsagePercentage: 10 }, "metadataEvent"),
+    );
+    expect(zeroThenFallback).toBe(baseline);
+    expect(zeroThenFallback).not.toBe(fallbackOnly);
   });
 
   test("authoritative metadata token usage overrides estimates and preserves cache splits", async () => {

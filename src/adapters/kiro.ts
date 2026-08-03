@@ -1203,7 +1203,12 @@ async function* parseKiroAttemptEvents(
           }
           break;
         case "context_usage":
-          if (ev.contextUsagePercentage > 0) {
+          // Zero is a real reading (a fresh conversation), not "absent", so it must still claim
+          // authority — otherwise precedence would depend on the VALUE rather than the source and a
+          // trailing metadataEvent could override a genuine 0%. Negatives are malformed and
+          // rejected. contextUsageTotalFloor already discards a zero floor, so nothing downstream
+          // sees a bogus zero-token checkpoint.
+          if (ev.contextUsagePercentage >= 0) {
             contextUsagePercentage = ev.contextUsagePercentage;
             contextUsageIsAuthoritative = true;
           }
