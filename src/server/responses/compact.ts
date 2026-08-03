@@ -76,8 +76,8 @@ import {
   isCodexUpstreamRedirectStatus,
   recordCodexUpstreamHostFailure,
   recordCodexUpstreamHostResponse,
-  releaseCodexUpstreamHostProbeLease,
-  type CodexUpstreamHostProbeLease,
+  releaseCodexUpstreamHostAdmissionLease,
+  type CodexUpstreamHostAdmissionLease,
 } from "../../codex/upstream-host-health";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
@@ -156,13 +156,17 @@ async function resolveAlternateCompactContext(args: {
 }): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
   const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
+  let authCtx: CodexAuthContext | undefined;
   try {
-    const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+    authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
-    if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
+    if (!authCtx.accountId || authCtx.accountId === excludeAccountId) {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return null;
+    }
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
     const headers = new Headers({ "content-type": "application/json" });
     const selected = headersForCodexAuthContext(req.headers, authCtx);
@@ -178,6 +182,7 @@ async function resolveAlternateCompactContext(args: {
     if (provider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(provider.apiKey)}`);
     return { authCtx, provider, headers };
   } catch (err) {
+    releaseCodexAuthContextProbeLease(authCtx);
     if (err instanceof CodexMainProfileDrainingError) {
       // The native-main fence can start after account A has already rejected the
       // request. Treat the now-fenced main profile as no alternate and preserve A's
@@ -365,7 +370,12 @@ export async function handleResponsesCompact(
     const compactHostKey = usesCodexForwardPoolAuth(authCtx, route.provider)
       ? canonicalCodexUpstreamHostKey(route.providerName, compactUrl)
       : null;
-    let compactHostProbeLease: CodexUpstreamHostProbeLease | null = null;
+    let compactHostAdmissionLease: CodexUpstreamHostAdmissionLease | null = null;
+    const settleObservedCompactHostResponse = (): void => {
+      if (!compactHostAdmissionLease) return;
+      recordCodexUpstreamHostResponse(compactHostAdmissionLease);
+      compactHostAdmissionLease = null;
+    };
     // Takes its context explicitly: the alternate-account flow below records a rejection
     // against A while promoting B, then records B's own outcome. A closure over a single
     // `authCtx` cannot express either.
@@ -401,20 +411,27 @@ export async function handleResponsesCompact(
       sendHeaders: Headers,
       recovery: "normal" | "single",
       attempts: UpstreamAttemptObservation[],
+      onSendStart?: () => void,
     ): Promise<Response> => {
-      const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
-        compactUrl,
-        applyUpstreamRecoveryInit({
+      const body = JSON.stringify({ ...compactBody, model: route.modelId });
+      const fetcher = providerFetch(sendProvider);
+      let executorStarted = false;
+      const executor = ((input: RequestInfo | URL, init?: RequestInit) => {
+        if (!executorStarted) {
+          executorStarted = true;
+          onSendStart?.();
+        }
+        return fetcher(input, init);
+      }) as typeof globalThis.fetch;
+      const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => {
+        const init = applyUpstreamRecoveryInit({
           method: "POST",
           headers: sendHeaders,
-          body: JSON.stringify({ ...compactBody, model: route.modelId }),
+          body,
           ...(compactHostKey ? { redirect: "manual" as const } : {}),
-        }, upstreamRecovery),
-        req.signal,
-        connectMs,
-        false,
-        providerFetch(sendProvider),
-      );
+        }, upstreamRecovery);
+        return fetchWithHeaderTimeout(compactUrl, init, req.signal, connectMs, false, executor);
+      };
       if (recovery === "normal") {
         return fetchWithTransientRetry(doFetch, {
           abortSignal: req.signal,
@@ -436,20 +453,29 @@ export async function handleResponsesCompact(
       ctx: CodexAuthContext,
       err: unknown,
       attempts: readonly UpstreamAttemptObservation[],
+      hostResponseObserved = false,
     ): Response => {
+      const observedStatus = lastUpstreamAttemptResponseStatus(attempts);
       if (req.signal.aborted) {
-        releaseCodexUpstreamHostProbeLease(compactHostProbeLease);
+        if (hostResponseObserved || observedStatus !== undefined) {
+          settleObservedCompactHostResponse();
+        } else {
+          releaseCodexUpstreamHostAdmissionLease(compactHostAdmissionLease);
+          compactHostAdmissionLease = null;
+        }
         recordCompactPoolOutcome(ctx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
-      const observedStatus = lastUpstreamAttemptResponseStatus(attempts);
       if (observedStatus !== undefined) {
         recordCompactPoolOutcome(ctx, observedStatus);
-        if (compactHostKey) recordCodexUpstreamHostResponse(compactHostKey);
-      } else if (compactHostKey) {
+      } else if (compactHostAdmissionLease) {
         releaseCodexAuthContextProbeLease(ctx);
       }
-      if (compactHostKey) recordCodexUpstreamHostFailure(compactHostKey);
+      if (compactHostAdmissionLease) {
+        recordCodexUpstreamHostFailure(compactHostAdmissionLease, Date.now(), {
+          observedResponse: hostResponseObserved || observedStatus !== undefined,
+        });
+      }
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     };
 
@@ -470,17 +496,17 @@ export async function handleResponsesCompact(
         retryAfter: String(compactHostAdmission.retryAfterSeconds),
       });
     }
-    compactHostProbeLease = compactHostAdmission?.probeLease ?? null;
+    compactHostAdmissionLease = compactHostAdmission?.lease ?? null;
     const primaryAttempts: UpstreamAttemptObservation[] = [];
     try {
       // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
       // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
       upstream = await sendCompactAttempt(compactProvider, headers, "normal", primaryAttempts);
-      if (compactHostKey) recordCodexUpstreamHostResponse(compactHostKey);
     } catch (err) {
       return compactTransportFailureResponse(outcomeCtx, err, primaryAttempts);
     }
     if (compactHostKey && isCodexUpstreamRedirectStatus(upstream.status)) {
+      settleObservedCompactHostResponse();
       recordCompactPoolOutcome(outcomeCtx, 502);
       await upstream.body?.cancel().catch(() => undefined);
       return formatErrorResponse(502, "upstream_error", "Provider returned an unsupported redirect");
@@ -490,13 +516,15 @@ export async function handleResponsesCompact(
     // (core.ts:319-423) and recognizes exactly 429/402. Without it a pool rejection
     // surfaces to the client, which retries the compact task OUTSIDE the logical request
     // — reporting exhausted retries while another pool account sat idle (#913).
-    if (
+    let pendingAlternateAuthCtx: CodexAuthContext | null = null;
+    try {
+      if (
       (upstream.status === 429 || upstream.status === 402)
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
       && !req.signal.aborted
-    ) {
+      ) {
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [
         upstream.headers.get("x-codex-primary-reset-at"),
@@ -513,13 +541,15 @@ export async function handleResponsesCompact(
         excludeAccountId: authCtx.accountId,
         turnAdmissionLease,
       });
+      pendingAlternateAuthCtx = alternate?.authCtx ?? null;
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's
       // quota is not ours to spend on a request nobody is waiting for.
       if (alternate && req.signal.aborted) {
         releaseCodexAuthContextProbeLease(alternate.authCtx);
-        releaseCodexUpstreamHostProbeLease(compactHostProbeLease);
+        pendingAlternateAuthCtx = null;
+        settleObservedCompactHostResponse();
         recordCompactPoolOutcome(outcomeCtx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
@@ -544,19 +574,36 @@ export async function handleResponsesCompact(
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         const alternateAttempts: UpstreamAttemptObservation[] = [];
+        let alternateSendBegan = false;
         try {
-          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternateAttempts);
-          if (compactHostKey) recordCodexUpstreamHostResponse(compactHostKey);
+          upstream = await sendCompactAttempt(
+            alternate.provider,
+            alternate.headers,
+            "single",
+            alternateAttempts,
+            () => {
+              alternateSendBegan = true;
+              pendingAlternateAuthCtx = null;
+            },
+          );
         } catch (err) {
-          return compactTransportFailureResponse(outcomeCtx, err, alternateAttempts);
+          if (!alternateSendBegan) throw err;
+          return compactTransportFailureResponse(outcomeCtx, err, alternateAttempts, true);
         }
         if (compactHostKey && isCodexUpstreamRedirectStatus(upstream.status)) {
+          settleObservedCompactHostResponse();
           recordCompactPoolOutcome(outcomeCtx, 502);
           await upstream.body?.cancel().catch(() => undefined);
           return formatErrorResponse(502, "upstream_error", "Provider returned an unsupported redirect");
         }
       }
     }
+    } catch (error) {
+      releaseCodexAuthContextProbeLease(pendingAlternateAuthCtx ?? undefined);
+      settleObservedCompactHostResponse();
+      throw error;
+    }
+    settleObservedCompactHostResponse();
     const retryAfter = upstream.headers.get("retry-after");
     const resetAt = [
       upstream.headers.get("x-codex-primary-reset-at"),

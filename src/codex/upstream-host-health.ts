@@ -6,17 +6,27 @@ export interface CodexUpstreamHostHealthSnapshot {
   cooldownUntil?: number;
 }
 
-export type CodexUpstreamHostProbeLease = Readonly<{
+/** Opaque capability tying one logical request to the host generation that admitted it. */
+export type CodexUpstreamHostAdmissionLease = Readonly<{
   key: CodexUpstreamHostKey;
   leaseId: symbol;
+  generation: number;
+  halfOpen: boolean;
 }>;
 
 export type CodexUpstreamHostAdmission =
-  | { kind: "admitted"; probeLease: CodexUpstreamHostProbeLease | null }
+  | { kind: "admitted"; lease: CodexUpstreamHostAdmissionLease }
   | { kind: "blocked"; retryAfterSeconds: number };
+
+export interface CodexUpstreamHostFailureOptions {
+  /** This logical request received an HTTP response before its terminal rejection. */
+  observedResponse?: boolean;
+}
 
 type CodexUpstreamHostHealth = CodexUpstreamHostHealthSnapshot & {
   lastTouchedAt: number;
+  generation: number;
+  activeLeaseIds: Set<symbol>;
   halfOpenLeaseId?: symbol;
 };
 
@@ -26,6 +36,12 @@ export const CODEX_UPSTREAM_HOST_COOLDOWN_MS = 30_000;
 export const CODEX_UPSTREAM_HOST_MAX_ENTRIES = 128;
 
 const upstreamHostHealth = new Map<CodexUpstreamHostKey, CodexUpstreamHostHealth>();
+let nextGenerationValue = 0;
+
+function nextGeneration(): number {
+  nextGenerationValue = nextGenerationValue >= Number.MAX_SAFE_INTEGER ? 1 : nextGenerationValue + 1;
+  return nextGenerationValue;
+}
 
 function normalizedAuthority(url: URL): string | null {
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
@@ -59,32 +75,85 @@ function snapshot(health: CodexUpstreamHostHealth): CodexUpstreamHostHealthSnaps
   };
 }
 
-function removeExpiredEntries(now: number): void {
+function removeExpiredNonLeasedEntries(now: number): void {
   for (const [key, health] of upstreamHostHealth) {
-    // A tripped circuit survives its cooldown so the next logical request must
-    // pass through the atomic half-open admission below. The bounded map still
-    // evicts abandoned entries when capacity is needed.
-    if (health.cooldownUntil === undefined
-      && now - health.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS) {
+    if (health.activeLeaseIds.size > 0) continue;
+    if (health.consecutiveFailures === 0 || (
+      health.cooldownUntil === undefined
+      && now - health.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS
+    )) {
       upstreamHostHealth.delete(key);
     }
   }
 }
 
-function makeRoom(now: number): void {
-  removeExpiredEntries(now);
-  while (upstreamHostHealth.size >= CODEX_UPSTREAM_HOST_MAX_ENTRIES) {
-    let oldestKey: CodexUpstreamHostKey | undefined;
-    let oldestAt = Number.POSITIVE_INFINITY;
-    for (const [key, health] of upstreamHostHealth) {
-      if (health.lastTouchedAt < oldestAt) {
-        oldestKey = key;
-        oldestAt = health.lastTouchedAt;
-      }
+function oldestNonLeasedKey(): CodexUpstreamHostKey | undefined {
+  let oldestKey: CodexUpstreamHostKey | undefined;
+  let oldestAt = Number.POSITIVE_INFINITY;
+  for (const [key, health] of upstreamHostHealth) {
+    if (health.activeLeaseIds.size > 0) continue;
+    if (health.lastTouchedAt < oldestAt) {
+      oldestKey = key;
+      oldestAt = health.lastTouchedAt;
     }
-    if (!oldestKey) break;
+  }
+  return oldestKey;
+}
+
+function makeRoom(now: number): void {
+  removeExpiredNonLeasedEntries(now);
+  while (upstreamHostHealth.size >= CODEX_UPSTREAM_HOST_MAX_ENTRIES) {
+    const oldestKey = oldestNonLeasedKey();
+    if (!oldestKey) return; // Every entry is leased: preserve correctness with temporary overflow.
     upstreamHostHealth.delete(oldestKey);
   }
+}
+
+function pruneOverflow(now: number): void {
+  removeExpiredNonLeasedEntries(now);
+  while (upstreamHostHealth.size > CODEX_UPSTREAM_HOST_MAX_ENTRIES) {
+    const oldestKey = oldestNonLeasedKey();
+    if (!oldestKey) return;
+    upstreamHostHealth.delete(oldestKey);
+  }
+}
+
+function newHealthyState(now: number): CodexUpstreamHostHealth {
+  return {
+    consecutiveFailures: 0,
+    lastFailureAt: 0,
+    lastTouchedAt: now,
+    generation: nextGeneration(),
+    activeLeaseIds: new Set(),
+  };
+}
+
+function advanceGeneration(health: CodexUpstreamHostHealth): void {
+  health.generation = nextGeneration();
+  health.activeLeaseIds.clear();
+  delete health.halfOpenLeaseId;
+}
+
+function issueLease(
+  key: CodexUpstreamHostKey,
+  health: CodexUpstreamHostHealth,
+  halfOpen: boolean,
+  now: number,
+): CodexUpstreamHostAdmissionLease {
+  const leaseId = Symbol(halfOpen ? "codex-upstream-host-half-open" : "codex-upstream-host-admission");
+  health.activeLeaseIds.add(leaseId);
+  health.lastTouchedAt = now;
+  if (halfOpen) health.halfOpenLeaseId = leaseId;
+  return { key, leaseId, generation: health.generation, halfOpen };
+}
+
+function matchingHealth(lease: CodexUpstreamHostAdmissionLease): CodexUpstreamHostHealth | null {
+  const health = upstreamHostHealth.get(lease.key);
+  if (!health || health.generation !== lease.generation || !health.activeLeaseIds.has(lease.leaseId)) {
+    return null;
+  }
+  if (lease.halfOpen && health.halfOpenLeaseId !== lease.leaseId) return null;
+  return health;
 }
 
 export function getCodexUpstreamHostHealth(
@@ -92,8 +161,9 @@ export function getCodexUpstreamHostHealth(
   now = Date.now(),
 ): CodexUpstreamHostHealthSnapshot | null {
   const health = upstreamHostHealth.get(key);
-  if (!health) return null;
-  if (health.cooldownUntil === undefined
+  if (!health || health.consecutiveFailures === 0) return null;
+  if (health.activeLeaseIds.size === 0
+    && health.cooldownUntil === undefined
     && now - health.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS) {
     upstreamHostHealth.delete(key);
     return null;
@@ -106,8 +176,7 @@ export function getCodexUpstreamHostCooldownUntil(
   now = Date.now(),
 ): number | null {
   const health = upstreamHostHealth.get(key);
-  if (!health?.cooldownUntil) return null;
-  if (health.cooldownUntil <= now) return null;
+  if (!health?.cooldownUntil || health.cooldownUntil <= now) return null;
   return health.cooldownUntil;
 }
 
@@ -115,69 +184,106 @@ export function acquireCodexUpstreamHostAdmission(
   key: CodexUpstreamHostKey,
   now = Date.now(),
 ): CodexUpstreamHostAdmission {
-  const health = upstreamHostHealth.get(key);
-  if (!health) return { kind: "admitted", probeLease: null };
-  if (health.cooldownUntil === undefined) {
-    if (now - health.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS) {
-      upstreamHostHealth.delete(key);
+  pruneOverflow(now);
+  let health = upstreamHostHealth.get(key);
+  if (health?.activeLeaseIds.size === 0
+    && health.cooldownUntil === undefined
+    && health.consecutiveFailures > 0
+    && now - health.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS) {
+    upstreamHostHealth.delete(key);
+    health = undefined;
+  }
+  if (!health) {
+    makeRoom(now);
+    health = newHealthyState(now);
+    upstreamHostHealth.set(key, health);
+  }
+  if (health.cooldownUntil !== undefined) {
+    if (health.cooldownUntil > now) {
+      return {
+        kind: "blocked",
+        retryAfterSeconds: Math.max(1, Math.ceil((health.cooldownUntil - now) / 1_000)),
+      };
     }
-    return { kind: "admitted", probeLease: null };
+    if (health.halfOpenLeaseId !== undefined) {
+      return { kind: "blocked", retryAfterSeconds: 1 };
+    }
+    advanceGeneration(health);
+    return { kind: "admitted", lease: issueLease(key, health, true, now) };
   }
-  if (health.cooldownUntil > now) {
-    return {
-      kind: "blocked",
-      retryAfterSeconds: Math.max(1, Math.ceil((health.cooldownUntil - now) / 1_000)),
-    };
-  }
-  if (health.halfOpenLeaseId !== undefined) {
-    return { kind: "blocked", retryAfterSeconds: 1 };
-  }
-
-  const leaseId = Symbol("codex-upstream-host-probe");
-  health.halfOpenLeaseId = leaseId;
-  health.lastTouchedAt = now;
-  return { kind: "admitted", probeLease: { key, leaseId } };
+  return { kind: "admitted", lease: issueLease(key, health, false, now) };
 }
 
-/** Release a half-open probe without recording host or account evidence. */
-export function releaseCodexUpstreamHostProbeLease(
-  lease: CodexUpstreamHostProbeLease | null | undefined,
+/** Release an admitted request without recording host or account evidence. */
+export function releaseCodexUpstreamHostAdmissionLease(
+  lease: CodexUpstreamHostAdmissionLease | null | undefined,
+  now = Date.now(),
 ): boolean {
   if (!lease) return false;
-  const health = upstreamHostHealth.get(lease.key);
-  if (!health || health.halfOpenLeaseId !== lease.leaseId) return false;
-  delete health.halfOpenLeaseId;
+  const health = matchingHealth(lease);
+  if (!health) return false;
+  health.activeLeaseIds.delete(lease.leaseId);
+  if (health.halfOpenLeaseId === lease.leaseId) delete health.halfOpenLeaseId;
+  health.lastTouchedAt = now;
+  if (health.activeLeaseIds.size === 0 && health.consecutiveFailures === 0) {
+    upstreamHostHealth.delete(lease.key);
+  }
+  pruneOverflow(now);
   return true;
 }
 
 export function recordCodexUpstreamHostFailure(
-  key: CodexUpstreamHostKey,
+  lease: CodexUpstreamHostAdmissionLease,
   now = Date.now(),
-): CodexUpstreamHostHealthSnapshot {
-  const current = upstreamHostHealth.get(key);
-  const reopensCircuit = current?.cooldownUntil !== undefined;
-  const stale = !current || (!reopensCircuit
-    && now - current.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS);
-  const consecutiveFailures = reopensCircuit
+  options: CodexUpstreamHostFailureOptions = {},
+): CodexUpstreamHostHealthSnapshot | null {
+  const current = matchingHealth(lease);
+  if (!current) return null;
+  current.activeLeaseIds.delete(lease.leaseId);
+  if (current.halfOpenLeaseId === lease.leaseId) delete current.halfOpenLeaseId;
+
+  if (options.observedResponse) {
+    upstreamHostHealth.delete(lease.key);
+    makeRoom(now);
+    const afterResponse: CodexUpstreamHostHealth = {
+      consecutiveFailures: 1,
+      lastFailureAt: now,
+      lastTouchedAt: now,
+      generation: nextGeneration(),
+      activeLeaseIds: new Set(),
+    };
+    upstreamHostHealth.set(lease.key, afterResponse);
+    pruneOverflow(now);
+    return snapshot(afterResponse);
+  }
+
+  const reopensCircuit = lease.halfOpen || current.cooldownUntil !== undefined;
+  const stale = current.consecutiveFailures === 0
+    || (!reopensCircuit && now - current.lastFailureAt > CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS);
+  current.consecutiveFailures = reopensCircuit
     ? Math.max(CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD, current.consecutiveFailures + 1)
     : stale ? 1 : current.consecutiveFailures + 1;
-  const cooldownUntil = reopensCircuit || consecutiveFailures >= CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD
-    ? now + CODEX_UPSTREAM_HOST_COOLDOWN_MS
-    : undefined;
-  if (!current) makeRoom(now);
-  const next: CodexUpstreamHostHealth = {
-    consecutiveFailures,
-    lastFailureAt: now,
-    lastTouchedAt: now,
-    ...(cooldownUntil !== undefined ? { cooldownUntil } : {}),
-  };
-  upstreamHostHealth.set(key, next);
-  return snapshot(next);
+  current.lastFailureAt = now;
+  current.lastTouchedAt = now;
+  if (reopensCircuit || current.consecutiveFailures >= CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD) {
+    current.cooldownUntil = now + CODEX_UPSTREAM_HOST_COOLDOWN_MS;
+    advanceGeneration(current);
+  } else {
+    delete current.cooldownUntil;
+  }
+  pruneOverflow(now);
+  return snapshot(current);
 }
 
-/** Any HTTP response proves that the configured provider host was reachable. */
-export function recordCodexUpstreamHostResponse(key: CodexUpstreamHostKey): void {
-  upstreamHostHealth.delete(key);
+/** Any HTTP response from this admitted logical request proves the host was reachable. */
+export function recordCodexUpstreamHostResponse(
+  lease: CodexUpstreamHostAdmissionLease,
+  now = Date.now(),
+): boolean {
+  if (!matchingHealth(lease)) return false;
+  upstreamHostHealth.delete(lease.key);
+  pruneOverflow(now);
+  return true;
 }
 
 export function isCodexUpstreamRedirectStatus(status: number): boolean {

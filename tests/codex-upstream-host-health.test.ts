@@ -11,10 +11,26 @@ import {
   getCodexUpstreamHostHealth,
   recordCodexUpstreamHostFailure,
   recordCodexUpstreamHostResponse,
-  releaseCodexUpstreamHostProbeLease,
+  releaseCodexUpstreamHostAdmissionLease,
+  type CodexUpstreamHostAdmissionLease,
+  type CodexUpstreamHostHealthSnapshot,
+  type CodexUpstreamHostKey,
 } from "../src/codex/upstream-host-health";
 
 beforeEach(() => clearCodexUpstreamHostHealth());
+
+function admit(key: CodexUpstreamHostKey, now: number): CodexUpstreamHostAdmissionLease {
+  const admission = acquireCodexUpstreamHostAdmission(key, now);
+  expect(admission.kind).toBe("admitted");
+  if (admission.kind !== "admitted") throw new Error("expected host admission");
+  return admission.lease;
+}
+
+function fail(key: CodexUpstreamHostKey, now: number): CodexUpstreamHostHealthSnapshot {
+  const health = recordCodexUpstreamHostFailure(admit(key, now), now);
+  expect(health).not.toBeNull();
+  return health!;
+}
 
 describe("Codex upstream host health (#914)", () => {
   test("keys normalized provider plus canonical HTTP origin only", () => {
@@ -28,92 +44,132 @@ describe("Codex upstream host health (#914)", () => {
     expect(canonicalCodexUpstreamHostKey("openai", "ftp://chatgpt.com/file")).toBeNull();
   });
 
-  test("opens a fixed host cooldown only at its own threshold and clears on HTTP response", () => {
+  test("opens only at its threshold and a half-open HTTP response clears it", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/backend-api/codex")!;
     const now = 1_900_000_000_000;
     for (let attempt = 1; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
-      const health = recordCodexUpstreamHostFailure(key, now + attempt);
+      const health = fail(key, now + attempt);
       expect(health.consecutiveFailures).toBe(attempt);
       expect(health.cooldownUntil).toBeUndefined();
     }
     const trippedAt = now + CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD;
-    const tripped = recordCodexUpstreamHostFailure(key, trippedAt);
+    const tripped = fail(key, trippedAt);
     expect(tripped.cooldownUntil).toBe(trippedAt + CODEX_UPSTREAM_HOST_COOLDOWN_MS);
     expect(getCodexUpstreamHostCooldownUntil(key, trippedAt)).toBe(tripped.cooldownUntil!);
-    recordCodexUpstreamHostResponse(key);
-    expect(getCodexUpstreamHostHealth(key, trippedAt)).toBeNull();
+    const probeAt = tripped.cooldownUntil!;
+    expect(recordCodexUpstreamHostResponse(admit(key, probeAt), probeAt)).toBe(true);
+    expect(getCodexUpstreamHostHealth(key, probeAt)).toBeNull();
   });
 
   test("an expired window starts a fresh streak", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
-    recordCodexUpstreamHostFailure(key, 1_000);
-    const next = recordCodexUpstreamHostFailure(key, 1_000 + CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS + 1);
+    fail(key, 1_000);
+    const next = fail(key, 1_000 + CODEX_UPSTREAM_HOST_FAILURE_WINDOW_MS + 1);
     expect(next.consecutiveFailures).toBe(1);
   });
 
   test("admits exactly one half-open logical request after cooldown", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
     const now = 1_900_000_000_000;
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
     for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
-      recordCodexUpstreamHostFailure(key, now + attempt);
+      tripped = fail(key, now + attempt);
     }
-    const cooldownUntil = now + CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD - 1
-      + CODEX_UPSTREAM_HOST_COOLDOWN_MS;
-    expect(acquireCodexUpstreamHostAdmission(key, cooldownUntil - 1)).toMatchObject({
-      kind: "blocked",
-    });
+    const cooldownUntil = tripped!.cooldownUntil!;
+    expect(acquireCodexUpstreamHostAdmission(key, cooldownUntil - 1)).toMatchObject({ kind: "blocked" });
     const probe = acquireCodexUpstreamHostAdmission(key, cooldownUntil);
     expect(probe.kind).toBe("admitted");
-    if (probe.kind !== "admitted") throw new Error("expected half-open admission");
-    expect(probe.probeLease).not.toBeNull();
     expect(acquireCodexUpstreamHostAdmission(key, cooldownUntil)).toEqual({
       kind: "blocked",
       retryAfterSeconds: 1,
     });
-
-    recordCodexUpstreamHostResponse(key);
-    expect(acquireCodexUpstreamHostAdmission(key, cooldownUntil)).toEqual({
-      kind: "admitted",
-      probeLease: null,
-    });
+    if (probe.kind !== "admitted") throw new Error("expected half-open admission");
+    expect(recordCodexUpstreamHostResponse(probe.lease, cooldownUntil)).toBe(true);
+    expect(getCodexUpstreamHostHealth(key, cooldownUntil)).toBeNull();
   });
 
   test("a half-open terminal rejection immediately reopens the cooldown", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
     const trippedAt = 2_000;
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
     for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
-      recordCodexUpstreamHostFailure(key, trippedAt);
+      tripped = fail(key, trippedAt);
     }
-    const probeAt = trippedAt + CODEX_UPSTREAM_HOST_COOLDOWN_MS;
-    expect(acquireCodexUpstreamHostAdmission(key, probeAt).kind).toBe("admitted");
-    const reopened = recordCodexUpstreamHostFailure(key, probeAt);
+    const probeAt = tripped!.cooldownUntil!;
+    const reopened = recordCodexUpstreamHostFailure(admit(key, probeAt), probeAt)!;
     expect(reopened.cooldownUntil).toBe(probeAt + CODEX_UPSTREAM_HOST_COOLDOWN_MS);
     expect(acquireCodexUpstreamHostAdmission(key, probeAt)).toMatchObject({ kind: "blocked" });
   });
 
-  test("caller abort releases a half-open probe without adding evidence", () => {
+  test("caller abort releases a half-open admission without adding evidence", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
     const trippedAt = 3_000;
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
     for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
-      recordCodexUpstreamHostFailure(key, trippedAt);
+      tripped = fail(key, trippedAt);
     }
-    const probeAt = trippedAt + CODEX_UPSTREAM_HOST_COOLDOWN_MS;
-    const first = acquireCodexUpstreamHostAdmission(key, probeAt);
-    if (first.kind !== "admitted") throw new Error("expected half-open admission");
+    const probeAt = tripped!.cooldownUntil!;
+    const first = admit(key, probeAt);
     const before = getCodexUpstreamHostHealth(key, probeAt);
-    expect(releaseCodexUpstreamHostProbeLease(first.probeLease)).toBe(true);
+    expect(releaseCodexUpstreamHostAdmissionLease(first, probeAt)).toBe(true);
     expect(getCodexUpstreamHostHealth(key, probeAt)).toEqual(before);
-    const replacement = acquireCodexUpstreamHostAdmission(key, probeAt);
-    expect(replacement.kind).toBe("admitted");
-    if (replacement.kind !== "admitted") throw new Error("expected replacement probe");
-    expect(replacement.probeLease).not.toBeNull();
+    expect(admit(key, probeAt).halfOpen).toBe(true);
   });
 
-  test("bounds the process-local map and evicts the oldest entry", () => {
+  test("stale pre-trip success and failure cannot settle a newer half-open generation", () => {
+    const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
+    const now = 4_000;
+    const staleSuccess = admit(key, now);
+    const staleFailure = admit(key, now);
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
+    for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
+      tripped = fail(key, now + attempt);
+    }
+    const probeAt = tripped!.cooldownUntil!;
+    const halfOpen = admit(key, probeAt);
+    const before = getCodexUpstreamHostHealth(key, probeAt);
+
+    expect(recordCodexUpstreamHostResponse(staleSuccess, probeAt)).toBe(false);
+    expect(recordCodexUpstreamHostFailure(staleFailure, probeAt)).toBeNull();
+    expect(getCodexUpstreamHostHealth(key, probeAt)).toEqual(before);
+    expect(acquireCodexUpstreamHostAdmission(key, probeAt)).toEqual({
+      kind: "blocked",
+      retryAfterSeconds: 1,
+    });
+    expect(recordCodexUpstreamHostResponse(halfOpen, probeAt)).toBe(true);
+  });
+
+  test("capacity pressure never evicts an active half-open admission", () => {
+    const protectedKey = canonicalCodexUpstreamHostKey("openai", "https://protected.example")!;
+    const now = 5_000;
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
+    for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
+      tripped = fail(protectedKey, now);
+    }
+    const probeAt = tripped!.cooldownUntil!;
+    const halfOpen = admit(protectedKey, probeAt);
+    const pressureLeases: CodexUpstreamHostAdmissionLease[] = [];
+    for (let index = 0; index < CODEX_UPSTREAM_HOST_MAX_ENTRIES + 16; index++) {
+      const key = canonicalCodexUpstreamHostKey(`provider-${index}`, `https://host-${index}.example`)!;
+      pressureLeases.push(admit(key, probeAt + index));
+    }
+    expect(acquireCodexUpstreamHostAdmission(protectedKey, probeAt)).toEqual({
+      kind: "blocked",
+      retryAfterSeconds: 1,
+    });
+    for (const lease of pressureLeases) releaseCodexUpstreamHostAdmissionLease(lease, probeAt);
+    expect(acquireCodexUpstreamHostAdmission(protectedKey, probeAt)).toEqual({
+      kind: "blocked",
+      retryAfterSeconds: 1,
+    });
+    expect(recordCodexUpstreamHostResponse(halfOpen, probeAt)).toBe(true);
+  });
+
+  test("bounds the process-local map and evicts the oldest non-leased entry", () => {
     const first = canonicalCodexUpstreamHostKey("provider-0", "https://host-0.example")!;
     for (let index = 0; index <= CODEX_UPSTREAM_HOST_MAX_ENTRIES; index++) {
       const key = canonicalCodexUpstreamHostKey(`provider-${index}`, `https://host-${index}.example`)!;
-      recordCodexUpstreamHostFailure(key, 10_000 + index);
+      fail(key, 10_000 + index);
     }
     expect(getCodexUpstreamHostHealth(first, 10_000 + CODEX_UPSTREAM_HOST_MAX_ENTRIES)).toBeNull();
   });

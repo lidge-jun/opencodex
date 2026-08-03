@@ -101,9 +101,8 @@ import {
   isCodexUpstreamRedirectStatus,
   recordCodexUpstreamHostFailure,
   recordCodexUpstreamHostResponse,
-  releaseCodexUpstreamHostProbeLease,
-  type CodexUpstreamHostKey,
-  type CodexUpstreamHostProbeLease,
+  releaseCodexUpstreamHostAdmissionLease,
+  type CodexUpstreamHostAdmissionLease,
 } from "../../codex/upstream-host-health";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
@@ -323,7 +322,6 @@ type CodexPoolAccountRetryResult =
     error: unknown;
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
     attempts: UpstreamAttemptObservation[];
-    hostKey: CodexUpstreamHostKey | null;
   };
 
 function codexQuotaOutcomeMeta(response: Response): {
@@ -390,54 +388,65 @@ async function retryCodexPoolOnAlternateAccount(
     return { kind: "no-alternate" };
   }
 
-  const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
-  if (outcomeStatus === 429 || outcomeStatus === 402) {
-    const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-    applyAccountQuotaFromUpstreamHeaders(
-      firstAuthCtx.accountId,
-      firstResponse.headers,
-      firstAuthCtx.writerGeneration,
-    );
-  }
-  if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
-    recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
-      ...quotaMeta,
-      threadId: req.headers.get("x-codex-parent-thread-id"),
-      modelId: route.modelId,
-      probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
-      writerGeneration: firstAuthCtx.writerGeneration,
-      // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
-      ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
-    });
-  }
+  const prepared = await (async () => {
+    let request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>> | undefined;
+    try {
+      const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
+      if (outcomeStatus === 429 || outcomeStatus === 402) {
+        const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
+        applyAccountQuotaFromUpstreamHeaders(
+          firstAuthCtx.accountId,
+          firstResponse.headers,
+          firstAuthCtx.writerGeneration,
+        );
+      }
+      if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
+        recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+          ...quotaMeta,
+          threadId: req.headers.get("x-codex-parent-thread-id"),
+          modelId: route.modelId,
+          probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+          probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+          writerGeneration: firstAuthCtx.writerGeneration,
+          // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
+          ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
+        });
+      }
 
-  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
-  const retryProvider = applyCodexAuthContextToProvider(
-    stripCodexRuntimeProviderFields(route.provider),
-    retryAuthCtx,
-    "pool",
-  );
-  const retryAdapter = resolveAdapter(
-    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
-    config.cacheRetention,
-  );
-  const request = await retryAdapter.buildRequest(parsed, {
-    headers: retryHeaders,
-    translatorBudget: options.translatorBudget,
-  });
-  recordAdapterReasoning(logCtx, request);
+      const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
+      const retryProvider = applyCodexAuthContextToProvider(
+        stripCodexRuntimeProviderFields(route.provider),
+        retryAuthCtx,
+        "pool",
+      );
+      const retryAdapter = resolveAdapter(
+        resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
+        config.cacheRetention,
+      );
+      request = await retryAdapter.buildRequest(parsed, {
+        headers: retryHeaders,
+        translatorBudget: options.translatorBudget,
+      });
+      recordAdapterReasoning(logCtx, request);
 
-  await firstResponse.body?.cancel().catch(() => undefined);
-  options.onCodexAuthContextResolved?.(retryAuthCtx);
-  route.provider = retryProvider;
-  logCtx.provider = formatCodexProviderForLog(
-    route.providerName,
-    retryAuthCtx.accountId,
-    config,
-  );
+      await firstResponse.body?.cancel().catch(() => undefined);
+      options.onCodexAuthContextResolved?.(retryAuthCtx);
+      route.provider = retryProvider;
+      logCtx.provider = formatCodexProviderForLog(
+        route.providerName,
+        retryAuthCtx.accountId,
+        config,
+      );
+      const fetcher = providerFetch(route.provider);
+      return { fetcher, request, retryHeaders };
+    } catch (error) {
+      request?.releaseBodyObservation?.();
+      releaseCodexAuthContextProbeLease(retryAuthCtx);
+      throw error;
+    }
+  })();
+  const { fetcher, request, retryHeaders } = prepared;
 
-  const hostKey = canonicalCodexUpstreamHostKey(route.providerName, request.url);
   const attempts: UpstreamAttemptObservation[] = [];
   noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
   try {
@@ -452,10 +461,9 @@ async function retryCodexPoolOnAlternateAccount(
       upstream.signal,
       connectMs,
       stream,
-      providerFetch(route.provider),
+      fetcher,
     );
     attempts.push({ kind: "response", status: upstreamResponse.status });
-    if (hostKey) recordCodexUpstreamHostResponse(hostKey);
     return {
       kind: "retried",
       authCtx: retryAuthCtx,
@@ -465,7 +473,7 @@ async function retryCodexPoolOnAlternateAccount(
     };
   } catch (error) {
     attempts.push({ kind: "rejection" });
-    return { kind: "transport", error, authCtx: retryAuthCtx, attempts, hostKey };
+    return { kind: "transport", error, authCtx: retryAuthCtx, attempts };
   } finally {
     request.releaseBodyObservation?.();
   }
@@ -1754,7 +1762,7 @@ async function handleResponsesInner(
     const hostKey = tracksCodexPoolHost
       ? canonicalCodexUpstreamHostKey(route.providerName, request.url)
       : null;
-    let hostProbeLease: CodexUpstreamHostProbeLease | null = null;
+    let hostAdmissionLease: CodexUpstreamHostAdmissionLease | null = null;
     const attemptHistory: UpstreamAttemptObservation[] = [];
     const recordPoolTransportOutcome = (outcome: CodexUpstreamOutcome): void => {
       if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
@@ -1767,25 +1775,38 @@ async function handleResponsesInner(
         writerGeneration: authCtx.writerGeneration,
       });
     };
+    const settleObservedHostResponse = (): void => {
+      if (!hostAdmissionLease) return;
+      recordCodexUpstreamHostResponse(hostAdmissionLease);
+      hostAdmissionLease = null;
+    };
     const transportFailureResponse = (
       err: unknown,
       observations: readonly UpstreamAttemptObservation[] = attemptHistory,
-      failedHostKey: CodexUpstreamHostKey | null = hostKey,
+      hostResponseObserved = false,
     ): Response => {
       upstream.abort();
+      const observedStatus = lastUpstreamAttemptResponseStatus(observations);
       if (options.abortSignal?.aborted) {
         releaseCodexAuthContextProbeLease(authCtx);
-        releaseCodexUpstreamHostProbeLease(hostProbeLease);
+        if (hostResponseObserved || observedStatus !== undefined) {
+          settleObservedHostResponse();
+        } else {
+          releaseCodexUpstreamHostAdmissionLease(hostAdmissionLease);
+          hostAdmissionLease = null;
+        }
         return clientCancelledResponse();
       }
-      const observedStatus = lastUpstreamAttemptResponseStatus(observations);
       if (observedStatus !== undefined) {
         recordPoolTransportOutcome(observedStatus);
-        if (failedHostKey) recordCodexUpstreamHostResponse(failedHostKey);
-      } else if (failedHostKey) {
+      } else if (hostAdmissionLease) {
         releaseCodexAuthContextProbeLease(authCtx);
       }
-      if (failedHostKey) recordCodexUpstreamHostFailure(failedHostKey);
+      if (hostAdmissionLease) {
+        recordCodexUpstreamHostFailure(hostAdmissionLease, Date.now(), {
+          observedResponse: hostResponseObserved || observedStatus !== undefined,
+        });
+      }
       const msg = err instanceof Error && err.name === "TimeoutError"
         ? `Provider connect timeout after ${connectMs}ms`
         : describeUpstreamConnectFailure(err, connectMs);
@@ -1803,7 +1824,7 @@ async function handleResponsesInner(
           retryAfter: String(hostAdmission.retryAfterSeconds),
         });
       }
-      hostProbeLease = hostAdmission?.probeLease ?? null;
+      hostAdmissionLease = hostAdmission?.lease ?? null;
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
@@ -1828,8 +1849,6 @@ async function handleResponsesInner(
     } finally {
       request.releaseBodyObservation?.();
     }
-    if (hostKey) recordCodexUpstreamHostResponse(hostKey);
-
     // Same-target 429 wait-and-retry (opt-in `retryOn429`) for key-auth providers on the
     // passthrough wire. This branch returns before the recovery loop below, so Responses-shaped
     // key-auth gateways (e.g. the built-in DeepSeek preset) would otherwise surface 429
@@ -1883,49 +1902,59 @@ async function handleResponsesInner(
       }
     }
 
-    if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
-      let poolRetryOutcome: number | undefined;
-      if (await shouldRetryCodexPoolAccountModel400(
-        upstreamResponse,
-        route.modelId,
-        options.abortSignal,
-      )) {
-        poolRetryOutcome = 400;
-      } else if (shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
-        // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
-        poolRetryOutcome = upstreamResponse.status;
-      }
+    try {
+      if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
+        let poolRetryOutcome: number | undefined;
+        if (await shouldRetryCodexPoolAccountModel400(
+          upstreamResponse,
+          route.modelId,
+          options.abortSignal,
+        )) {
+          poolRetryOutcome = 400;
+        } else if (shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
+          // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
+          poolRetryOutcome = upstreamResponse.status;
 
-      if (poolRetryOutcome !== undefined) {
-        const retry = await retryCodexPoolOnAlternateAccount({
-          req,
-          config,
-          route,
-          parsed,
-          logCtx,
-          options,
-          firstAuthCtx: authCtx,
-          firstResponse: upstreamResponse,
-          outcomeStatus: poolRetryOutcome,
-          upstream,
-          connectMs,
-          passthroughEstimate,
-          stream: parsed.stream,
-        });
-        if (retry.kind === "transport") {
-          authCtx = retry.authCtx;
-          return transportFailureResponse(retry.error, retry.attempts, retry.hostKey);
         }
-        if (retry.kind === "retried") {
-          authCtx = retry.authCtx;
-          request = retry.request;
-          upstreamResponse = retry.upstreamResponse;
-          selectedForwardHeaders = retry.selectedForwardHeaders;
-          // Keep subagent quota-failure health keyed to the account that actually served.
-          subagentFallbackAccountId = retry.authCtx.accountId;
+
+        if (poolRetryOutcome !== undefined) {
+          const retry = await retryCodexPoolOnAlternateAccount({
+            req,
+            config,
+            route,
+            parsed,
+            logCtx,
+            options,
+            firstAuthCtx: authCtx,
+            firstResponse: upstreamResponse,
+            outcomeStatus: poolRetryOutcome,
+            upstream,
+            connectMs,
+            passthroughEstimate,
+            stream: parsed.stream,
+          });
+          if (retry.kind === "transport") {
+            authCtx = retry.authCtx;
+            return transportFailureResponse(retry.error, retry.attempts, true);
+          }
+          if (retry.kind === "retried") {
+            authCtx = retry.authCtx;
+            request = retry.request;
+            upstreamResponse = retry.upstreamResponse;
+            selectedForwardHeaders = retry.selectedForwardHeaders;
+            // Keep subagent quota-failure health keyed to the account that actually served.
+            subagentFallbackAccountId = retry.authCtx.accountId;
+          }
         }
       }
+    } catch (error) {
+      // The primary request produced a real HTTP response. Alternate auth/import/
+      // adapter preparation can still throw before returning a typed retry result;
+      // settle that response so a half-open admission cannot leak indefinitely.
+      settleObservedHostResponse();
+      throw error;
     }
+    settleObservedHostResponse();
     if (hostKey && isCodexUpstreamRedirectStatus(upstreamResponse.status)) {
       recordPoolTransportOutcome(502);
       await upstreamResponse.body?.cancel().catch(() => undefined);
