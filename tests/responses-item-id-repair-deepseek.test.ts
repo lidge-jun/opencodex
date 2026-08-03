@@ -95,6 +95,21 @@ describe("DeepSeek Responses item-id repair", () => {
     expect(completed.output[1].id).toBe(messageAdded.id);
   });
 
+  test("clientResponseId dual-maps raw and rewritten response ids", () => {
+    const handlers = createResponsesItemIdRepairHandlers({ rewriteNonCanonicalIds: true });
+    const raw = "58786d76-18be-43d9-b6f5-8922796fbe28";
+    // Simulate rewrite seeing the completed response first.
+    handlers.rewrite(JSON.stringify({
+      type: "response.completed",
+      response: { id: raw, status: "completed", output: [] },
+    }));
+    const clientId = handlers.clientResponseId(raw);
+    expect(clientId).toMatch(/^resp_ocx_[0-9a-f]+_\d+$/);
+    expect(clientId).not.toBe(raw);
+    // Stable across repeated lookups so continuation aliasing can dual-write safely.
+    expect(handlers.clientResponseId(raw)).toBe(clientId);
+  });
+
   test("mints unique response ids for distinct upstream response ids", async () => {
     const upstream = [
       `event: response.completed\ndata: {"type":"response.completed","response":{"id":"11111111-1111-1111-1111-111111111111","status":"completed","output":[]}}\n\n`,
@@ -220,6 +235,27 @@ describe("DeepSeek Responses item-id repair", () => {
     expect(completed.output[0].type).toBe("reasoning");
     expect(String(completed.output[0].encrypted_content)).toMatch(/^ocxr1:/);
     expect((completed.output[0].content as Array<{ text: string }>)[0].text).toBe("orphan");
+  });
+
+  test("does not overwrite an existing assistant message when flushing retained reasoning", async () => {
+    const upstream = [
+      `event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"1dbc05ae-0b41-40fd-961e-7a84deebe064","role":"assistant","content":[]}}\n\n`,
+      // Retain reasoning text under output_index 0 even though the terminal snapshot has a message there.
+      `event: response.reasoning_text.delta\ndata: {"type":"response.reasoning_text.delta","output_index":0,"item_id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","delta":"keep-me"}\n\n`,
+      `event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"1dbc05ae-0b41-40fd-961e-7a84deebe064","role":"assistant","content":[{"type":"output_text","text":"OK","annotations":[]}]}}\n\n`,
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"58786d76-18be-43d9-b6f5-8922796fbe28","status":"completed","output":[{"type":"message","id":"1dbc05ae-0b41-40fd-961e-7a84deebe064","role":"assistant","content":[{"type":"output_text","text":"OK","annotations":[]}]}]}}\n\n`,
+    ].join("");
+    const events = await parseSse(await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      rewriteNonCanonicalIds: true,
+    })));
+    const completed = events.find(e => e.type === "response.completed")!.response as { output: Record<string, unknown>[] };
+    expect(completed.output.length).toBeGreaterThanOrEqual(2);
+    const reasoning = completed.output.find(item => item.type === "reasoning");
+    const message = completed.output.find(item => item.type === "message");
+    expect(reasoning).toBeTruthy();
+    expect(message).toBeTruthy();
+    expect((message!.content as Array<{ text: string }>)[0].text).toBe("OK");
+    expect(String(reasoning!.encrypted_content)).toMatch(/^ocxr1:/);
   });
 
   test("keeps shared placeholder aliases type-scoped", async () => {

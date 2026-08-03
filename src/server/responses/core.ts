@@ -1652,8 +1652,13 @@ async function handleResponsesInner(
     let mapClientResponseId: ((rawId: string | undefined) => string | undefined) | undefined;
     const rememberPassthroughResponse = passthroughRecordEligible
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) => {
+        // Always record the inspector-visible id first (usually the raw upstream UUID).
         rememberResponseState(parsed._rawBody, response, undefined, { force: true });
         if (typeof response.id !== "string" || !mapClientResponseId) return;
+        // rewriteNonCanonicalIds rewrites client-facing response ids to resp_ocx_*.
+        // Codex continues with previous_response_id using that client-visible id, so the
+        // local replay cache must also be keyed by the rewritten id or multi-turn context
+        // is dropped on the next request.
         const clientId = mapClientResponseId(response.id);
         if (clientId && clientId !== response.id) {
           rememberResponseState(parsed._rawBody, { ...response, id: clientId }, undefined, { force: true });

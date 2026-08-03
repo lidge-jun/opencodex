@@ -361,15 +361,19 @@ function flushRetainedReasoningIntoResponse(
     }
     // No reasoning item was emitted for this retained stream; synthesize one so the
     // terminal snapshot still carries the accumulated reasoning text.
+    // Never overwrite a non-reasoning item (e.g. assistant message) at the same index.
     const synthetic = normalizeReasoningItem(state, outputIndex, {
       type: "reasoning",
       summary: [],
       content: [{ type: "reasoning_text", text }],
     }, true);
-    if (outputIndex < output.length) output[outputIndex] = synthetic;
-    else {
+    if (!existing) {
       while (output.length < outputIndex) output.push({ type: "message", role: "assistant", content: [] });
-      output.push(synthetic);
+      if (outputIndex < output.length) output[outputIndex] = synthetic;
+      else output.push(synthetic);
+    } else {
+      // Keep the existing assistant/message/tool item and insert reasoning just before it.
+      output.splice(outputIndex, 0, synthetic);
     }
     changed = true;
   }

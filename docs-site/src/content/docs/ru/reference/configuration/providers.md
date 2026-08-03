@@ -253,7 +253,7 @@ Beijing, а `alibaba-token-plan-intl` обслуживает междунаро�
 }
 ```
 
-Списки placeholder'ов сравниваются по exact-match. Для gateway вроде DeepSeek Responses, которые отдают UUID-style response/item id и сырые `reasoning_text` потоки, включайте `rewriteNonCanonicalIds`: OpenCodex переписывает id в Codex-friendly prefix, нормализует reasoning в `encrypted_content` (сохраняя plaintext `content` для replay) и гарантирует terminal `[DONE]`. Для обычных/stateful Responses-провайдеров это
+Списки placeholder'ов сравниваются по exact-match. Для шлюзов вроде DeepSeek Responses, которые возвращают UUID-style response/item id и сырые `reasoning_text` потоки, включайте `rewriteNonCanonicalIds`: OpenCodex переписывает id в Codex-friendly prefix, нормализует reasoning в `encrypted_content` (сохраняя plaintext `content` для replay) и гарантирует terminal `[DONE]`. Для обычных/stateful Responses-провайдеров это
 поле оставляйте unset, чтобы passthrough оставался byte-for-byte идентичным.
 
 ## Провайдер Cursor (`adapter: "cursor"`)
