@@ -73,6 +73,13 @@ describe("headless GUI parity CLI", () => {
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],
+      // GUI-only for now: the overview card switches for Claude Code and Grok.
+      // Their effect is already reachable from the CLI by other names —
+      // `ocx grok apply` regenerates the fence and `ocx stop` strips it, and
+      // the Claude flag flips through `ocx claude config` — so a dedicated
+      // `ocx integration native` verb would duplicate existing commands rather
+      // than add a capability. Listed so the sweep stays exhaustive.
+      ["/api/native-integrations", "(none — GUI-only)"],
       ["/api/debug", "ocx debug/observe"],
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],

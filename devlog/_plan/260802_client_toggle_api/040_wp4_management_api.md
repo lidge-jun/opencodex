@@ -32,7 +32,11 @@ writer policy in the server layer.
 
 ### 1.1 IN
 
-WP4 changes exactly these files:
+WP4's cumulative surface is these five files. **Two of them —
+`model-rows.ts` and `model-routes.ts` — were already extracted during WP1
+(`d67d4cace`, refined in `611a34f5d`), so the WP4 commit itself touches
+three.** Kept as written rather than trimmed, because the acceptance criteria
+below still check all five; the count is cumulative scope, not one diff.
 
 1. `src/server/management/integration-routes.ts` — new route module, pasted
    from §4.
@@ -185,6 +189,16 @@ observable state, not a failed read. Unsafe becomes a 409 only when a write is
 attempted and the writer refuses it.
 
 ### 3.2 Exact error responses
+
+**Refusal envelopes carry the writer's recovery fields.** `006 §4` makes
+`message` a REQUIRED field of `WriteRefused` and `§Bookkeeping order` requires
+`message`/`snapshotPath`/`residual` to survive HTTP routing; the rows below
+were written before that and listed only `snapshotPath`. `006` is
+authoritative: every writer-refusal row below additionally carries
+`"message":"<writer message>"`, plus `"residual":true` when compensation
+itself failed. Validation and admission rows — the 400s, the 404, the busy
+409, the 410 preflight, 413, 401/403/503 — are exact as written, because no
+writer refusal produced them.
 
 | Status | Trigger | Exact JSON body |
 |---|---|---|
@@ -855,5 +869,5 @@ status-only fake cannot make a non-activated branch look covered.
 - [ ] `bun run privacy:scan` exits 0; route/journal responses contain no API
   key, account identifier, or snapshot content.
 - [ ] `git diff --check` exits 0.
-- [ ] `git diff --name-only` for WP4 lists only the five IN-scope files from
-  §1.1.
+- [ ] `git diff --name-only` for the WP4 commit lists only IN-scope files from
+  §1.1 — three of them, the other two having landed in WP1.

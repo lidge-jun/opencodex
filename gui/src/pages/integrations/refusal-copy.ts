@@ -1,5 +1,6 @@
 import type { TKey } from "../../i18n/shared";
 import { IntegrationApiError, type IntegrationRefusalEnvelope } from "./integration-api";
+import { NativeApiError, type NativeRefusalEnvelope } from "./native-api";
 
 /**
  * Envelopes the server sends that are NOT writer refusals.
@@ -25,6 +26,10 @@ export function refusalOf(error: unknown): IntegrationRefusalEnvelope | null {
   return error instanceof IntegrationApiError ? error.refusal : null;
 }
 
+function nativeRefusalOf(error: unknown): NativeRefusalEnvelope | null {
+  return error instanceof NativeApiError ? error.refusal : null;
+}
+
 /** Keyed by `reason`, never by `state` (006 §5). */
 function reasonKey(reason: string | undefined): TKey {
   if (reason === "conflict") return "integrations.error.conflict";
@@ -48,7 +53,33 @@ const LOCALIZED_REASONS: ReadonlySet<string> = new Set(["non_loopback"]);
 
 export type Translate = (key: TKey, vars?: Record<string, string>) => string;
 
-export function describeRefusal(t: Translate, error: unknown, fallback?: string): string {
+function describeNativeRefusal(
+  t: Translate,
+  refusal: NativeRefusalEnvelope,
+  configPath?: string,
+): string {
+  if (refusal.reason === "orphaned_marker") {
+    return t("integrations.native.error.orphanedMarker", { path: configPath ?? "" });
+  }
+  if (refusal.reason === "home_mismatch") {
+    // The server message is the only place that carries both homes. Keep it
+    // after the localized lead instead of flattening the useful conflict.
+    return `${t("integrations.native.error.homeMismatch")} ${refusal.message}`;
+  }
+  if (refusal.reason === "not_installed") return t("integrations.native.error.notInstalled");
+  if (refusal.reason === "config_busy") return t("integrations.native.error.configBusy");
+  return refusal.message || t("integrations.error.generic");
+}
+
+export function describeRefusal(
+  t: Translate,
+  error: unknown,
+  fallback?: string,
+  nativeConfigPath?: string,
+): string {
+  const nativeRefusal = nativeRefusalOf(error);
+  if (nativeRefusal) return describeNativeRefusal(t, nativeRefusal, nativeConfigPath);
+
   const refusal = refusalOf(error);
   if (!refusal) {
     const code = error instanceof IntegrationApiError ? String(error.body.code ?? "") : "";

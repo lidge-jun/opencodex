@@ -1,6 +1,9 @@
 import type { OcxConfig } from "../../types";
 import type { StartupInstallAction } from "../startup-action-control";
 import type { ManagementPrincipal } from "../management-auth";
+import type { CatalogModel } from "../../codex/catalog";
+import type { injectGrokConfig } from "../../grok/inject";
+import type { RuntimePortState } from "../../config";
 
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
@@ -13,6 +16,25 @@ export interface ManagementApiDeps {
    * OPENCODEX_HOME (incident: devlog 260730.../070).
    */
   saveConfigPreservingClaudeCode?: (config: OcxConfig) => void;
+  /**
+   * Catalog seam for the Grok toggle (WP2, devlog 260803_integrations_toggle_all
+   * Rev 3 N2). Production leaves this unset and the route dynamic-imports the
+   * real one — a static import would close a cycle with management-api.ts.
+   * Tests stub it to orphan the fixture file mid-fetch (the r7 recheck test).
+   */
+  fetchAllModels?: (config: OcxConfig) => Promise<CatalogModel[]>;
+  /**
+   * Writer seam for the Grok toggle: lets a test place the file in any state
+   * between the pre-write recheck and the write itself (the r8 post-inspection
+   * tests). Production leaves this unset and uses the real writer.
+   */
+  injectGrokConfig?: typeof injectGrokConfig;
+  /**
+   * Runtime-state seam: the fence must name the host/port the RUNNING process
+   * bound (agent-settings-routes.ts:99-103 pattern), and a test must not depend
+   * on the developer's real runtime state file.
+   */
+  readRuntimePort?: (pid: number) => RuntimePortState | null;
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;

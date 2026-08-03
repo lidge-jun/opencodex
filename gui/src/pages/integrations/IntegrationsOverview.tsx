@@ -1,28 +1,42 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDataSurface } from "../../data-surface";
 import { navigateHash } from "../../hash-routing";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Switch } from "../../ui";
 import IntegrationStateBadge from "./IntegrationStateBadge";
+import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import { describeRefusal } from "./refusal-copy";
 import {
-  FILE_INTEGRATION_CLIENTS,
+  buildOverviewRows,
+  countOverviewRows,
+  type OverviewRow,
+} from "./overview-clients";
+import {
+  loadApiKeyCount,
+  loadClaudeCodeStatus,
+  loadClaudeDesktopStatus,
+  loadCodexRoutingStatus,
+  loadGrokFenceStatus,
   loadIntegrationJournal,
   loadIntegrationStates,
   toggleIntegration,
-  type FileIntegrationClientId,
   type IntegrationJournalRow,
   type IntegrationStatus,
 } from "./integration-api";
+import {
+  loadNativeIntegrations,
+  NativeApiError,
+  toggleNativeIntegration,
+  type NativeStatus,
+} from "./native-api";
 
-const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
-  opencode: "integrations.tab.opencode",
-  pi: "integrations.tab.pi",
-  hermes: "integrations.tab.hermes",
-  openclaw: "integrations.tab.openclaw",
-  kimi: "integrations.tab.kimi",
-  gajae: "integrations.tab.gajae",
+const GROK_DISABLE_COPY: ConsequenceCopy = {
+  titleKey: "integrations.dialog.grok.title",
+  changesKey: "integrations.dialog.grok.changes",
+  breakageKey: "integrations.dialog.grok.breakage",
+  undoKey: "integrations.dialog.grok.undo",
+  confirmKey: "integrations.dialog.grok.confirm",
 };
 
 const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {
@@ -36,6 +50,94 @@ function isApplied(status: IntegrationStatus): boolean {
   return status.state === "current" || status.state === "stale";
 }
 
+/**
+ * One card, whether or not its client has a switch.
+ *
+ * The whole card navigates, but it is NOT a button or an anchor: it already
+ * holds two controls, and nesting them inside one is invalid and takes the
+ * switch off the keyboard. Instead the title is the real control and a
+ * pseudo-element stretches it over the card, with the two action controls
+ * lifted above it in the stacking order. That gives one tab stop named after
+ * the client, leaves the switch and the settings button clickable on their
+ * own, and needs no `stopPropagation` guessing about which control the user
+ * meant. The badge is deliberately NOT lifted — it is not interactive, and
+ * lifting it would carve a dead zone into the middle of a clickable card.
+ */
+function OverviewCard({
+  row,
+  pending,
+  result,
+  onOpen,
+  onToggle,
+}: {
+  row: OverviewRow;
+  pending: boolean;
+  result: { tone: "ok" | "err"; text: string } | null;
+  onOpen: () => void;
+  onToggle: (() => void) | null;
+}) {
+  const t = useT();
+  const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
+  const toggleBlocked = row.toggleBlocked !== null
+    && (row.applied || row.toggleBlocked.reason === "orphaned_marker");
+  const blockedText = toggleBlocked && row.toggleBlocked && (row.toggle === "claude" || row.toggle === "grok")
+    ? describeRefusal(t, new NativeApiError(409, {
+        error: "native integration change refused",
+        code: "native_integration_refused",
+        clientId: row.toggle,
+        reason: row.toggleBlocked.reason,
+        message: row.toggleBlocked.message,
+      }), undefined, row.togglePath ?? undefined)
+    : null;
+  return (
+    <li className="integration-card" data-client={row.id}>
+      <div className="integration-card-head">
+        <h4>
+          <button type="button" className="integration-card-link" onClick={onOpen}>
+            {t(row.labelKey)}
+          </button>
+        </h4>
+        <IntegrationStateBadge state={row.state} installed={row.installed} />
+      </div>
+      {/*
+        File clients show a config path in code type, because that is a string
+        the user copies. The rest show a translated sentence, which must not
+        pretend to be a path.
+      */}
+      {detail && (
+        <p className={row.detail ? "integration-path" : "integration-meta"}>{detail}</p>
+      )}
+      {result?.tone === "err" && <Notice tone="err">{result.text}</Notice>}
+      {result?.tone === "ok" && <Notice tone="ok">{result.text}</Notice>}
+      <div className="integration-card-actions">
+        {row.toggle && onToggle && (
+          <div className="integration-toggle-control">
+            <Switch
+              on={row.applied}
+              onClick={onToggle}
+              // Unknown is an unsettled native read; conflict/unsafe and an
+              // advisory refusal must all be resolved before mutation.
+              disabled={row.state === "unknown"
+                || !row.installed
+                || row.state === "conflict"
+                || row.state === "unsafe"
+                || toggleBlocked
+                || pending}
+              label={row.applied
+                ? t("integrations.action.disable")
+                : t("integrations.action.apply")}
+            />
+            {blockedText && <p className="integration-toggle-blocked">{blockedText}</p>}
+          </div>
+        )}
+        <button type="button" className="btn btn-ghost" onClick={onOpen} tabIndex={-1}>
+          {t("integrations.action.settings")}
+        </button>
+      </div>
+    </li>
+  );
+}
+
 export default function IntegrationsOverview({
   apiBase,
   active = true,
@@ -47,6 +149,17 @@ export default function IntegrationsOverview({
   const [bulkPending, setBulkPending] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
+  const [cardResults, setCardResults] = useState<Partial<Record<OverviewRow["id"], { tone: "ok" | "err"; text: string }>>>({});
+  const [pendingToggle, setPendingToggle] = useState<OverviewRow | null>(null);
+  const restoreFocusRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (pendingToggle !== null) return;
+    const trigger = restoreFocusRef.current;
+    if (!trigger) return;
+    restoreFocusRef.current = null;
+    if (trigger.isConnected) trigger.focus();
+  }, [pendingToggle]);
 
   const fetchStates = useCallback(
     async (signal: AbortSignal) => (await loadIntegrationStates(apiBase, signal)).clients,
@@ -54,6 +167,37 @@ export default function IntegrationsOverview({
   );
   const fetchHistory = useCallback(
     async (signal: AbortSignal) => (await loadIntegrationJournal(apiBase, undefined, signal)).operations,
+    [apiBase],
+  );
+  /*
+   * The five surfaces that are not file clients. Each is read ONCE per visit
+   * and on an explicit refresh — deliberately no `pollMs`: `/api/claude-code`
+   * answers ~36 KB to give up two booleans and `/api/keys` measured 466 ms, so
+   * a timer would spend that repeatedly to learn nothing new. `enabled: active`
+   * keeps all five quiet while the panel is mounted but hidden.
+   */
+  const fetchCodex = useCallback(
+    (signal: AbortSignal) => loadCodexRoutingStatus(apiBase, signal),
+    [apiBase],
+  );
+  const fetchKeyCount = useCallback(
+    (signal: AbortSignal) => loadApiKeyCount(apiBase, signal),
+    [apiBase],
+  );
+  const fetchClaude = useCallback(
+    (signal: AbortSignal) => loadClaudeCodeStatus(apiBase, signal),
+    [apiBase],
+  );
+  const fetchClaudeDesktop = useCallback(
+    (signal: AbortSignal) => loadClaudeDesktopStatus(apiBase, signal),
+    [apiBase],
+  );
+  const fetchGrok = useCallback(
+    (signal: AbortSignal) => loadGrokFenceStatus(apiBase, signal),
+    [apiBase],
+  );
+  const fetchNative = useCallback(
+    async (signal: AbortSignal) => (await loadNativeIntegrations(apiBase, signal))?.clients ?? null,
     [apiBase],
   );
 
@@ -69,12 +213,70 @@ export default function IntegrationsOverview({
     fetchHistory,
     { isEmpty: rows => rows.length === 0, enabled: active },
   );
+  const codexResource = useDataSurface(
+    `integration-codex:${apiBase}`,
+    [apiBase],
+    fetchCodex,
+    { isEmpty: value => value === null, enabled: active },
+  );
+  const keysResource = useDataSurface(
+    `integration-keys:${apiBase}`,
+    [apiBase],
+    fetchKeyCount,
+    { isEmpty: value => value === null, enabled: active },
+  );
+  const claudeResource = useDataSurface(
+    `integration-claude:${apiBase}`,
+    [apiBase],
+    fetchClaude,
+    { isEmpty: value => value === null, enabled: active },
+  );
+  const claudeDesktopResource = useDataSurface(
+    `integration-claude-desktop:${apiBase}`,
+    [apiBase],
+    fetchClaudeDesktop,
+    { isEmpty: value => value === null, enabled: active },
+  );
+  const grokResource = useDataSurface(
+    `integration-grok:${apiBase}`,
+    [apiBase],
+    fetchGrok,
+    { isEmpty: value => value === null, enabled: active },
+  );
+  const nativeResource = useDataSurface<NativeStatus[] | null>(
+    `integration-native:${apiBase}`,
+    [apiBase],
+    fetchNative,
+    { isEmpty: value => value === null, enabled: active },
+  );
 
   const clients = statesResource.state.data ?? [];
   const history = historyResource.state.data ?? [];
-  const installed = clients.filter(client => client.installed);
   const appliedClients = clients.filter(isApplied);
-  const staleCount = clients.filter(client => client.state === "stale").length;
+  const installedFileClients = clients.filter(client => client.installed);
+  /*
+   * "Settled" is what separates a client the server omitted from one whose
+   * list has not answered yet. Only a cold state means we have never had an
+   * answer; a stale-with-error state still holds real rows.
+   */
+  const clientsSettled = statesResource.state.kind !== "cold"
+    && statesResource.state.kind !== "retrying-cold";
+  const native = nativeResource.state.data ?? null;
+  // `readOptional` returns null for a failed probe. Only an actual array is a
+  // settled contract; an empty array is meaningful and removes both switches.
+  const nativeSettled = native !== null;
+  const rows = buildOverviewRows({
+    clients,
+    clientsSettled,
+    codex: codexResource.state.data ?? null,
+    keyCount: keysResource.state.data ?? null,
+    claude: claudeResource.state.data ?? null,
+    claudeDesktop: claudeDesktopResource.state.data ?? null,
+    grok: grokResource.state.data ?? null,
+    native,
+    nativeSettled,
+  });
+  const counts = countOverviewRows(rows);
 
   /*
    * `refresh()` on the resource layer is deliberately fire-and-forget: it
@@ -85,6 +287,12 @@ export default function IntegrationsOverview({
   const refresh = () => {
     statesResource.refresh();
     historyResource.refresh();
+    codexResource.refresh();
+    keysResource.refresh();
+    claudeResource.refresh();
+    claudeDesktopResource.refresh();
+    grokResource.refresh();
+    nativeResource.refresh();
   };
 
   /*
@@ -113,6 +321,7 @@ export default function IntegrationsOverview({
      *
      * Six loopback requests are cheap; a lost ownership record is not.
      */
+    // Bulk disable remains file-clients-only; Grok must keep its consequence gate.
     for (const client of appliedClients) {
       try {
         // react-doctor-disable-next-line react-doctor/async-await-in-loop -- serial on purpose; see the block comment above
@@ -157,21 +366,68 @@ export default function IntegrationsOverview({
    * one client turns the overview into a directory of links, and the summary
    * counts right above it exist precisely so a user can act on what they see.
    */
-  const [cardPending, setCardPending] = useState<FileIntegrationClientId | null>(null);
-  const toggleCard = async (client: IntegrationStatus) => {
+  const [cardPending, setCardPending] = useState<OverviewRow["id"] | null>(null);
+
+  const refreshNativeDetails = () => {
+    nativeResource.refresh();
+    claudeResource.refresh();
+    grokResource.refresh();
+  };
+
+  const setCardResult = (id: OverviewRow["id"], result: { tone: "ok" | "err"; text: string } | null) => {
+    setCardResults(current => {
+      const next = { ...current };
+      if (result) next[id] = result;
+      else delete next[id];
+      return next;
+    });
+  };
+
+  const toggleCard = async (row: OverviewRow, next: boolean) => {
     if (cardPending) return;
-    setCardPending(client.clientId);
-    setBulkResult(null);
+    if (!row.toggle) return;
+    setCardPending(row.id);
+    setCardResult(row.id, null);
     try {
-      // Same rule as the client page: turning it off means disable, for
-      // `stale` as much as for `current`.
-      await toggleIntegration(apiBase, client.clientId, !isApplied(client));
-      refresh();
+      if (row.status) {
+        await toggleIntegration(apiBase, row.status.clientId, next);
+        refresh();
+      } else if (row.toggle === "claude" || row.toggle === "grok") {
+        const result = await toggleNativeIntegration(apiBase, row.toggle, next);
+        if (result.reason === "non_loopback_removed") {
+          setCardResult(row.id, {
+            tone: "ok",
+            text: t(result.changed
+              ? "integrations.native.msg.nonLoopbackRemoved"
+              : "integrations.native.msg.nonLoopbackRemovedNoop"),
+          });
+        } else if (result.reason === "non_loopback_superseded") {
+          setCardResult(row.id, { tone: "ok", text: t("integrations.native.msg.nonLoopbackSuperseded") });
+        }
+        refreshNativeDetails();
+      }
     } catch (error) {
-      setBulkResult({ tone: "err", text: `${client.clientId}: ${describeRefusal(t, error)}` });
+      setCardResult(row.id, {
+        tone: "err",
+        text: describeRefusal(t, error, undefined, row.togglePath ?? undefined),
+      });
+      if (row.toggle === "claude" || row.toggle === "grok") refreshNativeDetails();
     } finally {
       setCardPending(null);
     }
+  };
+
+  const requestToggle = (row: OverviewRow, next: boolean) => {
+    if (row.status || next || row.id === "claude" || row.toggle === null) {
+      void toggleCard(row, next);
+      return;
+    }
+    // Grok disable is the only native action that edits another program's file.
+    const activeElement = document.activeElement;
+    restoreFocusRef.current = activeElement?.tagName === "BUTTON"
+      ? activeElement as HTMLButtonElement
+      : null;
+    setPendingToggle(row);
   };
 
   return (
@@ -179,16 +435,27 @@ export default function IntegrationsOverview({
       <div className="integration-summary">
         <div className="integration-summary-cell">
           <span className="integration-summary-label">{t("integrations.summary.detected")}</span>
-          <strong>{installed.length}</strong>
+          <strong>{counts.detected}</strong>
         </div>
         <div className="integration-summary-cell">
           <span className="integration-summary-label">{t("integrations.summary.applied")}</span>
-          <strong>{appliedClients.length}</strong>
+          <strong>{counts.applied}</strong>
         </div>
         <div className="integration-summary-cell">
           <span className="integration-summary-label">{t("integrations.summary.stale")}</span>
-          <strong>{staleCount}</strong>
+          <strong>{counts.stale}</strong>
         </div>
+        {/*
+          Only shown when something could not be read. A permanent cell reading
+          zero is noise; a cell that appears is a signal — and without it, six
+          applied out of eleven and six out of nine look identical.
+        */}
+        {counts.unknown > 0 && (
+          <div className="integration-summary-cell">
+            <span className="integration-summary-label">{t("integrations.state.unknown")}</span>
+            <strong>{counts.unknown}</strong>
+          </div>
+        )}
         <div className="integration-summary-cell">
           <span className="integration-summary-label">{t("integrations.summary.lastChange")}</span>
           <strong>{lastChange ? new Date(lastChange).toLocaleString() : t("integrations.status.unknown")}</strong>
@@ -217,58 +484,35 @@ export default function IntegrationsOverview({
       {bulkResult && <Notice tone={bulkResult.tone}>{bulkResult.text}</Notice>}
 
       {/*
-        "No clients installed" is a CONCLUSION, and it can only be drawn from a
-        settled response. `clients` defaults to an empty array, so branching on
-        its length first told a user mid-load — and a user whose request had
-        just failed — that nothing was installed.
+        The grid used to disappear entirely when no FILE client was installed,
+        which now means hiding Codex, API keys, Claude and Grok because the
+        user has not installed OpenCode. The "nothing detected" panel is about
+        the file clients specifically, so it sits BELOW the grid and says so
+        instead of replacing everything.
       */}
-      {clients.length === 0 ? (
+      {rows.length === 0 ? (
         statesResource.state.kind === "failed-cold" ? null : (
           <p className="page-sub">{t("common.loading")}</p>
         )
-      ) : installed.length === 0 ? (
+      ) : (
+        <ul className="integration-cards">
+          {rows.map(row => (
+            <OverviewCard
+              key={row.id}
+              row={row}
+              pending={cardPending !== null}
+              result={cardResults[row.id] ?? null}
+              onOpen={() => navigateHash(row.hash)}
+              onToggle={row.toggle ? () => requestToggle(row, !row.applied) : null}
+            />
+          ))}
+        </ul>
+      )}
+      {clientsSettled && installedFileClients.length === 0 && (
         <div className="integration-empty">
           <h4>{t("integrations.empty.title")}</h4>
           <p>{t("integrations.empty.body")}</p>
         </div>
-      ) : (
-        <ul className="integration-cards">
-          {FILE_INTEGRATION_CLIENTS.map(clientId => {
-            const status = clients.find(candidate => candidate.clientId === clientId);
-            if (!status) return null;
-            return (
-              <li key={clientId} className="integration-card">
-                <div className="integration-card-head">
-                  <h4>{t(TAB_LABEL_KEY[clientId])}</h4>
-                  <IntegrationStateBadge state={status.state} installed={status.installed} />
-                </div>
-                <p className="integration-path">{status.configPath}</p>
-                <div className="integration-card-actions">
-                  <Switch
-                    on={isApplied(status)}
-                    onClick={() => void toggleCard(status)}
-                    // Conflict and unsafe are never resolved from a card: the
-                    // client page is where the reason is explained.
-                    disabled={!status.installed
-                      || status.state === "conflict"
-                      || status.state === "unsafe"
-                      || cardPending !== null}
-                    label={isApplied(status)
-                      ? t("integrations.action.disable")
-                      : t("integrations.action.apply")}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => navigateHash(`integrations/${clientId}`)}
-                  >
-                    {t("integrations.action.settings")}
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
       )}
 
       <h4>{t("integrations.rollback.title")}</h4>
@@ -309,6 +553,16 @@ export default function IntegrationsOverview({
           row={restoring}
           onClose={() => setRestoring(null)}
           onRestored={refresh}
+        />
+      )}
+      {pendingToggle && (
+        <ConsequenceDialog
+          copy={{ ...GROK_DISABLE_COPY, vars: { path: pendingToggle.togglePath ?? "" } }}
+          onClose={() => setPendingToggle(null)}
+          onConfirm={async () => {
+            await toggleCard(pendingToggle, false);
+            setPendingToggle(null);
+          }}
         />
       )}
     </section>

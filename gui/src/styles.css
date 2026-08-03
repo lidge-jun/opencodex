@@ -298,12 +298,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .nav-entry-claude .nav-item,
 .nav-entry-claude .nav-item:hover,
 .nav-entry-claude .nav-item.active { width: auto; background: transparent; }
-/* Use the standard flex Switch (not an absolute track/knob overlay) so the
-   knob stays vertically centered with the Claude label. */
-.nav-entry-claude .switch {
-  margin-inline: 2px 4px;
-}
-.nav-entry-claude .switch:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 
 .sidebar-foot { margin-top: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 2px; }
 

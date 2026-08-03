@@ -241,3 +241,87 @@ export async function restoreIntegration(
     }),
   );
 }
+
+/*
+ * Overview-only readers for the five surfaces that are not file clients.
+ *
+ * These deliberately do NOT throw and do NOT go through `readResponse`. A file
+ * client's failure carries a refusal envelope with a snapshot path and a
+ * recovery message the user needs; these five are read-only status probes, and
+ * the only thing the overview can say about a failed one is "unknown". Turning
+ * that into a thrown error would take down the whole grid for one slow route.
+ *
+ * Each returns only the fields the overview maps. `/api/claude-code` answers
+ * ~36 KB including every context window and alias; reading two of its fields
+ * and discarding the rest keeps this surface off a shape it does not own.
+ */
+
+async function readOptional<T>(request: Promise<Response>): Promise<T | null> {
+  try {
+    const response = await request;
+    if (!response.ok) return null;
+    return await readJsonIfOk<T>(response) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadCodexRoutingStatus(apiBase: string, signal?: AbortSignal) {
+  const body = await readOptional<{
+    routingInjected?: unknown;
+    status?: unknown;
+    recommendedCommand?: unknown;
+  }>(fetch(`${apiBase}/api/startup-health`, { signal }));
+  if (!body) return null;
+  return {
+    routingInjected: body.routingInjected === true,
+    status: typeof body.status === "string" ? body.status : undefined,
+    recommendedCommand: typeof body.recommendedCommand === "string" ? body.recommendedCommand : null,
+  };
+}
+
+export async function loadApiKeyCount(apiBase: string, signal?: AbortSignal): Promise<number | null> {
+  const body = await readOptional<{ keys?: unknown }>(fetch(`${apiBase}/api/keys`, { signal }));
+  if (!body || !Array.isArray(body.keys)) return null;
+  return body.keys.length;
+}
+
+export async function loadClaudeCodeStatus(apiBase: string, signal?: AbortSignal) {
+  const body = await readOptional<{ enabled?: unknown; authMode?: unknown }>(
+    fetch(`${apiBase}/api/claude-code`, { signal }),
+  );
+  if (!body) return null;
+  return {
+    enabled: body.enabled === true,
+    authMode: typeof body.authMode === "string" ? body.authMode : undefined,
+  };
+}
+
+export async function loadClaudeDesktopStatus(apiBase: string, signal?: AbortSignal) {
+  const body = await readOptional<{
+    applied?: unknown;
+    stale?: unknown;
+    activeProfile?: unknown;
+    appliedAt?: unknown;
+  }>(fetch(`${apiBase}/api/claude-desktop/status`, { signal }));
+  if (!body) return null;
+  return {
+    applied: body.applied === true,
+    stale: body.stale === true,
+    // Tri-state on purpose: `null` means undeterminable, which must not be
+    // read as "Desktop is serving someone else's profile".
+    activeProfile: typeof body.activeProfile === "boolean" ? body.activeProfile : null,
+    appliedAt: typeof body.appliedAt === "string" ? body.appliedAt : null,
+  };
+}
+
+export async function loadGrokFenceStatus(apiBase: string, signal?: AbortSignal) {
+  const body = await readOptional<{ present?: unknown; models?: unknown }>(
+    fetch(`${apiBase}/api/grok`, { signal }),
+  );
+  if (!body) return null;
+  return {
+    present: body.present === true,
+    models: Array.isArray(body.models) ? body.models : [],
+  };
+}

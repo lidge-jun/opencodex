@@ -67,6 +67,7 @@ import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
+import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
@@ -140,6 +141,7 @@ export async function handleManagementAPI(
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
+    ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
