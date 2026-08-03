@@ -238,6 +238,28 @@ describe("google adapter — tool_choice on the wire", () => {
     expect((await geminiBody(parsedWithChoice({ name: "get_weather" }, []))).toolConfig).toBeUndefined();
   });
 
+  test('claude-on-antigravity honors "none" by dropping the declarations', async () => {
+    const ccaProvider = {
+      adapter: "google",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      apiKey: "key",
+      project: "proj-123",
+    };
+    const claudeParsed = parsedWithChoice("none");
+    (claudeParsed as unknown as { modelId: string }).modelId = "claude-opus-4.8";
+    const claudeRequest = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(claudeParsed)).body).request as Record<string, unknown>;
+    // VALIDATED would defeat NONE, so the declarations go instead; the config matches a tool-less turn.
+    expect(claudeRequest.tools).toBeUndefined();
+    expect(claudeRequest.toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } });
+
+    // Gemini on the same route has no VALIDATED override, so NONE rides with the catalog intact.
+    const geminiParsed = parsedWithChoice("none");
+    const geminiRequest = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(geminiParsed)).body).request as Record<string, unknown>;
+    expect(geminiRequest.tools).toBeDefined();
+    expect(geminiRequest.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
+  });
+
   test("claude-on-antigravity keeps VALIDATED mode over a client choice, allowed names survive", async () => {
     const ccaProvider = {
       adapter: "google",

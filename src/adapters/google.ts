@@ -384,6 +384,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const draftRequest: Record<string, unknown> = { ...body, sessionId };
         // Claude-on-Antigravity forces VALIDATED function calling (the real client always sets it).
         if (/claude/i.test(wireModelId)) {
+          // VALIDATED would defeat a client's tool_choice "none": honor it by dropping the
+          // declarations instead, the wire shape of a tool-less Claude turn.
+          if (parsed.options.toolChoice === "none") {
+            delete draftRequest.tools;
+            delete draftRequest.toolConfig;
+          }
           const existing = (draftRequest.toolConfig ?? {}) as Record<string, unknown>;
           const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
           draftRequest.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
