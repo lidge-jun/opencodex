@@ -567,6 +567,7 @@ const providerConfigSchema = z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),
     repairMissingTerminalIds: z.boolean().optional(),
+    rewriteNonCanonicalIds: z.boolean().optional(),
   }).strict().optional(),
 }).passthrough();
 

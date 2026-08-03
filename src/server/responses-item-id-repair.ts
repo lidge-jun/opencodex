@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ResponsesItemIdRepairConfig } from "../types";
+import { encodeReasoningEnvelope } from "../responses/reasoning-envelope";
 import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
@@ -7,10 +8,16 @@ type RepairableItemType = "message" | "reasoning";
 
 interface ResponsesItemIdRepairState {
   readonly repairMissingTerminalIds: boolean;
+  readonly rewriteNonCanonicalIds: boolean;
   readonly placeholders: Record<RepairableItemType, ReadonlySet<string>>;
   readonly outputIds: Record<RepairableItemType, Map<number, string>>;
+  readonly rawToCanonical: Map<string, string>;
+  readonly reasoningTextByOutputIndex: Map<number, string>;
+  readonly responseIdMap: Map<string, string>;
   readonly scope: string;
   readonly budget?: TranslatorBudget;
+  sawCompleted: boolean;
+  sawDoneTrailer: boolean;
 }
 
 const REPAIRABLE_PREFIXES: Record<RepairableItemType, string> = {
@@ -50,9 +57,58 @@ function mintCanonicalId(type: RepairableItemType, scope: string, outputIndex: n
   return `${REPAIRABLE_PREFIXES[type]}ocx_${scope}_${outputIndex}`;
 }
 
+function isCanonicalItemId(type: RepairableItemType, id: string): boolean {
+  return id.startsWith(REPAIRABLE_PREFIXES[type]);
+}
+
+function shouldRewriteRawId(
+  state: ResponsesItemIdRepairState,
+  type: RepairableItemType,
+  rawId: string,
+): boolean {
+  if (state.placeholders[type].has(rawId)) return true;
+  if (state.rewriteNonCanonicalIds && !isCanonicalItemId(type, rawId)) return true;
+  return false;
+}
+
+function mapRawId(
+  state: ResponsesItemIdRepairState,
+  type: RepairableItemType,
+  outputIndex: number,
+  rawId: string | undefined,
+): string | null {
+  const existing = state.outputIds[type].get(outputIndex);
+  if (existing) {
+    if (rawId && shouldRewriteRawId(state, type, rawId) && !state.rawToCanonical.has(rawId)) {
+      state.rawToCanonical.set(rawId, existing);
+    }
+    return existing;
+  }
+
+  if (!rawId) {
+    if (!state.repairMissingTerminalIds) return null;
+    const minted = mintCanonicalId(type, state.scope, outputIndex);
+    state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, minted])).byteLength, { kind: "item_ids" });
+    state.outputIds[type].set(outputIndex, minted);
+    return minted;
+  }
+
+  const mapped = shouldRewriteRawId(state, type, rawId)
+    ? mintCanonicalId(type, state.scope, outputIndex)
+    : state.repairMissingTerminalIds
+      ? rawId
+      : null;
+  if (!mapped) return null;
+  state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, rawId, mapped])).byteLength, { kind: "item_ids" });
+  state.outputIds[type].set(outputIndex, mapped);
+  if (mapped !== rawId) state.rawToCanonical.set(rawId, mapped);
+  return mapped;
+}
+
 function createRepairState(config: ResponsesItemIdRepairConfig, budget?: TranslatorBudget): ResponsesItemIdRepairState {
-  const state = {
+  const state: ResponsesItemIdRepairState = {
     repairMissingTerminalIds: config.repairMissingTerminalIds === true,
+    rewriteNonCanonicalIds: config.rewriteNonCanonicalIds === true,
     placeholders: {
       message: new Set(config.message ?? []),
       reasoning: new Set(config.reasoning ?? []),
@@ -61,13 +117,19 @@ function createRepairState(config: ResponsesItemIdRepairConfig, budget?: Transla
       message: new Map<number, string>(),
       reasoning: new Map<number, string>(),
     },
+    rawToCanonical: new Map<string, string>(),
+    reasoningTextByOutputIndex: new Map<number, string>(),
+    responseIdMap: new Map<string, string>(),
     scope: randomUUID().replace(/-/g, ""),
     budget,
+    sawCompleted: false,
+    sawDoneTrailer: false,
   };
   budget?.chargeRetained(new TextEncoder().encode(JSON.stringify({
     message: [...state.placeholders.message],
     reasoning: [...state.placeholders.reasoning],
     scope: state.scope,
+    rewriteNonCanonicalIds: state.rewriteNonCanonicalIds,
   })).byteLength, { kind: "item_ids" });
   return state;
 }
@@ -79,26 +141,81 @@ function rememberMappedId(
 ): string | null {
   const type = repairableItemType(item);
   if (!type) return null;
-  const existing = state.outputIds[type].get(outputIndex);
-  if (existing) return existing;
   const rawId = typeof item.id === "string" ? item.id : undefined;
-  if (!rawId) return null;
-  const mapped = state.placeholders[type].has(rawId)
-    ? mintCanonicalId(type, state.scope, outputIndex)
-    : state.repairMissingTerminalIds
-      ? rawId
-      : null;
-  if (!mapped) return null;
-  state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, rawId, mapped])).byteLength, { kind: "item_ids" });
-  state.outputIds[type].set(outputIndex, mapped);
-  return mapped;
+  return mapRawId(state, type, outputIndex, rawId);
+}
+
+function mapResponseId(state: ResponsesItemIdRepairState, rawId: string | undefined): string | undefined {
+  if (!rawId) return rawId;
+  if (!state.rewriteNonCanonicalIds) return rawId;
+  if (rawId.startsWith("resp_")) return rawId;
+  const existing = state.responseIdMap.get(rawId);
+  if (existing) return existing;
+  const minted = `resp_ocx_${state.scope}`;
+  state.responseIdMap.set(rawId, minted);
+  return minted;
+}
+
+function normalizeReasoningItem(
+  state: ResponsesItemIdRepairState,
+  outputIndex: number,
+  item: Record<string, unknown>,
+  terminal: boolean,
+): Record<string, unknown> {
+  const mapped = rememberMappedId(state, outputIndex, item) ?? item.id;
+  const text = state.reasoningTextByOutputIndex.get(outputIndex)
+    ?? (Array.isArray(item.content)
+      ? item.content
+        .filter((part): part is Record<string, unknown> => isPlainObject(part) && part.type === "reasoning_text" && typeof part.text === "string")
+        .map(part => String(part.text))
+        .join("")
+      : "");
+  if (text) state.reasoningTextByOutputIndex.set(outputIndex, text);
+  const next: Record<string, unknown> = {
+    type: "reasoning",
+    id: mapped,
+    summary: Array.isArray(item.summary) ? item.summary : [],
+  };
+  if (terminal || text) {
+    next.encrypted_content = encodeReasoningEnvelope({ txt: text || " " });
+  }
+  return next;
+}
+
+function normalizeMessageItem(
+  state: ResponsesItemIdRepairState,
+  outputIndex: number,
+  item: Record<string, unknown>,
+): Record<string, unknown> {
+  const mapped = rememberMappedId(state, outputIndex, item);
+  const next: Record<string, unknown> = { ...item };
+  if (mapped) next.id = mapped;
+  if (Array.isArray(next.content)) {
+    next.content = next.content.map(part => {
+      if (!isPlainObject(part)) return part;
+      if (part.type !== "output_text") return part;
+      return {
+        type: "output_text",
+        text: typeof part.text === "string" ? part.text : "",
+        annotations: Array.isArray(part.annotations) ? part.annotations : [],
+      };
+    });
+  }
+  return next;
 }
 
 function rewriteOutputItem(
   state: ResponsesItemIdRepairState,
   outputIndex: number,
   item: Record<string, unknown>,
+  terminal = false,
 ): { item: Record<string, unknown>; changed: boolean } {
+  if (state.rewriteNonCanonicalIds && item.type === "reasoning") {
+    return { item: normalizeReasoningItem(state, outputIndex, item, terminal), changed: true };
+  }
+  if (state.rewriteNonCanonicalIds && item.type === "message") {
+    return { item: normalizeMessageItem(state, outputIndex, item), changed: true };
+  }
   const mapped = rememberMappedId(state, outputIndex, item);
   if (!mapped) return { item, changed: false };
   const currentId = typeof item.id === "string" ? item.id : undefined;
@@ -112,35 +229,80 @@ function rewriteItemIdField(
   event: Record<string, unknown>,
   outputIndex: number,
 ): { event: Record<string, unknown>; changed: boolean } {
-  const eventType = typeof event.type === "string" ? ITEM_ID_EVENT_TYPES[event.type] : undefined;
-  if (!eventType) return { event, changed: false };
-  const mapped = state.outputIds[eventType].get(outputIndex);
-  if (!mapped) return { event, changed: false };
   const currentId = typeof event.item_id === "string" ? event.item_id : undefined;
+  const reverseMapped = currentId ? state.rawToCanonical.get(currentId) : undefined;
+  if (reverseMapped && reverseMapped !== currentId) {
+    return { event: { ...event, item_id: reverseMapped }, changed: true };
+  }
+
+  const eventType = typeof event.type === "string" ? ITEM_ID_EVENT_TYPES[event.type] : undefined;
+  let mapped: string | null | undefined;
+  if (eventType === "message" && (
+    event.type === "response.content_part.added"
+    || event.type === "response.content_part.done"
+  )) {
+    mapped = state.outputIds.message.get(outputIndex)
+      ?? state.outputIds.reasoning.get(outputIndex)
+      ?? null;
+  } else if (eventType) {
+    mapped = state.outputIds[eventType].get(outputIndex);
+    if (!mapped && currentId && state.rewriteNonCanonicalIds) {
+      mapped = mapRawId(state, eventType, outputIndex, currentId);
+    }
+  } else {
+    return { event, changed: false };
+  }
+  if (!mapped) return { event, changed: false };
   if (currentId === mapped) return { event, changed: false };
   if (currentId === undefined && !state.repairMissingTerminalIds) return { event, changed: false };
-  return { event: { ...event, item_id: mapped }, changed: true };
+  const next: Record<string, unknown> = { ...event, item_id: mapped };
+  if (state.rewriteNonCanonicalIds && "logprobs" in next) delete next.logprobs;
+  return { event: next, changed: true };
 }
 
 function rewriteResponseSnapshot(
   state: ResponsesItemIdRepairState,
   response: Record<string, unknown>,
 ): { response: Record<string, unknown>; changed: boolean } {
-  if (!Array.isArray(response.output)) return { response, changed: false };
   let changed = false;
+  let next = response;
+  if (typeof response.id === "string") {
+    const mapped = mapResponseId(state, response.id);
+    if (mapped && mapped !== response.id) {
+      next = { ...next, id: mapped };
+      changed = true;
+    }
+  }
+  if (!Array.isArray(response.output)) return { response: next, changed };
   const output = response.output.map((item, outputIndex) => {
     if (!isPlainObject(item)) return item;
-    const rewritten = rewriteOutputItem(state, outputIndex, item);
+    const rewritten = rewriteOutputItem(state, outputIndex, item, true);
     changed = changed || rewritten.changed;
     return rewritten.item;
   });
-  return changed ? { response: { ...response, output }, changed: true } : { response, changed: false };
+  return changed ? { response: { ...next, output }, changed: true } : { response: next, changed };
+}
+
+function accumulateReasoningText(
+  state: ResponsesItemIdRepairState,
+  outputIndex: number,
+  delta: string,
+): void {
+  state.reasoningTextByOutputIndex.set(
+    outputIndex,
+    (state.reasoningTextByOutputIndex.get(outputIndex) ?? "") + delta,
+  );
 }
 
 function repairEventPayload(
   payload: string,
   state: ResponsesItemIdRepairState,
-): string {
+): string | null {
+  if (payload.trim() === "[DONE]") {
+    state.sawDoneTrailer = true;
+    return payload;
+  }
+
   let event: unknown;
   try {
     event = JSON.parse(payload);
@@ -149,11 +311,41 @@ function repairEventPayload(
   }
   if (!isPlainObject(event)) return payload;
 
+  const type = typeof event.type === "string" ? event.type : undefined;
+  const outputIndex = asOutputIndex(event.output_index);
+
+  if (state.rewriteNonCanonicalIds) {
+    if (type === "response.in_progress") return null;
+    if (type === "response.reasoning_text.delta") {
+      if (outputIndex !== null && typeof event.delta === "string") {
+        accumulateReasoningText(state, outputIndex, event.delta);
+      }
+      return null;
+    }
+    if (type === "response.reasoning_text.done") {
+      if (outputIndex !== null && typeof event.text === "string") {
+        state.reasoningTextByOutputIndex.set(outputIndex, event.text);
+      }
+      return null;
+    }
+    if (
+      (type === "response.content_part.added" || type === "response.content_part.done")
+      && isPlainObject(event.part)
+      && event.part.type === "reasoning_text"
+    ) {
+      if (outputIndex !== null && typeof event.part.text === "string" && event.part.text) {
+        state.reasoningTextByOutputIndex.set(outputIndex, event.part.text);
+      }
+      return null;
+    }
+  }
+
   let changed = false;
   let nextEvent = event;
-  const outputIndex = asOutputIndex(event.output_index);
+
   if (outputIndex !== null && isPlainObject(event.item)) {
-    const rewritten = rewriteOutputItem(state, outputIndex, event.item);
+    const terminal = type === "response.output_item.done";
+    const rewritten = rewriteOutputItem(state, outputIndex, event.item, terminal);
     if (rewritten.changed) {
       nextEvent = { ...nextEvent, item: rewritten.item };
       changed = true;
@@ -173,6 +365,30 @@ function repairEventPayload(
       changed = true;
     }
   }
+
+  if (type === "response.completed") state.sawCompleted = true;
+
+  if (state.rewriteNonCanonicalIds && isPlainObject(nextEvent.part) && nextEvent.part.type === "output_text") {
+    nextEvent = {
+      ...nextEvent,
+      part: {
+        type: "output_text",
+        text: typeof nextEvent.part.text === "string" ? nextEvent.part.text : "",
+        annotations: Array.isArray(nextEvent.part.annotations) ? nextEvent.part.annotations : [],
+      },
+    };
+    if ("logprobs" in nextEvent) {
+      const { logprobs: _lp, ...rest } = nextEvent;
+      nextEvent = rest;
+    }
+    changed = true;
+  }
+  if (state.rewriteNonCanonicalIds && "logprobs" in nextEvent) {
+    const { logprobs: _lp, ...rest } = nextEvent;
+    nextEvent = rest;
+    changed = true;
+  }
+
   if (!changed) return payload;
   const rewritten = JSON.stringify(nextEvent);
   const bytes = new TextEncoder().encode(rewritten).byteLength;
@@ -183,30 +399,30 @@ function repairEventPayload(
 }
 
 /**
- * [Decision Log]
- * - 목적과 의도: 일부 openai-responses 호환 게이트웨이가 재사용/누락하는 message·reasoning item id를
- *   downstream SSE에서만 선택적으로 보정해 Codex Desktop 카드 상관관계를 안정화한다.
- * - 기존 구현 및 제약 조건: 기본 passthrough는 바이트 단위 그대로 relay되고, local replay 상태는 raw
- *   upstream 응답을 기억한다. function_call id / call_id는 upstream 의미가 있으므로 절대 바꾸면 안 된다.
- * - 검토한 주요 대안: 모든 passthrough SSE를 항상 재작성하기, raw inspect 분기까지 함께 재작성하기,
- *   function_call 포함 전체 item id를 정규화하기.
- * - 선택한 방식: provider-local opt-in 설정이 있을 때만 client-facing SSE 분기에 한정해 exact
- *   message/reasoning placeholder id와 missing terminal id를 item type + output_index 기준으로 보정하고,
- *   event-level item_id는 명시적인 message/reasoning lifecycle allowlist에서만 바꾼다.
- * - 다른 대안 대신 이 방식을 선택한 이유: disabled-by-default byte-for-byte passthrough를 유지하면서,
- *   previous_response_id replay는 raw upstream snapshot을 계속 사용해 synthetic id가 upstream으로
- *   역류하지 않게 막을 수 있다.
- * - 장점, 단점 및 영향: 기본 경로는 변하지 않는다. malformed stream이 output_index를 다른 item
- *   type에 재사용해도 function_call id/call_id는 보존된다. opt-in 게이트웨이는 sequential streams에서도
- *   고유한 canonical id를 얻지만, 보정이 필요한 경우에만 JS stream 재작성 비용을 지불한다.
+ * Opt-in client-facing SSE repair for openai-responses gateways.
+ * rewriteNonCanonicalIds rewrites DeepSeek-style UUID item/response ids, converts
+ * reasoning_text streams into Codex-friendly encrypted_content reasoning items, and
+ * ensures a terminal [DONE] trailer so CLI/TUI turns finish.
  */
-/** Stateful payload rewrite for composition with other client-facing SSE transforms. */
 export function createResponsesItemIdPayloadRewrite(
   config: ResponsesItemIdRepairConfig,
   budget?: TranslatorBudget,
 ): SsePayloadRewrite {
   const state = createRepairState(config, budget);
-  return (payload) => repairEventPayload(payload, state);
+  const rewrite: SsePayloadRewrite = (payload) => repairEventPayload(payload, state);
+  (rewrite as SsePayloadRewrite & { __state?: ResponsesItemIdRepairState }).__state = state;
+  return rewrite;
+}
+
+export function createResponsesItemIdDoneTrailer(
+  rewrite: SsePayloadRewrite,
+): () => string | undefined {
+  return () => {
+    const state = (rewrite as SsePayloadRewrite & { __state?: ResponsesItemIdRepairState }).__state;
+    if (!state) return undefined;
+    if (state.sawCompleted && !state.sawDoneTrailer) return "data: [DONE]\n\n";
+    return undefined;
+  };
 }
 
 export function relaySseWithResponsesItemIdRepair(
@@ -214,11 +430,15 @@ export function relaySseWithResponsesItemIdRepair(
   config: ResponsesItemIdRepairConfig,
   budget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
-  return relaySseWithPayloadRewrite(body, createResponsesItemIdPayloadRewrite(config, budget), budget);
+  const rewrite = createResponsesItemIdPayloadRewrite(config, budget);
+  return relaySseWithPayloadRewrite(body, rewrite, budget, {
+    trailer: createResponsesItemIdDoneTrailer(rewrite),
+  });
 }
 
 export function hasResponsesItemIdRepair(config: ResponsesItemIdRepairConfig | undefined): boolean {
   return config?.repairMissingTerminalIds === true
+    || config?.rewriteNonCanonicalIds === true
     || (config?.message?.length ?? 0) > 0
     || (config?.reasoning?.length ?? 0) > 0;
 }

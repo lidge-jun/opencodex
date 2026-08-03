@@ -123,14 +123,16 @@ export function relaySseEagerBounded(
       if (!next) break;
       const payload = sseDataPayload(next.block);
       const rewrittenPayload = payload === null ? null : rewrite!(payload);
+      frameBuffer = next.rest;
+      // Returning null from rewrite drops the entire SSE event.
+      if (payload !== null && rewrittenPayload === null) continue;
       // Replace only on an actual change: replaceSseDataPayload collapses
       // multi-data-line events and normalizes newline style even when the
       // payload is identical, which corrupts valid streams.
-      const block = payload !== null && rewrittenPayload !== payload
-        ? replaceSseDataPayload(next.block, rewrittenPayload!)
+      const block = payload !== null && rewrittenPayload !== null && rewrittenPayload !== payload
+        ? replaceSseDataPayload(next.block, rewrittenPayload)
         : next.block;
       out += block + next.delimiter;
-      frameBuffer = next.rest;
     }
     if (rewriteBudget) {
       const remaining = rewriteEncoder!.encode(frameBuffer).byteLength;
@@ -149,6 +151,14 @@ export function relaySseEagerBounded(
     const payload = sseDataPayload(tail);
     if (payload !== null) {
       const rewrittenPayload = rewrite(payload);
+      if (rewrittenPayload === null) {
+        frameBuffer = "";
+        if (rewriteBudget && frameBufferBytes > 0) {
+          rewriteBudget.releaseRetained(frameBufferBytes, { kind: "live_transient" });
+        }
+        frameBufferBytes = 0;
+        return rewriteEncoder!.encode("");
+      }
       if (rewrittenPayload !== payload) tail = replaceSseDataPayload(tail, rewrittenPayload);
     }
     frameBuffer = "";

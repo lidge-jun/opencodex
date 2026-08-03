@@ -185,6 +185,7 @@ describe("Responses passthrough item-id repair", () => {
     expect(hasResponsesItemIdRepair(undefined)).toBe(false);
     expect(hasResponsesItemIdRepair({})).toBe(false);
     expect(hasResponsesItemIdRepair({ repairMissingTerminalIds: true })).toBe(true);
+    expect(hasResponsesItemIdRepair({ rewriteNonCanonicalIds: true })).toBe(true);
     expect(hasResponsesItemIdRepair({ message: ["msg_0"] })).toBe(true);
   });
 });

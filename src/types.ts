@@ -908,6 +908,8 @@ export interface ResponsesItemIdRepairConfig {
   reasoning?: string[];
   /** Backfill missing `output_item.done` / terminal snapshot ids from the matching output_index. */
   repairMissingTerminalIds?: boolean;
+  /** Rewrite non-canonical message/reasoning item ids (e.g. DeepSeek UUIDs) to msg_/rs_ ids and normalize reasoning_text streams for Codex. */
+  rewriteNonCanonicalIds?: boolean;
 }
 
 export interface OcxProviderConfig {
