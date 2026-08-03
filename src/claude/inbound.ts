@@ -106,6 +106,10 @@ function toolResultOutput(block: Rec): string | Rec[] {
       } else if (item.type === "image") {
         const img = imageBlockToInputImage(item);
         if (img) out.push(img);
+      } else if (item.type === "document") {
+        // Same marker as the user-message document case below: the model should see the
+        // attachment happened instead of an empty tool output.
+        out.push({ type: "input_text", text: `[document${typeof item.title === "string" ? `: ${item.title}` : ""}]` });
       }
     }
     if (isError) out.unshift({ type: "input_text", text: "[tool error]" });

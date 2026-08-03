@@ -175,6 +175,41 @@ describe("claude inbound translation", () => {
     expect(() => parseRequest(body)).not.toThrow();
   });
 
+  test("tool_result document blocks surface the attachment marker", () => {
+    const body = anthropicToResponsesBody({
+      model: "m", max_tokens: 10,
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result", tool_use_id: "t1",
+            content: [
+              { type: "text", text: "3 pages" },
+              { type: "document", source: { type: "base64", media_type: "application/pdf", data: "aWc=" }, title: "report.pdf" },
+            ],
+          }],
+        },
+        { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result", tool_use_id: "t2",
+            content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "aWc=" } }],
+          }],
+        },
+      ],
+    }) as any;
+    expect(body.input[1].output).toEqual([
+      { type: "input_text", text: "3 pages" },
+      { type: "input_text", text: "[document: report.pdf]" },
+    ]);
+    // An untitled document still leaves a marker rather than the empty output that
+    // read as "the tool returned nothing".
+    expect(body.input[3].output).toEqual([{ type: "input_text", text: "[document]" }]);
+    expect(() => parseRequest(body)).not.toThrow();
+  });
+
   test("modelMap: exact, date-stripped, passthrough", () => {
     const cc = { modelMap: { "claude-sonnet-4-5": "gemini/gemini-3-flash", "claude-opus-4": "xai/grok-4" } };
     expect(resolveInboundModel("claude-sonnet-4-5", cc)).toBe("gemini/gemini-3-flash");
