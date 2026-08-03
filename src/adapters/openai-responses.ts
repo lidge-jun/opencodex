@@ -473,6 +473,33 @@ function toolOutputText(output: unknown): string {
  *   reasoning chain is intact and must be preserved.
  * Runs on every forward request; with intact pairs it returns the original reference.
  */
+/**
+ * Backfill `queries` on a replayed single-query `web_search_call`.
+ *
+ * `webSearchAction()` in the bridge now emits both keys, but that only helps items
+ * created after the fix. A conversation that already recorded
+ * `{type:"search", query:"..."}` replays that stored item on every subsequent turn, and
+ * DeepSeek's native Responses parser requires `queries` — so upgrading alone leaves
+ * those threads permanently 400ing with `missing field 'queries'` (#930).
+ *
+ * Runs on every Responses request, on both `input` items and the `action` nested inside
+ * them. Returns the original reference when nothing needs repair, so the common path
+ * allocates nothing.
+ */
+function backfillWebSearchQueries(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || item.type !== "web_search_call") return item;
+    const action = item.action;
+    if (!isPlainObject(action) || action.type !== "search") return item;
+    if (typeof action.query !== "string" || Array.isArray(action.queries)) return item;
+    changed = true;
+    return { ...item, action: { ...action, queries: [action.query] } };
+  });
+  return changed ? { ...body, input } : body;
+}
+
 function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const input = body.input;
@@ -1145,6 +1172,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      // Repair stored history from before the bridge emitted both keys: a conversation
+      // that already recorded a single-query web_search_call replays it every turn, and
+      // a strict parser rejects the whole request over it (#930).
+      outBody = backfillWebSearchQueries(outBody);
       // Same predicate as the routedCompaction gate in handleResponses(): an
       // authMode check would let a noncanonical custom forward provider skip this
       // rewrite while the server still routes it as a summarizer turn (#422).

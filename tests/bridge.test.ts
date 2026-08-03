@@ -882,7 +882,9 @@ describe("Responses bridge web_search_call native item", () => {
     expect((addedItem.id as string).startsWith("ws_")).toBe(true);
     expect(doneItem.id).toBe(addedItem.id);
     expect(doneItem.status).toBe("completed");
-    expect(doneItem.action).toEqual({ type: "search", query: "current docs" });
+    // Both shapes: codex-rs reads `query`, and DeepSeek's native Responses parser
+    // requires `queries` when the item is replayed in later turns (#930).
+    expect(doneItem.action).toEqual({ type: "search", query: "current docs", queries: ["current docs"] });
 
     const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
     const output = completed.output as Record<string, unknown>[];
@@ -918,6 +920,36 @@ describe("Responses bridge web_search_call native item", () => {
     // Native renders "<first> ..." only when `query` is absent and queries.len() > 1.
     expect(action).toEqual({ type: "search", queries: ["rust async", "tokio runtime"] });
     expect(action.query).toBeUndefined();
+  });
+
+  test("a single-query search also carries queries so strict parsers accept the replay (#930)", () => {
+    // DeepSeek's native Responses parser requires `queries`. Without it, the replayed
+    // web_search_call in every later turn of the conversation fails deserialization with
+    // `missing field 'queries'` and 400s the whole thread.
+    const json = buildResponseJSON([
+      { type: "web_search_call_begin", id: "ws_930" },
+      { type: "web_search_call_end", id: "ws_930", queries: ["deepseek responses"] },
+      { type: "text_delta", text: "answer" },
+      { type: "done" },
+    ], "routed/model");
+
+    const action = (json.output as Record<string, unknown>[])[0].action as Record<string, unknown>;
+    expect(action.queries).toEqual(["deepseek responses"]);
+    // `query` stays present: codex-rs reads it, and the single-query rendering depends
+    // on it, so this is additive rather than a swap.
+    expect(action.query).toBe("deepseek responses");
+  });
+
+  test("an empty-query search still carries a queries array (#930)", () => {
+    const json = buildResponseJSON([
+      { type: "web_search_call_begin", id: "ws_931" },
+      { type: "web_search_call_end", id: "ws_931", queries: [] },
+      { type: "done" },
+    ], "routed/model");
+
+    const action = (json.output as Record<string, unknown>[])[0].action as Record<string, unknown>;
+    expect(action.queries).toEqual([""]);
+    expect(action.query).toBe("");
   });
 
   test("streaming: web_search_call_end sources attach as url_citation annotations on the next message", async () => {

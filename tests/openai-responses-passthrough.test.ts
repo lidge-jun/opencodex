@@ -309,6 +309,37 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(input[0]).not.toHaveProperty("id");
   });
 
+  test("backfills queries on a replayed single-query web_search_call (#930)", () => {
+    // The bridge fix only helps items created after it. A conversation that already
+    // recorded {type:"search", query:"..."} replays that stored item every turn, and
+    // DeepSeek's parser rejects the whole request over it — so upgrading alone would
+    // leave those threads permanently broken.
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "provider-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "provider-model",
+        input: [
+          { type: "web_search_call", id: "ws_legacy", status: "completed", action: { type: "search", query: "legacy" } },
+          { type: "web_search_call", id: "ws_batch", status: "completed", action: { type: "search", queries: ["a", "b"] } },
+          { type: "web_search_call", id: "ws_other", status: "completed", action: { type: "open_page", url: "https://example.test" } },
+        ],
+      },
+    }, meta);
+    const input = (JSON.parse(request.body) as { input: Array<{ action: Record<string, unknown> }> }).input;
+
+    // Repaired: singular query gains the array the strict parser requires.
+    expect(input[0].action).toEqual({ type: "search", query: "legacy", queries: ["legacy"] });
+    // Untouched: a batch already satisfies the parser, and adding `query` would collapse
+    // the native plural rendering.
+    expect(input[1].action).toEqual({ type: "search", queries: ["a", "b"] });
+    // Untouched: not a search action.
+    expect(input[2].action).toEqual({ type: "open_page", url: "https://example.test" });
+  });
+
   test("strips invalid type-specific ids from serialized input items", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const encryptedContent = "opaque-openai-encrypted-content";
