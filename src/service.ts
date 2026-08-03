@@ -174,14 +174,23 @@ function readServiceInstallState(): ServiceInstallState | null {
   return null;
 }
 
-/** Single accessor for update/reinstall code — v1/legacy state maps to scheduler. */
+/** Single accessor for backend-sensitive service code — v1/legacy state maps to scheduler. */
 export function readServiceBackend(): ServiceBackend {
   return readServiceInstallState()?.backend === "native" ? "native" : "scheduler";
 }
 
-/** The `ocx` argv that reinstalls the currently-chosen service backend (update paths). */
+/**
+ * The `ocx` argv that refreshes an already-installed service after an update.
+ *
+ * `repair` discovers the installed backend itself. On Windows scheduler installs it
+ * rewrites the stable wrapper assets and restarts the existing task without
+ * `schtasks /create`, so a normal non-elevated update cannot stop the proxy and then
+ * fail solely because Task Scheduler registration requires UAC.
+ *
+ * Keep the historical export name for callers outside this module.
+ */
 export function serviceReinstallArgs(): string[] {
-  return readServiceBackend() === "native" ? ["service", "install", "--native"] : ["service", "install"];
+  return ["service", "repair"];
 }
 
 /**
@@ -439,7 +448,7 @@ export const SERVICE_INSTALL_HEALTH_MS = 20_000;
  * thing that answers the question the user is actually asking.
  *
  * Probes the BAKED target rather than resolving one. `findLiveProxy` resolves through
- * pidfile -> runtime-port -> config.port, and a service reinstall has just invalidated
+ * pidfile -> runtime-port -> config.port, and a service repair has just invalidated
  * the first two while `resolveServiceListenPort` (OCX_BAKE_PORT precedence, config.port
  * === 0 normalization) can disagree with the third.
  *

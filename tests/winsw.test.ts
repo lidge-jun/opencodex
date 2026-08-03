@@ -249,10 +249,10 @@ describe("service backend CLI parsing", () => {
   });
 });
 
-describe("service reinstall args", () => {
-  test("defaults to the scheduler backend on this machine (no native state)", () => {
-    // On a dev machine without a native install-state the accessor maps to scheduler.
-    expect(serviceReinstallArgs()).toEqual(["service", "install"]);
+describe("service update refresh args", () => {
+  test("repairs the already-installed backend without re-registration", () => {
+    // `service repair` diagnoses scheduler/native/launchd/systemd itself.
+    expect(serviceReinstallArgs()).toEqual(["service", "repair"]);
   });
 });
 

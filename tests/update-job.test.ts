@@ -115,7 +115,7 @@ describe("GUI update execution decisions", () => {
   test("restart command separates service and direct proxy modes", () => {
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs")).toMatchObject({
       mode: "service",
-      args: ["/pkg/bin/ocx.mjs", "service", "install"],
+      args: ["/pkg/bin/ocx.mjs", "service", "repair"],
     });
     expect(restartCommand(false, "npm", "/pkg/bin/ocx.mjs")).toMatchObject({
       mode: "proxy",
@@ -128,9 +128,9 @@ describe("GUI update execution decisions", () => {
     expect(proxy.mode).toBe("proxy");
     expect(proxy.args).toEqual(["/pkg/bin/ocx.mjs", "start", "--port", "10100"]);
     expect(proxy.display).toContain("start --port 10100");
-    // Service reinstall stays install-only at the argv level; wrappers bake --port via OCX_BAKE_PORT.
+    // Service repair keeps the port at the environment/artifact layer via OCX_BAKE_PORT.
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs", 10100).args).toEqual([
-      "/pkg/bin/ocx.mjs", "service", "install",
+      "/pkg/bin/ocx.mjs", "service", "repair",
     ]);
   });
 
@@ -349,7 +349,52 @@ describe("GUI update execution decisions", () => {
     }
   });
 
-  test("service reinstall failure falls back to a direct proxy start", async () => {
+  test("non-elevated service worker repairs the existing manager instead of skipping it", async () => {
+    const commands: string[][] = [];
+    const spawned: number[] = [];
+    let wrapperStops = 0;
+    const job: UpdateJobState = {
+      id: "svc-worker-repair",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.10.0",
+      latestVersion: "2.10.1",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const prevService = process.env.OCX_SERVICE;
+    process.env.OCX_SERVICE = "1";
+    try {
+      await restartAfterUpdateForTests(job, { port: 19888, hostname: "127.0.0.1" }, {
+        serviceInstalledFn: () => true,
+        stopServiceWrappers: () => { wrapperStops += 1; },
+        listListenPidsFn: () => [],
+        waitForPort: async () => true,
+        runService: (_job, _bin, args) => {
+          commands.push(args);
+          return { status: 0 };
+        },
+        serviceViableFn: () => true,
+        probeProxy: async () => true,
+        spawnStart: (_job, _installer, port) => { spawned.push(port ?? 0); },
+      });
+      expect(commands).toHaveLength(1);
+      expect(commands[0]?.slice(-2)).toEqual(["service", "repair"]);
+      expect(wrapperStops).toBe(1);
+      expect(spawned).toEqual([]);
+      expect(readUpdateJob(job.id)?.log.some(line => line.includes("Skipping service"))).toBe(false);
+    } finally {
+      if (prevService === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prevService;
+    }
+  });
+
+  test("service repair failure falls back to a direct proxy start", async () => {
     const spawned: Array<{ port: number }> = [];
     const job: UpdateJobState = {
       id: "svc-fallback",
@@ -385,7 +430,7 @@ describe("GUI update execution decisions", () => {
     }
   });
 
-  test("service reinstall exit 0 with non-viable assets falls back to direct start", async () => {
+  test("service repair exit 0 with non-viable assets falls back to direct start", async () => {
     const spawned: Array<{ port: number }> = [];
     const job: UpdateJobState = {
       id: "svc-stale-fallback",

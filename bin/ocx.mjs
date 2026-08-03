@@ -134,19 +134,15 @@ function runNpmSelfUpdate() {
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
-  // unloads it permanently, so a successful update must reinstall it afterwards.
+  // unloads it, so a successful update must refresh and restart it afterwards.
   const serviceStatePath = join(configDir(), "service-state.json");
   const serviceWasInstalled = existsSync(serviceStatePath);
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
-  /** Read the backend from service-state.json so the update reinstalls the same one. */
+  /** Refresh the existing backend without re-registering it from a non-elevated updater. */
   function serviceReinstallArgs() {
-    try {
-      const state = JSON.parse(readFileSync(serviceStatePath, "utf8"));
-      if (state.backend === "native") return [launcher, "service", "install", "--native"];
-    } catch { /* missing or corrupt — fall through to default */ }
-    return [launcher, "service", "install"];
+    return [launcher, "service", "repair"];
   }
 
   // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
@@ -241,10 +237,10 @@ function runNpmSelfUpdate() {
         if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
       }
     }
-    // The stop above unloaded any managed service; reinstall via the freshly-installed
-    // launcher so the new files write the baked paths and the service restarts.
+    // The stop above unloaded any managed service; repair via the freshly-installed
+    // launcher so the new files write the baked paths and the existing manager restarts.
     if (serviceWasInstalled) {
-      console.log("Reinstalling the background service with the updated files...");
+      console.log("Refreshing the background service with the updated files...");
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(bakePort);
       try {
@@ -274,17 +270,15 @@ function runNpmSelfUpdate() {
           }
         }
         if (needDirectStart) {
-          // On Windows, schtasks /create requires elevation. The launcher inherits the
-          // user's (non-admin) token, so the service reinstall can fail with access
-          // denied — or exit 0 while leaving a non-viable manager. Fall back to a
-          // direct detached proxy start so the update never leaves the user without
-          // a running proxy.
+          // A repair can still fail, or exit 0 while leaving a non-viable manager.
+          // Fall back to a direct detached proxy start so the update never leaves the
+          // user without a running proxy.
           console.warn(
             svc.status === 0
               ? "opencodex: service refresh left a non-viable manager — starting the proxy directly instead."
               : "opencodex: service refresh failed — starting the proxy directly instead.",
           );
-          console.warn("  Run 'ocx service install' as administrator to refresh the background service.");
+          console.warn("  Run 'ocx service repair' to see why the background service could not restart.");
           const env = { ...process.env };
           delete env.OCX_SERVICE;
           const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {

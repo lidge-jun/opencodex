@@ -55,14 +55,15 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).not.toContain('"npm.cmd"');
   });
 
-  test("both paths abort when the stop fails, and reinstall a managed service after success", () => {
+  test("both paths abort when the stop fails, and repair a managed service after success", () => {
     expect(updateSource).toContain("aborting the update");
-    // The update path now uses serviceReinstallArgs() to preserve the chosen backend.
+    // The update path uses the shared repair argv so Task Scheduler is not re-registered.
     expect(updateSource).toContain("serviceReinstallArgs()");
     expect(launcherSource).toContain("aborting the update");
-    // The launcher reads service-state.json to preserve the backend choice on reinstall.
+    // The npm launcher mirrors the repair argv because it executes before Bun loads.
     expect(launcherSource).toContain("serviceReinstallArgs");
-    // The launcher reads the state path for both service-installed detection and backend choice.
+    expect(launcherSource).toContain('[launcher, "service", "repair"]');
+    // The launcher still reads service-state.json to decide whether a manager existed.
     expect(launcherSource).toContain('"service-state.json"');
     expect(updateSource).toContain("OCX_BAKE_PORT");
     expect(launcherSource).toContain("OCX_BAKE_PORT");
@@ -98,7 +99,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("function updateChildStdio()");
     expect(updateSource).toContain('process.env.OCX_SERVICE === "1"');
     expect(updateSource).toContain('return "pipe"');
-    // All three update children (stop, installer, service reinstall) go through it.
+    // All three update children (stop, installer, service repair) go through it.
     expect(updateSource).toContain("stdio: stopStdio");
     expect(updateSource).toContain("stdio: installStdio");
     expect(updateSource).toContain("stdio: svcStdio");

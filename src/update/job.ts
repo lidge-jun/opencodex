@@ -300,7 +300,7 @@ export function restartCommand(
   const startArgs = pinPort
     ? [launcher, "start", "--port", String(Math.trunc(port))]
     : [launcher, "start"];
-  const svcArgs = serviceInstalled ? [launcher, ...(serviceArgs ?? ["service", "install"])] : startArgs;
+  const svcArgs = serviceInstalled ? [launcher, ...(serviceArgs ?? ["service", "repair"])] : startArgs;
   if (installer === "npm") {
     const bin = nodeBin();
     const args = svcArgs;
@@ -626,8 +626,10 @@ export interface RestartIo {
   waitForPort?: typeof reclaimListenPort;
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number) => void;
   serviceInstalledFn?: () => boolean;
+  /** Stop the installed manager before port reclaim (injectable to keep tests off real services). */
+  stopServiceWrappers?: () => void;
   /**
-   * After a service reinstall exits 0, only trust the service path when this is true.
+   * After a service repair exits 0, only trust the service path when this is true.
    * Defaults to {@link isServiceViable} — installed-but-stale assets must fall through
    * to a direct proxy start so dashboard updates never leave /healthz dead.
    */
@@ -648,7 +650,7 @@ export interface RestartIo {
   serviceHealthTimeoutMs?: number;
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number;
-  /** Service-mode install/reinstall command (defaults to spawnSync via runLoggedCommand). */
+  /** Service-mode repair command (defaults to spawnSync via runLoggedCommand). */
   runService?: (
     job: UpdateJobState,
     bin: string,
@@ -683,14 +685,14 @@ export interface RestartIo {
  * window: being wrong here costs one extra start attempt; being wrong the other way
  * leaves the user with no proxy at all.
  *
- * It runs AFTER the child's own 20s install probe (SERVICE_INSTALL_HEALTH_MS on
- * macOS/Linux), so a reinstall that exits 0 but never serves spends up to 45s before
+ * It runs AFTER the child's own 20s repair probe (SERVICE_INSTALL_HEALTH_MS on
+ * macOS/Linux), so a repair that exits 0 but never serves spends up to 45s before
  * the fallback — inside RESTART_TIMEOUT_MS of 60s. That is why this is 25s, not more.
  */
 export const SERVICE_RECOVERY_HEALTH_MS = 25_000;
 
 /**
- * Whether the reinstalled service actually produced a listener on the captured target.
+ * Whether the repaired service actually produced a listener on the captured target.
  *
  * Not a duplicate of the child's own check: since WP2 the child asserts the port on
  * macOS/Linux, but Windows still reports success from registration alone, a flapping
@@ -739,13 +741,14 @@ async function restartAfterUpdate(
     try {
       const { serviceReinstallArgs } = await import("../service");
       svcArgs = serviceReinstallArgs();
-    } catch { /* fallback to default service install */ }
+    } catch { /* fallback to default service repair */ }
   }
   const cmd = restartCommand(serviceInstalled, job.installer, packageLauncherPath(), port, svcArgs);
   const waitFn = io.waitForPort ?? reclaimListenPort;
   const listPids = io.listListenPidsFn ?? listListenPids;
   const verifyOcx = io.verifyOcxFn ?? verifyPidIdentity;
   const aliveFn = io.isAliveFn ?? isProcessAlive;
+  const stopServiceWrappers = io.stopServiceWrappers ?? stopWindowsServiceWrappersBestEffort;
   // Pre-update PID plus any ocx still LISTENing on the captured port. After a
   // stop-first npm self-update Windows often leaves a respawned bun/node child
   // that is not the captured PID; treating it as protected blocks reclaim and
@@ -776,35 +779,20 @@ async function restartAfterUpdate(
     // schtasks /end often leaves the hidden cmd/wscript wrapper alive; its :loop
     // respawns `ocx start` a few seconds later and races port reclaim. End the
     // task again and best-effort kill those wrappers before we touch the socket.
-    stopWindowsServiceWrappersBestEffort();
+    stopServiceWrappers();
     // Stop-first update already unloaded the service; reclaim the socket, then
-    // reinstall wrappers that bake `--port`.
+    // repair the existing manager and rewrite wrappers that bake `--port`.
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
-    let skipServiceInstall = false;
-    // Windows GUI update worker sets OCX_SERVICE=1 and is never elevated.
-    // `schtasks /create` will UAC-fail and can race the subsequent direct start.
-    // Keep systemd/launchd reinstall on non-Windows supervisors.
-    if (process.platform === "win32" && process.env.OCX_SERVICE === "1") {
-      updateJob(job, {}, "Skipping service reinstall from the non-elevated update worker; falling back to a direct proxy start.");
-      skipServiceInstall = true;
-    }
-    if (!freed && !skipServiceInstall) {
+    if (!freed) {
       updateJob(
         job,
         {},
-        `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — reinstall may fail until the port is free.`
+        `Port ${port} still busy after ${Math.trunc(RESTART_PORT_RECLAIM_MS / 1000)}s; refusing to hop — service repair may fail until the port is free.`
           + ` ${formatPortHolders(port, listPids, verifyOcx, preServiceAllow)}`,
       );
-      const liveAfter = listPids(port).filter(pid => pid !== process.pid && aliveFn(pid));
-      if (liveAfter.length === 0) {
-        // Non-elevated `service install` will UAC-fail anyway; skip straight to
-        // the direct-start fallthrough instead of burning another minute on it.
-        updateJob(job, {}, "Skipping service reinstall after reclaim timeout with no live holders; falling back to a direct proxy start.");
-        skipServiceInstall = true;
-      }
     }
-    if (!skipServiceInstall) {
+    {
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(Math.trunc(port));
       let serviceOk = false;
@@ -813,24 +801,11 @@ async function restartAfterUpdate(
         const result = run(job, cmd.bin, cmd.args);
         serviceOk = result.status === 0;
         if (!serviceOk) {
-          // On Windows, `schtasks /create` requires an elevated token. The update worker
-          // inherits the (non-admin) proxy's privileges, so a service-managed install
-          // updated from the GUI or a normal terminal fails here with access denied.
-          // Falling back to a direct proxy start keeps the update from leaving the proxy
-          // stopped; the stale service manager can be refreshed later with an admin
-          // `ocx service install`.
-          //
-          // That advice is Windows-only, and on macOS/Linux it now actively misleads:
-          // `ocx service install` gained a non-zero exit for a service that registers
-          // but does not serve, so this branch fires there for a reason elevation
-          // cannot fix. Point at the command that prints the real reason instead.
           updateJob(
             job,
             {},
-            `Service reinstall failed (exit ${result.status ?? "?"}); falling back to a direct proxy start.`
-            + (process.platform === "win32"
-              ? " Run 'ocx service install' as administrator to refresh the background service manager."
-              : " Run 'ocx service install' by hand to see the reason, then 'ocx service status'."),
+            `Service repair failed (exit ${result.status ?? "?"}); falling back to a direct proxy start. `
+            + "Run 'ocx service repair' by hand to see the reason, then 'ocx service status'.",
           );
         }
       } finally {
@@ -851,7 +826,7 @@ async function restartAfterUpdate(
           updateJob(
             job,
             {},
-            `Service reinstall exited 0 and reported viable, but nothing answered on ${hostname}:${port} `
+            `Service repair exited 0 and reported viable, but nothing answered on ${hostname}:${port} `
             + `within ${Math.trunc((io.serviceHealthTimeoutMs ?? SERVICE_RECOVERY_HEALTH_MS) / 1000)}s; `
             + "falling back to a direct proxy start.",
           );
@@ -859,13 +834,13 @@ async function restartAfterUpdate(
           updateJob(
             job,
             {},
-            "Service reinstall exited 0 but the background service is not viable (stale or missing assets, disabled, or conflicting); falling back to a direct proxy start.",
+            "Service repair exited 0 but the background service is not viable (stale or missing assets, disabled, or conflicting); falling back to a direct proxy start.",
           );
         }
       }
     }
     // Fall through to the direct proxy start below so the update never leaves the
-    // proxy stopped when the service reinstall could not run or did not leave a
+    // proxy stopped when the service repair could not run or did not leave a
     // viable supervisor.
   }
 
@@ -879,7 +854,7 @@ async function restartAfterUpdate(
       // below are the path that repairs stuck Windows listeners.
     }
   }
-  if (serviceInstalled) stopWindowsServiceWrappersBestEffort();
+  if (serviceInstalled) stopServiceWrappers();
   // Reclaim the captured port before the pinned start. Spawning `--port` while the old
   // socket is still busy is how Windows updates used to fail health checks (or hop).
   // killAllOcxOnPort covers wrapper-respawned bun PIDs minted during the wait.
@@ -1061,7 +1036,12 @@ export function restartAfterUpdateForTests(
   captured: { port: number; hostname: string; oldPid?: number },
   io: RestartIo,
 ): Promise<void> {
-  return restartAfterUpdate(job, captured, io);
+  return restartAfterUpdate(job, captured, {
+    // Unit tests can run on a developer machine that has the real service installed.
+    // Never let the test-only entry point stop it unless a test explicitly supplies a seam.
+    stopServiceWrappers: () => {},
+    ...io,
+  });
 }
 
 function restartFailureHint(port: number): string {
@@ -1142,7 +1122,7 @@ async function confirmRestartedProxy(
 ): Promise<boolean> {
   /* [Decision Log]
   - 목적과 의도: GUI update job이 detached restart 요청만 보고 성공 처리하지 않도록, 실제 프록시 복귀 여부를 확인한다.
-  - 기존 구현 및 제약 조건: update-job.json은 spawn/service reinstall 직후 `succeeded`로 끝났고, Windows npm/Bun 교체 실패처럼 몇 초 후 죽는 재시작을 잡지 못했다.
+  - 기존 구현 및 제약 조건: update-job.json은 spawn/service repair 직후 `succeeded`로 끝났고, Windows npm/Bun 교체 실패처럼 몇 초 후 죽는 재시작을 잡지 못했다.
   - 검토한 주요 대안: (1) 포트 점유만 확인 — 외부 프로세스/죽기 직전 프로세스를 성공으로 오인할 수 있다. (2) 무기한 /healthz 폴링 — UX가 느려지고 worker 종료 시점이 불명확하다. (3) 짧은 healthy 등장 + 안정성 창 확인 — 실제 복귀를 확인하면서도 대기 시간을 제한할 수 있다.
   - 선택한 방식: identity-aware /healthz probe가 일정 시간 안에 나타나고, 추가 안정성 창 동안 유지되는지 확인한다.
   - 다른 대안 대신 이 방식을 선택한 이유: GUI는 "업데이트가 설치됐지만 재시작은 실패"를 분리해 알려줘야 하며, 이 방식이 가장 적은 오탐으로 그 경계를 만든다.
@@ -1238,11 +1218,9 @@ export function npmSelfUpdateRestartEvidence(
 /**
  * Post-install restart for the GUI worker.
  *
- * npm installs run `node ocx.mjs update`, which already stops the proxy and reinstalls /
- * starts the service (or falls back to a direct start). A second `service install` here
- * calls `stopWindows()` on that healthy listener, then often fails elevation from the
- * non-interactive worker — leaving the captured port (default 10100) dead until a manual
- * restart. Prefer confirming the npm self-update's own restart first; only re-run restart
+ * npm installs run `node ocx.mjs update`, which already stops the proxy and repairs /
+ * starts the service (or falls back to a direct start). Prefer confirming that restart
+ * first so a healthy listener is not disrupted again; only run the explicit repair path
  * when that probe fails. Bun/source installs still always take the explicit restart path.
  *
  * Probe-first applies only to service-managed npm installs: without a service, `ocx.mjs`
@@ -1253,7 +1231,7 @@ export function npmSelfUpdateRestartEvidence(
  * not enough when a no-op restart or failed port reclaim leaves the old proxy up.
  *
  * Browser-dashboard update recovery must not require a viable Background Service: when
- * no service is installed (or reinstall leaves a non-viable/stale manager), the explicit
+ * no service is installed (or repair leaves a non-viable/stale manager), the explicit
  * path always falls through to a direct `ocx start --port` so /healthz can recover.
  */
 export async function finishGuiUpdateRestart(

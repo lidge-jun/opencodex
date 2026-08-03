@@ -945,6 +945,32 @@ describe("service repair", () => {
     });
     expect(calls).toEqual(["native", "native-state"]);
   });
+
+  test("macOS repair preserves the launchd reload path", async () => {
+    const calls: string[] = [];
+    await repairService({
+      platform: "darwin",
+      diagnose: () => ({ ...baseDiag, backend: "launchd" }),
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      repairLaunchd: () => { calls.push("launchd"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    expect(calls).toEqual(["env", "auth", "launchd"]);
+  });
+
+  test("Linux repair preserves the systemd reload path", async () => {
+    const calls: string[] = [];
+    await repairService({
+      platform: "linux",
+      diagnose: () => ({ ...baseDiag, backend: "systemd" }),
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      repairLaunchd: () => { calls.push("launchd"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    expect(calls).toEqual(["env", "auth", "systemd"]);
+  });
 });
 
 /**
