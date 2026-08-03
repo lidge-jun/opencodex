@@ -213,6 +213,10 @@ export function createResponsesSnapshotPayloadRewrite(
     let nextEvent = event;
     let changed = false;
 
+    if (type === "response.output_item.done" && !isPlainObject(event.item)) {
+      reconstructionTainted = true;
+    }
+
     if ((type === "response.output_item.added" || type === "response.output_item.done")
       && isPlainObject(event.item)) {
       const itemStatus = type === "response.output_item.done" ? "completed" : "in_progress";

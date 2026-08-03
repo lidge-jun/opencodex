@@ -237,6 +237,32 @@ describe("Responses sparse-snapshot repair", () => {
     expect(terminal.response.output).toEqual([]);
   });
 
+  test("suppresses reconstruction after malformed done events", () => {
+    const malformedDoneEvents = [
+      { type: "response.output_item.done", output_index: 1 },
+      { type: "response.output_item.done", output_index: 1, item: "invalid" },
+      { type: "response.output_item.done", output_index: "1", item: { type: "message" } },
+      { type: "response.output_item.done", output_index: 1, item: { id: "msg_1" } },
+    ];
+
+    for (const malformedDoneEvent of malformedDoneEvents) {
+      const rewrite = createResponsesSnapshotPayloadRewrite();
+      rewrite(JSON.stringify({
+        type: "response.output_item.done",
+        output_index: 0,
+        item: { id: "msg_0", type: "message" },
+      }));
+      rewrite(JSON.stringify(malformedDoneEvent));
+
+      const terminal = JSON.parse(rewrite(JSON.stringify({
+        type: "response.completed",
+        response: { id: "resp_malformed_done", object: "response" },
+      }))) as { response: { output?: unknown } };
+
+      expect(terminal.response.output).toEqual([]);
+    }
+  });
+
   test("suppresses partial reconstruction after retained-item bounds are exceeded", () => {
     const rewrite = createResponsesSnapshotPayloadRewrite();
     for (let outputIndex = 0; outputIndex <= MAX_COMPLETED_OUTPUT_ITEMS; outputIndex += 1) {
