@@ -139,6 +139,8 @@ export type CodexQuotaRecoveryProbeClaim = {
   leaseId: string;
   cooldownGeneration: number;
   credentialGeneration: number;
+  /** Claim-time `replacedAt`; unchanged after a probe-owned refresh, stamped on external replacement. */
+  credentialReplacedAt?: number;
 };
 
 export type CodexQuotaRecoveryProbeProof = {
@@ -439,6 +441,7 @@ export function claimDueCodexQuotaRecoveryProbes(
     scope?: CodexQuotaScope;
     health: CodexUpstreamHealth;
     credentialGeneration: number;
+    credentialReplacedAt?: number;
     order: number;
   }> = [];
   for (const [order, account] of (config.codexAccounts ?? []).entries()) {
@@ -467,6 +470,7 @@ export function claimDueCodexQuotaRecoveryProbes(
       ...(candidate.scope ? { scope: candidate.scope } : {}),
       health: candidate.health,
       credentialGeneration: record.generation,
+      ...(record.replacedAt !== undefined ? { credentialReplacedAt: record.replacedAt } : {}),
       order,
     });
   }
@@ -491,6 +495,9 @@ export function claimDueCodexQuotaRecoveryProbes(
       leaseId,
       cooldownGeneration: candidate.health.cooldownGeneration ?? 0,
       credentialGeneration: candidate.credentialGeneration,
+      ...(candidate.credentialReplacedAt !== undefined
+        ? { credentialReplacedAt: candidate.credentialReplacedAt }
+        : {}),
     };
   });
 }
@@ -506,10 +513,21 @@ export function settleCodexQuotaRecoveryProbe(
     ? scopedHealthFor(claim.accountId, claim.scope)
     : upstreamHealth.get(claim.accountId);
   if (!health || health.probeLeaseId !== claim.leaseId) return false;
+  const currentRecord = readCodexAccountRecord(claim.accountId);
+  const proofGeneration = proof.credentialGeneration;
+  // A probe-owned token refresh (getValidCodexToken) advances the credential generation by
+  // exactly one while preserving `replacedAt`; an external credential replacement bumps the
+  // generation too but stamps a fresh `replacedAt`. Accept the +1 transition only when the
+  // claim-time lineage is intact AND the generation the fresh quota was proven under is live.
+  const generationFenced = proofGeneration !== undefined
+    && (proofGeneration === claim.credentialGeneration
+      ? isCodexAccountGenerationLive(claim.accountId, proofGeneration)
+      : proofGeneration === claim.credentialGeneration + 1
+        && currentRecord?.replacedAt === claim.credentialReplacedAt
+        && isCodexAccountGenerationLive(claim.accountId, proofGeneration));
   const fenced = (health.cooldownGeneration ?? 0) === claim.cooldownGeneration
     && (health.probeLeaseGeneration ?? 0) === claim.cooldownGeneration
-    && claim.credentialGeneration === proof.credentialGeneration
-    && isCodexAccountGenerationLive(claim.accountId, claim.credentialGeneration);
+    && generationFenced;
   if (!recovered || !fenced) {
     const released = withProbeLeaseReleased(health, now);
     if (claim.scope) setScopedHealth(claim.accountId, claim.scope, released);

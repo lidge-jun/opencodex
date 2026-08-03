@@ -103,10 +103,17 @@ export function isCompleteCodexQuotaRecoverySnapshot(
   // Recovery still fails closed on MISSING EVIDENCE — a credits-only or windowless payload
   // carries no usage reading at all and must never clear a cooldown. What it does not do is
   // fail closed on an unfamiliar plan NAME, which only ever meant "cooled forever".
-  const required = codexQuotaWindowForPlan(plan) === "monthly"
-    ? quota.monthlyPercent
-    : quota.weeklyPercent;
-  return typeof required === "number" && Number.isFinite(required);
+  //
+  // The parser classifies windows by DURATION, not by plan name: a Team response whose
+  // primary window is explicitly monthly parses to monthlyPercent only (no secondary
+  // window exists), so requiring weeklyPercent because the plan is not go/free would
+  // strand exactly those accounts until their predicted expiry. Accept whichever window(s)
+  // the parser actually wrote; Go/Free never carry a weekly value, so monthly-only is
+  // required there.
+  if (codexQuotaWindowForPlan(plan) === "monthly") {
+    return typeof quota.monthlyPercent === "number" && Number.isFinite(quota.monthlyPercent);
+  }
+  return hasKnownQuotaValue(quota);
 }
 
 export function normalizeUsagePercent(value: unknown): number | undefined {

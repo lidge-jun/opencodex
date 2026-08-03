@@ -117,6 +117,55 @@ describe("Codex cooldown recovery worker", () => {
     expect(routed).toEqual(["b", "b"]);
   });
 
+  test("recovers a Team account from a duration-classified monthly snapshot", async () => {
+    // WHAM can legitimately return only an explicitly monthly primary window for a Team
+    // plan (30.4-day window, no secondary). parseUsageQuota then writes monthlyPercent only,
+    // so recovery must accept the window the parser actually classified instead of demanding
+    // a weekly reading because the plan name is not "go"/"free".
+    const config = makeConfig(["a"]);
+    saveCredential("a");
+    cool(config, "a");
+    globalThis.fetch = async () => usageResponse(0, {
+      plan_type: "team",
+      rate_limit: {
+        primary_window: { used_percent: 6, reset_at: 1_900_000_000, limit_window_seconds: 2_628_000 },
+        secondary_window: null,
+        tertiary_window: null,
+      },
+      rate_limit_reset_credits: { available_count: 0 },
+    });
+    await runCodexCooldownRecoveryProbes(config, due());
+    expect(getCodexQuotaHealthSnapshot("a", "shared", due() + 1)).toBeNull();
+  });
+
+  test("recovers when the probe's own token refresh advances the credential generation", async () => {
+    // A near-expiry access token makes getValidCodexToken() refresh it inside the probe
+    // fetch, bumping the credential generation from 1 to 2 before WHAM completes. The fresh
+    // quota is proven under the new live generation, so settling against the claim-time
+    // generation must accept this probe's own refresh, not treat it as a replacement.
+    const config = makeConfig(["a"]);
+    saveCodexAccountCredential("a", {
+      accessToken: "access-a",
+      refreshToken: "refresh-a",
+      expiresAt: Date.now() + 30_000,
+      chatgptAccountId: "acct-a",
+    });
+    cool(config, "a");
+    globalThis.fetch = async input => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/oauth/token")) {
+        return new Response(JSON.stringify({
+          access_token: "access-a-2",
+          refresh_token: "refresh-a-2",
+          expires_in: 3600,
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return usageResponse(12);
+    };
+    await runCodexCooldownRecoveryProbes(config, due());
+    expect(getCodexQuotaHealthSnapshot("a", "shared", due() + 1)).toBeNull();
+  });
+
   test.each([
     ["still exhausted", () => usageResponse(100)],
     ["credits only", () => usageResponse(0, { plan_type: "team", rate_limit_reset_credits: { available_count: 1 } })],
@@ -290,12 +339,17 @@ describe("Codex cooldown recovery worker", () => {
 
     for (const plan of snapshotPlans) {
       const monthly = codexQuotaWindowForPlan(plan) === "monthly";
-      const filled = monthly ? { monthlyPercent: 12 } : { weeklyPercent: 12 };
-      const empty = monthly ? { weeklyPercent: 12 } : { monthlyPercent: 12 };
-      expect(isCompleteCodexQuotaRecoverySnapshot(filled, plan)).toBe(true);
-      // The other window is not evidence for this plan, in either direction.
-      expect(isCompleteCodexQuotaRecoverySnapshot(empty, plan)).toBe(false);
+      // The parser classifies windows by duration, so a weekly-billed plan can carry a
+      // monthly-only reading (30-day primary, no secondary). Any window the parser actually
+      // wrote is evidence; only Go/Free never carry a weekly value.
+      expect(isCompleteCodexQuotaRecoverySnapshot({ weeklyPercent: 12 }, plan)).toBe(!monthly);
+      expect(isCompleteCodexQuotaRecoverySnapshot({ monthlyPercent: 12 }, plan)).toBe(true);
     }
+
+    // Monthly-billed Go/Free parse to monthlyPercent only; a weekly-only reading is not
+    // evidence for them.
+    expect(isCompleteCodexQuotaRecoverySnapshot({ weeklyPercent: 12 }, "go")).toBe(false);
+    expect(isCompleteCodexQuotaRecoverySnapshot({ weeklyPercent: 12 }, "free")).toBe(false);
 
     // Absent plan follows the parser's weekly default.
     expect(isCompleteCodexQuotaRecoverySnapshot({ weeklyPercent: 12 }, undefined)).toBe(true);
