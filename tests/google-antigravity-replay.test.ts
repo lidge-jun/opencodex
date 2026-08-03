@@ -64,6 +64,52 @@ describe("antigravity reasoning-replay cache", () => {
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
   });
 
+  test("a signature on a standalone thought part replays onto the next functionCall (#897)", () => {
+    observeAntigravityReplay(MODEL, SESSION, [
+      { thought: true, thoughtSignature: SIG },
+      fcPart("get_x", { a: 1 }),
+    ]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
+  test("a call's own signature wins over a preceding standalone thought signature", () => {
+    observeAntigravityReplay(MODEL, SESSION, [
+      { thought: true, thoughtSignature: "sig-standalone-aaaa" },
+      fcPart("get_x", {}, SIG),
+    ]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
+  test("a standalone thought signature does not pair backwards or leak into a later observe", () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}), { thought: true, thoughtSignature: SIG }]);
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {})]);
+    const contents = [{
+      role: "model",
+      parts: [
+        { functionCall: { name: "get_x", args: {} } },
+        { functionCall: { name: "get_y", args: {} } },
+      ],
+    }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[1] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
+  test("a signature on a non-thought part does not attach to the next call", () => {
+    // Text parts survive replayed history with their own signature; only thought parts are stripped.
+    observeAntigravityReplay(MODEL, SESSION, [
+      { text: "answer", thoughtSignature: SIG },
+      fcPart("get_x", {}),
+    ]);
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
   test("clear-on-invalid empties the entry", () => {
     observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}, SIG)]);
     clearAntigravityReplay(MODEL, SESSION);

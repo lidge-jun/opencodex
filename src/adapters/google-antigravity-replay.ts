@@ -365,6 +365,8 @@ export function antigravityUsesReplayCache(model: string): boolean {
  * Observe a parsed CCA chunk's `candidates[0].content.parts` and record thought signatures keyed by
  * the functionCall identity (name + args). Accumulates across the whole session so a sequential
  * multi-step tool loop keeps EVERY prior call's signature, not just the latest part-index slot.
+ * A signature on a standalone thought part is paired with the next functionCall in the same
+ * array (#897); a call's own signature takes precedence and an unpaired one is dropped.
  * `parts` is the already-unwrapped `response.candidates[0].content.parts`.
  */
 export function observeAntigravityReplay(model: string, sessionId: string, parts: unknown[]): void {
@@ -380,19 +382,29 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     oldestAtMs: null,
   };
   let inserted = false;
+  let pendingThoughtSig: string | undefined;
   for (const raw of parts) {
     if (!raw || typeof raw !== "object") continue;
     const part = raw as Record<string, unknown>;
     const sig = extractSignature(part);
-    if (!sig) continue;
     const fc = part.functionCall as { name?: unknown; args?: unknown } | undefined;
-    const ck = fc ? functionCallKey(fc.name, fc.args) : undefined;
+    if (!fc) {
+      // A signature on a standalone thought part pairs with the NEXT functionCall in this
+      // array: thought parts are stripped from replayed history, so the call part is the only
+      // carrier that survives (#897). Non-thought parts keep their own signature in history.
+      if (sig && part.thought === true) pendingThoughtSig = sig;
+      continue;
+    }
+    const callSig = sig ?? pendingThoughtSig; // a signature on the call part itself wins
+    pendingThoughtSig = undefined;
+    if (!callSig) continue;
+    const ck = functionCallKey(fc.name, fc.args);
     if (!ck) continue; // only function-call signatures are replayable by identity
-    const signatureBytes = utf8.encode(sig).byteLength;
+    const signatureBytes = utf8.encode(callSig).byteLength;
     const sizeBytes = utf8.encode(ck).byteLength + signatureBytes;
     if (signatureBytes > replayLimits.maxSignatureBytes || sizeBytes > replayLimits.maxBytesPerSession) continue;
     deleteReplayCall(entry, ck);
-    entry.byCall.set(ck, { signature: sig, sizeBytes, touchedAtMs: now });
+    entry.byCall.set(ck, { signature: callSig, sizeBytes, touchedAtMs: now });
     entry.bytes += sizeBytes;
     replayBytes += sizeBytes;
     inserted = true;
