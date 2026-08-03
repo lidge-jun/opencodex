@@ -347,7 +347,7 @@ describe("Responses image-gen call restoration", () => {
       expect(isEagerRelaySseResponse(response)).toBe(
         process.platform === "win32" || process.platform === "darwin",
       );
-      expect(clientBody.length).toBeGreaterThan(largeEcho.length);
+      expect(clientBody).toContain(largeEcho);
       expect(clientBody).not.toContain("image_gen__imagegen");
       expect(clientBody.match(/\"namespace\":\"image_gen\"/g)).toHaveLength(3);
       expect(clientBody.match(/event: response\.completed/g)).toHaveLength(1);
