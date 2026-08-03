@@ -151,7 +151,6 @@ export function createResponsesSnapshotPayloadRewrite(
 ): SsePayloadRewrite {
   const defaults = requestDefaults(requestBody);
   const completedItems = new Map<number, RetainedOutputItem>();
-  const encoder = new TextEncoder();
   let aggregateItemBytes = 0;
   let reconstructionTainted = false;
 
@@ -229,7 +228,7 @@ export function createResponsesSnapshotPayloadRewrite(
           retainCompletedItem(
             event.output_index as number,
             item,
-            encoder.encode(JSON.stringify(item)).byteLength,
+            Buffer.byteLength(JSON.stringify(item), "utf8"),
           );
         } else {
           reconstructionTainted = true;
