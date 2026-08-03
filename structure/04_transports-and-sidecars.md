@@ -383,12 +383,20 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
 
 ## Kiro reasoning round-trip (`redactedContent`)
 
-Kiro never returns plaintext reasoning for its Sol-family models: `reasoningContentEvent` carries a
-KMS-encrypted `redactedContent` blob, and `gpt-5.6-sol`'s `additionalModelRequestFieldsSchema`
-(`ListAvailableModels`) accepts only `reasoning.effort` — there is no display/summary opt-in. Kiro's
-own CLI replays that blob on the matching `assistantResponseMessage.reasoningContent` to preserve
-model reasoning across turns; dropping it makes every turn restart without the previous turn's
-reasoning. Verified against kiro-cli 2.14.1 and 2.16.0.
+Kiro never returns plaintext reasoning for its **GPT-5.6 family** (`gpt-5.6-sol`, `-terra`,
+`-luna`): `reasoningContentEvent` carries a KMS-encrypted `redactedContent` blob, never `text`.
+Their `additionalModelRequestFieldsSchema` (`ListAvailableModels`) accepts only `reasoning.effort`
+with `additionalProperties: false` — there is no display/summary opt-in, so this is the only
+reasoning these models can return. Kiro's own CLI replays the blob on the matching
+`assistantResponseMessage.reasoningContent` to preserve model reasoning across turns; dropping it
+makes every turn restart without the previous turn's reasoning. Verified on kiro-cli 2.14.1 and
+2.16.0, all three models.
+
+The Claude 4.6+/5 entries advertise a different, richer contract (`thinking.type` adaptive/disabled,
+`thinking.display` summarized/omitted, `output_config.effort`, `max_tokens`) and are not covered by
+that measurement; older Claude, deepseek, minimax, glm, and qwen entries advertise no additional
+fields at all. The handling below keys off the wire field, not the model id, so any model that
+sends `redactedContent` round-trips.
 
 - The blob rides the existing `ocxr1:` envelope as `krc` (`src/responses/reasoning-envelope.ts`) on
   an envelope-only reasoning item — `summary: []`, no text deltas — so it stays invisible in the

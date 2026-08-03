@@ -118,8 +118,9 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
           : {}),
       };
     case "reasoningContentEvent":
-      // `text` is plaintext reasoning; `redactedContent` is the encrypted blob the model actually
-      // returns for Sol-family models. Both may be absent on a bare event.
+      // `text` is plaintext reasoning; `redactedContent` is the encrypted blob the GPT-5.6 family
+      // (sol/terra/luna) actually returns — they never send `text`. Keyed off the wire field, not
+      // the model id. Both may be absent on a bare event.
       return {
         type: "reasoning",
         ...(optionalString(eventType, parsed, "text") !== undefined
