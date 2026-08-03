@@ -137,6 +137,26 @@ function stripItemIdsWhenUnstored(body: unknown): unknown {
 }
 
 /**
+ * Replayed web_search_call actions carry a singular `query`, but DeepSeek's Responses route
+ * requires `queries` and 400s without it (#930). Add the plural next to the singular. Key path
+ * only: forward mode keeps the hosted shape.
+ */
+function normalizeWebSearchCallActions(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || item.type !== "web_search_call") return item;
+    const action = item.action;
+    if (!isPlainObject(action) || typeof action.query !== "string" || action.queries !== undefined) return item;
+    changed = true;
+    return { ...item, action: { ...action, queries: [action.query] } };
+  });
+
+  return changed ? { ...body, input } : body;
+}
+
+/**
  * Replace proxy-minted compaction items (`encrypted_content` starting with `ocx1:`) with plain
  * user messages before forwarding to the ChatGPT backend. Our envelope is transparent base64, not
  * OpenAI encryption — the native backend cannot decrypt it and would reject the request. Real
@@ -1140,6 +1160,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           parsed._openAiVirtualSelectedModelId,
         );
         outBody = normalizeImageGenClientTools(outBody);
+        outBody = normalizeWebSearchCallActions(outBody);
       }
       if (forward || parsed._previousResponseInputExpanded === true) {
         outBody = repairOversizedReplayCallIds(outBody);

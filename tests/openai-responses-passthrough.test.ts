@@ -104,6 +104,59 @@ describe("DeepSeek Responses endpoint contract", () => {
   });
 });
 
+/** Issue #930: DeepSeek's Responses route requires `queries` on replayed web_search_call actions. */
+describe("web_search_call action replay (#930)", () => {
+  const keyProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.deepseek.com",
+    authMode: "key" as const,
+    apiKey: "sk-test",
+    responsesPath: "/responses",
+  };
+  const forwardProvider = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.example/backend-api/codex",
+    authMode: "forward" as const,
+  };
+
+  function forwardedInput(provider: typeof keyProvider | typeof forwardProvider, input: unknown[]): Record<string, unknown>[] {
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "deepseek-v4-flash",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "deepseek-v4-flash", stream: true, input },
+    }, { headers: new Headers({ authorization: "Bearer t" }) }) as { body: string };
+    return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input;
+  }
+
+  test("the key path adds queries next to the recorded singular query", () => {
+    const input = forwardedInput(keyProvider, [
+      { type: "web_search_call", id: "ws_x", status: "completed", action: { type: "search", query: "test" } },
+    ]);
+    expect(input[0].action).toEqual({ type: "search", query: "test", queries: ["test"] });
+  });
+
+  test("forward mode keeps the hosted shape", () => {
+    const input = forwardedInput(forwardProvider, [
+      { type: "web_search_call", id: "ws_x", status: "completed", action: { type: "search", query: "test" } },
+    ]);
+    expect(input[0].action).toEqual({ type: "search", query: "test" });
+  });
+
+  test("existing queries, actionless calls, and other items pass through untouched", () => {
+    const ready = { type: "search", queries: ["a", "b"] };
+    const input = forwardedInput(keyProvider, [
+      { type: "web_search_call", id: "ws_a", status: "completed", action: ready },
+      { type: "web_search_call", id: "ws_b", status: "completed" },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+    ]);
+    expect(input[0].action).toEqual(ready);
+    expect("action" in input[1]).toBe(false);
+    expect(input[2].type).toBe("message");
+  });
+});
+
 describe("OpenAI Responses passthrough sanitization", () => {
   test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
     const validParameters = {
