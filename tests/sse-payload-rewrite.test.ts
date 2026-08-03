@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createImageGenCallRestoreRewrite } from "../src/server/responses-image-gen-repair";
-import { createResponsesItemIdPayloadRewrite } from "../src/server/responses-item-id-repair";
+import { createResponsesItemIdRepairHandlers } from "../src/server/responses-item-id-repair";
 import {
   composeSsePayloadRewrites,
   relaySseWithPayloadRewrite,
@@ -51,7 +51,7 @@ describe("SSE payload rewrite composition", () => {
     const imageGen = createImageGenCallRestoreRewrite(
       new Map([["image_gen__imagegen", { namespace: "image_gen", name: "imagegen" }]]),
     )!;
-    const itemId = createResponsesItemIdPayloadRewrite({
+    const itemId = createResponsesItemIdRepairHandlers({
       message: ["msg_0"],
       repairMissingTerminalIds: true,
     });
@@ -63,13 +63,16 @@ describe("SSE payload rewrite composition", () => {
       },
       (payload) => {
         itemIdCalls += 1;
-        return itemId(payload);
+        return itemId.rewrite(payload);
       },
     );
 
     const budget = createTestTranslatorBudget();
-    const out = await readAll(relaySseWithPayloadRewrite(streamFromText(upstream), composed, budget));
+    const out = await readAll(relaySseWithPayloadRewrite(streamFromText(upstream), composed, budget, {
+      trailer: itemId.trailer,
+    }));
     budget.dispose();
+    expect(out).toContain("data: [DONE]");
     expect(imageGenCalls).toBe(3);
     expect(itemIdCalls).toBe(3);
     expect(imageGenCalls).toBe(itemIdCalls);
@@ -78,7 +81,7 @@ describe("SSE payload rewrite composition", () => {
       .trim()
       .split(/\r?\n\r?\n/)
       .map(block => block.split(/\r?\n/).find(line => line.startsWith("data:"))?.slice(5).trim())
-      .filter((payload): payload is string => !!payload)
+      .filter((payload): payload is string => !!payload && payload !== "[DONE]")
       .map(payload => JSON.parse(payload) as Record<string, unknown>);
 
     const messageAdded = events[0].item as Record<string, unknown>;

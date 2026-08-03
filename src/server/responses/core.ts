@@ -1646,6 +1646,9 @@ async function handleResponsesInner(
     // When item-id repair rewrites response ids, the inspector still sees the raw
     // upstream UUID while Codex chains previous_response_id with the client-visible
     // resp_ocx_* id. Alias both keys into the local continuation cache.
+    // mapClientResponseId is assigned only on the SSE rewrite path below. The JSON
+    // response path currently does not apply Responses item-id repair; if JSON repair
+    // is added later, initialize this alias before that branch records continuation state.
     let mapClientResponseId: ((rawId: string | undefined) => string | undefined) | undefined;
     const rememberPassthroughResponse = passthroughRecordEligible
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) => {

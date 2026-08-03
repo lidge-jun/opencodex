@@ -208,7 +208,7 @@ Anthropic 계정 정책 위험을 이해하지 못한다면 이 기능은 꺼두
 }
 ```
 
-자리표시자 목록은 정확히 일치해야 합니다. 일반적인 상태 유지형 Responses 공급자에서는 필드를 설정하지 마십시오. 그래야 passthrough가 바이트 단위로 동일하게 유지됩니다.
+자리표시자 목록은 정확히 일치해야 합니다. DeepSeek Responses처럼 UUID 형식 response/item id와 원본 `reasoning_text` 스트림을 반환하는 게이트웨이에서는 `rewriteNonCanonicalIds`를 켜십시오. OpenCodex는 해당 id를 Codex 친화적 prefix로 다시 쓰고, reasoning을 `encrypted_content`로 정규화하면서 replay용 평문 `content`는 유지하며, 종료용 `[DONE]`을 보장합니다. 일반/상태 유지형 Responses 공급자에서는 필드를 설정하지 마십시오. 그래야 passthrough가 바이트 단위로 동일하게 유지됩니다.
 
 ## Cursor 공급자 (`adapter: "cursor"`)
 

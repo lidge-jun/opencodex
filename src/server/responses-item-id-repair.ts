@@ -235,11 +235,12 @@ function normalizeReasoningItem(
     // Snapshot content-derived text into the budgeted map only when we still need it later.
     if (!terminal) setReasoningText(state, outputIndex, text);
   }
-  const next: Record<string, unknown> = {
-    type: "reasoning",
-    id: mapped,
-    summary: Array.isArray(item.summary) ? item.summary : [],
-  };
+  // Preserve upstream metadata such as status; only proxy-owned reasoning fields are rebuilt.
+  const next: Record<string, unknown> = { ...item, type: "reasoning" };
+  if (mapped !== undefined) next.id = mapped;
+  next.summary = Array.isArray(item.summary) ? item.summary : [];
+  delete next.content;
+  delete next.encrypted_content;
   if (terminal || text) {
     // Codex consumes encrypted_content; DeepSeek tool-call continuations need plaintext
     // reasoning_text after sanitizeReasoningInputContent strips the proxy-only ocxr1 envelope.
@@ -337,6 +338,44 @@ function rewriteItemIdField(
   return { event: next, changed: true };
 }
 
+function flushRetainedReasoningIntoResponse(
+  state: ResponsesItemIdRepairState,
+  response: Record<string, unknown>,
+): { response: Record<string, unknown>; changed: boolean } {
+  if (!state.rewriteNonCanonicalIds || state.reasoningTextByOutputIndex.size === 0) {
+    return { response, changed: false };
+  }
+  const output = Array.isArray(response.output) ? [...response.output] : [];
+  let changed = false;
+  for (const [outputIndex, text] of [...state.reasoningTextByOutputIndex.entries()]) {
+    if (!text) {
+      releaseReasoningText(state, outputIndex);
+      continue;
+    }
+    const existing = isPlainObject(output[outputIndex]) ? output[outputIndex] as Record<string, unknown> : null;
+    if (existing?.type === "reasoning") {
+      const rewritten = normalizeReasoningItem(state, outputIndex, existing, true);
+      output[outputIndex] = rewritten;
+      changed = true;
+      continue;
+    }
+    // No reasoning item was emitted for this retained stream; synthesize one so the
+    // terminal snapshot still carries the accumulated reasoning text.
+    const synthetic = normalizeReasoningItem(state, outputIndex, {
+      type: "reasoning",
+      summary: [],
+      content: [{ type: "reasoning_text", text }],
+    }, true);
+    if (outputIndex < output.length) output[outputIndex] = synthetic;
+    else {
+      while (output.length < outputIndex) output.push({ type: "message", role: "assistant", content: [] });
+      output.push(synthetic);
+    }
+    changed = true;
+  }
+  return changed ? { response: { ...response, output }, changed: true } : { response, changed: false };
+}
+
 function rewriteResponseSnapshot(
   state: ResponsesItemIdRepairState,
   response: Record<string, unknown>,
@@ -425,10 +464,21 @@ function repairEventPayload(
     }
   }
   if (isPlainObject(event.response)) {
-    const rewritten = rewriteResponseSnapshot(state, event.response);
-    if (rewritten.changed) {
+    let response = event.response;
+    if (type && TERMINAL_RESPONSE_TYPES.has(type) && state.rewriteNonCanonicalIds) {
+      const flushed = flushRetainedReasoningIntoResponse(state, response);
+      response = flushed.response;
+      changed = changed || flushed.changed;
+    }
+    const rewritten = rewriteResponseSnapshot(state, response);
+    if (rewritten.changed || response !== event.response) {
       nextEvent = { ...nextEvent, response: rewritten.response };
       changed = true;
+    }
+  } else if (type && TERMINAL_RESPONSE_TYPES.has(type) && state.rewriteNonCanonicalIds && state.reasoningTextByOutputIndex.size > 0) {
+    // Terminal events without a response snapshot still need retained reasoning released.
+    for (const outputIndex of [...state.reasoningTextByOutputIndex.keys()]) {
+      releaseReasoningText(state, outputIndex);
     }
   }
 

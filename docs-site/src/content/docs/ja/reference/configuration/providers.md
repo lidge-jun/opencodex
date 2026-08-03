@@ -205,7 +205,7 @@ Anthropic アカウント ポリシーのリスクを理解していない限り
 }
 ```
 
-プレースホルダー リストは完全に一致します。通常/ステートフル応答プロバイダーのフィールドを未設定のままにして、パススルーがバイトごとに同一になるようにします。
+プレースホルダー リストは完全に一致します。DeepSeek Responses のように UUID 形式の response/item ID と生の `reasoning_text` ストリームを返すゲートウェイでは `rewriteNonCanonicalIds` を有効にします。OpenCodex はそれらの ID を Codex 向けプレフィックスへ書き換え、reasoning を `encrypted_content` に正規化しつつ replay 用の平文 `content` を保持し、終端の `[DONE]` を補完します。通常/ステートフルな Responses プロバイダーではこのフィールドを未設定のままにして、パススルーがバイト単位で同一になるようにします。
 
 ## Cursor プロバイダー (`adapter: "cursor"`)
 

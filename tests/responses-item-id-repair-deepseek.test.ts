@@ -187,6 +187,41 @@ describe("DeepSeek Responses item-id repair", () => {
     expect(repaired.match(/data: \[DONE\]/g)).toHaveLength(1);
   });
 
+  test("preserves reasoning status metadata", async () => {
+    const upstream = [
+      `event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","status":"in_progress","summary":[]}}\n\n`,
+      `event: response.reasoning_text.delta\ndata: {"type":"response.reasoning_text.delta","output_index":0,"item_id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","delta":"think"}\n\n`,
+      `event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","status":"completed","summary":[]}}\n\n`,
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"58786d76-18be-43d9-b6f5-8922796fbe28","status":"completed","output":[{"type":"reasoning","id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","status":"completed","summary":[]}]}}\n\n`,
+    ].join("");
+    const events = await parseSse(await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      rewriteNonCanonicalIds: true,
+    })));
+    const added = events.find(e => e.type === "response.output_item.added")!.item as Record<string, unknown>;
+    const done = events.find(e => e.type === "response.output_item.done")!.item as Record<string, unknown>;
+    const completed = events.find(e => e.type === "response.completed")!.response as { output: Record<string, unknown>[] };
+    expect(added.status).toBe("in_progress");
+    expect(done.status).toBe("completed");
+    expect(completed.output[0].status).toBe("completed");
+    expect(String(done.encrypted_content)).toMatch(/^ocxr1:/);
+  });
+
+  test("flushes retained reasoning text into terminal snapshot when item.done is missing", async () => {
+    const upstream = [
+      `event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","status":"in_progress","summary":[]}}\n\n`,
+      `event: response.reasoning_text.delta\ndata: {"type":"response.reasoning_text.delta","output_index":0,"item_id":"8da7b778-aff2-4d83-bfc3-8cd09ee79b34","delta":"orphan"}\n\n`,
+      `event: response.completed\ndata: {"type":"response.completed","response":{"id":"58786d76-18be-43d9-b6f5-8922796fbe28","status":"completed","output":[]}}\n\n`,
+    ].join("");
+    const events = await parseSse(await readAll(relaySseWithResponsesItemIdRepair(streamFromText(upstream), {
+      rewriteNonCanonicalIds: true,
+    })));
+    const completed = events.find(e => e.type === "response.completed")!.response as { output: Record<string, unknown>[] };
+    expect(completed.output).toHaveLength(1);
+    expect(completed.output[0].type).toBe("reasoning");
+    expect(String(completed.output[0].encrypted_content)).toMatch(/^ocxr1:/);
+    expect((completed.output[0].content as Array<{ text: string }>)[0].text).toBe("orphan");
+  });
+
   test("keeps shared placeholder aliases type-scoped", async () => {
     const upstream = [
       'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"shared_placeholder"}}\n\n',
