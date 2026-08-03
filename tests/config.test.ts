@@ -900,6 +900,20 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().error).toBeNull();
 
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { "provider-image-model": "openai-responses" },
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
     for (const provider of [
       { adapter: "openai-chat", baseUrl: "https://gateway.example/v1", authMode: "key", apiKeyTransport: "bearer" },
       { adapter: "anthropic", baseUrl: "https://gateway.example/v1", authMode: "oauth", apiKeyTransport: "bearer" },
@@ -1031,6 +1045,204 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().source).toBe("fallback");
     expect(readConfigDiagnostics().error).toContain("conflicts with modelSupportsReasoningSummaries=false");
+  });
+
+  test("modelPreferHostedTools accepts only supported hosted-tool arrays", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    // A registry `modelWireDefaults` entry that selects openai-responses for a
+    // Responses inbound must be honored by validation, exactly as the runtime
+    // honors it. DeepSeek's preset routes `deepseek-v4-flash` over native
+    // Responses for a Responses inbound while the provider-wide wire stays
+    // openai-chat; validating from `registry.adapter` alone rejected a
+    // preference the runtime would have accepted.
+    writeConfig({
+      port: 12345,
+      providers: {
+        deepseek: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+          modelPreferHostedTools: { "deepseek-v4-flash": ["image_generation"] },
+        },
+      },
+      defaultProvider: "deepseek",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    // The mirror of the case above. `volcengine-agent-plan` is a Responses registry row
+    // with `preserveCustomDestination`, so a config reusing that id while pointing at a
+    // different endpoint keeps its own transport at runtime —
+    // `providerMatchesRegistryTransport()` returns false and `routedProviderConfig()`
+    // preserves the configured `openai-chat` adapter. Validating from `registry.adapter`
+    // unconditionally would accept a preference that the Responses adapter never sees.
+    writeConfig({
+      port: 12345,
+      providers: {
+        "volcengine-agent-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.example.test/v1",
+          modelPreferHostedTools: { "some-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "volcengine-agent-plan",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    // The forward-auth half of the same effective-transport question. A
+    // `preserveCustomDestination` registry row reused under a different endpoint keeps
+    // its OWN auth at runtime, not the registry's, because `routedProviderConfig()`
+    // honors `providerMatchesRegistryTransport()`. Deciding forward-auth from
+    // `registry.authKind` alone accepted a preference the adapter never applies:
+    // `preferConfiguredHostedTools()` runs only on the non-forward branch.
+    writeConfig({
+      port: 12345,
+      providers: {
+        "volcengine-agent-plan": {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://custom.example.test/v1",
+          modelPreferHostedTools: { "some-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "volcengine-agent-plan",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("not supported on forward-auth");
+
+    // Registry providers route through their registry wire, not this persisted adapter.
+    writeConfig({
+      port: 12345,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.openai.com/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openai-apikey",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          modelAdapters: { "gpt-5.6-sol": "openai-chat" },
+          modelPreferHostedTools: { "gpt-5.6-sol-pro": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openai-apikey",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    for (const modelPreferHostedTools of [
+      [],
+      { "": ["image_generation"] },
+      { model: [] },
+      { model: "image_generation" },
+      { model: ["web_search"] },
+    ]) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.test/v1",
+            modelPreferHostedTools,
+          },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelPreferHostedTools");
+    }
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        openrouter: {
+          adapter: "openai-responses",
+          baseUrl: "https://openrouter.ai/api/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openrouter",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { "provider-image-model": "openai-chat" },
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelPreferHostedTools: { "gpt-5.3-codex-spark": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("does not support");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openai",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("not supported on forward-auth");
   });
 
   test("modelAdapters accepts only allowed wires on eligible providers (#404)", () => {

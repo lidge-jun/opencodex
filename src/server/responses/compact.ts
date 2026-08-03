@@ -27,7 +27,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, CodexAccountMode, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -52,6 +52,7 @@ import {
   resolveCodexAuthContext,
   codexProbeLeaseId,
   codexProbeQuotaScope,
+  releaseCodexAuthContextProbeLease,
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
@@ -59,7 +60,12 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
-import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../../lib/upstream-retry";
+import {
+  fetchWithResetRetry,
+  fetchWithTransientRetry,
+  applyUpstreamRecoveryInit,
+  type UpstreamSendRecovery,
+} from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
@@ -117,10 +123,78 @@ export function compactResponseTooLargeError(): Response {
 
 
 
+/**
+ * Resolve one eligible pool account other than `excludeAccountId`, and build everything
+ * the alternate send needs. Returns null when no alternate exists or construction fails,
+ * in which case the caller keeps the first account's rejection intact.
+ *
+ * Mirrors the auth resolution the native compact branch already does for the first
+ * account, so the alternate is built the same way rather than through a second,
+ * divergent path.
+ */
+async function resolveAlternateCompactContext(args: {
+  req: Request;
+  config: OcxConfig;
+  route: { provider: OcxProviderConfig; codexAccountMode?: CodexAccountMode };
+  selectedModelId: string | undefined;
+  excludeAccountId: string | null;
+}): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
+  const { req, config, route, selectedModelId, excludeAccountId } = args;
+  if (!route.codexAccountMode || !excludeAccountId) return null;
+  try {
+    const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+      ...(selectedModelId ? { modelId: selectedModelId } : {}),
+      excludeAccountId,
+    });
+    if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
+    const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+    const headers = new Headers({ "content-type": "application/json" });
+    const selected = headersForCodexAuthContext(req.headers, authCtx);
+    for (const name of FORWARD_HEADERS) {
+      const value = selected.get(name);
+      if (value) headers.set(name, value);
+    }
+    const override = (provider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
+    if (override) {
+      headers.set("authorization", `Bearer ${override.accessToken}`);
+      headers.set("chatgpt-account-id", override.chatgptAccountId);
+    }
+    if (provider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(provider.apiKey)}`);
+    return { authCtx, provider, headers };
+  } catch {
+    // No eligible alternate (all cooled, affinity expired, reauth needed) — the caller
+    // returns the first account's rejection unchanged, which is today's behavior.
+    return null;
+  }
+}
+
+/**
+ * Headers a client needs to back off correctly after a pool rejection. The buffered
+ * response is rebuilt from scratch, so anything not listed here is dropped — which is
+ * what silently discarded `Retry-After` and the reset hints from a 429 before.
+ * Deliberately narrow: no hop-by-hop headers, no content-length (the buffered body sets
+ * its own), no cookies.
+ */
+const COMPACT_PASSTHROUGH_HEADERS = [
+  "retry-after",
+  "x-codex-primary-reset-at",
+  "x-codex-secondary-reset-at",
+  "x-codex-tertiary-reset-at",
+];
+
+function compactResponseHeaders(upstream: Response): Headers {
+  const headers = new Headers({ "Content-Type": upstream.headers.get("content-type") ?? "application/json" });
+  for (const name of COMPACT_PASSTHROUGH_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return headers;
+}
+
 export async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
   const reader = upstream.body?.getReader();
-  const contentType = upstream.headers.get("content-type") ?? "application/json";
-  if (!reader) return new Response(null, { status: upstream.status, headers: { "Content-Type": contentType } });
+  const headers = compactResponseHeaders(upstream);
+  if (!reader) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
   const declaredLength = Number(upstream.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
     await reader.cancel("compact_response_too_large").catch(() => undefined);
@@ -153,7 +227,7 @@ export async function bufferCompactResponse(upstream: Response, signal: AbortSig
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new Response(body, { status: upstream.status, headers: { "Content-Type": contentType } });
+  return new Response(body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 
 
@@ -256,49 +330,141 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
+    // Takes its context explicitly: the alternate-account flow below records a rejection
+    // against A while promoting B, then records B's own outcome. A closure over a single
+    // `authCtx` cannot express either.
     const recordCompactPoolOutcome = (
+      ctx: CodexAuthContext,
       outcome: CodexUpstreamOutcome,
-      meta: { retryAfter?: string | null; resetAt?: unknown | unknown[] } = {},
+      meta: {
+        retryAfter?: string | null;
+        resetAt?: unknown | unknown[];
+        promoteAccountId?: string;
+      } = {},
     ) => {
-      if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
-      recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+      if (!usesCodexForwardPoolAuth(ctx, route.provider)) return;
+      recordCodexUpstreamOutcome(config, ctx.accountId, outcome, {
         ...meta,
         threadId: compactThreadId,
         modelId: selectedModelId,
-        probeLeaseId: codexProbeLeaseId(authCtx),
-        probeQuotaScope: codexProbeQuotaScope(authCtx),
-        writerGeneration: authCtx.kind === "pool" || authCtx.kind === "main-pool"
-          ? authCtx.writerGeneration
+        probeLeaseId: codexProbeLeaseId(ctx),
+        probeQuotaScope: codexProbeQuotaScope(ctx),
+        writerGeneration: ctx.kind === "pool" || ctx.kind === "main-pool"
+          ? ctx.writerGeneration
           : undefined,
       });
     };
+    // Two recovery modes, mirroring retryCodexPoolOnAlternateAccount() on the regular
+    // path (core.ts:396). The first account keeps the full ladder — transient-5xx retry
+    // wrapping reset retry — because those retries happen before any alternate is even
+    // considered. The alternate is one bounded send: a second ladder would multiply the
+    // work an already-rejecting pool is doing.
+    const sendCompactAttempt = (
+      sendProvider: OcxProviderConfig,
+      sendHeaders: Headers,
+      recovery: "normal" | "single",
+    ): Promise<Response> => {
+      const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
+        compactUrl,
+        applyUpstreamRecoveryInit({
+          method: "POST",
+          headers: sendHeaders,
+          body: JSON.stringify({ ...compactBody, model: route.modelId }),
+        }, upstreamRecovery),
+        req.signal,
+        connectMs,
+        false,
+        providerFetch(sendProvider),
+      );
+      return recovery === "single"
+        ? doFetch()
+        : fetchWithTransientRetry(doFetch, { abortSignal: req.signal, label: safeHostLabel(compactUrl) });
+    };
+
+    // The account each outcome belongs to. Reassigned only when the alternate send below
+    // actually happens, so every recorder call names the context that produced it.
+    let outcomeCtx = authCtx;
     let upstream: Response;
     try {
       // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
       // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
-      upstream = await fetchWithTransientRetry(
-        recovery => fetchWithHeaderTimeout(
-          compactUrl,
-          applyUpstreamRecoveryInit({
-            method: "POST",
-            headers,
-            body: JSON.stringify({ ...compactBody, model: route.modelId }),
-          }, recovery),
-          req.signal,
-          connectMs,
-          false,
-          providerFetch(compactProvider),
-        ),
-        { abortSignal: req.signal, label: safeHostLabel(compactUrl) },
-      );
+      upstream = await sendCompactAttempt(compactProvider, headers, "normal");
     } catch (err) {
       if (req.signal.aborted) {
-        recordCompactPoolOutcome(499);
+        recordCompactPoolOutcome(outcomeCtx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
-      recordCompactPoolOutcome(outcome);
+      recordCompactPoolOutcome(outcomeCtx, outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+    }
+
+    // Bounded same-request alternate: the regular /v1/responses path already does this
+    // (core.ts:319-423) and recognizes exactly 429/402. Without it a pool rejection
+    // surfaces to the client, which retries the compact task OUTSIDE the logical request
+    // — reporting exhausted retries while another pool account sat idle (#913).
+    if (
+      (upstream.status === 429 || upstream.status === 402)
+      && usesCodexForwardPoolAuth(authCtx, route.provider)
+      && route.codexAccountMode
+      && !req.signal.aborted
+    ) {
+      const firstRetryAfter = upstream.headers.get("retry-after");
+      const firstResetAt = [
+        upstream.headers.get("x-codex-primary-reset-at"),
+        upstream.headers.get("x-codex-secondary-reset-at"),
+        upstream.headers.get("x-codex-tertiary-reset-at"),
+      ].filter(Boolean);
+      // Build the alternate COMPLETELY before cancelling the first body: if construction
+      // throws, the first rejection is still intact and can be returned to the client.
+      const alternate = await resolveAlternateCompactContext({
+        req,
+        config,
+        route,
+        selectedModelId,
+        excludeAccountId: authCtx.accountId,
+      });
+      // Resolution can await a credential refresh, so the client may have gone away
+      // while we were choosing B. Re-check before spending anything: recording A,
+      // cancelling its body, and sending B are all observable side effects, and B's
+      // quota is not ours to spend on a request nobody is waiting for.
+      if (alternate && req.signal.aborted) {
+        releaseCodexAuthContextProbeLease(alternate.authCtx);
+        recordCompactPoolOutcome(outcomeCtx, 499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
+      if (alternate) {
+        // Same order the regular path uses (core.ts:349-357): a 429/402 carries the
+        // quota snapshot that produced it, so refresh A's cache before recording its
+        // rejection. Skipping this leaves quota-strategy routing and the dashboard
+        // reading numbers from before the account ran out.
+        if (authCtx.kind === "pool" || authCtx.kind === "main-pool") {
+          const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
+          applyAccountQuotaFromUpstreamHeaders(
+            authCtx.accountId,
+            upstream.headers,
+            authCtx.writerGeneration,
+          );
+        }
+        recordCompactPoolOutcome(authCtx, upstream.status, {
+          retryAfter: firstRetryAfter,
+          resetAt: firstResetAt,
+          ...(alternate.authCtx.accountId ? { promoteAccountId: alternate.authCtx.accountId } : {}),
+        });
+        await upstream.body?.cancel().catch(() => undefined);
+        outcomeCtx = alternate.authCtx;
+        try {
+          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single");
+        } catch (err) {
+          if (req.signal.aborted) {
+            recordCompactPoolOutcome(outcomeCtx, 499);
+            return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+          }
+          const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+          recordCompactPoolOutcome(outcomeCtx, outcome);
+          return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+        }
+      }
     }
     const retryAfter = upstream.headers.get("retry-after");
     const resetAt = [
@@ -310,12 +476,12 @@ export async function handleResponsesCompact(
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
-      recordCompactPoolOutcome(499);
+      recordCompactPoolOutcome(outcomeCtx, 499);
       return buffered;
     }
     // Always record the real upstream status: a local buffering failure after a
     // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
-    recordCompactPoolOutcome(upstream.status, { retryAfter, resetAt });
+    recordCompactPoolOutcome(outcomeCtx, upstream.status, { retryAfter, resetAt });
     return buffered;
   }
 

@@ -13,7 +13,7 @@ import type { CSSProperties, ReactNode } from "react";
  * Lets a page mirror its ready geometry without exposing placeholder values to assistive
  * technology. The surrounding skeleton owns the single announced sentence.
  */
-export function DataSurfaceSkeletonBlock({
+function DataSurfaceSkeletonBlock({
   className,
   style,
 }: {

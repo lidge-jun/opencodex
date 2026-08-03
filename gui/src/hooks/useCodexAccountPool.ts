@@ -110,7 +110,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // Pause leases live in a ref: pausing must not re-render, and the effect below reads
   // the live set rather than a captured snapshot.
   const [pauseCount, setPauseCount] = useState(0);
-  const pauseTokensRef = useRef<Set<PauseToken>>(new Set());
+  const pauseTokensRef = useRef<Set<PauseToken> | null>(null);
+  if (pauseTokensRef.current === null) pauseTokensRef.current = new Set();
   // Which apiBase this instance has already kicked its initial load for. StrictMode double-invokes
   // the mount effect, and the deferred load is deliberately uncancellable, so the guard has to live
   // here rather than in the effect's cleanup.
@@ -119,7 +120,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // Set by switchAccount so a background load already in flight cannot roll the active
   // id back to a value the server had not yet committed when that request was issued.
   const pendingActiveIdRef = useRef<{ id: string | null } | null>(null);
-  const observersRef = useRef<Set<CodexAccountLoadObserver>>(new Set());
+  const observersRef = useRef<Set<CodexAccountLoadObserver> | null>(null);
+  if (observersRef.current === null) observersRef.current = new Set();
   // Last /active payload an actual read returned. Surfaces that mount after a
   // load already finished read it to seed their UI instead of waiting a poll interval.
   const lastActiveRef = useRef<{ value: unknown } | null>(null);
@@ -131,13 +133,13 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const pauseMutationRef = useRef<"bulk" | { accountId: string } | null>(null);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
-    observersRef.current.add(observer);
+    observersRef.current!.add(observer);
     // Subscribing stays silent. `acceptActiveRead` means "a read that started at this
     // revision came back", and useCodexAutoSwitch / CodexPoolStrategySetting decide their
     // editing and saving disposition from that. Synthesising one on subscribe can overwrite
     // an in-flight draft or arm a spurious post-save refresh. Late surfaces seed themselves
     // from readLastThreshold()/readLastActive(), which apply only while uninitialized.
-    return () => { observersRef.current.delete(observer); };
+    return () => { observersRef.current!.delete(observer); };
   }, []);
 
   /** Last threshold an actual read returned, or undefined when none has succeeded yet. */
@@ -156,7 +158,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     // observer snapshot below cannot leave the counter stuck above zero.
     try {
       // Snapshot subscribers so an unsubscribe mid-flight cannot desync begin/accept pairs.
-      const observers = [...observersRef.current];
+      const observers = [...observersRef.current!];
       const revisions = new Map<CodexAccountLoadObserver, number>();
       for (const observer of observers) revisions.set(observer, observer.beginActiveRead());
       // Soft refresh when boxes are already on screen — avoid full-page loading flash.
@@ -282,14 +284,14 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
 
   const pauseRefresh = useCallback((): PauseToken => {
     const token = {} as PauseToken;
-    pauseTokensRef.current.add(token);
-    setPauseCount(pauseTokensRef.current.size);
+    pauseTokensRef.current!.add(token);
+    setPauseCount(pauseTokensRef.current!.size);
     return token;
   }, []);
 
   const resumeRefresh = useCallback((token: PauseToken) => {
-    if (!pauseTokensRef.current.delete(token)) return;
-    setPauseCount(pauseTokensRef.current.size);
+    if (!pauseTokensRef.current!.delete(token)) return;
+    setPauseCount(pauseTokensRef.current!.size);
   }, []);
 
   const switchAccount = useCallback(async (id: string | null) => {

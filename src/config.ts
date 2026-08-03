@@ -28,6 +28,7 @@ import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   OPENAI_PROVIDER_TIER_VERSION,
+  pinnedWireAdapter,
   REASONING_SUMMARY_DELIVERY_VALUES,
   type OcxClaudeCodeConfig,
   type OcxConfig,
@@ -35,6 +36,12 @@ import {
   type OcxProviderConfig,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import {
+  getProviderRegistryEntry,
+  providerMatchesRegistryTransport,
+  providerModelWireDefault,
+} from "./providers/registry";
+import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 import {
@@ -42,6 +49,7 @@ import {
   MAX_APP_OWNED_MEMORY_BUDGET_MB,
   MIN_APP_OWNED_MEMORY_BUDGET_MB,
 } from "./lib/app-owned-memory";
+import { isHostedToolUnsupportedForModel } from "./responses/hosted-tool-policy";
 
 let _atomicSeq = 0;
 
@@ -703,6 +711,100 @@ export function reasoningSummaryDeliveryRecordConfigError(
   return null;
 }
 
+const SUPPORTED_PREFERRED_HOSTED_TOOLS = new Set(["image_generation"]);
+
+export function modelPreferHostedToolsConfigError(
+  value: unknown,
+  field: string,
+  providerName: string,
+  provider: { adapter?: unknown; authMode?: unknown; modelAdapters?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  const registry = getProviderRegistryEntry(providerName);
+  // Effective transport: a `preserveCustomDestination` registry row reused under a
+  // different endpoint keeps its own adapter AND its own auth at runtime, because
+  // `routedProviderConfig()` honors `providerMatchesRegistryTransport()`. Both the
+  // wire check below and the forward-auth check here have to start from the same
+  // decision, or validation accepts a preference the adapter never applies —
+  // `preferConfiguredHostedTools()` runs only on the non-forward branch.
+  const registryTransportMatches = typeof provider.baseUrl === "string"
+    && providerMatchesRegistryTransport(providerName, {
+      baseUrl: provider.baseUrl,
+      adapter: provider.adapter as OcxProviderConfig["adapter"],
+      ...(typeof provider.authMode === "string" ? { authMode: provider.authMode as OcxProviderConfig["authMode"] } : {}),
+    });
+  const effectiveForwardAuth = registryTransportMatches
+    ? registry?.authKind === "forward"
+    : provider.authMode === "forward";
+  if (entries.length > 0 && effectiveForwardAuth) {
+    return `${field} is not supported on forward-auth Responses providers`;
+  }
+  const requestedWireFor = (modelId: string): unknown => provider.modelAdapters
+    && typeof provider.modelAdapters === "object"
+    && !Array.isArray(provider.modelAdapters)
+    ? (provider.modelAdapters as Record<string, unknown>)[modelId]
+    : undefined;
+  const resolveEffectiveWire = (modelId: string, currentWire: unknown): unknown => {
+    const pinned = pinnedWireAdapter(providerName, modelId);
+    if (pinned) return pinned;
+    const requestedWire = requestedWireFor(modelId);
+    if (typeof requestedWire === "string" && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requestedWire)) {
+      return requestedWire;
+    }
+    // No explicit override: fall back to the registry's per-model wire default before
+    // the provider-wide adapter, because that is the order `resolveModelAdapter()`
+    // uses at request time (src/server/adapter-resolve.ts:38-48). Skipping it rejected
+    // preferences the runtime would have honored — DeepSeek routes `deepseek-v4-flash`
+    // over native Responses for a Responses inbound while the provider-wide wire stays
+    // openai-chat. Hosted-tool preferences only apply to Responses traffic, so the
+    // inbound to ask about is "responses".
+    const registryDefault = typeof currentWire === "string" && typeof provider.baseUrl === "string"
+      ? providerModelWireDefault(
+        providerName,
+        {
+          baseUrl: provider.baseUrl,
+          adapter: currentWire,
+          ...(typeof provider.authMode === "string" ? { authMode: provider.authMode as OcxProviderConfig["authMode"] } : {}),
+        },
+        modelId,
+        MODEL_ADAPTER_OVERRIDE_ALLOWED,
+        "responses",
+      )
+      : undefined;
+    return registryDefault ?? currentWire;
+  };
+  for (const [key, entry] of entries) {
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (!Array.isArray(entry)) return `${field}.${key} must be an array`;
+    if (entry.length === 0) return `${field}.${key} must include image_generation`;
+    for (const tool of entry) {
+      if (typeof tool !== "string" || !SUPPORTED_PREFERRED_HOSTED_TOOLS.has(tool)) {
+        return `${field}.${key} supports only image_generation`;
+      }
+      if (isHostedToolUnsupportedForModel(key, tool)) {
+        return `${field}.${key} cannot prefer ${tool}: the model does not support it`;
+      }
+    }
+    // Same `registryTransportMatches` decision the forward-auth check above uses:
+    // start from the registry adapter only when this config still points at the
+    // registry's documented transport.
+    const baseWire = registryTransportMatches ? registry?.adapter ?? provider.adapter : provider.adapter;
+    let effectiveWire = resolveEffectiveWire(key, baseWire);
+    const virtualWireModel = resolveOpenAiVirtualModel(providerName, key)?.wireModelId;
+    if (virtualWireModel && virtualWireModel !== key) {
+      effectiveWire = resolveEffectiveWire(virtualWireModel, effectiveWire);
+    }
+    if (effectiveWire !== "openai-responses") {
+      return `${field}.${key} requires the openai-responses wire`;
+    }
+  }
+  return null;
+}
+
 /**
  * Validate a provider's per-model wire override map (#404).
  *
@@ -1005,6 +1107,19 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "modelAdapters"],
         message: modelAdaptersError,
+      });
+    }
+    const preferHostedToolsError = modelPreferHostedToolsConfigError(
+      (provider as { modelPreferHostedTools?: unknown }).modelPreferHostedTools,
+      "modelPreferHostedTools",
+      name,
+      provider,
+    );
+    if (preferHostedToolsError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelPreferHostedTools"],
+        message: preferHostedToolsError,
       });
     }
     const maxInputError = positiveIntegerRecordConfigError(

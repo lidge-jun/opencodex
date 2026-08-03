@@ -97,6 +97,17 @@ hosted `image_generation` and deduplicates aliases in stable container order. Em
 namespaces do not remove the hosted fallback. Discovery and normalization span both top-level
 `body.tools` and Codex Desktop Responses Lite `input[].type = "additional_tools"` containers.
 
+For a model explicitly listed in `modelPreferHostedTools`, a non-forward Responses provider may opt
+to remove colliding client `image_gen` declarations before this normalization and rewrite their
+selectors to hosted `image_generation`, so a provider-reserved hosted tool takes precedence without
+loosening a caller's tool-choice restriction. The opt-in is intentionally model-scoped: the default
+alias path remains safest for ordinary public Responses endpoints.
+
+For OpenAI API virtual `-pro` models, preference lookup checks the selected public ID first and
+uses the resolved base wire-model ID as a fallback. `modelAdapters` resolves the public ID first and
+the base ID second; the second pass selects the final adapter, and configuration validation mirrors
+both steps.
+
 Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
 items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
 extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify

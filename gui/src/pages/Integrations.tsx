@@ -72,7 +72,8 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
   const [mounted, setMounted] = useState<ReadonlySet<IntegrationTab>>(
     () => new Set([readIntegrationTab()]),
   );
-  const tabRefs = useRef(new Map<IntegrationTab, HTMLButtonElement>());
+  const tabRefs = useRef<Map<IntegrationTab, HTMLButtonElement> | null>(null);
+  if (tabRefs.current === null) tabRefs.current = new Map();
 
   /*
    * Every tab change goes through here, whether it came from a click or from
@@ -102,7 +103,7 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
     activateTab(next);
     if (moveFocus) {
       window.requestAnimationFrame(() => {
-        tabRefs.current.get(next)?.focus({ preventScroll: true });
+        tabRefs.current!.get(next)?.focus({ preventScroll: true });
       });
     }
   };
@@ -131,8 +132,8 @@ export default function Integrations({ apiBase }: { apiBase: string }) {
           <button
             key={definition.id}
             ref={node => {
-              if (node) tabRefs.current.set(definition.id, node);
-              else tabRefs.current.delete(definition.id);
+              if (node) tabRefs.current!.set(definition.id, node);
+              else tabRefs.current!.delete(definition.id);
             }}
             type="button"
             role="tab"

@@ -2,6 +2,8 @@ import type { KiroOAuthMetadata } from "./oauth/types";
 
 export interface OcxParsedRequest {
   modelId: string;
+  /** Selected OpenAI API virtual-model id retained after it rewrites the upstream wire model. */
+  _openAiVirtualSelectedModelId?: string;
   previousResponseId?: string;
   context: OcxContext;
   stream: boolean;
@@ -1065,6 +1067,11 @@ export interface OcxProviderConfig {
    * Presence also advertises reasoning-summary support for that routed model.
    */
   modelReasoningSummaryDelivery?: Record<string, ReasoningSummaryDelivery>;
+  /**
+   * Exact-model hosted tools that win collisions with Codex client tool declarations.
+   * Use for non-forward Responses gateways that reserve a hosted tool namespace server-side.
+   */
+  modelPreferHostedTools?: Record<string, string[]>;
   /** Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values. */
   reasoningEffortMap?: Record<string, string>;
   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */

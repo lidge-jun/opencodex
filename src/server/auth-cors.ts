@@ -4,6 +4,7 @@ import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  modelPreferHostedToolsConfigError,
   codexAutoStartEnabled,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
@@ -432,6 +433,13 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
+  const preferHostedToolsError = modelPreferHostedToolsConfigError(
+    raw.modelPreferHostedTools,
+    "modelPreferHostedTools",
+    name,
+    typed,
+  );
+  if (preferHostedToolsError) return `provider ${name} ${preferHostedToolsError}`;
   if (raw.responsesSnapshotRepair !== undefined && typeof raw.responsesSnapshotRepair !== "boolean") {
     return `provider ${name} responsesSnapshotRepair must be a boolean`;
   }
