@@ -10,7 +10,7 @@ head SHA, PR number/URL, verification result, and review state.
 - Bun: `1.3.14`; package version: `2.10.0`
 - Worktree: `D:\codex-worktrees\ocx-router-intelligence`
 - Push remote: `origin` (Wibias/opencodex); PR target: `lidge-jun/opencodex:dev`
-- All PRs opened as DRAFT; nothing merged by this programme.
+- Programme stack: #1003 (RI-01) and #1004 (RI-02) merged to `dev`; #1005 (RI-03) open.
 
 ## Related in-flight PRs (not superseded by this stack)
 
@@ -132,7 +132,7 @@ other; closing one is a maintainer decision and neither is stale.
   (2) SQL column names are snake_case - analytics SELECT now aliases to
   camelCase; (3) cost field is `estimate.cost.total` (CostBreakdown), not
   `costUsd`; plus the row-cap is injectable for truncation tests.
-- Final commit: pending (recorded after commit)
+- Final commit: `e732d02e` (post-review fixes on cooldown parsing, API row cap, tests)
 - PR: #1005 (OPEN) https://github.com/lidge-jun/opencodex/pull/1005
 - Verification:
   - `bun x tsc --noEmit`: PASSED (0 errors)

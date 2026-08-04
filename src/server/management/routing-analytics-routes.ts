@@ -5,7 +5,11 @@
  * request-history index. Read-only; never changes routing behavior.
  */
 
-import { computeRoutingAnalytics } from "../../routing/analytics";
+import {
+  ANALYTICS_API_DEFAULT_ROWS,
+  ANALYTICS_MAX_ROWS,
+  computeRoutingAnalytics,
+} from "../../routing/analytics";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
@@ -34,6 +38,29 @@ export async function handleRoutingAnalyticsRoutes(ctx: ManagementContext): Prom
   if (from !== undefined && to !== undefined && from > to) {
     return jsonResponse({ error: { code: "invalid_range", message: "from must not be after to" } }, 400, req, config);
   }
+  const limitParsed = parseQueryInt(url.searchParams.get("limit"));
+  if (limitParsed === "invalid") {
+    return jsonResponse(
+      { error: { code: "invalid_limit", message: "limit must be an integer" } },
+      400,
+      req,
+      config,
+    );
+  }
+  const maxRows = limitParsed ?? ANALYTICS_API_DEFAULT_ROWS;
+  if (maxRows < 1 || maxRows > ANALYTICS_MAX_ROWS) {
+    return jsonResponse(
+      {
+        error: {
+          code: "invalid_limit",
+          message: `limit must be between 1 and ${ANALYTICS_MAX_ROWS}`,
+        },
+      },
+      400,
+      req,
+      config,
+    );
+  }
 
   const result = await computeRoutingAnalytics({
     provider: url.searchParams.get("provider")?.trim() || undefined,
@@ -42,6 +69,6 @@ export async function handleRoutingAnalyticsRoutes(ctx: ManagementContext): Prom
     surface: url.searchParams.get("surface")?.trim() || undefined,
     from,
     to,
-  });
+  }, { maxRows });
   return jsonResponse(result, 200, req, config);
 }

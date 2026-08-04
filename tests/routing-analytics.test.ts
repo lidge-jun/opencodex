@@ -198,4 +198,46 @@ describe("routing analytics (RI-03)", () => {
     expect(body.totalRequests).toBe(1);
     expect(body.successRate).toBe(1);
   });
+
+  test("counts cooldownTriggeringFailures for non-4xx failures with recovery attempts", async () => {
+    appendUsageEntry(
+      entry("r1", {
+        timestamp: 1,
+        status: 503,
+        durationMs: 100,
+        attempts: [
+          {
+            ordinal: 1,
+            provider: "a",
+            model: "m1",
+            adapter: "openai-chat",
+            status: 503,
+            durationMs: 100,
+            sendCount: 1,
+            recoveryKinds: ["rate-limit-429"],
+            usageStatus: "unreported",
+          },
+        ],
+      }),
+    );
+    const result = await computeRoutingAnalytics({});
+    expect(result.cooldownTriggeringFailures).toBe(1);
+  });
+
+  test("routing analytics API returns 400 for invalid from/to/limit", async () => {
+    const cases = [
+      { query: "from=abc", code: "invalid_from" },
+      { query: "to=xyz", code: "invalid_to" },
+      { query: "from=10&to=5", code: "invalid_range" },
+      { query: "limit=0", code: "invalid_limit" },
+    ] as const;
+    for (const { query, code } of cases) {
+      const req = new ManagementRequest(`http://localhost/api/routing-analytics?${query}`, { method: "GET" });
+      const response = await handleManagementAPI(req, new URL(req.url), config(), { refreshCodexCatalog: async () => {} });
+      expect(response).not.toBeNull();
+      expect(response!.status).toBe(400);
+      const body = await response!.json() as { error?: { code?: string } };
+      expect(body.error?.code).toBe(code);
+    }
+  });
 });

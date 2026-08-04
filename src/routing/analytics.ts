@@ -16,6 +16,8 @@ import { estimateRequestCost, serviceTierContext } from "../usage/cost";
 import { openRequestHistoryIndex, requestHistoryDb } from "./history/indexer";
 
 export const ANALYTICS_MAX_ROWS = 50_000;
+/** Default row cap for the management API (full cap remains available via `limit`). */
+export const ANALYTICS_API_DEFAULT_ROWS = 5_000;
 
 export interface RoutingAnalyticsFilters {
   provider?: string;
@@ -235,16 +237,21 @@ export async function computeRoutingAnalytics(
     }
     if (row.usageStatus !== "unreported") usageReported += 1;
 
-    const entry = kind === "success" || row.status >= 400 ? parseEntry(row.rowJson) : null;
-    if (cooldownTriggering(entry, row.status)) cooldownFailures += 1;
-
     let rowCostUsd: number | null = null;
-    if (kind === "success" && entry) {
-      rowCostUsd = successCostUsd(row, entry);
-      if (rowCostUsd !== null) {
-        costTotalUsd += rowCostUsd;
-        costCount += 1;
+    if (kind === "success") {
+      const entry = parseEntry(row.rowJson);
+      if (entry) {
+        rowCostUsd = successCostUsd(row, entry);
+        if (rowCostUsd !== null) {
+          costTotalUsd += rowCostUsd;
+          costCount += 1;
+        }
       }
+    }
+
+    if (kind === "failure") {
+      const failureEntry = parseEntry(row.rowJson);
+      if (cooldownTriggering(failureEntry, row.status)) cooldownFailures += 1;
     }
 
     const key = `${row.provider}\0${row.model}\0${row.apiKeyId ?? ""}\0${row.profileId ?? ""}`;
