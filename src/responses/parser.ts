@@ -668,9 +668,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     ...(data.tools as unknown[] ?? []),
     ...loadedToolSpecs,
   ]);
-  // Detect structured-output mode (Responses `text.format`) so the web-search sidecar can render its
-  // tool_result as JSON rather than prose that could corrupt the model's schema-constrained answer.
-  const structuredOutput = detectStructuredOutput(data.text);
+  // Capture structured-output mode (Responses `text.format`): the format object rides
+  // options.textFormat for adapters whose wire has an equivalent (openai-chat response_format),
+  // while the `_structuredOutput` flag keeps the web-search sidecar rendering its tool_result
+  // as JSON rather than prose that could corrupt the model's schema-constrained answer.
+  const textFormat = parseTextFormat(data.text);
+  if (textFormat) options.textFormat = textFormat;
 
   return {
     modelId: data.model,
@@ -682,17 +685,30 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     ...(replayedInputPrefixLength > 0 ? { _replayPrefixLen: replayedInputPrefixLength } : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
-    ...(structuredOutput ? { _structuredOutput: true } : {}),
+    ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),
     ...(contextCompactionBoundary ? { _contextCompactionBoundary: true } : {}),
   };
 }
 
-/** True when the Responses `text.format` requests structured output (json_schema or json_object). */
-function detectStructuredOutput(text: unknown): boolean {
-  if (!isObj(text)) return false;
+/**
+ * The Responses `text.format` object when it requests structured output (json_schema or
+ * json_object), undefined otherwise. Acceptance is identical to the boolean detector this
+ * replaces; unknown or malformed formats are ignored, never rejected, so the native
+ * passthrough keeps forwarding whatever the caller sent via `_rawBody`.
+ */
+function parseTextFormat(text: unknown): OcxRequestOptions["textFormat"] {
+  if (!isObj(text)) return undefined;
   const format = (text as { format?: unknown }).format;
-  if (!isObj(format)) return false;
-  const t = (format as { type?: unknown }).type;
-  return t === "json_schema" || t === "json_object";
+  if (!isObj(format)) return undefined;
+  const f = format as { type?: unknown; name?: unknown; description?: unknown; schema?: unknown; strict?: unknown };
+  if (f.type === "json_object") return { type: "json_object" };
+  if (f.type !== "json_schema") return undefined;
+  return {
+    type: "json_schema",
+    ...(typeof f.name === "string" ? { name: f.name } : {}),
+    ...(typeof f.description === "string" ? { description: f.description } : {}),
+    ...(isObj(f.schema) ? { schema: f.schema as Record<string, unknown> } : {}),
+    ...(typeof f.strict === "boolean" ? { strict: f.strict } : {}),
+  };
 }

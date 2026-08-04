@@ -1741,6 +1741,9 @@ async function handleResponsesInner(
     delete parsed._webSearch;
     delete parsed.options.toolChoice;
     delete parsed.options.parallelToolCalls;
+    // The compaction turn is a plain prose summary; a surviving structured-output format
+    // would force schema-constrained JSON into the synthetic compaction item.
+    delete parsed.options.textFormat;
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 

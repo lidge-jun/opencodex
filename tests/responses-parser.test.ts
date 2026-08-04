@@ -143,6 +143,44 @@ describe("Responses parser", () => {
     expect(parsed.options.promptCacheKey).toBe("project-cache-v1");
   });
 
+  test("carries text.format json_schema into options.textFormat and flags structured output", () => {
+    const parsed = parseRequest({
+      model: "gpt-5.5",
+      input: "structured",
+      stream: true,
+      text: { format: { type: "json_schema", name: "answer", description: "shape", schema: { type: "object" }, strict: true } },
+    });
+
+    expect(parsed.options.textFormat).toEqual({
+      type: "json_schema",
+      name: "answer",
+      description: "shape",
+      schema: { type: "object" },
+      strict: true,
+    });
+    expect(parsed._structuredOutput).toBe(true);
+  });
+
+  test("carries text.format json_object and ignores the plain text format", () => {
+    const jsonObject = parseRequest({
+      model: "gpt-5.5",
+      input: "structured",
+      stream: true,
+      text: { format: { type: "json_object" } },
+    });
+    const plain = parseRequest({
+      model: "gpt-5.5",
+      input: "prose",
+      stream: true,
+      text: { format: { type: "text" } },
+    });
+
+    expect(jsonObject.options.textFormat).toEqual({ type: "json_object" });
+    expect(jsonObject._structuredOutput).toBe(true);
+    expect(plain.options.textFormat).toBeUndefined();
+    expect(plain._structuredOutput).toBeUndefined();
+  });
+
   test("preserves input_image blocks from function_call_output", () => {
     const parsed = parseRequest({
       model: "kiro/claude-sonnet-4.5",

@@ -233,6 +233,20 @@ export interface OcxRequestOptions {
   frequencyPenalty?: number;
   /** Responses prompt-cache affinity key. Passthrough preserves it via _rawBody; routed adapters do not consume it unless their upstream wire supports it. */
   promptCacheKey?: string;
+  /**
+   * Responses `text.format` (json_schema / json_object), preserved for adapters whose
+   * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
+   * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts.
+   * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
+   * keeps rejecting structured output via `_structuredOutput`.
+   */
+  textFormat?: {
+    type: "json_schema" | "json_object";
+    name?: string;
+    description?: string;
+    schema?: Record<string, unknown>;
+    strict?: boolean;
+  };
 }
 
 export type OcxMessagePhase = "commentary" | "final_answer";
