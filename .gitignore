@@ -58,3 +58,4 @@ coverage/
 # TypeScript build info
 *.tsbuildinfo
 
+devlog/pr_description.md
