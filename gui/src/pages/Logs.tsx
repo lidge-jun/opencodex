@@ -61,7 +61,7 @@ interface MatchedPriceInfo {
   provider: string;
   modelId: string;
   jawcodeProvider?: string;
-  source: "jawcode" | "expected";
+  source: "jawcode" | "expected" | "user";
   sourceRef?: string;
   verifiedAt?: string;
   status: "verified" | "verified-derived";
@@ -323,10 +323,12 @@ const RECOVERY_KIND_KEYS = {
   "image-413": "logs.detail.attempt.recovery.image413",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
+/** Map a metric-unavailable reason to its i18n key. */
 function metricReasonKey(reason: MetricUnavailableReason) {
   return METRIC_REASON_KEYS[reason];
 }
 
+/** Map a cost-estimate reason to its i18n key. */
 function estimateReasonKey(reason: CostEstimateReason) {
   return ESTIMATE_REASON_KEYS[reason];
 }

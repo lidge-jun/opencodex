@@ -644,6 +644,7 @@ export const en = {
   "logs.detail.copied": "Copied",
   "logs.detail.source.jawcode": "jawcode catalog",
   "logs.detail.source.expected": "Expected price overlay",
+  "logs.detail.source.user": "Provider-configured price overlay",
   "logs.detail.verification.verified": "Verified",
   "logs.detail.verification.derived": "Derived from base model",
   "logs.detail.attempt.target": "Provider / model",

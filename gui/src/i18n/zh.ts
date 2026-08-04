@@ -629,6 +629,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.copied": "已复制",
   "logs.detail.source.jawcode": "jawcode 目录",
   "logs.detail.source.expected": "Expected 价格覆盖",
+  "logs.detail.source.user": "提供商自定义价格覆盖",
   "logs.detail.verification.verified": "已验证",
   "logs.detail.verification.derived": "由基础模型推导",
   "logs.detail.attempt.target": "提供方 / 模型",

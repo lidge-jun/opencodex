@@ -19,6 +19,7 @@ const EMPTY: readonly ExpectedPriceOverlay[] = [];
 let active: readonly ExpectedPriceOverlay[] = EMPTY;
 let version = 0;
 
+/** True when `value` is a complete cost entry: all four rates are non-negative finite numbers. */
 function validCost4(value: unknown): value is ProviderCostOverlay {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;

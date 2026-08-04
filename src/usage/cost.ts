@@ -193,6 +193,11 @@ export function resolveMatchedPrice(
 
 const priceMemo = new Map<string, MatchedPrice | null>();
 
+/**
+ * Resolution wrapper: exact provider/model lookup first, then the Antigravity
+ * base-model fallback for collapsed wire ids. Never falls through to the
+ * cross-provider vendor price at this level.
+ */
 function resolveMatchedPriceInner(
   provider: string,
   modelId: string,
@@ -210,6 +215,11 @@ function resolveMatchedPriceInner(
   return null;
 }
 
+/**
+ * Exact provider/model price lookup: user-configured `modelCosts` first, then
+ * the jawcode provider bundle, then the expected-price overlay, then the
+ * model-level vendor fallback. All-zero rows fall through ("not billable").
+ */
 function resolveMatchedPriceExact(
   provider: string,
   modelId: string,
@@ -389,6 +399,11 @@ function applyPriorityMultiplier(
   }, multiplier];
 }
 
+/**
+ * Per-attempt cost estimate: tokens normalized, price resolved (user overlay →
+ * catalogs), priority/long-context tiers applied. Null when usage or price is
+ * missing so combos can fail closed.
+ */
 export function estimateAttemptCost(
   attempt: Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus">,
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,

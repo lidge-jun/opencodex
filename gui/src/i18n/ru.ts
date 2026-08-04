@@ -634,6 +634,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.copied": "Скопировано",
   "logs.detail.source.jawcode": "каталог jawcode",
   "logs.detail.source.expected": "Оверлей ожидаемых цен",
+  "logs.detail.source.user": "Ценовой оверлей провайдера",
   "logs.detail.verification.verified": "Подтверждено",
   "logs.detail.verification.derived": "Выведено из базовой модели",
   "logs.detail.attempt.target": "Провайдер / модель",
