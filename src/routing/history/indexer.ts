@@ -475,7 +475,7 @@ function queryRows(
   filters: RequestHistoryFilters,
   cursor: HistoryCursor | null,
   limit: number,
-): { rows: Array<HistoryQueryRow>; total: number } {
+): { rows: Array<HistoryQueryRow>; fetched: number } {
   const where: string[] = [];
   const values: Array<string | number> = [];
   const add = (clause: string, value: string | number) => {
@@ -502,7 +502,7 @@ function queryRows(
   const rows = handle.query(
     `SELECT row_json, timestamp, request_id FROM requests${whereSql} ORDER BY timestamp DESC, request_id DESC LIMIT ?`,
   ).all(...values, limit + 1) as Array<HistoryQueryRow>;
-  return { rows, total: rows.length };
+  return { rows, fetched: rows.length };
 }
 
 function requireDb(): Database {
@@ -539,8 +539,8 @@ export async function queryRequestHistory(
     REQUEST_HISTORY_MAX_PAGE_SIZE,
   );
   const handle = requireDb();
-  const { rows, total } = queryRows(handle, filters, cursor, limit);
-  const hasMore = total > limit;
+  const { rows, fetched } = queryRows(handle, filters, cursor, limit);
+  const hasMore = fetched > limit;
   const pageRows = rows.slice(0, limit);
   const entries: PersistedUsageEntry[] = [];
   for (const row of pageRows) {
