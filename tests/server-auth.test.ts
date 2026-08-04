@@ -1899,7 +1899,7 @@ describe("server local API auth", () => {
       expect(response.headers.get("x-exact-response")).toBe("original");
       expect(await response.text()).toBe(body);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
-      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
       if (status !== 400) {
         const cooldown = await (await harness.request({ model: `side/${POOL_RETRY_MODEL}`, callerBearer: false })).text();
         expect(cooldown).toContain("selector (side)");
@@ -2635,7 +2635,7 @@ describe("server local API auth", () => {
     }
   });
 
-  test("unexpected alternate resolver failure releases A's recovery probe and preserves the error", async () => {
+  test("unexpected alternate resolver failure settles a retryable A 429 once and preserves the error", async () => {
     const harness = await startPoolRetryHarness(() => new Response("unused"), {
       omitCredentialAccountIds: ["pool-b"],
     });
@@ -2674,7 +2674,13 @@ describe("server local API auth", () => {
         chatgptAccountId: "acct-pool-b",
       });
       clearAccountNeedsReauth("pool-b");
-      return rejectionResponse(unsupportedModelBody());
+      return new Response("rate limited", {
+        status: 429,
+        headers: {
+          "retry-after": "60",
+          "x-codex-primary-reset-at": String(Math.floor((Date.now() + 60 * 60_000) / 1000)),
+        },
+      });
     }) as typeof fetch;
 
     try {
@@ -2690,8 +2696,19 @@ describe("server local API auth", () => {
       expect(sends).toBe(1);
       expect(selectionCalls).toBe(2);
       expect(observedProbeLeaseId).toEqual(expect.any(String));
-      expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toEqual(expect.any(Number));
+      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+        cooldownUntil: expect.any(Number),
+        cooldownSource: "retry-after",
+        cooldownGeneration: 2,
+        lastFailureStatus: 429,
+      });
       expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+      expect(getCodexUpstreamHostHealth(canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!)).toBeNull();
     } finally {
       globalThis.fetch = redirectedFetch;
       await stopPoolRetryHarness(harness);

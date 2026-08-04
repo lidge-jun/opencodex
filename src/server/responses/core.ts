@@ -383,6 +383,50 @@ async function retryCodexPoolOnAlternateAccount(
   if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   const inboundWire = options.inboundWire ?? "responses";
   let retryAuthCtx: CodexAuthContext | undefined;
+  let firstOutcomeSettled = false;
+  // A's response has already been observed when this helper starts, but B
+  // resolution/preparation can still throw. Keep that accounting local so A
+  // cannot remain eligible after a local alternate failure.
+  const settleFirstOutcome = async ({
+    promoteAccountId,
+    suppressPromotion = false,
+  }: {
+    promoteAccountId?: string;
+    suppressPromotion?: boolean;
+  } = {}): Promise<void> => {
+    if (firstOutcomeSettled) return;
+    // Claim settlement before any await. A recorder failure must not allow a
+    // later cleanup path to record the same upstream response again.
+    firstOutcomeSettled = true;
+    try {
+      const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
+      if (outcomeStatus === 429 || outcomeStatus === 402) {
+        const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
+        applyAccountQuotaFromUpstreamHeaders(
+          firstAuthCtx.accountId,
+          firstResponse.headers,
+          firstAuthCtx.writerGeneration,
+        );
+      }
+      if (shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
+        releaseCodexAuthContextProbeLease(firstAuthCtx);
+        return;
+      }
+      recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+        ...quotaMeta,
+        threadId: req.headers.get("x-codex-parent-thread-id"),
+        modelId: route.modelId,
+        probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+        probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+        writerGeneration: firstAuthCtx.writerGeneration,
+        ...(promoteAccountId ? { promoteAccountId } : {}),
+        ...(suppressPromotion ? { suppressPromotion: true } : {}),
+      });
+    } catch (error) {
+      releaseCodexAuthContextProbeLease(firstAuthCtx);
+      throw error;
+    }
+  };
   try {
     retryAuthCtx = await resolveCodexAuthContext(
       req.headers,
@@ -401,6 +445,14 @@ async function retryCodexPoolOnAlternateAccount(
       && !(error instanceof CodexAccountCooldownError)
       && !(error instanceof CodexMainProfileDrainingError)
     ) {
+      try {
+        // B was never usable, so record A without promoting it. A settlement
+        // errors must not mask the original resolver error.
+        await settleFirstOutcome({ suppressPromotion: true });
+      } catch {
+        // settleFirstOutcome released A's probe when its recorder failed.
+      }
+      await firstResponse.body?.cancel().catch(() => undefined);
       releaseCodexAuthContextProbeLease(firstAuthCtx);
       throw error;
     }
@@ -411,31 +463,7 @@ async function retryCodexPoolOnAlternateAccount(
 
   const prepared = await (async () => {
     let request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>> | undefined;
-    let firstOutcomeSettled = false;
     try {
-      const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
-      if (outcomeStatus === 429 || outcomeStatus === 402) {
-        const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-        applyAccountQuotaFromUpstreamHeaders(
-          firstAuthCtx.accountId,
-          firstResponse.headers,
-          firstAuthCtx.writerGeneration,
-        );
-      }
-      if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
-        recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
-          ...quotaMeta,
-          threadId: req.headers.get("x-codex-parent-thread-id"),
-          modelId: route.modelId,
-          probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-          probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
-          writerGeneration: firstAuthCtx.writerGeneration,
-          // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
-          ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
-        });
-        firstOutcomeSettled = true;
-      }
-
       const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
       const retryProvider = applyCodexAuthContextToProvider(
         stripCodexRuntimeProviderFields(route.provider),
@@ -452,6 +480,8 @@ async function retryCodexPoolOnAlternateAccount(
       });
       recordAdapterReasoning(logCtx, request);
 
+      // Only a fully prepared B may be reused for A's round-robin promotion.
+      await settleFirstOutcome({ promoteAccountId: retryAuthCtx.accountId });
       await firstResponse.body?.cancel().catch(() => undefined);
       options.onCodexAuthContextResolved?.(retryAuthCtx);
       route.provider = retryProvider;
@@ -464,7 +494,15 @@ async function retryCodexPoolOnAlternateAccount(
       return { fetcher, request, retryHeaders };
     } catch (error) {
       request?.releaseBodyObservation?.();
-      if (!firstOutcomeSettled) releaseCodexAuthContextProbeLease(firstAuthCtx);
+      try {
+        // B preparation failed, so settle A without promotion. Preserve the
+        // original preparation error even if the A recorder also fails.
+        await settleFirstOutcome({ suppressPromotion: true });
+      } catch {
+        // settleFirstOutcome released A's probe when its recorder failed.
+      }
+      await firstResponse.body?.cancel().catch(() => undefined);
+      releaseCodexAuthContextProbeLease(firstAuthCtx);
       releaseCodexAuthContextProbeLease(retryAuthCtx);
       throw error;
     }

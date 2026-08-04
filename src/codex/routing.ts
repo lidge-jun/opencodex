@@ -211,6 +211,8 @@ export type CodexUpstreamOutcomeMeta = {
    * again (which would advance a round-robin ring twice).
    */
   promoteAccountId?: string;
+  /** A locally failed alternate must not advance pool rotation. */
+  suppressPromotion?: boolean;
   /** Generation captured when this routed account was selected. */
   writerGeneration?: number;
 };
@@ -1567,7 +1569,9 @@ export function recordCodexUpstreamOutcome(
           const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
             ? meta.promoteAccountId
             : null;
-          const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now, quotaScope);
+          const fallback = meta.suppressPromotion
+            ? null
+            : (reused ?? pickAlternateCodexAccount(config, accountId, now, quotaScope));
           if (fallback) promoteActiveCodexAccount(config, fallback);
         }
       }
@@ -1613,7 +1617,9 @@ export function recordCodexUpstreamOutcome(
         const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
           ? meta.promoteAccountId
           : null;
-        const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now);
+        const fallback = meta.suppressPromotion
+          ? null
+          : (reused ?? pickAlternateCodexAccount(config, accountId, now));
         if (fallback) promoteActiveCodexAccount(config, fallback);
       }
     }
