@@ -5,7 +5,7 @@
  * view state (tab, query) lives here; selection lifts up.
  */
 import { useMemo, useState } from "react";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/shared";
 import {
   bucketPresets,
   filterPresets,
@@ -24,15 +24,19 @@ export type AccountLoginRow = {
 
 export type CatalogTier = "accounts" | "free" | "paid";
 
+const EMPTY_USAGE_RANK: Record<string, number> = {};
+const EMPTY_ACCOUNT_ROWS: AccountLoginRow[] = [];
+const EMPTY_ACCOUNT_STATUS: Record<string, AccountLoginStatus> = {};
+
 export default function ProviderCatalog({
   presets,
-  usageRank = {},
+  usageRank = EMPTY_USAGE_RANK,
   presetsLoading = false,
   initialTier = "free",
   onSelectPreset,
   onSelectCustom,
-  accountRows = [],
-  accountStatus = {},
+  accountRows = EMPTY_ACCOUNT_ROWS,
+  accountStatus = EMPTY_ACCOUNT_STATUS,
   busyProvider = null,
   onLogin,
   onCancelLogin,
@@ -58,13 +62,19 @@ export default function ProviderCatalog({
 
   const catalog = useMemo(() => presets.filter(p => p.id !== "custom"), [presets]);
 
-  /** Usage-ranked order: requests desc, then label (050a sortPresets is the no-usage fallback). */
-  const ranked = useMemo(() => [...catalog].sort((a, b) => {
-    const ra = usageRank[a.id] ?? 0;
-    const rb = usageRank[b.id] ?? 0;
-    if (rb !== ra) return rb - ra;
-    return a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
-  }), [catalog, usageRank]);
+  /** Usage-ranked order only after usage arrives; until then keep stable label order
+   * so a slow /api/usage (~5s cold) cannot flash a catalog resort. */
+  const ranked = useMemo(() => {
+    const hasUsage = Object.keys(usageRank).length > 0;
+    return catalog.toSorted((a, b) => {
+      if (hasUsage) {
+        const ra = usageRank[a.id] ?? 0;
+        const rb = usageRank[b.id] ?? 0;
+        if (rb !== ra) return rb - ra;
+      }
+      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
+    });
+  }, [catalog, usageRank]);
 
   const buckets = useMemo(() => bucketPresets(ranked), [ranked]);
   const tierList = buckets[tier];
@@ -90,7 +100,7 @@ export default function ProviderCatalog({
     <div className="provider-catalog">
       <div className="provider-catalog-tabs" role="tablist">
         {(["accounts", "free", "paid"] as const).map(candidate => (
-          <button
+          <button type="button"
             key={candidate}
             role="tab"
             aria-selected={tier === candidate}
@@ -120,7 +130,7 @@ export default function ProviderCatalog({
           <div className="muted text-control provider-catalog-empty">{t("modal.catalogLoading")}</div>
         )}
         {tier !== "accounts" && rows.map(p => (
-          <button key={p.id} className="list-row" onClick={() => onSelectPreset(p)}>
+          <button type="button" key={p.id} className="list-row" onClick={() => onSelectPreset(p)}>
             <div>
               <div className="title">{p.label}</div>
               <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
@@ -152,17 +162,21 @@ export default function ProviderCatalog({
                       <a className="btn btn-ghost" href={row.href ?? "#codex-auth"}>{t("modal.accountManage")}</a>
                     )}
                     {onLogin && (
-                      <button className={loggedIn ? "btn btn-ghost" : "btn btn-primary"} onClick={() => onLogin(row.id)}>
-                        {loggedIn ? t("modal.accountAdd") : t("modal.accountLogin")}
+                      <button type="button"
+                        className={loggedIn ? "btn btn-ghost" : "btn btn-primary"}
+                        disabled={busy}
+                        onClick={() => { if (!busy) onLogin(row.id); }}
+                      >
+                        {busy ? t("codexAuth.enablingOpenai") : loggedIn ? t("modal.accountAdd") : t("modal.accountLogin")}
                       </button>
                     )}
                   </>
                 ) : loggedIn ? (
-                  onLogout && <button className="btn btn-ghost" onClick={() => onLogout(row.id)}>{t("modal.accountLogout")}</button>
+                  onLogout && <button type="button" className="btn btn-ghost" onClick={() => onLogout(row.id)}>{t("modal.accountLogout")}</button>
                 ) : busy ? (
-                  onCancelLogin && <button className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>{t("common.cancel")}</button>
+                  onCancelLogin && <button type="button" className="btn btn-ghost" onClick={() => onCancelLogin(row.id)}>{t("common.cancel")}</button>
                 ) : (
-                  onLogin && <button className="btn btn-primary" onClick={() => onLogin(row.id)}>{t("modal.accountLogin")}</button>
+                  onLogin && <button type="button" className="btn btn-primary" onClick={() => onLogin(row.id)}>{t("modal.accountLogin")}</button>
                 )}
               </div>
             </div>
@@ -176,7 +190,7 @@ export default function ProviderCatalog({
       <div className="provider-catalog-footer">
         <div style={{ flex: 1 }} />
         {tier !== "accounts" && (
-          <button className="link-btn" onClick={onSelectCustom}>{t("modal.notListed")}</button>
+          <button type="button" className="link-btn" onClick={onSelectCustom}>{t("modal.notListed")}</button>
         )}
       </div>
     </div>

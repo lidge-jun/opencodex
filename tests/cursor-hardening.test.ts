@@ -7,8 +7,10 @@ import {
 } from "../src/adapters/cursor/gen/agent_pb";
 import { fetchCursorUsableModels } from "../src/adapters/cursor/live-models";
 import { armTimeoutDestroyFallback, createLiveCursorTransport, createTerminalSettler } from "../src/adapters/cursor/live-transport";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import { gatherRoutedModels } from "../src/codex/catalog";
-import { clearModelCache } from "../src/codex/model-cache";
+import { clearModelCache, getProviderDiscoveryStatus } from "../src/codex/model-cache";
+import { handleManagementAPI } from "../src/server/management-api";
 
 async function withDiscoveryServer<T>(
   handler: (stream: http2.ServerHttp2Stream) => void,
@@ -41,6 +43,25 @@ function respond(status: number, body = new Uint8Array()): (stream: http2.Server
   };
 }
 
+async function cursorDiscoveryDto(provider: string): Promise<Record<string, unknown>> {
+  const requestUrl = new URL("http://127.0.0.1/api/providers");
+  const response = await handleManagementAPI(
+    new Request(requestUrl),
+    requestUrl,
+    {
+      providers: {
+        [provider]: {
+          adapter: "cursor",
+          baseUrl: "https://api2.cursor.sh",
+          models: [],
+        },
+      },
+    },
+  );
+  const providers = await response!.json() as Array<Record<string, unknown>>;
+  return providers[0] ?? {};
+}
+
 describe("Cursor live-model discovery hardening", () => {
   test("returns discovered models as typed success", async () => {
     const body = toBinary(GetUsableModelsResponseSchema, create(GetUsableModelsResponseSchema, {
@@ -57,6 +78,33 @@ describe("Cursor live-model discovery hardening", () => {
       fetchCursorUsableModels({ apiKey: "bad-token", baseUrl }));
 
     expect(result).toMatchObject({ ok: false, error: "auth", detail: "HTTP 401" });
+  });
+
+  test("Cursor catalog discovery failure records provider status", async () => {
+    const provider = "cursor-discovery-failed";
+    const rawDetail = "HTTP 401";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const models = await withDiscoveryServer(respond(401), baseUrl => gatherRoutedModels({
+        providers: {
+          [provider]: {
+            adapter: "cursor",
+            baseUrl,
+            apiKey: "bad-token",
+            models: ["auto"],
+          },
+        },
+      }));
+
+      expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([`${provider}/auto`]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "provider" });
+      const dto = await cursorDiscoveryDto(provider);
+      expect(dto).toMatchObject({ discovery: { status: "failed", reason: "provider" } });
+      expect(JSON.stringify(dto)).not.toContain(rawDetail);
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
   });
 
   test("classifies non-auth HTTP failures", async () => {
@@ -88,6 +136,25 @@ describe("Cursor live-model discovery hardening", () => {
       fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
 
     expect(result).toEqual({ ok: false, error: "empty" });
+  });
+
+  test("Cursor model discovery rejects announced and streamed 4 MiB overflow before decode", async () => {
+    const announced = await withDiscoveryServer(stream => {
+      stream.respond({
+        ":status": 200,
+        "content-type": "application/proto",
+        "content-length": String(4 * 1024 * 1024 + 1),
+      });
+      stream.end();
+    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+    expect(announced).toMatchObject({ ok: false, error: "too_large" });
+
+    const streamed = await withDiscoveryServer(stream => {
+      stream.respond({ ":status": 200, "content-type": "application/proto" });
+      stream.write(Buffer.alloc(4 * 1024 * 1024));
+      stream.end(Buffer.alloc(1));
+    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));
+    expect(streamed).toMatchObject({ ok: false, error: "too_large" });
   });
 
   test("catalog warns with the failure class before preserving its degradation order", async () => {
@@ -132,7 +199,7 @@ describe("Cursor discovery bounded retry", () => {
       }
       stream.respond({ ":status": 200, "content-type": "application/proto" });
       stream.end(body);
-    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl, timeoutMs: 30 }));
+    }, baseUrl => fetchCursorUsableModels({ apiKey: "test-token", baseUrl, timeoutMs: 120 }));
 
     expect(requests).toBe(2);
     expect(result).toEqual({ ok: true, models: ["gpt-5.5-high"] });
@@ -273,6 +340,7 @@ describe("Cursor live transport unexpected EOF", () => {
     }, async baseUrl => {
       const transport = createLiveCursorTransport({
         provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
         firstFrameTimeoutMs: 2_000,
       });
       let failure: Error | undefined;
@@ -299,3 +367,4 @@ describe("Cursor live transport unexpected EOF", () => {
     });
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

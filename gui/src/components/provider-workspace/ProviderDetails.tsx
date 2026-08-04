@@ -3,7 +3,7 @@
  * and composes the Overview/Models/Usage/Settings panels.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { isFreeProvider } from "../../provider-workspace/catalog";
@@ -16,6 +16,7 @@ import ProviderOverview from "./ProviderOverview";
 import ProviderModels from "./ProviderModels";
 import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
+import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
@@ -29,6 +30,7 @@ export default function ProviderDetails({
   modelUsage,
   quotaReport,
   availableModels,
+  hasLiveModels,
   selectedModels,
   modelsLoading,
   modelsLoadFailed,
@@ -45,16 +47,20 @@ export default function ProviderDetails({
   loginHint,
   authHandlers,
   onCodexActiveNeedsReauthChange,
+  codexController,
   onUpdateProvider,
   isDefault,
   onRemoveProvider,
   onSetDisabled,
+  onSetDefault,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
   availableModels: string[];
+  /** Server-reported live-catalog provenance; see filterModels(). */
+  hasLiveModels: boolean;
   selectedModels: string[];
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
@@ -71,10 +77,13 @@ export default function ProviderDetails({
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
+  /** Shared Codex account state owned by Providers (WP3). */
+  codexController?: CodexAccountPoolController;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
+  onSetDefault?: (name: string) => void;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
@@ -89,6 +98,14 @@ export default function ProviderDetails({
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
   const authSurface = useMemo(() => providerAuthSurface(item), [item]);
+  const connectionIdentity = JSON.stringify([
+    codexController?.activeId ?? "",
+    accounts?.find(account => account.active)?.id ?? "",
+    keys?.find(entry => entry.active)?.id ?? "",
+    oauth?.loggedIn === undefined ? "" : String(oauth.loggedIn),
+    oauth?.needsReauth === undefined ? "" : String(oauth.needsReauth),
+    oauthEmail ?? "",
+  ]);
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
     { id: "models", label: t("pws.tab.models") },
@@ -142,12 +159,17 @@ export default function ProviderDetails({
         <ProviderIcon name={item.name} adapter={item.adapter} baseUrl={item.baseUrl} cls="pws-detail-icon" />
         <div className="pws-detail-title-wrap">
           <h2 className="pws-detail-title">
-            {formatProviderDisplayName(item.name)}
+            {formatProviderDisplayName(item.name, t)}
             {local && <span className="pwi-rail-badge pwi-rail-badge--local">{t("modal.badge.local")}</span>}
             {!local && free && <span className="pwi-rail-badge pwi-rail-badge--free">{t("modal.badge.free")}</span>}
           </h2>
         </div>
         <div className="pws-detail-actions">
+          {!isDefault && !isDisabled && onSetDefault && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSetDefault(item.name)}>
+              {t("prov.setDefault")}
+            </button>
+          )}
           {onRemoveProvider && (
             <button
               type="button"
@@ -199,7 +221,25 @@ export default function ProviderDetails({
       >
         {tab === "overview" && (
           <ProviderOverview
+            accountPanel={authSurface ? (
+              <ProviderAuthPanel
+                item={item}
+                apiBase={apiBase}
+                oauth={oauth}
+                accounts={accounts}
+                keys={keys}
+                accountLoadState={accountLoadState}
+                switchingAccountId={switchingAccountId}
+                busy={busyProvider === item.name}
+                loginHint={loginHint}
+                authHandlers={authHandlers}
+                onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
+                codexController={codexController}
+              />
+            ) : undefined}
             item={item}
+            apiBase={apiBase}
+            connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
             oauthEmail={oauthEmail}
@@ -227,8 +267,11 @@ export default function ProviderDetails({
         )}
         {tab === "models" && (
           <ProviderModels
+            key={item.name}
             item={item}
+            apiBase={apiBase}
             availableModels={availableModels}
+            hasLiveModels={hasLiveModels}
             selectedModels={selectedModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
@@ -256,6 +299,7 @@ export default function ProviderDetails({
             loginHint={loginHint}
             authHandlers={authHandlers}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
+            codexController={codexController}
           />
         )}
         {tab === "settings" && (

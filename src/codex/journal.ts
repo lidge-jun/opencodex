@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
+import { hasInjectedCodexRouting } from "./injected-marker";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 
 const JOURNAL_PATH = join(CODEX_HOME, "opencodex-journal.json");
@@ -28,10 +29,45 @@ function sha256(content: string | null): string | null {
   return content === null ? null : createHash("sha256").update(content).digest("hex");
 }
 
-export function writeJournal(): void {
-  if (existsSync(JOURNAL_PATH) && readJournal()) return;
+export interface WriteJournalOptions {
+  /**
+   * The caller's verdict on the config it is about to transform: false when
+   * `hasInjectedCodexRouting` matched. This does NOT decide whether the content
+   * may be journaled — that is checked below, from the bytes themselves. It only
+   * authorizes REPLACING an existing snapshot, which is why omitting it still
+   * allows a first snapshot but never an overwrite.
+   */
+  currentStateIsNative?: boolean;
+  /**
+   * The exact bytes the caller classified. Journaling these rather than re-reading
+   * the file keeps the snapshot and the verdict describing the same content when
+   * another process rewrites config.toml mid-flight.
+   */
+  configContent?: string;
+}
+
+/**
+ * Snapshot the pre-injection Codex state.
+ *
+ * Only native (non-opencodex-owned) config may be journaled, and native config
+ * always supersedes an older snapshot. The first half stops a re-inject from
+ * recording opencodex's own routing as the user's original — which would survive
+ * `ocx stop` and make the injection unremovable. The second half is the #477 fix:
+ * without it the first snapshot a machine ever takes is the only one it ever has,
+ * so an unclean shutdown days later replays a day-one config over the user's
+ * plugins, model choice, and trusted projects.
+ */
+export function writeJournal(options: WriteJournalOptions = {}): void {
   if (!existsSync(CODEX_CONFIG_PATH)) return;
-  const config = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  const config = options.configContent ?? readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  // Ownership is decided HERE, from the bytes about to be journaled — never taken
+  // on the caller's word. A caller that says "native" about injected content would
+  // otherwise make opencodex's own routing the user's permanent "original".
+  if (hasInjectedCodexRouting(config)) return;
+  // The caller's verdict only authorizes REPLACEMENT. It is weaker evidence than
+  // the check above (it may describe bytes read a moment earlier), so an
+  // unclassified call creates a first snapshot but never overwrites one.
+  if (existsSync(JOURNAL_PATH) && readJournal() && options.currentStateIsNative !== true) return;
   const profile = existsSync(CODEX_PROFILE_PATH)
     ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
     : null;

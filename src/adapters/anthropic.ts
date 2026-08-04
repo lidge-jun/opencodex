@@ -22,6 +22,7 @@ import { neutralizeIdentity } from "./identity";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -250,6 +251,71 @@ function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
   }
 }
 
+/** Normalize provider baseUrl paths ending in `/`, `/v1`, or `/v1/messages` to `{origin}/v1/messages`. */
+export function anthropicMessagesUrl(baseUrl: string): string {
+  try {
+    new URL(baseUrl);
+  } catch {
+    throw new Error(`anthropic provider has malformed baseUrl: ${baseUrl}`);
+  }
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const root = trimmed.replace(/\/v1\/messages\/?$/i, "").replace(/\/v1\/?$/i, "").replace(/\/+$/, "");
+  return `${root}/v1/messages`;
+}
+
+function synthesizeToolUseId(): string {
+  return `toolu_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+/**
+ * A tool_use id that a client can actually echo back. `??` only catches a missing
+ * field, so an Anthropic-compatible relay that sends `""` or `"   "` produced a
+ * call whose id round-trips as blank — the next turn then cannot pair the result
+ * with its call. Treat blank as absent and synthesize (#765).
+ */
+function usableToolUseId(id: unknown): string {
+  return typeof id === "string" && id.trim() ? id : synthesizeToolUseId();
+}
+
+function toolUseArguments(input: unknown): string {
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return "{}";
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch {
+      // A tool call's arguments must be a JSON object. Re-encoding an unparseable string as a
+      // JSON *string* is the double-encoding #765 reports: the caller then receives
+      // `"get weather"` where an object was required and the tool call is unusable either way.
+      // An empty object at least fails in the tool's own argument validation.
+      return "{}";
+    }
+  }
+  return JSON.stringify(input ?? {});
+}
+
+/**
+ * Whether arguments assembled from a stream's `input_json_delta` fragments are usable.
+ * A tool block that sent no fragments at all is fine — that is a no-argument call. Anything
+ * else has to parse, because unlike the non-stream path the fragments have already been
+ * forwarded to the client and cannot be repaired after the fact.
+ */
+function streamedToolArgumentsParse(assembled: string): boolean {
+  const trimmed = assembled.trim();
+  if (!trimmed) return true;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
+  return provider.apiKeyTransport === "bearer";
+}
+
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
   switch (effort) {
@@ -399,29 +465,33 @@ function messagesToAnthropicFormat(
       }
       case "assistant": {
         const aMsg = msg as OcxAssistantMessage;
-        const content: unknown[] = [];
+        const preface: unknown[] = [];
+        const toolUses: unknown[] = [];
         const toolUseIds: string[] = [];
         for (const part of aMsg.content) {
           if (part.type === "text") {
             const text = (part as OcxTextContent).text;
-            if (text) content.push({ type: "text", text });
+            if (text) preface.push({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
-              content.push({ type: "redacted_thinking", data });
+              preface.push({ type: "redacted_thinking", data });
             }
             if (isLikelyRealAnthropicThinkingSignature(t.signature)) {
-              content.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
+              preface.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
             }
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
             const flatName = namespacedToolName(tc.namespace, tc.name);
             toolUseIds.push(tc.id);
-            content.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
+            toolUses.push({ type: "tool_use", id: tc.id, name: toolNames.toWire(flatName), input: tc.arguments });
           }
         }
+        // Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
+        // earlier tool_use ids look unpaired (#620 / common multi-step history shape).
+        const content = [...preface, ...toolUses];
         if (content.length === 0) break;
         messages.push({ role: "assistant", content });
         if (toolUseIds.length > 0) {
@@ -672,8 +742,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name)) };
       }
 
-      const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-      const url = `${base}/v1/messages`;
+      const url = anthropicMessagesUrl(provider.baseUrl);
       const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
       if (unresolvedPlaceholder) {
         throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
@@ -694,7 +763,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
         headers["x-client-request-id"] = crypto.randomUUID();
       } else {
-        headers["x-api-key"] = provider.apiKey;
+        if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+        else headers["x-api-key"] = provider.apiKey;
       }
       if (provider.headers) Object.assign(headers, provider.headers);
 
@@ -714,15 +784,17 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       return { url, method: "POST", headers, body: JSON.stringify(body) };
     },
 
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
       }
 
+      const budgetEncoder = new TextEncoder();
       let currentBlockType = "";
       let currentToolCallId = "";
       let currentToolCallName = "";
+      let currentToolCallJson = "";
       let pendingUsage: Record<string, number> | undefined;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
@@ -737,7 +809,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         };
       };
 
-      for await (const record of decodeServerSentEvents(response.body)) {
+      try {
+      for await (const record of decodeServerSentEvents(response.body, { includeComments: true, translatorBudget: budget })) {
+        if (record.kind === "comment") {
+          yield { type: "heartbeat" };
+          continue;
+        }
         const payload = record.data.trim();
         if (!payload) continue;
 
@@ -760,8 +837,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "tool_use") {
-                  currentToolCallId = block.id ?? "";
+                  currentToolCallId = usableToolUseId(block.id);
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
+                  currentToolCallJson = "";
+                  budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
@@ -786,15 +865,44 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   // Arrives once, just before the thinking block's content_block_stop; block-scoped
                   // so a stray signature on a non-thinking block can never be captured.
                   yield { type: "thinking_signature", signature: delta.signature };
-                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
+                  // Forwarded immediately: the bridge maps each delta to a client-visible
+                  // response.function_call_arguments.delta frame, so withholding fragments until
+                  // block close would leave a started call showing empty arguments. A copy is kept
+                  // to validate the assembled payload at content_block_stop.
+                  const previousBytes = budgetEncoder.encode(currentToolCallJson).byteLength;
+                  const nextBytes = previousBytes + budgetEncoder.encode(delta.partial_json).byteLength;
+                  const reservation = budget.reserveTransient(nextBytes, { kind: "tool_args", callId: currentToolCallId });
+                  try {
+                    currentToolCallJson += delta.partial_json;
+                    reservation.commitRetained();
+                    budget.releaseRetained(previousBytes, { kind: "tool_args", callId: currentToolCallId });
+                  } catch (error) {
+                    reservation.release();
+                    throw error;
+                  }
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
                 }
                 break;
               }
               case "content_block_stop": {
                 if (currentBlockType === "tool_use") {
+                  // The non-stream path repairs an unparseable payload in toolUseArguments(); the
+                  // stream cannot, because the fragments are already downstream. Fail the turn
+                  // instead of ending a tool call whose arguments will not parse — the bridge's
+                  // terminal-error path cancels the open call (status incomplete) rather than
+                  // completing it before response.failed (#765).
+                  if (!streamedToolArgumentsParse(currentToolCallJson)) {
+                    yield {
+                      type: "error",
+                      message: "Anthropic stream sent malformed tool_use arguments (invalid JSON)",
+                    };
+                    return;
+                  }
                   yield { type: "tool_call_end" };
+                  budget.closeCall(currentToolCallId);
                   currentToolCallId = "";
+                  currentToolCallJson = "";
                 }
                 currentBlockType = "";
                 break;
@@ -817,11 +925,43 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               }
         }
       }
-      if (pendingUsage && !emittedDone) yield* emitDone();
+      } catch (error) {
+        if (!isTranslatorBudgetExceededError(error)) throw error;
+        yield {
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "translation_buffer_limit",
+          message: "upstream translation buffer exceeded the safe limit",
+        };
+      } finally {
+        if (currentToolCallId) budget.closeCall(currentToolCallId);
+      }
+      if (!emittedDone) {
+        // Fail closed on transport EOF. Compatible providers may omit message_stop after message_delta.stop_reason.
+        if (pendingStopReason !== undefined) {
+          const stopReason = pendingStopReason === "max_tokens"
+            ? "max_tokens"
+            : pendingStopReason === "refusal" || pendingStopReason === "content_filter"
+              ? "content_filter"
+              : pendingStopReason;
+          emittedDone = true;
+          yield {
+            type: "done",
+            usage: usageFromAnthropic(pendingUsage),
+            ...(stopReason ? { stopReason } : {}),
+          };
+        } else {
+          yield { type: "error", message: "upstream stream ended before message_stop — possible truncation" };
+        }
+      }
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const json = await response.json() as Record<string, unknown>;
+      const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+      budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
+      try {
       const events: AdapterEvent[] = [];
       const content = json.content as { type: string; text?: string; id?: string; name?: string; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
       if (content) {
@@ -838,8 +978,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
             events.push({ type: "redacted_thinking", data: block.data });
           } else if (block.type === "tool_use") {
-            events.push({ type: "tool_call_start", id: block.id ?? "", name: toolNames.fromWire(block.name ?? "") });
-            events.push({ type: "tool_call_delta", arguments: JSON.stringify(block.input ?? {}) });
+            const id = usableToolUseId(block.id);
+            events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
+            events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input) });
             events.push({ type: "tool_call_end" });
           }
         }
@@ -851,7 +992,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         usage: usageFromAnthropic(usage),
         ...(stopReason ? { stopReason } : {}),
       });
+      retainTranslatedEventBatch(events, budget);
       return events;
+      } finally {
+        budget.releaseRetained(responseBytes, { kind: "retained_collectors" });
+      }
     },
 
   };

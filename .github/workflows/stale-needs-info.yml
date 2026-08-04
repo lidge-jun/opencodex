@@ -1,0 +1,97 @@
+name: Close stale needs-info issues
+
+# Scheduled workflows only run from the repository DEFAULT branch
+# (currently `main`), not from `dev`. Landing here on `dev` alone does not
+# change live issue-stale behavior until the change is also on that default
+# branch.
+on:
+  schedule:
+    # Daily at 06:15 UTC (offset from the hour to reduce Action load spikes).
+    - cron: "15 6 * * *"
+  # No workflow_dispatch: a branch-selected manual run would execute that
+  # branch's workflow body with issues:write / pull-requests:write, bypassing
+  # default-branch review. Schedule-only keeps the trusted revision on main.
+
+permissions:
+  issues: write
+  # actions/stale requires this even when PR processing is disabled below.
+  pull-requests: write
+
+concurrency:
+  group: stale-needs-info
+  cancel-in-progress: false
+
+jobs:
+  stale:
+    name: Stale needs-info issues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure stale label exists
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const name = "stale";
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name });
+              core.info(`Label "${name}" already exists.`);
+              return;
+            } catch (err) {
+              if (err.status !== 404) {
+                core.setFailed(`Failed to look up label "${name}": ${err.message || err}`);
+                return;
+              }
+            }
+            try {
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name,
+                color: "ffffff",
+                description: "No activity on a needs-info issue; will close soon unless updated",
+              });
+              core.info(`Created label "${name}".`);
+            } catch (err) {
+              // Concurrent scheduled runs may race on first create.
+              if (err.status === 422) {
+                try {
+                  await github.rest.issues.getLabel({ owner, repo, name });
+                  core.info(`Label "${name}" appeared concurrently; continuing.`);
+                  return;
+                } catch (lookupErr) {
+                  core.setFailed(
+                    `Failed to create label "${name}" (422) and re-check failed: ${lookupErr.message || lookupErr}`,
+                  );
+                  return;
+                }
+              }
+              core.setFailed(`Failed to create label "${name}": ${err.message || err}`);
+            }
+
+      - name: Mark and close inactive needs-info issues
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.4.0
+        with:
+          # Only issues maintainers labeled as waiting on the reporter.
+          only-issue-labels: needs-info
+          # Do not auto-stale pull requests.
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          # -1 PR timers still allow unstaling existing PR labels; keep that off.
+          remove-pr-stale-when-updated: false
+          # Warn after 14 days of inactivity; close 7 days after the warning.
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          stale-issue-label: stale
+          close-issue-reason: not_planned
+          # Any new comment/update removes the stale label and restarts the clock.
+          remove-stale-when-updated: true
+          ascending: true
+          operations-per-run: 60
+          stale-issue-message: |
+            This issue has the `needs-info` label and has had no activity for 14 days.
+
+            It will be closed in 7 days if there is still no reply with the requested details (reproduction steps, logs, or a concrete spec). A comment or edit resets this timer. Maintainers can remove `needs-info` once the report is actionable — for example when promoting it to `roadmap`.
+          close-issue-message: |
+            Closing this issue because it stayed on `needs-info` with no further reply.
+
+            Please open a new issue (or comment here to reopen) when you can provide the missing reproduction details or specification. Thanks for the report.

@@ -14,10 +14,19 @@ import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
+import { configuredAdminToken } from "../lib/admin-secrets";
+import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
+import { resolveClaudeAuthMode } from "../claude/auth-mode";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
 }
+
+/**
+ * Injectable IO for tests. `env` is deliberately NOT injectable: it is bound to the
+ * launch base so detection and the spawned process can never disagree (audit R3-3).
+ */
+export type ClaudeEnvDeps = { authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens"> };
 
 /**
  * Pure env assembly (unit-tested): never sets ANTHROPIC_API_KEY (setting both
@@ -25,8 +34,41 @@ export interface ClaudeLaunchEnv {
  * overrides variables the user already exported, apart from stale loopback
  * ANTHROPIC_BASE_URL values owned by a previous opencodex launch.
  */
-export function buildClaudeEnv(config: OcxConfig, port: number, base: ClaudeLaunchEnv, contextWindows: Record<string, number> = {}): ClaudeLaunchEnv {
+export function buildClaudeEnv(
+  config: OcxConfig,
+  port: number,
+  base: ClaudeLaunchEnv,
+  contextWindows: Record<string, number> = {},
+  deps: ClaudeEnvDeps = {},
+): ClaudeLaunchEnv {
   const env: ClaudeLaunchEnv = { ...base };
+  // Step 1 — strip OUR OWN dummy from the inherited environment before anything reads
+  // or writes the token slot. setDefault below preserves any non-empty value, so a
+  // stale marker left in place would suppress the admission key and then be removed,
+  // leaving the child with no token at all (audit R2-1). It is opencodex state, never
+  // user auth, so dropping it unconditionally is safe.
+  if (env.ANTHROPIC_AUTH_TOKEN === PROXY_MARKER) delete env.ANTHROPIC_AUTH_TOKEN;
+  // Step 1b — drop Anthropic credentials that the bundled Bun runtime synthesized from a
+  // project `.env`/`.env.local` (issue #701). Claude Code disables claude.ai connectors the
+  // moment either token slot is populated, so an ambient project file silently moved a
+  // subscriber onto API billing while their OAuth login stayed healthy. The npm launcher
+  // runs under Node, which does NOT auto-load dotenv, so it records the slots that existed
+  // before Bun started; anything populated now but absent then came from the working
+  // directory, not from the user. A genuine shell export is still honored, which keeps
+  // auto-mode API-key auth working. An ABSENT marker means provenance is unknowable
+  // (a direct `bun src/cli/index.ts` run, a test, or an older launcher), and then we
+  // change nothing rather than guess — an EMPTY marker is different: the launcher ran
+  // and saw no pre-existing slots.
+  const preBunSlots = base.OCX_PRE_BUN_ANTHROPIC_ENV;
+  if (preBunSlots !== undefined) {
+    const exported = new Set(preBunSlots.split(",").filter(name => name.length > 0));
+    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] as const) {
+      const value = env[name];
+      if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
+    }
+  }
+  // Never forward the seam itself to Claude Code.
+  delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
   const setDefault = (name: string, value: string | undefined) => {
     if (value === undefined || value.length === 0) return;
     if (env[name] !== undefined && env[name] !== "") return; // user wins
@@ -55,8 +97,26 @@ export function buildClaudeEnv(config: OcxConfig, port: number, base: ClaudeLaun
   if ((config.apiKeys?.length ?? 0) > 0) {
     setDefault("ANTHROPIC_AUTH_TOKEN", config.apiKeys![0].key);
   }
-  if (!env.ANTHROPIC_AUTH_TOKEN && config.claudeCode?.authMode === "proxy") {
-    env.ANTHROPIC_AUTH_TOKEN = "opencodex-proxy";
+  // Detection reads the SANITIZED launch env — the exact object spawned below — so the
+  // resolver and the spawned process cannot disagree. It deliberately does NOT read the
+  // raw base: the provenance strip above already removed dotenv-only credentials, and
+  // letting a value the child never receives decide the marker left an auto-mode user
+  // with neither the credential NOR the proxy marker (#701 audit round 2). Injected deps
+  // are spread FIRST and `env` bound LAST, and the injection type excludes `env`, so a
+  // test fake cannot break that. `ownTokens` is bound last for the same reason: it is
+  // config-derived, and a fake that replaced it could make our own admission key look
+  // like user auth.
+  const resolved = resolveClaudeAuthMode(config, detectClaudeAuth({
+    ...defaultAuthDetectDeps(env as NodeJS.ProcessEnv),
+    ...(deps.authDetect ?? {}),
+    env: () => env as NodeJS.ProcessEnv,
+    ownTokens: ownAdmissionTokens(config),
+  }));
+  if (!env.ANTHROPIC_AUTH_TOKEN && resolved.markerMode === "proxy") {
+    env.ANTHROPIC_AUTH_TOKEN = PROXY_MARKER;
+  }
+  if (resolved.origin === "auto-unknown") {
+    console.error("⚠ Claude 인증을 확인하지 못했습니다 — 구독 방식으로 진행합니다. GUI에서 인증 모드를 직접 지정하면 이 판단을 덮어쓸 수 있습니다.");
   }
   // NOTE: do NOT set _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL here. While it enables
   // Design/Remote Control, it DISABLES gateway model discovery (Claude Code's eligibility
@@ -115,14 +175,13 @@ export function buildClaudeEnv(config: OcxConfig, port: number, base: ClaudeLaun
 
 /**
  * Context-window map from the RUNNING proxy's management API (warm TTL cache; the
- * daemon registers every selector form — audit R3#1). 3s bound + auth header
- * (OPENCODEX_API_AUTH_TOKEN first, config key fallback — audit R4#1). Failure → {}
+ * daemon registers every selector form — audit R3#1). 3s bound + management auth header.
  * (no [1m] marking, conservative).
  */
 export async function fetchClaudeContextWindows(config: OcxConfig, port: number, timeoutMs = 3_000): Promise<Record<string, number>> {
   try {
     const headers = new Headers();
-    const token = process.env.OPENCODEX_API_AUTH_TOKEN || config.apiKeys?.[0]?.key;
+    const token = configuredAdminToken();
     if (token) headers.set("x-opencodex-api-key", token);
     const res = await fetch(`http://127.0.0.1:${port}/api/claude-code`, {
       headers,

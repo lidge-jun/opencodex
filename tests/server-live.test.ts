@@ -1,0 +1,851 @@
+/**
+ * /v1/live relay: Codex App / ChatGPT voice POSTs call-create against the injected base_url,
+ * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
+ */
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-api";
+import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
+import { saveConfig } from "../src/config";
+import { startServer } from "../src/server";
+import type { OcxConfig } from "../src/types";
+import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+
+const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+const previousOpencodexHome = process.env.OPENCODEX_HOME;
+const originalFetch = globalThis.fetch;
+const TEST_DIR = join(import.meta.dir, ".tmp-server-live-test");
+let isolatedCodexHome: IsolatedCodexHome | null = null;
+const DIRECT_CHATGPT_TOKEN = fakeChatGptJwt({ chatgpt_account_id: "acct-123" });
+
+beforeEach(() => {
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  mkdirSync(TEST_DIR, { recursive: true });
+  process.env.OPENCODEX_HOME = TEST_DIR;
+  delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  isolatedCodexHome = installIsolatedCodexHome("ocx-server-live-codex-");
+  clearCodexUpstreamHealth();
+  clearThreadAccountMap();
+  clearAccountNeedsReauth("pool-a");
+  clearAccountQuota();
+  globalThis.fetch = originalFetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousOpencodexHome;
+  isolatedCodexHome?.restore();
+  isolatedCodexHome = null;
+  clearCodexUpstreamHealth();
+  clearThreadAccountMap();
+  clearAccountNeedsReauth("pool-a");
+  clearAccountQuota();
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+});
+
+interface CapturedRequest {
+  path: string;
+  url: string;
+  headers: Headers;
+  bodyText: string;
+}
+
+function fakeLiveUpstream(captured: CapturedRequest[], status = 201, location = "/v1/live/rtc_test") {
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const reqUrl = new URL(req.url);
+      captured.push({
+        path: reqUrl.pathname,
+        url: `${reqUrl.pathname}${reqUrl.search}`,
+        headers: req.headers,
+        bodyText: await req.text(),
+      });
+      return new Response("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n", {
+        status,
+        headers: {
+          "content-type": "application/sdp",
+          location,
+        },
+      });
+    },
+  });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    const prefix = "/backend-api/codex";
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+      const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, upstream.url);
+      return originalFetch(target, init);
+    }
+    if (url.hostname === "api.openai.com") {
+      const target = new URL(`${url.pathname}${url.search}`, upstream.url);
+      return originalFetch(target, init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  return upstream;
+}
+
+function forwardConfig(): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  } as OcxConfig;
+}
+
+function multipartLiveBody(
+  sdp = "v=0",
+  session: Record<string, unknown> | null = { model: "gpt-live" },
+): { body: Uint8Array; contentType: string } {
+  const boundary = "codex-realtime-call-boundary";
+  const parts = [
+    `--${boundary}`,
+    `Content-Disposition: form-data; name="sdp"`,
+    `Content-Type: application/sdp`,
+    ``,
+    sdp,
+  ];
+  if (session !== null) {
+    parts.push(
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="session"`,
+      `Content-Type: application/json`,
+      ``,
+      JSON.stringify(session),
+    );
+  }
+  parts.push(`--${boundary}--`, ``);
+  return {
+    body: new TextEncoder().encode(parts.join("\r\n")),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured);
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody("v=0-offer", { model: "gpt-live", instructions: "hi" });
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": contentType,
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body,
+    });
+    expect(response.status).toBe(201);
+    expect(response.headers.get("location")).toBe("/v1/live/rtc_test");
+    expect(await response.text()).toContain("v=0");
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toBe("/realtime/calls");
+    expect(captured[0].url).toContain("intent=quicksilver");
+    expect(captured[0].url).toContain("architecture=avas");
+    expect(captured[0].headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-123");
+    expect(captured[0].headers.get("content-type")).toContain("application/json");
+    expect(JSON.parse(captured[0].bodyText)).toEqual({
+      sdp: "v=0-offer",
+      session: { model: "gpt-live", instructions: "hi" },
+    });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("POST /v1/live relays to an OpenAI API-key provider at /v1/realtime/calls", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured, 201, "/v1/realtime/calls/rtc_api");
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
+    providers: {
+      "openai-apikey": {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-test-live",
+      },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody();
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body,
+    });
+    expect(response.status).toBe(201);
+    expect(response.headers.get("location")).toBe("/v1/realtime/calls/rtc_api");
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toBe("/v1/realtime/calls");
+    expect(captured[0].url).toContain("intent=quicksilver");
+    expect(captured[0].url).toContain("architecture=avas");
+    expect(captured[0].headers.get("authorization")).toBe("Bearer sk-test-live");
+    expect(captured[0].headers.get("content-type")).toContain("multipart/form-data");
+    expect(captured[0].bodyText).toContain('name="sdp"');
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("call-create forwards Frameless protocol headers and keeps auth pool-owned", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured);
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody("v=0-offer", { model: "gpt-live", instructions: "hi" });
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": contentType,
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "openai-alpha": "quicksilver=v2",
+        "x-session-id": "rts_123",
+        "session-id": "sess_abc",
+        "thread-id": "thread_def",
+        originator: "codex_app",
+        "x-oai-attestation": "attest-blob",
+        // Must NOT be forwarded: account-derived compliance header.
+        "x-openai-fedramp": "true",
+      },
+      body,
+    });
+    expect(response.status).toBe(201);
+
+    expect(captured).toHaveLength(1);
+    const headers = captured[0].headers;
+    expect(headers.get("openai-alpha")).toBe("quicksilver=v2");
+    expect(headers.get("x-session-id")).toBe("rts_123");
+    expect(headers.get("session-id")).toBe("sess_abc");
+    expect(headers.get("thread-id")).toBe("thread_def");
+    expect(headers.get("originator")).toBe("codex_app");
+    expect(headers.get("x-oai-attestation")).toBe("attest-blob");
+    expect(headers.get("x-openai-fedramp")).toBeNull();
+    // Auth stays proxy-resolved, not blindly copied from the whitelist path.
+    expect(headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
+    expect(headers.get("chatgpt-account-id")).toBe("acct-123");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("call-create without protocol headers does not invent them upstream", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured);
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody("v=0-offer", { model: "gpt-live", instructions: "hi" });
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": contentType,
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body,
+    });
+    expect(response.status).toBe(201);
+    expect(captured).toHaveLength(1);
+    const headers = captured[0].headers;
+    expect(headers.get("openai-alpha")).toBeNull();
+    expect(headers.get("x-session-id")).toBeNull();
+    expect(headers.get("session-id")).toBeNull();
+    expect(headers.get("thread-id")).toBeNull();
+    expect(headers.get("originator")).toBeNull();
+    expect(headers.get("x-oai-attestation")).toBeNull();
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("POST /v1/realtime/calls is accepted and relays like /v1/live", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured, 201, "/v1/realtime/calls/rtc_codex");
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody("v=0-codex");
+    const response = await fetch(new URL("/v1/realtime/calls", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": contentType,
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body,
+    });
+    expect(response.status).toBe(201);
+    expect(response.headers.get("location")).toBe("/v1/realtime/calls/rtc_codex");
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toBe("/realtime/calls");
+    expect(JSON.parse(captured[0].bodyText)).toEqual({
+      sdp: "v=0-codex",
+      session: { model: "gpt-live" },
+    });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("ChatGPT multipart rewrite allows SDP-only offers without session", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured);
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody("v=0-sdp-only", null);
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": contentType,
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body,
+    });
+    expect(response.status).toBe(201);
+    expect(captured).toHaveLength(1);
+    expect(JSON.parse(captured[0].bodyText)).toEqual({ sdp: "v=0-sdp-only" });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("OPTIONS preflight allows ChatGPT-Account-Id for voice clients", async () => {
+  saveConfig(forwardConfig());
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://127.0.0.1:" + new URL(server.url).port,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type,chatgpt-account-id",
+      },
+    });
+    expect(response.status).toBe(204);
+    const allowed = response.headers.get("Access-Control-Allow-Headers") ?? "";
+    expect(allowed.toLowerCase()).toContain("chatgpt-account-id");
+    expect(allowed.toLowerCase()).toContain("openai-alpha");
+    expect(allowed.toLowerCase()).toContain("x-session-id");
+    expect(allowed.toLowerCase()).toContain("session-id");
+    expect(allowed.toLowerCase()).toContain("thread-id");
+    expect(allowed.toLowerCase()).toContain("originator");
+    expect(allowed.toLowerCase()).toContain("x-oai-attestation");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("POST /v1/live without an OpenAI upstream returns 400", async () => {
+  saveConfig({
+    port: 0,
+    defaultProvider: "cursor",
+    providers: {
+      cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "cursor-token" },
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sdp: "v=0" }),
+    });
+    expect(response.status).toBe(400);
+    const payload = await response.json() as { error?: { message?: string } };
+    expect(payload.error?.message).toContain("OpenAI upstream");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("GET /v1/live still hits the unknown-endpoint JSON 404 guard", async () => {
+  saveConfig(forwardConfig());
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    });
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { error?: { message?: string } };
+    expect(payload.error?.message).toContain("Unknown endpoint");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("a routed pool account's token overrides the caller bearer on the live relay", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured);
+  saveConfig({
+    ...forwardConfig(),
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    activeCodexAccountId: "pool-a",
+  } as OcxConfig);
+  saveCodexAccountCredential("pool-a", {
+    accessToken: fakeChatGptJwt({ chatgpt_account_id: "acct-pool-a", email: "pool@example.test" }),
+    refreshToken: "pool-refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    chatgptAccountId: "acct-pool-a",
+  });
+
+  const server = startServer(0);
+  try {
+    const { body, contentType } = multipartLiveBody();
+    const response = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": contentType,
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body,
+    });
+    expect(response.status).toBe(201);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-a");
+    expect(captured[0].headers.get("authorization")).toContain("Bearer ");
+    expect(captured[0].headers.get("authorization")).not.toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("sideband GET /v1/live/{callId} upgrades and relays bidirectionally to ChatGPT backend", async () => {
+  const seenPaths: string[] = [];
+  const seenUpgradeHeaders: Headers[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      const url = new URL(req.url);
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        seenPaths.push(url.pathname);
+        seenUpgradeHeaders.push(req.headers);
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      message(ws, message) {
+        ws.send(`echo:${typeof message === "string" ? message : message.toString()}`);
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  // Redirect ChatGPT sideband WebSocket targets to the local mock (config stays canonical).
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live/rtc_sideband`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "openai-alpha": "quicksilver=v2",
+        "x-session-id": "rts_side",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sideband timeout")), 5_000);
+      client.addEventListener("open", () => {
+        client.send("ping-sideband");
+      });
+      client.addEventListener("message", (event) => {
+        try {
+          expect(String(event.data)).toBe("echo:ping-sideband");
+          expect(seenPaths).toContain("/v1/live/rtc_sideband");
+          expect(seenUpgradeHeaders).toHaveLength(1);
+          expect(seenUpgradeHeaders[0].get("openai-alpha")).toBe("quicksilver=v2");
+          expect(seenUpgradeHeaders[0].get("x-session-id")).toBe("rts_side");
+          expect(seenUpgradeHeaders[0].get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
+          clearTimeout(timer);
+          resolve();
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+    client.close();
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", async () => {
+  const { buildLiveSidebandUpstreamWsUrl, forwardLiveUrl, keyedLiveUrl, parseLiveSidebandTarget } =
+    await import("../src/server/live");
+
+  expect(forwardLiveUrl("https://chatgpt.com/backend-api/codex", true)).toBe(
+    "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+  );
+  expect(keyedLiveUrl("https://api.openai.com/v1")).toBe(
+    "https://api.openai.com/v1/realtime/calls?intent=quicksilver&architecture=avas",
+  );
+
+  expect(parseLiveSidebandTarget("/v1/live/rtc_1", new URLSearchParams())).toEqual({
+    style: "frameless-path",
+    callId: "rtc_1",
+  });
+  expect(parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("call_id=rtc_2"))).toEqual({
+    style: "realtime-query",
+    callId: "rtc_2",
+  });
+
+  expect(
+    buildLiveSidebandUpstreamWsUrl({
+      style: "frameless-path",
+      callId: "rtc_1",
+    }),
+  ).toBe("wss://api.openai.com/v1/live/rtc_1");
+  expect(
+    buildLiveSidebandUpstreamWsUrl({
+      style: "realtime-calls-path",
+      callId: "rtc_1",
+    }),
+  ).toBe("wss://api.openai.com/v1/realtime/calls/rtc_1");
+  expect(
+    buildLiveSidebandUpstreamWsUrl({
+      style: "realtime-query",
+      callId: "rtc_2",
+    }),
+  ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
+  expect(
+    buildLiveSidebandUpstreamWsUrl({
+      style: "frameless-path",
+      callId: "rtc_1",
+    }),
+  ).toBe("wss://api.openai.com/v1/live/rtc_1");
+  expect(
+    buildLiveSidebandUpstreamWsUrl({
+      style: "realtime-query",
+      callId: "rtc_2",
+    }),
+  ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
+});
+
+test("sideband URL policy: override precedence, normalization, and fail-closed bounds", async () => {
+  const { buildLiveSidebandUpstreamWsUrl } = await import("../src/server/live");
+  const frameless = { style: "frameless-path", callId: "rtc_1" } as const;
+  const realtime = { style: "realtime-query", callId: "rtc 2" } as const;
+
+  // Override wins for every target style.
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://realtime.example.test/v1")).toBe("wss://realtime.example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(realtime, "https://realtime.example.test/v1")).toBe("wss://realtime.example.test/v1/realtime?intent=quicksilver&call_id=rtc%202");
+
+  // Normalization: query/fragment dropped, exactly one /v1, path prefix preserved,
+  // recognized endpoint forms stripped back to the root (upstream methods.rs:994).
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/api/v1/?foo=bar#frag")).toBe("wss://example.test/api/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v1/realtime")).toBe("wss://example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v1/realtime/calls/abc")).toBe("wss://example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v1/live/abc")).toBe("wss://example.test/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "https://example.test/v10")).toBe("wss://example.test/v10/v1/live/rtc_1");
+
+  // Scheme rewrite: https -> wss; loopback http -> ws (the dev case the knob exists for).
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://localhost:8080/v1")).toBe("ws://localhost:8080/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://127.0.0.1:8080")).toBe("ws://127.0.0.1:8080/v1/live/rtc_1");
+
+  // Fail-closed bounds: malformed, remote plaintext, userinfo, and non-http(s)
+  // schemes all return the canonical root — a compromised or accidental override
+  // must never redirect upstream bearer credentials or user audio.
+  for (const bad of [
+    "not a url",
+    "http://realtime.example.test/v1",
+    "ws://realtime.example.test/v1",
+    "https://user:pass@realtime.example.test/v1",
+    "ftp://realtime.example.test/v1",
+    "   ",
+  ]) {
+    expect(buildLiveSidebandUpstreamWsUrl(frameless, bad)).toBe("wss://api.openai.com/v1/live/rtc_1");
+  }
+});
+
+// Regression: Korean realtime transcripts must survive the sideband relay byte-identically.
+// A relay that re-decodes frames at arbitrary byte boundaries turns e.g. "얘" into "��"
+// (U+FFFD pairs); this test pins text, binary, and large-frame transparency.
+test("sideband relay preserves multibyte UTF-8 frames byte-identically in both directions", async () => {
+  const KOREAN_LINE = "가볍게 얘기핼봐요";
+  const KOREAN_EVENT = JSON.stringify({
+    type: "conversation.item.input_audio_transcription.delta",
+    delta: KOREAN_LINE,
+  });
+  const largeKorean = KOREAN_LINE.repeat(20_000); // ~1.3MB — forces TCP segmentation
+  const receivedByUpstream: Uint8Array[] = [];
+
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      open(ws) {
+        ws.send(KOREAN_EVENT);
+        ws.send(new TextEncoder().encode(KOREAN_LINE));
+        ws.send(largeKorean);
+      },
+      message(_ws, message) {
+        receivedByUpstream.push(
+          typeof message === "string"
+            ? new TextEncoder().encode(message)
+            : new Uint8Array(message as ArrayBuffer),
+        );
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live/rtc_korean`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    } as unknown as string[]);
+    client.binaryType = "arraybuffer";
+
+    const inbound: Array<{ kind: string; data: unknown }> = [];
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sideband timeout")), 10_000);
+      client.addEventListener("open", () => {
+        client.send(KOREAN_EVENT);
+        client.send(new TextEncoder().encode(KOREAN_LINE));
+      });
+      client.addEventListener("message", event => {
+        inbound.push({ kind: typeof event.data, data: event.data });
+        if (inbound.length >= 3) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+
+    expect(inbound[0]!.kind).toBe("string");
+    expect(inbound[0]!.data).toBe(KOREAN_EVENT);
+    expect(String(inbound[0]!.data)).not.toContain("�");
+    if (inbound[1]!.kind === "string") {
+      expect(inbound[1]!.data).toBe(KOREAN_LINE);
+    } else {
+      expect(new TextDecoder().decode(new Uint8Array(inbound[1]!.data as ArrayBuffer))).toBe(KOREAN_LINE);
+    }
+    expect(inbound[2]!.kind).toBe("string");
+    expect(inbound[2]!.data).toBe(largeKorean);
+    expect(String(inbound[2]!.data)).not.toContain("�");
+
+    const deadline = Date.now() + 5_000;
+    while (receivedByUpstream.length < 2 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    expect(receivedByUpstream).toHaveLength(2);
+    expect(new TextDecoder().decode(receivedByUpstream[0]!)).toBe(KOREAN_EVENT);
+    expect(new TextDecoder().decode(receivedByUpstream[1]!)).toBe(KOREAN_LINE);
+
+    client.close();
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+// The env-gated frame forensic log (OCX_LIVE_FRAME_LOG) records per-frame metadata and
+// U+FFFD presence without writing full payloads — the attribution tool for multibyte
+// transcript corruption reports.
+test("sideband frame log records direction, kind, and U+FFFD context without full payloads", async () => {
+  const frameLogPath = join(TEST_DIR, "frames.jsonl");
+  process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
+  const FFFD_TEXT = "가볍게 ��기핼봐요";
+
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      open(ws) {
+        ws.send(FFFD_TEXT);
+      },
+      message(ws, message) {
+        if (typeof message === "string") ws.send(`ack:${message.length}`);
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live/rtc_framelog`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("frame-log timeout")), 10_000);
+      let acks = 0;
+      client.addEventListener("open", () => {
+        client.send("clean-frame");
+      });
+      client.addEventListener("message", () => {
+        acks += 1;
+        if (acks >= 2) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(frameLogPath) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    const lines = readFileSync(frameLogPath, "utf8").trim().split("\n").map(l => JSON.parse(l));
+    const u2cFffd = lines.find(l => l.dir === "u2c" && l.fffd === true);
+    const c2uClean = lines.find(l => l.dir === "c2u" && l.kind === "text");
+    expect(u2cFffd).toBeDefined();
+    expect(u2cFffd.kind).toBe("text");
+    expect(u2cFffd.bytes).toBeGreaterThan(0);
+    expect(u2cFffd.context).toContain("�");
+    expect(c2uClean).toBeDefined();
+    expect(c2uClean.fffd).toBe(false);
+    // Full payloads must never be logged — only short FFFD context excerpts.
+    for (const line of lines) {
+      expect(JSON.stringify(line)).not.toContain("clean-frame");
+    }
+
+    client.close();
+  } finally {
+    delete process.env.OCX_LIVE_FRAME_LOG;
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});

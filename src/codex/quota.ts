@@ -1,3 +1,8 @@
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFile, getConfigDir } from "../config";
+import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
+
 export type StoredAccountQuota = {
   weeklyPercent?: number;
   monthlyPercent?: number;
@@ -6,6 +11,20 @@ export type StoredAccountQuota = {
   resetCredits?: number;
   updatedAt: number;
 };
+
+/** Disk snapshot under OPENCODEX_HOME — usage percents only (no emails/tokens). */
+const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
+/** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
+const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
+const QUOTA_PERSIST_DEBOUNCE_MS = 250;
+
+type QuotaDiskFile = {
+  version: 1;
+  quotas: Record<string, StoredAccountQuota>;
+};
+
+let diskHydrated = false;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 export type WhamUsageResponse = {
   email?: string | null;
@@ -28,10 +47,34 @@ type WhamUsageWindow = {
 };
 
 const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
+const MONTHLY_WINDOW_MIN_MINUTES = MONTHLY_WINDOW_MIN_SECONDS / 60;
 
 const accountQuota = new Map<string, StoredAccountQuota>();
+let lastReconciledGeneration = 0;
+let liveAccountIds = new Set<string>();
 
-export const CODEX_UNKNOWN_USAGE_SCORE = 100;
+function mayCommitAccountQuota(accountId: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration || liveAccountIds.has(accountId);
+}
+
+// Valid upstream percentages are normalized to 0..100. Keep "unknown" outside that domain so an
+// actually exhausted account is still eligible for threshold rotation.
+export const CODEX_UNKNOWN_USAGE_SCORE = 101;
+export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
+
+export function isCodexQuotaExhausted(
+  quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent"> | null,
+  plan?: string | null,
+): boolean {
+  if (!quota) return false;
+  const normalizedPlan = plan?.trim().toLowerCase();
+  const values = normalizedPlan === "go" || normalizedPlan === "free"
+    ? [quota.monthlyPercent]
+    : [quota.weeklyPercent, quota.monthlyPercent];
+  return values.some(value => typeof value === "number"
+    && Number.isFinite(value)
+    && value >= CODEX_EXHAUSTED_USAGE_PERCENT);
+}
 
 export function normalizeUsagePercent(value: unknown): number | undefined {
   const numeric = typeof value === "number"
@@ -65,6 +108,133 @@ function isExplicitMonthlyWindow(window: WhamUsageWindow | null | undefined): bo
     && seconds >= MONTHLY_WINDOW_MIN_SECONDS;
 }
 
+function isExplicitMonthlyWindowMinutes(windowMinutes: unknown): boolean {
+  const minutes = typeof windowMinutes === "number"
+    ? windowMinutes
+    : typeof windowMinutes === "string" && windowMinutes.trim() !== ""
+      ? Number(windowMinutes)
+      : undefined;
+  return typeof minutes === "number"
+    && Number.isFinite(minutes)
+    && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
+}
+
+
+function snapshotHasWeekly(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.weeklyPercent !== undefined || quota.weeklyResetAt !== undefined;
+}
+
+function snapshotHasMonthly(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return quota.monthlyPercent !== undefined || quota.monthlyResetAt !== undefined;
+}
+
+function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
+  return snapshotHasWeekly(quota) || snapshotHasMonthly(quota);
+}
+export function setAccountQuotaFromParsed(
+  accountId: string,
+  quota: Omit<StoredAccountQuota, "updatedAt"> | null,
+  writerGeneration = captureConfigGeneration(),
+): void {
+  if (!quota) return;
+  if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
+  const existing = accountQuota.get(accountId);
+  const next: StoredAccountQuota = { updatedAt: Date.now() };
+  const creditsOnly = quota.resetCredits !== undefined && !snapshotHasUsage(quota);
+
+  if (creditsOnly) {
+    if (existing?.weeklyPercent !== undefined) next.weeklyPercent = existing.weeklyPercent;
+    if (existing?.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
+    if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
+    if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
+    next.resetCredits = quota.resetCredits;
+    accountQuota.set(accountId, next);
+    schedulePersistAccountQuotas();
+    return;
+  }
+
+  if (snapshotHasWeekly(quota)) {
+    if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
+    if (quota.weeklyResetAt !== undefined) next.weeklyResetAt = quota.weeklyResetAt;
+  } else if (snapshotHasMonthly(quota) && !snapshotHasWeekly(quota)) {
+    // Monthly-only snapshots intentionally clear stale weekly values (issue #382).
+  } else if (existing?.weeklyPercent !== undefined) {
+    next.weeklyPercent = existing.weeklyPercent;
+    if (existing.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
+  }
+
+  if (snapshotHasMonthly(quota)) {
+    if (quota.monthlyPercent !== undefined) next.monthlyPercent = quota.monthlyPercent;
+    if (quota.monthlyResetAt !== undefined) next.monthlyResetAt = quota.monthlyResetAt;
+  } else if (snapshotHasWeekly(quota) && existing?.monthlyPercent !== undefined) {
+    next.monthlyPercent = existing.monthlyPercent;
+    if (existing.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
+  }
+
+  if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
+  else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
+
+  accountQuota.set(accountId, next);
+  schedulePersistAccountQuotas();
+}
+
+export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQuota, "updatedAt"> | null {
+  const primaryRaw = headers.get("x-codex-primary-used-percent");
+  const secondaryRaw = headers.get("x-codex-secondary-used-percent");
+  const tertiaryRaw = headers.get("x-codex-tertiary-used-percent");
+  const primaryResetRaw = headers.get("x-codex-primary-reset-at");
+  const secondaryResetRaw = headers.get("x-codex-secondary-reset-at");
+  const tertiaryResetRaw = headers.get("x-codex-tertiary-reset-at");
+  const primaryWindowMinutes = headers.get("x-codex-primary-window-minutes");
+  const secondaryWindowMinutes = headers.get("x-codex-secondary-window-minutes");
+
+  const quota: Omit<StoredAccountQuota, "updatedAt"> = {};
+  const primaryPercent = normalizeUsagePercent(primaryRaw);
+  const secondaryPercent = normalizeUsagePercent(secondaryRaw);
+  const tertiaryPercent = normalizeUsagePercent(tertiaryRaw);
+  const primaryResetAt = normalizeResetAt(primaryResetRaw);
+  const secondaryResetAt = normalizeResetAt(secondaryResetRaw);
+  const tertiaryResetAt = normalizeResetAt(tertiaryResetRaw);
+  const primaryIsMonthly = primaryRaw !== null && isExplicitMonthlyWindowMinutes(primaryWindowMinutes);
+
+  if (primaryIsMonthly) {
+    if (primaryPercent !== undefined) {
+      quota.monthlyPercent = primaryPercent;
+      if (primaryResetAt !== undefined) quota.monthlyResetAt = primaryResetAt;
+    }
+    if (secondaryPercent !== undefined) {
+      quota.weeklyPercent = secondaryPercent;
+      if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;
+    }
+  } else {
+    const weeklyPercent = primaryPercent ?? secondaryPercent;
+    const weeklyResetAt = primaryPercent !== undefined
+      ? primaryResetAt
+      : secondaryResetAt;
+    if (weeklyPercent !== undefined) {
+      quota.weeklyPercent = weeklyPercent;
+      if (weeklyResetAt !== undefined) quota.weeklyResetAt = weeklyResetAt;
+    }
+  }
+
+  if (tertiaryPercent !== undefined && quota.monthlyPercent === undefined) {
+    quota.monthlyPercent = tertiaryPercent;
+    if (tertiaryResetAt !== undefined) quota.monthlyResetAt = tertiaryResetAt;
+  }
+
+  return hasKnownQuotaValue(quota) ? quota : null;
+}
+
+export function applyAccountQuotaFromUpstreamHeaders(
+  accountId: string,
+  headers: Headers,
+  writerGeneration = captureConfigGeneration(),
+): void {
+  const quota = parseUpstreamQuotaHeaders(headers);
+  if (!quota) return;
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration);
+}
+
 export function updateAccountQuota(
   accountId: string,
   weekly: unknown,
@@ -72,7 +242,9 @@ export function updateAccountQuota(
   monthly?: unknown,
   monthlyResetAt?: unknown,
   resetCredits?: number,
+  writerGeneration = captureConfigGeneration(),
 ): void {
+  if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
   const existing = accountQuota.get(accountId);
   const nextWeekly = normalizeUsagePercent(weekly);
   const nextMonthly = normalizeUsagePercent(monthly);
@@ -100,19 +272,89 @@ export function updateAccountQuota(
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
   accountQuota.set(accountId, quota);
+  schedulePersistAccountQuotas();
+}
+
+function hydrateAccountQuotasFromDisk(): void {
+  if (diskHydrated) return;
+  diskHydrated = true;
+  try {
+    const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
+    if (!existsSync(path)) return;
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as QuotaDiskFile;
+    if (!parsed || parsed.version !== 1 || !parsed.quotas || typeof parsed.quotas !== "object") return;
+    const now = Date.now();
+    for (const [accountId, quota] of Object.entries(parsed.quotas)) {
+      if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
+      if (now - quota.updatedAt > QUOTA_DISK_MAX_AGE_MS) continue;
+      if (!accountQuota.has(accountId)) accountQuota.set(accountId, quota);
+    }
+  } catch {
+    // Corrupt/missing cache must never block routing or the dashboard.
+  }
+}
+
+function schedulePersistAccountQuotas(): void {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      const quotas: Record<string, StoredAccountQuota> = {};
+      for (const [accountId, quota] of accountQuota.entries()) {
+        quotas[accountId] = quota;
+      }
+      const body: QuotaDiskFile = { version: 1, quotas };
+      atomicWriteFile(join(getConfigDir(), QUOTA_CACHE_FILENAME), `${JSON.stringify(body)}\n`);
+    } catch {
+      // Best-effort persistence only.
+    }
+  }, QUOTA_PERSIST_DEBOUNCE_MS);
 }
 
 export function getAccountQuota(accountId: string): StoredAccountQuota | null {
+  hydrateAccountQuotasFromDisk();
   return accountQuota.get(accountId) ?? null;
 }
 
 export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuota]> {
+  hydrateAccountQuotasFromDisk();
   return accountQuota.entries();
 }
 
 export function clearAccountQuota(accountId?: string): void {
-  if (accountId) accountQuota.delete(accountId);
-  else accountQuota.clear();
+  if (accountId) {
+    accountQuota.delete(accountId);
+    schedulePersistAccountQuotas();
+    return;
+  }
+  accountQuota.clear();
+  diskHydrated = false;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  try {
+    const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
+    if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // Best-effort; memory is already cleared.
+  }
+}
+
+export function reconcileCodexQuotaAccounts(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  hydrateAccountQuotasFromDisk();
+  let removed = 0;
+  for (const accountId of accountQuota.keys()) {
+    if (context.codexAccountIds.has(accountId)) continue;
+    accountQuota.delete(accountId);
+    removed += 1;
+  }
+  liveAccountIds = new Set(context.codexAccountIds);
+  lastReconciledGeneration = context.generation;
+  if (removed > 0) schedulePersistAccountQuotas();
+  return removed;
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {

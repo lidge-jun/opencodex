@@ -126,4 +126,4 @@ The config-file keys are available now. Set `enabled: false` on either sidecar i
 disable it. Anthropic-OAuth search and image description reuse the existing Claude Code OAuth
 fingerprint precedent, but should be soak-tested with the intended account and workload.
 
-See the [Configuration reference](/opencodex/reference/configuration/#sidecars) for every field.
+See the [Configuration reference](/reference/configuration/#sidecars) for every field.

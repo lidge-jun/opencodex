@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { setClientResourceData, useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
@@ -11,21 +12,23 @@ import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
-import ClaudeCode from "./pages/ClaudeCode";
+import Claude from "./pages/Claude";
+import Grok from "./pages/Grok";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
-import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
-import { Select } from "./ui";
+import { SidebarGithubRow } from "./components/sidebar-github-row";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
+import { Select, Switch } from "./ui";
 import { installApiAuthFetch } from "./api";
+import { readJsonIfOk } from "./fetch-json";
+import { type Page } from "./app-routing";
+import { useAppRouteState } from "./use-app-route-state";
+import { requestProxyStop } from "./stop-proxy";
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "startup" | "providers" | "models" | "combos" | "subagents" | "orchestrator" | "favorites" | "logs" | "usage" | "storage" | "codex-auth" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
-
-const VALID_PAGES = new Set<Page>(["dashboard", "startup", "providers", "models", "combos", "subagents", "orchestrator", "favorites", "logs", "usage", "storage", "codex-auth", "api", "claude"]);
-
 const PAGE_TKEY: Record<Page, TKey> = {
   dashboard: "nav.dashboard",
   startup: "nav.startup",
@@ -43,49 +46,15 @@ const PAGE_TKEY: Record<Page, TKey> = {
   "codex-auth": "nav.codexAuth",
   api: "nav.api",
   claude: "nav.claude",
+  grok: "nav.grok",
 };
-
-function readPageFromHash(): Page {
-  const raw = location.hash.replace(/^#\/?/, "");
-  // Sub-views use a "/" suffix (e.g. #providers/workspace); the first segment is the page id.
-  const pageId = raw.split("/")[0] as Page;
-  // Legacy: Debug used to be a standalone page; it now lives as a tab on Logs.
-  if (pageId === ("debug" as Page)) return "logs";
-  return VALID_PAGES.has(pageId) ? pageId : "dashboard";
-}
-
-function hashBelongsToPage(rawHash: string, page: Page): boolean {
-  return rawHash === page
-    || (page === "providers" && rawHash === "providers/workspace")
-    || (page === "logs" && rawHash === "logs/debug");
-}
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const THEME_KEY = "ocx-theme";
-const PROVIDERS_VIEW_KEY = "ocx-providers-view";
-
-function readProvidersViewPreference(): "classic" | "workspace" {
-  try {
-    return localStorage.getItem(PROVIDERS_VIEW_KEY) === "workspace" ? "workspace" : "classic";
-  } catch {
-    return "classic";
-  }
-}
-
-function writeProvidersViewPreference(view: "classic" | "workspace"): void {
-  try {
-    localStorage.setItem(PROVIDERS_VIEW_KEY, view);
-  } catch {
-    /* ignore quota / private-mode failures */
-  }
-}
-
-function providersHashForPage(): string {
-  return readProvidersViewPreference() === "workspace" ? "providers/workspace" : "providers";
-}
 
 const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
+  { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
@@ -96,9 +65,9 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
-  { id: "codex-auth", tkey: "nav.codexAuth", Icon: IconKey },
   { id: "api", tkey: "nav.api", Icon: IconGlobe },
   { id: "claude", tkey: "nav.claude", Icon: IconSparkle },
+  { id: "grok", tkey: "nav.grok", Icon: IconBoxes },
 ];
 
 const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
@@ -116,9 +85,8 @@ function readStoredTheme(): Theme {
 }
 
 export default function App() {
-  const [page, setPageState] = useState<Page>(readPageFromHash);
+  const { page, navigateToPage } = useAppRouteState();
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
-  const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null);
   const { locale, setLocale } = useI18n();
   const t = useT();
 
@@ -130,61 +98,14 @@ export default function App() {
 
   useEffect(() => {
     // External navigation (hash edit, back/forward) also dismisses the mobile drawer.
-    const onHash = () => {
-      const nextPage = readPageFromHash();
-      const rawHash = window.location.hash.replace(/^#\/?/, "");
-      setNavOpen(false);
-      // Legacy #debug deep links → the Debug tab on Logs.
-      if (rawHash === "debug" || rawHash.startsWith("debug/")) {
-        window.location.hash = "logs/debug";
-        return;
-      }
-      if (!hashBelongsToPage(rawHash, nextPage)) {
-        window.location.hash = nextPage === "providers" ? providersHashForPage() : nextPage;
-        return;
-      }
-      // Preference is source of truth for Classic/Workspace. Bare #providers must not
-      // wipe a saved workspace choice (that regressed when leaving Providers and returning).
-      if (nextPage === "providers") {
-        const preferred = readProvidersViewPreference();
-        if (rawHash === "providers/workspace") {
-          writeProvidersViewPreference("workspace");
-        } else if (rawHash === "providers" && preferred === "workspace") {
-          window.location.hash = "providers/workspace";
-          return;
-        } else if (rawHash === "providers") {
-          writeProvidersViewPreference("classic");
-        }
-      }
-      setPageState(nextPage);
+    const dismissNav = () => setNavOpen(false);
+    window.addEventListener("hashchange", dismissNav);
+    window.addEventListener("popstate", dismissNav);
+    return () => {
+      window.removeEventListener("hashchange", dismissNav);
+      window.removeEventListener("popstate", dismissNav);
     };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
   }, []);
-
-  useEffect(() => {
-    const rawHash = window.location.hash.replace(/^#\/?/, "");
-    // Legacy #debug deep links must resolve before generic normalization
-    // (otherwise the hash collapses to bare #logs and the tab choice is lost).
-    if (rawHash === "debug" || rawHash.startsWith("debug/")) {
-      window.location.hash = "logs/debug";
-      return;
-    }
-    if (page === "providers") {
-      // Honor an explicit workspace deep link on first load before normalizing
-      // to the saved preference (bookmarks/shared links must not open Classic).
-      if (rawHash === "providers/workspace") {
-        writeProvidersViewPreference("workspace");
-        return;
-      }
-      const wanted = providersHashForPage();
-      if (rawHash !== wanted) window.location.hash = wanted;
-      return;
-    }
-    if (!hashBelongsToPage(rawHash, page)) {
-      window.location.hash = page;
-    }
-  }, [page]);
 
   useEffect(() => {
     const el = document.documentElement;
@@ -192,30 +113,37 @@ export default function App() {
     else { el.setAttribute("data-theme", theme); localStorage.setItem(THEME_KEY, theme); }
   }, [theme]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const fetchRuntimeVersion = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/healthz`);
-        if (!res.ok) return;
-        const version = readRuntimeVersion(await res.json());
-        if (!cancelled && version) setRuntimeVersion(version);
-      } catch {
-        // Keep the build-time fallback when the proxy is unavailable.
-      }
-    };
-    fetchRuntimeVersion();
-    const interval = setInterval(fetchRuntimeVersion, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, []);
+  const healthPoll = useKeyedClientResource(
+    `app-healthz:${API_BASE}`,
+    [],
+    async (signal) => {
+      const res = await fetch(`${API_BASE}/healthz`, { signal });
+      if (!res.ok) return null;
+      return readRuntimeVersion(await res.json());
+    },
+    { pollMs: 30_000 },
+  );
 
   const cycleTheme = () => setTheme(t => (t === "light" ? "dark" : t === "dark" ? "system" : "light"));
   const ThemeIcon = THEME_ICON[theme];
-  const displayedVersion = runtimeVersion ?? __APP_VERSION__;
+  const displayedVersion: string = healthPoll.data ?? __APP_VERSION__;
 
   const [stopping, setStopping] = useState(false);
-  // Sidebar "Claude ON" toggle — literal label in every locale (product name).
-  const [claudeEnabled, setClaudeEnabled] = useState<boolean | null>(null);
+  // Claude navigation row also owns the connection toggle.
+  const fetchClaudeEnabled = useCallback(async (signal: AbortSignal) => {
+    const res = await fetch(`${API_BASE}/api/claude-code`, { signal });
+    const d = await readJsonIfOk<{ enabled?: unknown }>(res);
+    return d && typeof d.enabled === "boolean" ? d.enabled : null;
+  }, []);
+
+  const claudePoll = useKeyedClientResource(
+    `app-claude-code:${API_BASE}`,
+    [],
+    fetchClaudeEnabled,
+  );
+  const claudeEnabled = claudePoll.data ?? null;
+  const claudeToggleInFlight = useRef(false);
+  const [claudeTogglePending, setClaudeTogglePending] = useState(false);
 
   useEffect(() => {
     if (!navOpen) return;
@@ -245,34 +173,39 @@ export default function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_BASE}/api/claude-code`)
-      .then(res => res.json())
-      .then(d => { if (!cancelled && typeof d.enabled === "boolean") setClaudeEnabled(d.enabled); })
-      .catch(() => { /* toggle stays hidden until the API answers */ });
-    return () => { cancelled = true; };
-  }, []);
-
   const toggleClaude = async () => {
-    if (claudeEnabled === null) return;
+    if (claudeEnabled === null || claudeToggleInFlight.current) return;
+    claudeToggleInFlight.current = true;
+    setClaudeTogglePending(true);
     const next = !claudeEnabled;
-    setClaudeEnabled(next); // optimistic
+    setClientResourceData(`app-claude-code:${API_BASE}`, next);
     try {
       const res = await fetch(`${API_BASE}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: next }),
       });
-      if (!res.ok) setClaudeEnabled(!next);
+      if (!res.ok) setClientResourceData(`app-claude-code:${API_BASE}`, !next);
     } catch {
-      setClaudeEnabled(!next);
+      setClientResourceData(`app-claude-code:${API_BASE}`, !next);
+    } finally {
+      claudeToggleInFlight.current = false;
+      setClaudeTogglePending(false);
     }
   };
   const handleStop = async () => {
     if (!confirm(t("dash.stopConfirm"))) return;
     setStopping(true);
-    try { await fetch(`${API_BASE}/api/stop`, { method: "POST" }); } catch { /* connection drops */ }
+    const outcome = await requestProxyStop(API_BASE, {
+      formatFailure: status => t("dash.stopFailed", { status: String(status) }),
+    });
+    // Refusals and restore failures return normally instead of dropping the connection.
+    // In both cases the proxy did not reach a clean-stop result, so re-enable the control
+    // and surface the server's remediation instead of leaving "stopping…" stuck forever.
+    if (!outcome.accepted) {
+      setStopping(false);
+      alert(outcome.message);
+    }
   };
 
   const brand = (
@@ -308,27 +241,35 @@ export default function App() {
           </button>
         </div>
         <nav>
+          {/*
+            Codex Auth was once filtered out of this list whenever the workspace layout
+            was active, on the grounds that the Providers workspace embeds the same
+            account pool. It is now promoted to the second slot instead: there is only
+            one layout, so that filter would have hidden the page permanently.
+          */}
           {NAV.map(({ id, tkey, Icon }) => (
-            <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
-              onClick={() => {
-                // Always sync the hash on nav click so Providers restores Classic/Workspace preference.
-                window.location.hash = id === "providers" ? providersHashForPage() : id;
-                setPageState(id);
-                setNavOpen(false);
-              }}
-              aria-current={page === id ? "page" : undefined}>
-              <Icon /> {t(tkey)}
-            </button>
+            <div key={id} className={`nav-entry${id === "claude" ? ` nav-entry-claude${page === id ? " active" : ""}` : ""}`}>
+              <button type="button" className={`nav-item${page === id ? " active" : ""}`} data-page={id}
+                onClick={() => {
+                  // Deliberate sidebar navigation — push a history entry.
+                  navigateToPage(id);
+                  setNavOpen(false);
+                }}
+                aria-current={page === id ? "page" : undefined}>
+                <Icon /> {t(tkey)}
+              </button>
+              {id === "claude" && claudeEnabled !== null && (
+                <Switch
+                  on={claudeEnabled}
+                  onClick={() => void toggleClaude()}
+                  disabled={claudeTogglePending}
+                  label={t("claude.toggleAria")}
+                />
+              )}
+            </div>
           ))}
         </nav>
         <div className="sidebar-foot">
-          {claudeEnabled !== null && (
-            <button type="button" className="theme-toggle" onClick={toggleClaude}
-              aria-pressed={claudeEnabled} aria-label={t("claude.toggleAria")} title={t("claude.toggleAria")}
-              style={claudeEnabled ? { color: "var(--accent)" } : undefined}>
-              <IconSparkle /> <span className="mode">{claudeEnabled ? t("app.claudeOn") : t("app.claudeOff")}</span>
-            </button>
-          )}
           <div className="lang-toggle">
             <IconGlobe aria-hidden />
             <Select
@@ -337,6 +278,7 @@ export default function App() {
               onChange={v => setLocale(v as Locale)}
               label={t("lang.label")}
               placement="right"
+              portal={false}
               style={{ flex: 1, minWidth: 0, width: "100%" }}
             />
           </div>
@@ -348,9 +290,16 @@ export default function App() {
             aria-label={t("dash.stop")} title={t("dash.stop")}>
             <IconPower /> <span className="mode">{stopping ? t("dash.stopping") : t("dash.stop")}</span>
           </button>
-          <a className="sidebar-link" href="https://github.com/lidge-jun/opencodex" target="_blank" rel="noreferrer">
-            <IconGithub /> {t("common.github")}
-          </a>
+          <SidebarGithubRow
+            apiBase={API_BASE}
+            onOpenUpdate={() => {
+              // The update dialog lives on the dashboard maintenance panel. Deep-link to
+              // `#dashboard/update` and let the dashboard own the check/run flow — no
+              // cross-component event bus, and the link survives a refresh.
+              setNavOpen(false);
+              navigateToPage("dashboard", "update");
+            }}
+          />
         </div>
       </aside>
 
@@ -368,8 +317,8 @@ export default function App() {
             {page === "startup" && <Startup apiBase={API_BASE} />}
             {page === "providers" && <Providers apiBase={API_BASE} />}
             {page === "models" && <Models apiBase={API_BASE} />}
-            {page === "combos" && <Combos apiBase={API_BASE} />}
-            {page === "subagents" && <Subagents apiBase={API_BASE} />}
+            {page === "combos" && <Combos key={API_BASE} apiBase={API_BASE} />}
+            {page === "subagents" && <Subagents key={API_BASE} apiBase={API_BASE} />}
             {page === "favorites" && <Favorites apiBase={API_BASE} />}
             {page === "orchestrator" && <Orchestrator apiBase={API_BASE} />}
             {page === "logs" && <Logs apiBase={API_BASE} />}
@@ -377,7 +326,8 @@ export default function App() {
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "api" && <ApiKeys apiBase={API_BASE} />}
-            {page === "claude" && <ClaudeCode apiBase={API_BASE} />}
+            {page === "claude" && <Claude apiBase={API_BASE} />}
+            {page === "grok" && <Grok apiBase={API_BASE} />}
           </ErrorBoundary>
         </div>
       </main>

@@ -19,6 +19,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
   ocx account alias <provider> <id|main> <display-name|-> [--json]
   ocx account remove <provider> <id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <id|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]`;
 const PIPE_GUIDANCE = `Pipe the API key on stdin, for example:
   ocx account add-key <provider> <<< "$MY_KEY"
@@ -279,6 +280,39 @@ export async function cmdAddKey(args: string[], deps: AccountDeps): Promise<numb
   const output = wantsJson ? JSON.stringify(result, null, 2)
     : `${name}: added API key ${id ?? ""}${safeLabel ? ` (${safeLabel})` : ""}`.trim();
   console.log(output.replaceAll(key, "[redacted]"));
+  return 0;
+}
+
+/**
+ * Lift a quota cooldown on a Codex account.
+ *
+ * This is the user-facing escape from the lockout described in
+ * `devlog/_plan/260726_cooldown_lockout_hardening`: injected routing makes the proxy the
+ * only model path for Codex Desktop, so a stuck cooldown reads as "the whole app is dead".
+ *
+ * Codex accounts only. API-key pools already reset their own 429 cooldowns through key
+ * management (`clearKeyCooldowns`), and OAuth providers have no equivalent state here.
+ */
+export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promise<number> {
+  const wantsJson = flag(args, "--json");
+  const name = args.shift();
+  const requestedId = args.shift();
+  if (!name || !requestedId || args.length) return usage();
+  const classified = configAndType(deps, name);
+  if ("error" in classified) return usage(`Error: ${classified.error}`);
+  if (classified.type !== "codex") {
+    return usage(`Error: ${name} is not a Codex account pool; cooldown clearing applies to Codex accounts only`);
+  }
+  const id = requestedId === "main" ? MAIN_ID : requestedId;
+  const baseUrl = await resolveBaseUrl(deps);
+  if (!baseUrl) return proxyUnreachable();
+  const response = await apiJson(deps, baseUrl, "POST", "/api/codex-auth/accounts/clear-cooldown", { id });
+  if (response.status === 0) return proxyUnreachable();
+  if (response.status !== 200) return apiError(response.json, `failed to clear cooldown for ${requestedId}`);
+  const cleared = response.json?.cleared === true;
+  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, id, cleared }, null, 2));
+  else if (cleared) console.log(`${name}: cooldown lifted for ${requestedId}`);
+  else console.log(`${name}: no active cooldown for ${requestedId}`);
   return 0;
 }
 

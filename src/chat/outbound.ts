@@ -8,6 +8,8 @@
 type Rec = Record<string, unknown>;
 
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
+import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage } from "../lib/errors";
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -27,39 +29,64 @@ export function chatCompletionsUsage(usage: unknown): Rec {
   const details = isRec(u.input_tokens_details) ? u.input_tokens_details : {};
   const prompt = typeof u.input_tokens === "number" ? u.input_tokens : 0;
   const completion = typeof u.output_tokens === "number" ? u.output_tokens : 0;
-  const cached = typeof details.cached_tokens === "number" ? details.cached_tokens : undefined;
+  const cached = typeof details.cached_tokens === "number" ? details.cached_tokens : 0;
   const out: Rec = {
     prompt_tokens: prompt,
     completion_tokens: completion,
     total_tokens: prompt + completion,
   };
-  if (cached !== undefined) {
-    out.prompt_tokens_details = { cached_tokens: cached };
-  }
+  // Detail objects are always emitted (zero defaults) so strict OpenAI-compatible
+  // clients that require them (see responsesUsage in src/bridge.ts) never fail on
+  // routed providers that report no cache/reasoning numbers.
+  out.prompt_tokens_details = { cached_tokens: cached };
   const outDetails = isRec(u.output_tokens_details) ? u.output_tokens_details : {};
-  if (typeof outDetails.reasoning_tokens === "number") {
-    out.completion_tokens_details = { reasoning_tokens: outDetails.reasoning_tokens };
-  }
+  const reasoning = typeof outDetails.reasoning_tokens === "number" ? outDetails.reasoning_tokens : 0;
+  out.completion_tokens_details = { reasoning_tokens: reasoning };
   return out;
 }
 
-export function chatCompletionsErrorBody(status: number, message: string, type = "invalid_request_error"): Rec {
+export function chatCompletionsErrorBody(
+  status: number,
+  message: string,
+  type = "invalid_request_error",
+  code?: string | null,
+): Rec {
+  if (isCyberPolicyCode(code) || isCyberPolicyMessage(message)) {
+    return {
+      error: {
+        message,
+        type: "invalid_request_error",
+        param: null,
+        code: CYBER_POLICY_ERROR_CODE,
+      },
+    };
+  }
   return {
     error: {
       message,
       type,
       param: null,
-      code: status === 401 ? "invalid_api_key"
-        : status === 404 ? "model_not_found"
-        : status === 429 ? "rate_limit_exceeded"
-        : null,
+      code: code !== undefined
+        ? code
+        : status === 401 ? "invalid_api_key"
+          : status === 404 ? "model_not_found"
+          : status === 429 ? "rate_limit_exceeded"
+          : null,
     },
   };
 }
 
-export function chatCompletionsErrorResponse(status: number, message: string, type?: string): Response {
-  return new Response(JSON.stringify(chatCompletionsErrorBody(status, message, type)), {
-    status,
+export function chatCompletionsErrorResponse(
+  status: number,
+  message: string,
+  type?: string,
+  code?: string | null,
+): Response {
+  const body = chatCompletionsErrorBody(status, message, type, code);
+  const err = body.error as { code?: string | null };
+  const finalStatus = err.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
+  return new Response(JSON.stringify(body), {
+    status: finalStatus,
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -85,19 +112,13 @@ export function isChatCompletionsStreamError(err: unknown): err is ChatCompletio
 
 function streamErrorStatus(message: string): number {
   const lower = message.toLowerCase();
+  if (isCyberPolicyMessage(lower)) return 400;
   if (lower.includes("truncated")) return 502;
   if (lower.includes("rate") || lower.includes("429")) return 429;
   if (lower.includes("unauthor") || lower.includes("401") || lower.includes("api key")) return 401;
   if (lower.includes("not found") || lower.includes("404")) return 404;
   if (lower.includes("invalid") || lower.includes("400")) return 400;
   return 502;
-}
-
-function streamErrorType(status: number): string {
-  if (status === 401) return "authentication_error";
-  if (status === 429) return "rate_limit_error";
-  if (status >= 500) return "server_error";
-  return "invalid_request_error";
 }
 
 function dataFrame(payload: Rec | "[DONE]"): string {
@@ -115,13 +136,28 @@ function chunkBase(id: string, model: string, created: number): Rec {
   };
 }
 
+function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: string): number {
+  let nextBytes = previousBytes + Buffer.byteLength(fragment);
+  const previousLast = previous.charCodeAt(previous.length - 1);
+  const fragmentFirst = fragment.charCodeAt(0);
+  if (previousLast >= 0xd800 && previousLast <= 0xdbff
+    && fragmentFirst >= 0xdc00 && fragmentFirst <= 0xdfff) {
+    // Buffer.byteLength() replaces each isolated surrogate with three bytes, while the joined
+    // pair is one four-byte scalar. Preserve full-string sizing without re-encoding the prefix.
+    nextBytes -= 2;
+  }
+  return nextBytes;
+}
+
 /**
  * Streaming: Responses SSE bytes -> Chat Completions SSE bytes.
  */
 export function responsesSseToChatCompletionsSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
+  opts: { translatorBudget: TranslatorBudget },
 ): ReadableStream<Uint8Array> {
+  const translatorBudget = opts.translatorBudget;
   const encoder = new TextEncoder();
   let terminated = false;
   let cancelled = false;
@@ -132,17 +168,68 @@ export function responsesSseToChatCompletionsSse(
   // tool call_id -> streaming index (OpenAI requires stable indices per tool call)
   const toolIndexByCallId = new Map<string, number>();
   const toolIndexByItemId = new Map<string, number>();
+  const toolCallIdByIndex = new Map<number, string>();
   const toolNameByIndex = new Map<number, string>();
+  const toolArgumentsByIndex = new Map<number, string>();
+  const toolArgumentBytesByIndex = new Map<number, number>();
+  const emittedToolIndexes = new Set<number>();
   let nextToolIndex = 0;
   let sseIterator: AsyncGenerator<{ event?: string; data: string }> | undefined;
   const upstreamAbort = new AbortController();
-
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      let failed = false;
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let failed = false;
+  let emittedFrames = 0;
+  let stepping = false;
+  let decoderStarted = false;
+  const queuedLiveFrameBytes: number[] = [];
+  const enqueueLiveFrame = (frame: Uint8Array) => {
+    const reservation = translatorBudget.reserveTransient(frame.byteLength, { kind: "live_transient" });
+    controller.enqueue(frame);
+    reservation.commitRetained();
+    queuedLiveFrameBytes.push(frame.byteLength);
+  };
+  const releaseDeliveredFrame = () => {
+    const bytes = queuedLiveFrameBytes.shift();
+    if (bytes !== undefined) translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
+  };
+  const closeToolCalls = () => {
+    for (const callId of toolIndexByCallId.keys()) translatorBudget.closeCall(callId);
+  };
+  const replaceToolArguments = (toolIndex: number, next: string) => {
+    const previous = toolArgumentsByIndex.get(toolIndex) ?? "";
+    if (previous === next && toolArgumentsByIndex.has(toolIndex)) return;
+    const previousBytes = toolArgumentBytesByIndex.get(toolIndex) ?? 0;
+    const nextBytes = Buffer.byteLength(next);
+    const callId = toolCallIdByIndex.get(toolIndex);
+    const scope = { kind: "tool_args" as const, ...(callId ? { callId } : {}) };
+    const reservation = translatorBudget.reserveTransient(nextBytes, scope);
+    toolArgumentsByIndex.set(toolIndex, next);
+    toolArgumentBytesByIndex.set(toolIndex, nextBytes);
+    reservation.commitRetained();
+    translatorBudget.releaseRetained(previousBytes, scope);
+  };
+  const appendToolArguments = (toolIndex: number, fragment: string) => {
+    const previous = toolArgumentsByIndex.get(toolIndex) ?? "";
+    const previousBytes = toolArgumentBytesByIndex.get(toolIndex) ?? 0;
+    const nextBytes = appendedUtf8Bytes(previous, previousBytes, fragment);
+    const callId = toolCallIdByIndex.get(toolIndex);
+    const scope = { kind: "tool_args" as const, ...(callId ? { callId } : {}) };
+    const reservation = translatorBudget.reserveTransient(nextBytes, scope);
+    try {
+      const next = previous + fragment;
+      toolArgumentsByIndex.set(toolIndex, next);
+      toolArgumentBytesByIndex.set(toolIndex, nextBytes);
+      reservation.commitRetained();
+      translatorBudget.releaseRetained(previousBytes, scope);
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
       const emit = (payload: Rec | "[DONE]") => {
         if (failed) return;
-        controller.enqueue(encoder.encode(dataFrame(payload)));
+        enqueueLiveFrame(encoder.encode(dataFrame(payload)));
+        emittedFrames++;
       };
       const ensureRole = () => {
         if (started) return;
@@ -166,8 +253,47 @@ export function responsesSseToChatCompletionsSse(
         frame.choices = [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }];
         emit(frame);
       };
+      const resolveFinalArguments = (candidate: unknown, streamed: string) => {
+        if (typeof candidate !== "string") return streamed;
+        // Some compatible providers send an empty final snapshot. Do not let that erase
+        // non-empty streamed arguments; genuinely empty calls have no buffered content.
+        return candidate.length > 0 || streamed.length === 0 ? candidate : streamed;
+      };
+      const emitToolCall = (toolIndex: number, callId: string, name: string, args: string) => {
+        if (!callId || emittedToolIndexes.has(toolIndex)) return;
+        emittedToolIndexes.add(toolIndex);
+        ensureRole();
+        const frame = chunkBase(id, model, created);
+        frame.choices = [{
+          index: 0,
+          delta: {
+            tool_calls: [{
+              index: toolIndex,
+              id: callId,
+              type: "function",
+              function: { name, arguments: args },
+            }],
+          },
+          finish_reason: null,
+        }];
+        emit(frame);
+      };
+      const flushPendingToolCalls = () => {
+        const pending = [...toolCallIdByIndex.entries()].sort(([a], [b]) => a - b);
+        for (const [toolIndex, callId] of pending) {
+          emitToolCall(
+            toolIndex,
+            callId,
+            toolNameByIndex.get(toolIndex) ?? "",
+            toolArgumentsByIndex.get(toolIndex) ?? "",
+          );
+        }
+      };
       const finish = (finishReason: string, usage: unknown) => {
         if (terminated) return;
+        // A valid completed/incomplete terminal frame may arrive without output_item.done.
+        // Preserve any known tool call before emitting its finish reason.
+        flushPendingToolCalls();
         terminated = true;
         ensureRole();
         const frame = chunkBase(id, model, created);
@@ -176,7 +302,7 @@ export function responsesSseToChatCompletionsSse(
         emit(frame);
         emit("[DONE]");
       };
-      const fail = (message: string) => {
+      const fail = (message: string, details?: { code?: string | null; type?: string; status?: number }) => {
         if (terminated) return;
         terminated = true;
         failed = true;
@@ -185,20 +311,35 @@ export function responsesSseToChatCompletionsSse(
         // Deliver the error frame then close the stream abnormally (no [DONE]).
         // Do not controller.error() — that can drop already-enqueued bytes from consumers
         // like response.text().
-        const status = streamErrorStatus(message);
-        const type = streamErrorType(status);
+        const statusHint = details?.status ?? streamErrorStatus(message);
+        const classified = classifyError(statusHint, details?.type ?? "upstream_error", message);
+        const translatorOverflow = details?.code === "translation_buffer_limit";
+        if (translatorOverflow) {
+          upstreamAbort.abort(new Error("upstream translation buffer exceeded the safe limit"));
+          closeToolCalls();
+          try { void sseIterator?.return(undefined).catch(() => {}); } catch { /* already closed */ }
+          classified.code = "translation_buffer_limit";
+          classified.type = "invalid_request_error";
+        } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
+          classified.code = CYBER_POLICY_ERROR_CODE;
+          classified.type = "invalid_request_error";
+        } else if (details?.code !== undefined && details.code !== null && !classified.code) {
+          classified.code = details.code;
+        }
         try {
-          controller.enqueue(encoder.encode(dataFrame({
+          const frame = encoder.encode(dataFrame({
             error: {
-              message,
-              type,
+              message: classified.message,
+              type: classified.type,
               param: null,
-              code: status === 401 ? "invalid_api_key"
-                : status === 404 ? "model_not_found"
-                : status === 429 ? "rate_limit_exceeded"
-                : null,
+              code: classified.code,
             },
-          })));
+          }));
+          // The budget is already exhausted. This bounded emergency frame is the sole
+          // typed overflow closure and therefore cannot reserve from that budget again.
+          if (translatorOverflow) controller.enqueue(frame);
+          else enqueueLiveFrame(frame);
+          emittedFrames++;
         } catch {
           /* controller may already be closed */
         }
@@ -232,24 +373,14 @@ export function responsesSseToChatCompletionsSse(
               toolIndex = nextToolIndex++;
               toolIndexByCallId.set(callId, toolIndex);
             }
+            toolCallIdByIndex.set(toolIndex, callId);
             if (typeof item.id === "string") toolIndexByItemId.set(item.id, toolIndex);
             if (name) toolNameByIndex.set(toolIndex, name);
-            const frame = chunkBase(id, model, created);
-            frame.choices = [{
-              index: 0,
-              delta: {
-                tool_calls: [{
-                  index: toolIndex,
-                  id: callId,
-                  type: "function",
-                  // Always include name so clients that replace (not merge) tool_calls
-                  // deltas never end up with function.name-less history.
-                  function: { name, arguments: "" },
-                }],
-              },
-              finish_reason: null,
-            }];
-            emit(frame);
+            translatorBudget.openCall(callId);
+            if (!toolArgumentsByIndex.has(toolIndex)) replaceToolArguments(
+              toolIndex,
+              typeof item.arguments === "string" ? item.arguments : "",
+            );
             break;
           }
           case "response.function_call_arguments.delta": {
@@ -258,23 +389,18 @@ export function responsesSseToChatCompletionsSse(
             const toolIndex = (itemId ? toolIndexByItemId.get(itemId) : undefined)
               ?? (nextToolIndex > 0 ? nextToolIndex - 1 : 0);
             ensureRole();
-            const knownName = toolNameByIndex.get(toolIndex) ?? "";
-            const fn: Rec = { arguments: data.delta };
-            // Re-emit name on every args delta: GitHub Copilot App / some ChatGPT clients
-            // replace the whole function object instead of merging, which otherwise drops name.
-            if (knownName) fn.name = knownName;
-            const frame = chunkBase(id, model, created);
-            frame.choices = [{
-              index: 0,
-              delta: {
-                tool_calls: [{
-                  index: toolIndex,
-                  function: fn,
-                }],
-              },
-              finish_reason: null,
-            }];
-            emit(frame);
+            appendToolArguments(toolIndex, data.delta);
+            break;
+          }
+          case "response.function_call_arguments.done": {
+            const itemId = typeof data.item_id === "string" ? data.item_id : undefined;
+            const toolIndex = itemId ? toolIndexByItemId.get(itemId) : undefined;
+            if (toolIndex === undefined) break;
+            sawToolUse = true;
+            const name = typeof data.name === "string" ? data.name : "";
+            if (name) toolNameByIndex.set(toolIndex, name);
+            const streamedArgs = toolArgumentsByIndex.get(toolIndex) ?? "";
+            replaceToolArguments(toolIndex, resolveFinalArguments(data.arguments, streamedArgs));
             break;
           }
           case "response.output_item.done": {
@@ -284,34 +410,26 @@ export function responsesSseToChatCompletionsSse(
               sawToolUse = true;
               const callId = typeof item.call_id === "string" ? item.call_id : "";
               const name = typeof item.name === "string" ? item.name : "";
-              const args = typeof item.arguments === "string" ? item.arguments : "";
               if (!callId) break;
-              const existingIndex = toolIndexByCallId.get(callId);
-              const isNew = existingIndex === undefined;
+              const itemId = typeof item.id === "string" ? item.id : undefined;
+              const existingIndex = toolIndexByCallId.get(callId)
+                ?? (itemId ? toolIndexByItemId.get(itemId) : undefined);
               const toolIndex = existingIndex ?? nextToolIndex++;
-              if (isNew) toolIndexByCallId.set(callId, toolIndex);
-              if (typeof item.id === "string") toolIndexByItemId.set(item.id, toolIndex);
+              toolIndexByCallId.set(callId, toolIndex);
+              toolCallIdByIndex.set(toolIndex, callId);
+              translatorBudget.openCall(callId);
+              if (itemId) toolIndexByItemId.set(itemId, toolIndex);
               if (name) toolNameByIndex.set(toolIndex, name);
               const finalName = name || toolNameByIndex.get(toolIndex) || "";
-              // Last-write-wins: the done-frame snapshot is authoritative final arguments.
-              // Always re-emit full identity (id/type/name) so replace-style clients keep function.name.
-              if (args.length > 0 || isNew || finalName) {
-                ensureRole();
-                const frame = chunkBase(id, model, created);
-                frame.choices = [{
-                  index: 0,
-                  delta: {
-                    tool_calls: [{
-                      index: toolIndex,
-                      id: callId,
-                      type: "function",
-                      function: { name: finalName, arguments: args },
-                    }],
-                  },
-                  finish_reason: null,
-                }];
-                emit(frame);
-              }
+              const streamedArgs = toolArgumentsByIndex.get(toolIndex) ?? "";
+              // A Responses stream can carry incremental/finalized argument events plus an
+              // authoritative output_item.done snapshot. Chat Completions tool-call fields are
+              // append-only deltas, so forwarding multiple representations corrupts clients that
+              // accumulate them. Emit one complete call here; finish() flushes any item whose
+              // done event was omitted, and replace-style clients still get a complete object.
+              const args = resolveFinalArguments(item.arguments, streamedArgs);
+              replaceToolArguments(toolIndex, args);
+              emitToolCall(toolIndex, callId, finalName, args);
             }
             break;
           }
@@ -325,15 +443,34 @@ export function responsesSseToChatCompletionsSse(
             const details = isRec(response.incomplete_details) ? response.incomplete_details : {};
             const reason = details.reason === "max_output_tokens" ? "length"
               : details.reason === "content_filter" ? "content_filter"
-              : sawToolUse ? "tool_calls" : "stop";
-            finish(reason, response.usage);
+              : undefined;
+            if (reason !== undefined) {
+              // Truthful OpenAI-compatible finish reasons: the turn ended, just early.
+              finish(reason, response.usage);
+            } else {
+              // upstream_stall_timeout / adapter_eof / proxy-synthesized incompletes are
+              // failures, not early finishes: emit an error frame and close WITHOUT
+              // [DONE] instead of a success-looking stop/tool_calls + [DONE].
+              const why = typeof details.reason === "string" ? details.reason : "unknown";
+              const message = typeof details.message === "string" && details.message.length > 0
+                ? details.message
+                : `upstream stream ended early (${why})`;
+              fail(message);
+            }
             break;
           }
           case "response.failed": {
             const response = isRec(data.response) ? data.response : {};
             const error = isRec(response.error) ? response.error : {};
             const message = typeof error.message === "string" ? error.message : "upstream request failed";
-            fail(message);
+            const code = typeof error.code === "string" ? error.code : null;
+            const type = typeof error.type === "string" ? error.type : undefined;
+            fail(message, {
+              code,
+              ...(code === "translation_buffer_limit"
+                ? { status: 413, type: "invalid_request_error" }
+                : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
+            });
             break;
           }
           default:
@@ -344,10 +481,26 @@ export function responsesSseToChatCompletionsSse(
       // Shared spec-shaped SSE decoder: handles CRLF framing, arbitrary chunk boundaries,
       // multi-line data, and a terminal event without a trailing blank line (Sol audit
       // blocker 3 — the hand-rolled "\n\n" splitter misreported those as truncation).
-      sseIterator = decodeServerSentEvents(upstream, { signal: upstreamAbort.signal });
-      void (async () => {
+      sseIterator = decodeServerSentEvents(upstream, { signal: upstreamAbort.signal, translatorBudget });
+      const step = async () => {
+        if (stepping || cancelled) return;
+        stepping = true;
+        const emittedAtStart = emittedFrames;
         try {
-          for await (const record of sseIterator!) {
+          while (!cancelled && emittedFrames === emittedAtStart) {
+            decoderStarted = true;
+            const next = await sseIterator!.next();
+            if (next.done) {
+              if (!cancelled && !terminated) {
+                fail("upstream stream ended before a terminal frame (truncated response)");
+              }
+              // Success path: close after [DONE]. Failure path closes inside fail().
+              if (!cancelled && terminated && !failed) {
+                try { controller.close(); } catch { /* already closed */ }
+              }
+              break;
+            }
+            const record = next.value;
             const eventName = record.event ?? "";
             const dataLine = record.data.trim();
             if (!eventName || !dataLine) continue;
@@ -358,24 +511,39 @@ export function responsesSseToChatCompletionsSse(
             handleFrame(eventName, data);
           }
         } catch (err) {
-          fail(err instanceof Error ? err.message : String(err));
+          if (isTranslatorBudgetExceededError(err)) {
+            upstreamAbort.abort(err);
+            closeToolCalls();
+            fail(err.message, { status: 413, type: "invalid_request_error", code: err.code });
+          } else {
+            fail(err instanceof Error ? err.message : String(err));
+          }
         } finally {
-          if (!cancelled && !terminated) {
-            fail("upstream stream ended before a terminal frame (truncated response)");
-          }
-          // Success path: close after [DONE]. Failure path closes inside fail().
-          if (!cancelled && terminated && !failed) {
-            try { controller.close(); } catch { /* already closed */ }
-          }
+          stepping = false;
         }
-      })();
+      };
+
+  return new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+      // Default HWM=1: one Responses event is translated atomically, then upstream
+      // decoding pauses until the chat consumer creates demand again.
+    },
+    pull() {
+      releaseDeliveredFrame();
+      return step();
     },
     cancel(reason) {
       cancelled = true;
+      while (queuedLiveFrameBytes.length > 0) releaseDeliveredFrame();
+      closeToolCalls();
       // Abort first: it cancels the decoder's underlying reader, settling any in-flight
       // read() so the generator's return() below resolves promptly instead of hanging
       // behind an idle upstream (Sol re-verification blocker).
       upstreamAbort.abort(reason);
+      if (!decoderStarted) {
+        return upstream.cancel(reason).then(() => undefined, () => undefined);
+      }
       return sseIterator?.return(undefined).then(() => undefined, () => undefined) ?? Promise.resolve(undefined);
     },
   });
@@ -454,15 +622,22 @@ export function responsesJsonToChatCompletion(json: unknown, model: string): Rec
 export async function collectChatCompletion(
   stream: ReadableStream<Uint8Array>,
   model: string,
+  translatorBudget: TranslatorBudget,
 ): Promise<Rec> {
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
   let reasoning = "";
-  const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+  const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
   let finishReason = "stop";
   let usage: unknown;
   let streamError: ChatCompletionsStreamError | null = null;
+  const replaceRetained = (previous: string, next: string, kind: "live_transient" | "retained_collectors") => {
+    const reservation = translatorBudget.reserveTransient(Buffer.byteLength(next), { kind });
+    reservation.commitRetained();
+    translatorBudget.releaseRetained(Buffer.byteLength(previous), { kind });
+    return next;
+  };
   const reader = stream.getReader();
   try {
     for (;;) {
@@ -472,15 +647,22 @@ export async function collectChatCompletion(
         ({ done, value } = await reader.read());
       } catch (err) {
         if (isChatCompletionsStreamError(err)) throw err;
+        if (isTranslatorBudgetExceededError(err)) {
+          throw new ChatCompletionsStreamError(err.message, {
+            status: 413,
+            type: "invalid_request_error",
+            code: err.code,
+          });
+        }
         throw new ChatCompletionsStreamError(err instanceof Error ? err.message : String(err));
       }
       if (done) break;
       if (!value) continue;
-      buffer += decoder.decode(value, { stream: true });
+      buffer = replaceRetained(buffer, buffer + decoder.decode(value, { stream: true }), "live_transient");
       let sep: number;
       while ((sep = buffer.indexOf("\n\n")) !== -1) {
         const rawFrame = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
+        buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
         for (const line of rawFrame.split("\n")) {
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
@@ -493,8 +675,13 @@ export async function collectChatCompletion(
               ? parsed.error.message
               : "upstream request failed";
             const type = typeof parsed.error.type === "string" ? parsed.error.type : "server_error";
-            const status = streamErrorStatus(message);
-            streamError = new ChatCompletionsStreamError(message, { status, type });
+            const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
+            const status = code === "translation_buffer_limit"
+              ? 413
+              : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
+                ? 400
+                : streamErrorStatus(message);
+            streamError = new ChatCompletionsStreamError(message, { status, type, code });
             continue;
           }
           if (parsed.usage) usage = parsed.usage;
@@ -504,22 +691,31 @@ export async function collectChatCompletion(
           if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
           const delta = isRec(choice.delta) ? choice.delta : null;
           if (!delta) continue;
-          if (typeof delta.content === "string") content += delta.content;
-          if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
+          if (typeof delta.content === "string") content = replaceRetained(content, content + delta.content, "retained_collectors");
+          if (typeof delta.reasoning_content === "string") reasoning = replaceRetained(reasoning, reasoning + delta.reasoning_content, "retained_collectors");
           if (Array.isArray(delta.tool_calls)) {
             for (const tc of delta.tool_calls) {
               if (!isRec(tc)) continue;
               const index = typeof tc.index === "number" ? tc.index : 0;
-              const current = toolCalls.get(index) ?? { id: "", name: "", arguments: "" };
+              const current = toolCalls.get(index) ?? { id: "", name: "", arguments: "", argumentBytes: 0 };
               if (typeof tc.id === "string") current.id = tc.id;
               const fn = isRec(tc.function) ? tc.function : {};
               // Done-frame final arguments are authoritative last-write-wins snapshots.
               if (typeof fn.name === "string" && fn.name.length > 0) current.name = fn.name;
               if (typeof fn.arguments === "string") {
-                if (fn.arguments.startsWith("{") || fn.arguments.startsWith("[") || current.arguments.length === 0) {
-                  current.arguments = fn.arguments;
-                } else {
-                  current.arguments += fn.arguments;
+                const replace = fn.arguments.startsWith("{") || fn.arguments.startsWith("[") || current.arguments.length === 0;
+                const nextBytes = replace
+                  ? Buffer.byteLength(fn.arguments)
+                  : appendedUtf8Bytes(current.arguments, current.argumentBytes, fn.arguments);
+                const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                try {
+                  current.arguments = replace ? fn.arguments : current.arguments + fn.arguments;
+                  reservation.commitRetained();
+                  translatorBudget.releaseRetained(current.argumentBytes, { kind: "retained_collectors" });
+                  current.argumentBytes = nextBytes;
+                } catch (error) {
+                  reservation.release();
+                  throw error;
                 }
               }
               toolCalls.set(index, current);
@@ -541,11 +737,15 @@ export async function collectChatCompletion(
   if (toolCalls.size > 0) {
     message.tool_calls = [...toolCalls.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([, tc]) => ({
+      .map(([, tc]) => {
+        const copy = {
         id: tc.id || `call_${uuid().slice(0, 16)}`,
         type: "function",
         function: { name: tc.name, arguments: tc.arguments },
-      }));
+        };
+        translatorBudget.chargeRetained(Buffer.byteLength(JSON.stringify(copy)), { kind: "retained_collectors" });
+        return copy;
+      });
     if (finishReason === "stop") finishReason = "tool_calls";
   }
 

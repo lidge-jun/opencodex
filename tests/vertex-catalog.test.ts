@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { gatherRoutedModels } from "../src/codex/catalog";
+import { gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
 import { clearModelCache, markModelsFetchFailure, setCached } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
+import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
+
+/** Discovery runs on the pinned transport; hand it back the stubbed global. */
+const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
+  gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
 
 const originalFetch = globalThis.fetch;
 let warn: ReturnType<typeof spyOn> | undefined;

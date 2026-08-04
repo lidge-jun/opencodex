@@ -61,6 +61,7 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
+import { subagentFallbackGuidanceText } from "../../codex/subagent-model-fallback";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -96,9 +97,10 @@ import {
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import type { TranslatorBudget } from "../../lib/translator-budget";
 
 
-export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
+export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: TranslatorBudget): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
   freeformToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
@@ -107,9 +109,19 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest): {
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
   for (const t of parsed.context.tools ?? []) {
-    if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
-    if (t.freeform) freeformToolNames.add(t.name);
-    if (t.toolSearch) toolSearchToolNames.add(t.name);
+    if (t.namespace) {
+      const wireName = namespacedToolName(t.namespace, t.name);
+      budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+      toolNsMap.set(wireName, { namespace: t.namespace, name: t.name });
+    }
+    if (t.freeform) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      freeformToolNames.add(t.name);
+    }
+    if (t.toolSearch) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      toolSearchToolNames.add(t.name);
+    }
   }
   return { toolNsMap, freeformToolNames, toolSearchToolNames };
 }
@@ -160,6 +172,7 @@ export interface MultiAgentGuidanceOptions {
   injectionModel?: string;
   injectionEffort?: string;
   subagentModels?: string[];
+  subagentModelFallback?: string[];
   injectionPrompt?: string;
 }
 
@@ -170,6 +183,18 @@ export interface MultiAgentGuidanceDeps {
     configuredModels: readonly string[],
     surface: SpawnAgentSurface,
   ) => EffectiveSubagentRoster | Promise<EffectiveSubagentRoster>;
+  collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" };
+}
+
+async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
+  // Explicit override for tests and diagnostics: process state is global and
+  // would otherwise leak the host machine's app-server into hermetic tests.
+  const override = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  if (override === "fresh" || override === "stale" || override === "not_running" || override === "unknown") {
+    return { state: override };
+  }
+  const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
+  return collectCodexAppServerCatalogState();
 }
 
 
@@ -194,12 +219,22 @@ export async function multiAgentGuidanceText(
     injectionModel,
     injectionEffort,
     subagentModels,
+    subagentModelFallback,
     injectionPrompt,
   } = options;
   const surface = collabSurface(parsed);
   if (surface === null) return null;
 
   if (surface === "v2") {
+    // #857: the disk catalog may be newer than the running app-server's
+    // in-memory copy. Advertising preferred models or a roster the running
+    // Codex cannot actually spawn makes spawn_agent reject the override, so
+    // suppress positive model claims while the state is stale or unknown.
+    const catalogState = await (deps.collectCatalogState ?? defaultCollectCatalogState)();
+    if (catalogState.state === "stale" || catalogState.state === "unknown") {
+      return "<multi_agent_mode>The model catalog changed after Codex started; do not set "
+        + "model or reasoning_effort overrides until Codex restarts.</multi_agent_mode>";
+    }
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
     // injectionModel and/or a roster entry that resolves in the injected catalog.
@@ -222,11 +257,12 @@ export async function multiAgentGuidanceText(
         .map(item => `${item.configured}:${item.reason}`)
         .join(", ")}`);
     }
-    if (!injectionModel && roster === "") return null;
+    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
+    if (!injectionModel && roster === "" && fallbackGuidance === "") return null;
     if (injectionPrompt) {
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, injectionModel, injectionEffort, roster)}</multi_agent_mode>`;
+      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, injectionModel, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
     }
-    if (!preferred && roster === "") return null;
+    if (!preferred && roster === "" && fallbackGuidance === "") return null;
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
       + "use only models listed for this collaboration surface. "
       + "When setting either override, set fork_turns to \"none\" "
@@ -237,6 +273,7 @@ export async function multiAgentGuidanceText(
         + (injectionEffort ? `, reasoning_effort "${injectionEffort}"` : "")
         + " — use it unless the user names another.";
     }
+    text += fallbackGuidance;
     text += roster;
     if (text.length > V2_GUIDANCE_CHAR_BUDGET) {
       // Roster is the only unbounded part — drop it before breaking the budget.
@@ -256,11 +293,12 @@ export async function multiAgentGuidanceText(
 
 export const V2_GUIDANCE_CHAR_BUDGET = 700;
 
-export function applyInjectionPlaceholders(prompt: string, model?: string, effort?: string, roster?: string): string {
+export function applyInjectionPlaceholders(prompt: string, model?: string, effort?: string, roster?: string, fallback?: string): string {
   return prompt
     .replaceAll("{{model}}", model ?? "")
     .replaceAll("{{effort}}", effort ?? "")
-    .replaceAll("{{roster}}", roster ?? "");
+    .replaceAll("{{roster}}", roster ?? "")
+    .replaceAll("{{fallback}}", fallback ?? "");
 }
 
 
@@ -281,11 +319,29 @@ export function subagentRosterText(models: Array<{ model: string; efforts: strin
 
 
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isGeneratedDeveloperItem(item: unknown, text: string): boolean {
+  if (!isRecord(item) || item.type !== "message" || item.role !== "developer") return false;
+  if (!Array.isArray(item.content) || item.content.length !== 1) return false;
+  const [part] = item.content;
+  return isRecord(part) && part.type === "input_text" && part.text === text;
+}
+
 export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): void {
-  parsed.context.messages.push({ role: "developer", content: text, timestamp: Date.now() });
   const raw = parsed._rawBody as { input?: unknown } | undefined;
+  const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
   if (raw && Array.isArray(raw.input)) {
-    const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
+    const replayPrefixLen = Math.min(parsed._replayPrefixLen ?? 0, raw.input.length);
+    if (raw.input.slice(0, replayPrefixLen).some(item => isGeneratedDeveloperItem(item, text))) {
+      return;
+    }
+  }
+
+  parsed.context.messages.push({ role: "developer", content: text, timestamp: Date.now() });
+  if (raw && Array.isArray(raw.input)) {
     // compaction_trigger must remain the final input item (codex-rs + ChatGPT backend both
     // validate this). Insert the developer message BEFORE the trigger when present.
     const last = raw.input[raw.input.length - 1];
@@ -296,5 +352,3 @@ export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): 
     }
   }
 }
-
-

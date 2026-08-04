@@ -20,7 +20,7 @@ interface ProviderAdapter {
 `buildRequest` lowers an `OcxParsedRequest` into an upstream HTTP request; `parseStream` /
 `parseResponse` lift the provider's reply back into internal `AdapterEvent`s. `fetchResponse` lets an
 adapter own retries/timeouts, while `runTurn` supports transports that cannot be represented as one
-HTTP fetch followed by one response stream. [`bridge.ts`](/opencodex/reference/architecture/#the-bridge)
+HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
 ## `openai-chat`
@@ -49,12 +49,12 @@ streams the response back **untranslated**.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
-  that also powers the [sidecars](/opencodex/guides/sidecars/).
+  that also powers the [sidecars](/guides/sidecars/).
 
 ## `anthropic`
 
 **Targets:** Anthropic **Messages** (`/v1/messages`).
-**Auth:** `key` (`x-api-key`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
+**Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
 - **Extended thinking math:** Anthropic requires `max_tokens > thinking.budget_tokens`. The adapter
@@ -64,6 +64,10 @@ streams the response back **untranslated**.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
+- For routed Anthropic Responses turns with client tools, a bounded terminal guard detects the
+  high-confidence case where the user requested an action but Claude ends with an execution claim
+  and no tool call. It performs at most one internal continuation; normal answers, clarification
+  questions, tool-using turns, and transport-incomplete responses are not auto-retried.
 
 ## `google`
 
@@ -75,6 +79,15 @@ streams the response back **untranslated**.
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
   `thoughtSignature` values so reasoning continuity survives later turns.
+- **Inline image output:** when the model is one of the explicit image-capable chat IDs
+  (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
+  `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
+  Standalone media-generation IDs such as `gemini-3-pro-image` are not included. Returned
+  `inlineData` parts are materialized under the configured OpenCodex `artifacts/` directory and
+  surfaced as markdown image links to the authenticated opaque route
+  `/v1/opencodex/artifacts/<id>` (not `file:` URIs or host filesystem paths). Each image is capped
+  at 50 MB and each response at 100 MB of decoded data; malformed base64 payloads are rejected.
+  Artifacts are pruned automatically when the count exceeds 200 files.
 
 ## `kiro`
 
@@ -90,31 +103,53 @@ streams the response back **untranslated**.
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
   shape is eligible for one bounded fallback to `q.{region}.amazonaws.com` after an endpoint,
   signature, DNS, or connection failure.
-- Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, and one OAuth
-  refresh/replay after HTTP 401. The client owns throttling, timeout, and ordinary service retries;
-  opencodex does not multiply those policies inside the adapter.
+- Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
+  refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
+  single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
+  hard quota failures and ordinary service errors are not replayed.
 - Its non-streaming parser drains the same event stream for the web-search loop.
 
 ### Completion semantics
 
-Kiro text events do not carry a dependable end-turn phase. When an ordinary client tool is present,
-opencodex therefore adds a private `codex_kiro_final_answer` tool to the upstream request. Progress
-text streams as commentary and cannot terminate the turn. The adapter consumes the private call,
-emits its answer as final text, and never exposes the private tool to Codex or Claude Code.
-When the web-search sidecar is active, this commentary still streams immediately; only the events
-needed to decide whether the model requested a synthetic search remain buffered.
+Kiro assistant text carries no dependable end-turn phase of its own. Its terminal `metadataEvent`
+can carry a native `stopReason`, but Kiro can label progress prose as `END_TURN`. On tool-enabled
+turns, `END_TURN` and `STOP_SEQUENCE` therefore prove only that the inference stopped; ordinary text
+remains commentary and enters the one bounded completion validation.
 
-If Kiro emits progress without calling the completion tool, the adapter makes one continuation. That
-single retry may finish with a validated private completion or plain final text. It cannot recurse:
-an empty or reasoning-only retry is returned as retryable incomplete, while a real client tool call
-keeps the turn open. If the retry only repeats the preceding commentary after whitespace
-normalization, the duplicate output is suppressed while the turn still completes. Tool-free
-requests retain normal text completion behavior.
+`END_TURN`, `STOP_SEQUENCE`, or a missing stop reason may use the compatibility path. Other explicit
+reasons have already terminated the inference upstream, so the adapter reports them instead of
+spending another model request: an output-token limit surfaces as incomplete output that a client may continue, while
+context-window exhaustion surfaces as a non-retryable context-length error rather than as truncated
+output. Filtering and guardrail stops surface as filtered incomplete output, and a `TOOL_USE` stop
+that arrives without an actual tool call is reported as a contradiction rather than treated as
+progress.
+
+When an ordinary client tool exists, opencodex adds a private
+`codex_kiro_final_answer` tool to the upstream request; progress text streams as commentary and
+cannot terminate the turn. The adapter consumes the private call, emits its answer as final text,
+and never exposes the private tool to Codex or Claude Code. Because the stop reason only arrives at
+the end of the stream, assistant text in a tool-enabled turn is held until either a real tool call
+starts or the stream ends, then releases it as commentary unless the private tool supplied the final
+answer. When the web-search sidecar is active, released
+commentary still streams ahead of the terminal event; only the events needed to decide whether the
+model requested a synthetic search remain buffered.
+
+If Kiro stops without calling the completion tool, the adapter makes one continuation. Reasoning-
+only retries preserve the original valid user/tool-result turn rather than manufacturing an empty
+assistant message; visible progress is replayed with a non-empty adapter-owned instruction. Before
+transport, the generated conversation is checked for alternating roles, non-empty structural turns,
+and matched tool-use/result ids. Empty tool output receives a neutral non-empty placeholder. The
+retry cannot recurse: an empty or reasoning-only retry is returned as retryable incomplete, while a
+real client tool call keeps the turn open. A completion-tool answer is always emitted as
+`final_answer`, even when it exactly repeats prior commentary, because phase correctness is more
+important than cosmetic de-duplication. Tool-free requests retain normal text completion behavior.
 
 ### Reasoning effort
 
-`gpt-5.6-sol` has verified native effort support. Its selected `low`, `medium`, `high`, `xhigh`, or
-`max` value is sent as `additionalModelRequestFields.reasoning.effort`. Other Kiro models currently
+`gpt-5.6-sol` and `claude-opus-5` have verified native effort support, and each model family names
+the request field differently. A selected `low`, `medium`, `high`, `xhigh`, or `max` value is sent
+as `additionalModelRequestFields.reasoning.effort` for `gpt-5.6-sol` and as
+`additionalModelRequestFields.output_config.effort` for `claude-opus-5`. Other Kiro models currently
 use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
 the user content because their native effort field has not been verified. Do not interpret an
 advertised effort control on those models as proof of upstream-native reasoning support.

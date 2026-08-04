@@ -3,14 +3,50 @@ import {
   anthropicErrorBody,
   anthropicErrorType,
   anthropicUsage,
-  collectAnthropicMessage,
+  collectAnthropicMessage as collectAnthropicMessageProduction,
   responsesJsonToAnthropicMessage,
-  responsesSseToAnthropicSse,
+  responsesSseToAnthropicSse as responsesSseToAnthropicSseProduction,
+  sanitizeWebSearchInput,
 } from "../src/claude/outbound";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import {
+  TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
+  type TranslatorBudget,
+} from "../src/lib/translator-budget";
+
+const streamBudgets = new WeakMap<ReadableStream<Uint8Array>, TranslatorBudget>();
+
+function responsesSseToAnthropicSse(
+  upstream: ReadableStream<Uint8Array>,
+  model: string,
+  opts: { pingIntervalMs?: number; translatorBudget?: TranslatorBudget } = {},
+): ReadableStream<Uint8Array> {
+  const translatorBudget = opts.translatorBudget ?? createTestTranslatorBudget();
+  const stream = responsesSseToAnthropicSseProduction(upstream, model, {
+    ...opts,
+    translatorBudget,
+  });
+  streamBudgets.set(stream, translatorBudget);
+  return stream;
+}
+
+function collectAnthropicMessage(
+  stream: ReadableStream<Uint8Array>,
+  model: string,
+  translatorBudget = streamBudgets.get(stream) ?? createTestTranslatorBudget(),
+) {
+  return collectAnthropicMessageProduction(stream, model, translatorBudget);
+}
 
 function sse(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
+
+function dataOnlySse(data: Record<string, unknown>): string {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+const DONE_SSE = "data: [DONE]\n\n";
 
 function streamFrom(text: string): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -18,6 +54,16 @@ function streamFrom(text: string): ReadableStream<Uint8Array> {
     start(controller) {
       // Split into odd chunks so frame-boundary buffering is exercised.
       for (let i = 0; i < text.length; i += 7) controller.enqueue(encoder.encode(text.slice(i, i + 7)));
+      controller.close();
+    },
+  });
+}
+
+function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
       controller.close();
     },
   });
@@ -40,6 +86,69 @@ async function collectEvents(stream: ReadableStream<Uint8Array>): Promise<{ name
 }
 
 describe("claude outbound SSE", () => {
+  test("translator overflow emits one typed error and cancels the upstream reader", async () => {
+    const frame = sse("response.failed", {
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: {
+          message: "upstream translation buffer exceeded the safe limit",
+          type: "upstream_error",
+          code: "translation_buffer_limit",
+        },
+      },
+    });
+    let cancelled = false;
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(frame));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const events = await collectEvents(responsesSseToAnthropicSse(upstream, "m"));
+    expect(events).toEqual([{
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "request_too_large",
+          message: "upstream translation buffer exceeded the safe limit",
+          code: "translation_buffer_limit",
+        },
+      },
+    }]);
+    expect(cancelled).toBe(true);
+  });
+
+  test("multiline Responses data assembly is charged as an old/new replacement", async () => {
+    const half = 512 * 1024;
+    const multiline = `data: {"type":"unknown","payload":"${"x".repeat(half)}\n`
+      + `data: ${"y".repeat(half)}"}\n\n`;
+    // Source + raw frame peaks below 3.5 MiB; admitting old data + fragment + replacement does not.
+    const budget = createTestTranslatorBudget({ maxTurnBytes: Math.floor(3.5 * 1024 * 1024) });
+    const events = await collectEvents(responsesSseToAnthropicSse(
+      streamFromChunks([multiline]),
+      "m",
+      { translatorBudget: budget },
+    ));
+
+    expect(events).toEqual([{
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "request_too_large",
+          message: "upstream translation buffer exceeded the safe limit",
+          code: "translation_buffer_limit",
+        },
+      },
+    }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("text + thinking + tool call + completed w/ usage -> exact Anthropic sequence", async () => {
     const upstream = [
       sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
@@ -96,6 +205,113 @@ describe("claude outbound SSE", () => {
     // monotonic block indexes
     const startIndexes = events.filter(e => e.name === "content_block_start").map(e => e.data.index);
     expect(startIndexes).toEqual([0, 1, 2]);
+  });
+
+  test("data-only Responses frames infer event names from payload types", async () => {
+    const upstream = [
+      dataOnlySse({ type: "response.created", response: { id: "resp_data_only", status: "in_progress" } }),
+      dataOnlySse({ type: "response.output_text.delta", delta: "data-only stream" }),
+      dataOnlySse({
+        type: "response.completed",
+        response: { status: "completed", usage: { input_tokens: 8, output_tokens: 2 } },
+      }),
+      DONE_SSE,
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.map(e => e.name)).toEqual([
+      "message_start", "ping",
+      "content_block_start", "content_block_delta", "content_block_stop",
+      "message_delta", "message_stop",
+    ]);
+    expect(events.find(e => e.name === "content_block_delta")!.data.delta).toEqual({
+      type: "text_delta",
+      text: "data-only stream",
+    });
+    expect(events.find(e => e.name === "message_delta")!.data).toMatchObject({
+      delta: { stop_reason: "end_turn" },
+      usage: { input_tokens: 8, output_tokens: 2 },
+    });
+  });
+
+  test("explicit and data-only Responses frames can interleave", async () => {
+    const upstream = [
+      sse("response.created", { response: { id: "resp_mixed", status: "in_progress" } }),
+      dataOnlySse({ type: "response.output_text.delta", delta: "mixed stream" }),
+      sse("response.completed", { response: { status: "completed" } }),
+      DONE_SSE,
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.find(e => e.name === "content_block_delta")!.data.delta).toEqual({
+      type: "text_delta",
+      text: "mixed stream",
+    });
+    expect(events.at(-1)!.name).toBe("message_stop");
+  });
+
+  test("data-only Responses frames survive non-streaming aggregation", async () => {
+    const upstream = [
+      dataOnlySse({ type: "response.output_text.delta", delta: "data-only message" }),
+      dataOnlySse({
+        type: "response.completed",
+        response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3 } },
+      }),
+      DONE_SSE,
+    ].join("");
+
+    const anthropicSse = responsesSseToAnthropicSse(streamFrom(upstream), "m");
+    const message = await collectAnthropicMessage(anthropicSse, "m");
+    expect(message).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "data-only message" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 5, output_tokens: 3 },
+    });
+  });
+
+  test("explicit event names override payload types and untyped data-only frames stay ignored", async () => {
+    const upstream = [
+      dataOnlySse({ delta: "must stay ignored" }),
+      sse("response.output_text.delta", { type: "response.ignored", delta: "visible" }),
+      sse("response.completed", {
+        type: "response.output_text.delta",
+        delta: "must not override the explicit terminal event",
+        response: { status: "completed" },
+      }),
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    const textDeltas = events
+      .filter(e => e.name === "content_block_delta" && e.data.delta?.type === "text_delta")
+      .map(e => e.data.delta.text);
+    expect(textDeltas).toEqual(["visible"]);
+    expect(events.at(-1)!.name).toBe("message_stop");
+  });
+
+  test("data-only [DONE] without a Responses terminal frame still fails closed", async () => {
+    const upstream = [
+      dataOnlySse({ type: "response.output_text.delta", delta: "partial" }),
+      DONE_SSE,
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.some(e => e.name === "message_stop")).toBe(false);
+    expect(events.find(e => e.name === "content_block_delta")!.data.delta).toEqual({
+      type: "text_delta",
+      text: "partial",
+    });
+    expect(events.at(-1)).toMatchObject({
+      name: "error",
+      data: {
+        type: "error",
+        error: {
+          type: "overloaded_error",
+          message: "upstream stream ended before a terminal frame (truncated response)",
+        },
+      },
+    });
   });
 
   test("failed -> error event with taxonomy type", async () => {
@@ -227,17 +443,28 @@ describe("claude outbound SSE", () => {
   });
 
   test("idle keepalive pings flow during upstream silence", async () => {
-    // Upstream: created frame, 90ms of silence, then a clean completion.
+    // Upstream: created frame, a stretch of silence, then a clean completion.
+    //
+    // The silence is deliberately many intervals long. At 90ms with a 25ms ping the
+    // margin was 3.6 intervals against a >=3 assertion, so a single coalesced timer on
+    // a loaded runner failed it — which is how this went red on macos-latest while
+    // passing everywhere else. Timer scheduling is best-effort, not exact.
+    //
+    // The assertion below is unchanged. What changed is the headroom: the test still
+    // proves idle pings flow during silence, it just no longer depends on the runner
+    // delivering timers on schedule.
+    const PING_INTERVAL_MS = 25;
+    const SILENCE_MS = 300;
     const encoder = new TextEncoder();
     const upstream = new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(encoder.encode(sse("response.created", { response: {} })));
-        await new Promise(r => setTimeout(r, 90));
+        await new Promise(r => setTimeout(r, SILENCE_MS));
         controller.enqueue(encoder.encode(sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })));
         controller.close();
       },
     });
-    const events = await collectEvents(responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: 25 }));
+    const events = await collectEvents(responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: PING_INTERVAL_MS }));
     const pings = events.filter(e => e.name === "ping").length;
     expect(pings).toBeGreaterThanOrEqual(3); // startup ping + >=2 idle pings
     expect(events.at(-1)!.name).toBe("message_stop");
@@ -433,4 +660,137 @@ describe("claude outbound web_search translation", () => {
     expect(msg.content[1].tool_use_id).toBe("ws_1");
     expect(msg.usage.server_tool_use).toEqual({ web_search_requests: 1 });
   });
+});
+
+describe("sanitizeWebSearchInput (#381)", () => {
+  test("omits empty allowed_domains and blocked_domains arrays", () => {
+    expect(sanitizeWebSearchInput({
+      query: "CLAUDE.md practices",
+      allowed_domains: ["code.claude.com"],
+      blocked_domains: [],
+    })).toEqual({
+      query: "CLAUDE.md practices",
+      allowed_domains: ["code.claude.com"],
+    });
+    expect(sanitizeWebSearchInput({
+      query: "community",
+      allowed_domains: [],
+      blocked_domains: ["example.com"],
+    })).toEqual({
+      query: "community",
+      blocked_domains: ["example.com"],
+    });
+    expect(sanitizeWebSearchInput({
+      query: "open",
+      allowed_domains: [],
+      blocked_domains: [],
+    })).toEqual({ query: "open" });
+  });
+
+  test("keeps allowed_domains and drops blocked_domains when both are non-empty", () => {
+    expect(sanitizeWebSearchInput({
+      query: "docs",
+      allowed_domains: ["code.claude.com"],
+      blocked_domains: ["example.com"],
+    })).toEqual({
+      query: "docs",
+      allowed_domains: ["code.claude.com"],
+    });
+  });
+
+  test("JSON path sanitizes WebSearch function_call arguments", () => {
+    const msg = responsesJsonToAnthropicMessage({
+      status: "completed",
+      output: [{
+        type: "function_call",
+        call_id: "toolu_ws",
+        name: "WebSearch",
+        arguments: JSON.stringify({
+          query: "site:code.claude.com memory",
+          allowed_domains: ["code.claude.com"],
+          blocked_domains: [],
+        }),
+      }],
+      usage: { input_tokens: 3, output_tokens: 1 },
+    }, "claude-ocx-native--gpt-5.6-sol") as Record<string, any>;
+    expect(msg.stop_reason).toBe("tool_use");
+    expect(msg.content[0]).toEqual({
+      type: "tool_use",
+      id: "toolu_ws",
+      name: "WebSearch",
+      input: {
+        query: "site:code.claude.com memory",
+        allowed_domains: ["code.claude.com"],
+      },
+    });
+  });
+
+  test("SSE path buffers WebSearch args and emits one sanitized input_json_delta", async () => {
+    const args = JSON.stringify({
+      query: "CLAUDE.md token cost",
+      allowed_domains: [],
+      blocked_domains: ["example.com"],
+    });
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.output_item.added", {
+        output_index: 0,
+        item: { type: "function_call", id: "fc_ws", call_id: "toolu_ws", name: "WebSearch", arguments: "", status: "in_progress" },
+      }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_ws", output_index: 0, delta: args.slice(0, 20) }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_ws", output_index: 0, delta: args.slice(20) }),
+      sse("response.output_item.done", {
+        output_index: 0,
+        item: { type: "function_call", id: "fc_ws", call_id: "toolu_ws", name: "WebSearch", arguments: args },
+      }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 2, output_tokens: 1 } } }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    const deltas = events.filter(e => e.name === "content_block_delta" && e.data.delta?.type === "input_json_delta");
+    expect(deltas).toHaveLength(1);
+    expect(JSON.parse(deltas[0].data.delta.partial_json)).toEqual({
+      query: "CLAUDE.md token cost",
+      blocked_domains: ["example.com"],
+    });
+  });
+
+  test("fragmented WebSearch args admit exact 2 MiB and reject one byte over", async () => {
+    const prefix = "{\"query\":\"";
+    const suffix = "\"}";
+    const exactArgs = prefix
+      + "x".repeat(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix))
+      + suffix;
+    const exactSplit = Math.floor(exactArgs.length / 2);
+    const exactBudget = createTestTranslatorBudget();
+    const exactEvents = await collectEvents(responsesSseToAnthropicSse(streamFromChunks([
+      sse("response.output_item.added", {
+        item: { type: "function_call", id: "fc_exact", call_id: "toolu_exact", name: "WebSearch" },
+      }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_exact", delta: exactArgs.slice(0, exactSplit) }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_exact", delta: exactArgs.slice(exactSplit) }),
+      sse("response.output_item.done", {
+        item: { type: "function_call", id: "fc_exact", call_id: "toolu_exact", name: "WebSearch" },
+      }),
+      sse("response.completed", { response: { status: "completed" } }),
+    ]), "m", { translatorBudget: exactBudget }));
+    const exactDelta = exactEvents.find(event => event.data.delta?.type === "input_json_delta");
+    expect(JSON.parse(exactDelta!.data.delta.partial_json).query.length)
+      .toBe(exactArgs.length - prefix.length - suffix.length);
+    expect(exactEvents.at(-1)?.name).toBe("message_stop");
+    expect(exactBudget.snapshot().activeCalls).toBe(0);
+
+    const overArgs = exactArgs.slice(0, -suffix.length) + "z" + suffix;
+    const overSplit = Math.floor(overArgs.length / 2);
+    const overEvents = await collectEvents(responsesSseToAnthropicSse(streamFromChunks([
+      sse("response.output_item.added", {
+        item: { type: "function_call", id: "fc_over", call_id: "toolu_over", name: "WebSearch" },
+      }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_over", delta: overArgs.slice(0, overSplit) }),
+      sse("response.function_call_arguments.delta", { item_id: "fc_over", delta: overArgs.slice(overSplit) }),
+    ]), "m"));
+    expect(overEvents.at(-1)).toMatchObject({
+      name: "error",
+      data: { error: { type: "request_too_large", code: "translation_buffer_limit" } },
+    });
+  }, 60_000);
 });

@@ -2,7 +2,7 @@
 
 Thanks for helping with opencodex.
 
-- Start with the canonical guide: [Contributing](https://lidge-jun.github.io/opencodex/contributing/)
+- Start with the canonical guide: [Contributing](https://opencodex.me/contributing/)
 - Public user docs live in [`docs-site/`](./docs-site)
 - Current maintainer invariants live in [`structure/`](./structure)
 - Maintainer roles and merge policy live in [`MAINTAINERS.md`](./MAINTAINERS.md)
@@ -10,15 +10,26 @@ Thanks for helping with opencodex.
 
 ## Branches
 
-- `dev` — integration target for all normal pull requests.
+- `dev` — the only integration target for pull requests.
 - `main` — releases only; moves by maintainer-controlled promotion from `dev`.
 - `preview` — prerelease train.
-- `claudedesktop` — work in progress; maintainer-integrated only.
+
+The `dev2-go` Go native-port line has been retired. Its history is archived at
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive),
+and everything now goes to `dev`. See [`MAINTAINERS.md`](./MAINTAINERS.md) for
+the reasoning.
+
+Rebase pull requests are welcome: bringing a stale branch onto the current head
+is normal contribution. Note the source commits in the description.
 
 Agent-facing repository and review rules live in [`AGENTS.md`](./AGENTS.md).
 
 For local development commands, architecture notes, and release workflow details, use the hosted
 contributing guide above instead of duplicating instructions here.
+
+Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
+Bun runtime for end users, but contributor commands such as `bun install`, `bun run test`, and
+`bun run prepush` run from your local Bun installation.
 
 ## Pre-push hook
 

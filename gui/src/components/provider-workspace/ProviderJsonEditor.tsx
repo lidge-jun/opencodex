@@ -3,7 +3,7 @@
  * Dirty/leave/save guards are managed via the parent's jsonEditor prop contract.
  */
 import { useRef, useEffect } from "react";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/shared";
 
 export interface JsonEditorState {
   open: boolean;
@@ -55,6 +55,7 @@ export default function ProviderJsonEditor({
         onChange={e => editor.onDraftChange(e.target.value)}
         spellCheck={false}
         rows={20}
+        aria-label={t("pws.jsonEditorDesc")}
       />
       {message && (
         <div className={message.ok ? "pwi-settings-msg pwi-settings-msg--ok" : "pwi-settings-msg pwi-settings-msg--err"}>

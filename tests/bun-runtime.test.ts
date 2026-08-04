@@ -1,10 +1,12 @@
 import { describe, it, expect, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, overrideBunPath } from "../src/lib/bun-runtime";
 
-const tmp = mkdtempSync(join(tmpdir(), "ocx-bun-runtime-"));
+// realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
+// from mkdtemp compares unequal to the same path resolved through process.cwd().
+const tmp = realpathSync(mkdtempSync(join(tmpdir(), "ocx-bun-runtime-")));
 const previousOverride = process.env.OPENCODEX_BUN_PATH;
 afterAll(() => {
   if (previousOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
@@ -60,6 +62,31 @@ describe("bundledBunPath / durableBunPath", () => {
     else process.env.OPENCODEX_BUN_PATH = previousOverride;
   });
 
+  it("resolves a relative override against the launcher cwd", () => {
+    const launcherCwd = join(tmp, "launcher-cwd");
+    const real = join(launcherCwd, "relative-bun.exe");
+    const previousCwd = process.cwd();
+    const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
+    mkdirSync(launcherCwd, { recursive: true });
+    writeFileSync(real, Buffer.alloc(1_000_000));
+
+    try {
+      process.chdir(launcherCwd);
+      process.env.OPENCODEX_BUN_PATH = "  relative-bun.exe  ";
+      expect(overrideBunPath()).toBe(real);
+      expect(durableBunRuntime()).toEqual({
+        path: real,
+        source: "override",
+        overrideEnv: "OPENCODEX_BUN_PATH",
+      });
+      expect(durableBunPath()).toBe(real);
+    } finally {
+      process.chdir(previousCwd);
+      if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = inheritedOverride;
+    }
+  });
+
   it("resolves the installed bundled bun binary (dev has the bun dep)", () => {
     const p = bundledBunPath();
     // In this repo the `bun` dependency is installed, so the real binary resolves.
@@ -69,11 +96,18 @@ describe("bundledBunPath / durableBunPath", () => {
   });
 
   it("durableBunPath returns the bundled path when present, else process.execPath", () => {
-    const bundled = bundledBunPath();
-    const durable = durableBunPath();
-    expect(typeof durable).toBe("string");
-    expect(durable.length).toBeGreaterThan(0);
-    if (bundled) expect(durable).toBe(bundled);
-    else expect(durable).toBe(process.execPath);
+    const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
+    delete process.env.OPENCODEX_BUN_PATH;
+    try {
+      const bundled = bundledBunPath();
+      const durable = durableBunPath();
+      expect(typeof durable).toBe("string");
+      expect(durable.length).toBeGreaterThan(0);
+      if (bundled) expect(durable).toBe(bundled);
+      else expect(durable).toBe(process.execPath);
+    } finally {
+      if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
+      else process.env.OPENCODEX_BUN_PATH = inheritedOverride;
+    }
   });
 });

@@ -1,7 +1,36 @@
 import { describe, expect, test } from "bun:test";
 import { usageFromResponsesPayload } from "../src/server";
+import { applyResponseLogMetadata, type RequestLogContext } from "../src/server/request-log";
 
 describe("usageFromResponsesPayload", () => {
+  test("bridge-reported usage wins over re-parsed wire payload (provenance guard)", () => {
+    // The bridge always emits zero-default detail objects for strict clients; when
+    // onUsage already recorded the raw adapter usage, SSE/JSON re-parsing must not
+    // overwrite it with synthetic zeros (cache_detail_missing suppression).
+    const logCtx: RequestLogContext = { model: "m", provider: "p", usageFromBridge: true };
+    logCtx.usage = { inputTokens: 10, outputTokens: 5 };
+    applyResponseLogMetadata(logCtx, {
+      response: {
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          total_tokens: 15,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
+        },
+      },
+    });
+    expect(logCtx.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(logCtx.usage.cachedInputTokens).toBeUndefined();
+
+    // Without the bridge flag (native passthrough), wire parsing still applies.
+    const passthroughCtx: RequestLogContext = { model: "m", provider: "p" };
+    applyResponseLogMetadata(passthroughCtx, {
+      response: { usage: { input_tokens: 4, output_tokens: 2, input_tokens_details: { cached_tokens: 1 } } },
+    });
+    expect(passthroughCtx.usage).toMatchObject({ inputTokens: 4, cachedInputTokens: 1 });
+  });
+
   test("returns undefined for null / wrong types / missing token pairs", () => {
     expect(usageFromResponsesPayload(undefined)).toBeUndefined();
     expect(usageFromResponsesPayload(null)).toBeUndefined();

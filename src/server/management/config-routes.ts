@@ -10,7 +10,7 @@ import {
   multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
-  saveConfig,
+  saveConfigPreservingClaudeCode,
 } from "../../config";
 import {
   clearLoginState,
@@ -23,6 +23,15 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { isStreamMode } from "../../lib/bun-stream-caps";
+import { shadowSourceModels } from "../../lib/shadow-call";
+import {
+  configureAppOwnedMemoryBudget,
+  enforceAppOwnedMemoryBudget,
+  MAX_APP_OWNED_MEMORY_BUDGET_MB,
+  MIN_APP_OWNED_MEMORY_BUDGET_MB,
+  resolveAppOwnedMemoryBudgetBytes,
+} from "../../lib/app-owned-memory";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -33,7 +42,6 @@ import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
-import { scanStorage } from "../../storage/scanner";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
@@ -58,10 +66,12 @@ import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
+import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
@@ -74,11 +84,69 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
+    let resolved: ReturnType<typeof resolveCodexRuntime>;
+    try {
+      // Full alternative discovery (memoized) so newerAvailable warnings work.
+      resolved = resolveCodexRuntime();
+    } catch {
+      resolved = {
+        runtime: { command: "codex", version: null, source: "fallback" },
+        failures: [],
+      };
+    }
+    const lastClamp = loadLastEffortClamp();
+    const clampActive = effortClampAppliesToRuntime(lastClamp, resolved.runtime);
+    const warningParts: string[] = [];
+    if (resolved.replacedConfigured) {
+      warningParts.push(
+        `Preferred Codex runtime is unavailable; using ${displayCodexRuntimePath(resolved.runtime.command)} instead.`,
+      );
+    } else if (
+      resolved.runtime.source === "fallback"
+      && resolved.failures.length > 0
+      && !resolved.runtime.version
+    ) {
+      warningParts.push("No validated Codex runtime found; falling back to `codex`.");
+    }
+    if (clampActive) {
+      const clampVersion = lastClamp?.runtimeVersion ?? resolved.runtime.version ?? "an older binary";
+      warningParts.push(
+        `Some reasoning effort options were hidden because OpenCodex used Codex ${clampVersion}.${resolved.newerAvailable ? " A newer Codex installation is available." : ""}`,
+      );
+    } else if (resolved.newerAvailable) {
+      warningParts.push(
+        `OpenCodex is using an older Codex binary (${resolved.runtime.version ?? "unknown"}). A newer Codex installation is available.`,
+      );
+    }
     return jsonResponse({
+      // The dashboard renders request-log timestamps. Without this it formats them in the
+      // BROWSER's zone, so a KST proxy viewed from a UTC browser reports every request nine
+      // hours off (#725). Carried on settings rather than /api/logs because that route's
+      // array response has four consumers that would have to change with it.
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       codexAutoStart: codexAutoStartEnabled(config),
       port: config.port,
       hostname: config.hostname ?? "127.0.0.1",
+      streamMode: config.streamMode ?? "auto",
+      appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       startupHealth: await getCachedStartupHealth(config),
+      codexRuntime: {
+        path: displayCodexRuntimePath(resolved.runtime.command),
+        version: resolved.runtime.version,
+        source: resolved.runtime.source,
+        newerAvailable: resolved.newerAvailable
+          ? {
+            path: displayCodexRuntimePath(resolved.newerAvailable.command),
+            version: resolved.newerAvailable.version,
+          }
+          : null,
+        catalogClamp: {
+          active: clampActive,
+          removedEfforts: clampActive ? (lastClamp?.removedEfforts ?? []) : [],
+          runtimeVersion: clampActive ? (lastClamp?.runtimeVersion ?? null) : null,
+        },
+        warning: warningParts.length > 0 ? warningParts.join(" ") : null,
+      },
     });
   }
 
@@ -87,16 +155,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/startup-action" && req.method === "POST") {
-    let body: { action?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    let body: { action?: unknown; repair?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!body || !["install-service", "install-shim"].includes(String(body.action))) {
       return jsonResponse({ error: "action must be install-service or install-shim" }, 400);
     }
+    if (body.repair !== undefined && typeof body.repair !== "boolean") {
+      return jsonResponse({ error: "repair must be a boolean when provided" }, 400);
+    }
     try {
       const action = body.action as StartupInstallAction;
-      const result = await (deps.runStartupInstallAction ?? runStartupInstallAction)(action);
+      const repair = body.repair === true;
+      const result = await (deps.runStartupInstallAction ?? runStartupInstallAction)(action, { repair });
       invalidateStartupHealthCache();
-      return jsonResponse({ ok: true, action, message: result.message });
+      return jsonResponse({ ok: true, action, repair, message: result.message });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
     }
@@ -113,7 +185,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/windows-tray" && req.method === "POST") {
     let body: { action?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!body || !["install", "start", "stop", "uninstall"].includes(String(body.action))) {
       return jsonResponse({ error: "action must be install, start, stop, or uninstall" }, 400);
     }
@@ -127,17 +199,55 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "PUT") {
-    let body: { codexAutoStart?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (typeof body.codexAutoStart !== "boolean") {
+    // Each field is optional but at least one must be present; fields are
+    // validated when present. streamMode-only PUTs must work: Windows/macOS
+    // memory troubleshooting can use this persisted stream-shape escape hatch
+    // (a Windows service does not inherit shell env). A stream-shape
+    // change applies to NEW turns only — the config object is shared by
+    // reference with the request handlers, no restart needed.
+    let body: { codexAutoStart?: unknown; streamMode?: unknown; appOwnedMemoryBudgetMb?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (body.codexAutoStart === undefined && body.streamMode === undefined && body.appOwnedMemoryBudgetMb === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, or appOwnedMemoryBudgetMb" }, 400);
+    }
+    if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
-    config.codexAutoStart = body.codexAutoStart;
-    saveConfig(config);
+    if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
+      return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
+    }
+    if (body.appOwnedMemoryBudgetMb !== undefined && (
+      typeof body.appOwnedMemoryBudgetMb !== "number"
+      || !Number.isInteger(body.appOwnedMemoryBudgetMb)
+      || body.appOwnedMemoryBudgetMb < MIN_APP_OWNED_MEMORY_BUDGET_MB
+      || body.appOwnedMemoryBudgetMb > MAX_APP_OWNED_MEMORY_BUDGET_MB
+    )) {
+      return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
+    }
+    if (typeof body.codexAutoStart === "boolean") {
+      config.codexAutoStart = body.codexAutoStart;
+    }
+    if (body.streamMode !== undefined) {
+      if (body.streamMode === "auto") {
+        delete config.streamMode;
+      } else {
+        config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
+      }
+    }
+    if (typeof body.appOwnedMemoryBudgetMb === "number") {
+      config.appOwnedMemoryBudgetMb = body.appOwnedMemoryBudgetMb;
+    }
+    saveConfigPreservingClaudeCode(config);
+    if (typeof body.appOwnedMemoryBudgetMb === "number") {
+      configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(body.appOwnedMemoryBudgetMb));
+      enforceAppOwnedMemoryBudget();
+    }
     invalidateStartupHealthCache();
     return jsonResponse({
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
+      streamMode: config.streamMode ?? "auto",
+      appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       startupHealth: await getCachedStartupHealth(config),
     });
   }
@@ -150,10 +260,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/sync" && req.method === "POST") {
     const { syncModelsToCodex } = await import("../../codex/sync");
+    const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
     const result = await syncModelsToCodex(undefined, config, null);
     return jsonResponse({
-      ...result,
-      staleAppServerHint: "If Codex App still shows an older model list, restart its long-lived app-server process after sync.",
+      ...attachStaleAppServerHint(result),
+      ...(result.ok ? {} : { error: result.message }),
     }, result.ok ? 200 : 500);
   }
 
@@ -169,7 +280,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   if (url.pathname === "/api/update/run" && req.method === "POST") {
     const { normalizeUpdateChannel, startUpdateJob, UpdateJobError } = await import("../../update/job");
     let body: { tag?: unknown; restart?: unknown };
-    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.tag !== undefined && body.tag !== "latest" && body.tag !== "preview") {
       return jsonResponse({ error: "tag must be latest or preview" }, 400);
     }
@@ -208,7 +319,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
     let raw: unknown;
-    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     // Strict shape (review F2): reject non-object bodies and non-object sections instead of throwing
     // on `null` or silently accepting arrays/strings as no-op updates.
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
@@ -258,7 +369,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         config.visionSidecar.maxDescriptionsPerTurn = body.vision.maxDescriptionsPerTurn;
       }
     }
-    saveConfig(config);
+    saveConfigPreservingClaudeCode(config);
     const ws = config.webSearchSidecar ?? {};
     const vs = config.visionSidecar ?? {};
     return jsonResponse({
@@ -274,12 +385,16 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/shadow-call-settings" && req.method === "GET") {
     const sci = config.shadowCallIntercept ?? {};
-    return jsonResponse({ enabled: sci.enabled === true, model: sci.model ?? "" });
+    return jsonResponse({
+      enabled: sci.enabled === true,
+      model: sci.model ?? "",
+      sourceModels: shadowSourceModels(sci.sourceModels),
+    });
   }
 
   if (url.pathname === "/api/shadow-call-settings" && req.method === "PUT") {
     let raw: unknown;
-    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
     const body = raw as { enabled?: unknown; model?: unknown };
     if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
@@ -294,9 +409,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (body.model === "") delete config.shadowCallIntercept.model;
       else config.shadowCallIntercept.model = body.model;
     }
-    saveConfig(config);
+    saveConfigPreservingClaudeCode(config);
     const sci = config.shadowCallIntercept;
-    return jsonResponse({ ok: true, enabled: sci.enabled === true, model: sci.model ?? "" });
+    return jsonResponse({
+      ok: true,
+      enabled: sci.enabled === true,
+      model: sci.model ?? "",
+      sourceModels: shadowSourceModels(sci.sourceModels),
+    });
   }
 
   if (url.pathname === "/api/orchestration" && req.method === "GET") {

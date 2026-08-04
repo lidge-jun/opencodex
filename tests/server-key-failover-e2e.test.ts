@@ -114,6 +114,85 @@ describe("server 429 key failover (end-to-end)", () => {
     }
   });
 
+  test("key rotation keeps registry-backfilled prompt_cache_key on the retried request", async () => {
+    // Regression: the persisted kimi-code config predates the registry `promptCacheKey`
+    // scalar, so routedProviderConfig backfills it at request time. The 429 retry used to
+    // rebuild route.provider from the raw persisted config, silently dropping the backfill
+    // (and every other registry merge) — the rotated attempt then omitted prompt_cache_key.
+    const originalFetch = globalThis.fetch;
+    const promptCacheKey = "kimi-session-high-entropy-429-e2e";
+    const seen: { auth: string | null; body: { prompt_cache_key?: string } }[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://api.kimi.com/coding/v1/chat/completions") {
+        seen.push({
+          auth: new Headers(init?.headers).get("authorization"),
+          body: JSON.parse(String(init?.body)) as { prompt_cache_key?: string },
+        });
+        if (seen.length === 1) {
+          return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+            status: 429,
+            headers: { "retry-after": "30", "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({
+          id: "chatcmpl-kimi-rotate",
+          object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok after rotate" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    let server: ReturnType<typeof startServer> | null = null;
+    try {
+      const config: OcxConfig = {
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "kimi-code",
+        providers: {
+          // Deliberately NO promptCacheKey here: the registry backfill is what must survive.
+          "kimi-code": {
+            adapter: "openai-chat",
+            baseUrl: "https://api.kimi.com/coding/v1",
+            authMode: "key",
+            apiKey: "key-alpha-000111222333",
+            apiKeyPool: [
+              { id: "k1", key: "key-alpha-000111222333", addedAt: 1 },
+              { id: "k2", key: "key-beta-444555666777", addedAt: 2 },
+            ],
+          },
+        },
+      } as OcxConfig;
+      saveConfig(config);
+      server = startServer(0);
+      const res = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "kimi-code/kimi-k2.7-code",
+          input: "hello",
+          stream: false,
+          prompt_cache_key: promptCacheKey,
+        }),
+      });
+      expect(res.status).toBe(200);
+      const json = await res.json() as { output?: { type: string; content?: { text?: string }[] }[] };
+      expect(json.output?.find(o => o.type === "message")?.content?.[0]?.text).toBe("ok after rotate");
+      expect(seen).toHaveLength(2);
+      expect(seen.map(s => s.auth)).toEqual([
+        "Bearer key-alpha-000111222333",
+        "Bearer key-beta-444555666777",
+      ]);
+      // Both attempts — the rotated retry especially — must carry the cache key.
+      expect(seen.map(s => s.body.prompt_cache_key)).toEqual([promptCacheKey, promptCacheKey]);
+    } finally {
+      server?.stop(true);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("routed 429 rotates to the pool's next key and succeeds", async () => {
     const seenAuth: string[] = [];
     upstream = Bun.serve({

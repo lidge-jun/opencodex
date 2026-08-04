@@ -2,19 +2,21 @@ import * as readline from "node:readline";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
-import { isPublicOAuthProvider, listOAuthProviders, OAUTH_PROVIDERS, runLogin } from "./index";
+import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxProviderConfig } from "../types";
+import { configuredAdminToken } from "../lib/admin-secrets";
+import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 export function runningProxyUpdateHeaders(): Headers {
   const headers = new Headers({ "Content-Type": "application/json" });
-  const apiToken = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
-  if (apiToken) headers.set("X-OpenCodex-API-Key", apiToken);
+  const adminToken = configuredAdminToken();
+  if (adminToken) headers.set("X-OpenCodex-API-Key", adminToken);
   return headers;
 }
 
 /** Push the new provider into a running proxy's live config so it routes without a restart. */
-async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
+export async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
   // Identity-checked runtime-port lookup: reaches a fallback-port proxy and avoids
   // posting credentials-adjacent config to whatever else answers on config.port.
   const live = await findLiveProxy();
@@ -28,6 +30,19 @@ async function notifyRunningProxy(name: string, provider: unknown): Promise<void
   } catch {
     /* proxy unreachable; disk config loads on next start */
   }
+}
+
+/**
+ * After `runLogin()` has persisted the merged provider (including preserved apiKey /
+ * apiKeyPool / authMode), push that on-disk entry into a running proxy.
+ *
+ * Must not send `OAUTH_PROVIDERS[name].providerConfig`: POST /api/providers replaces the
+ * live entry and saves it, which would drop the preserved key billing state.
+ */
+export async function notifyRunningProxyAfterOAuthLogin(name: string): Promise<void> {
+  const provider = loadConfig().providers[name];
+  if (!provider) return;
+  await notifyRunningProxy(name, provider);
 }
 
 export async function handleLogin(provider?: string): Promise<void> {
@@ -58,7 +73,7 @@ async function handleOAuthLogin(name: string): Promise<void> {
   } finally {
     rl.close();
   }
-  await notifyRunningProxy(name, OAUTH_PROVIDERS[name].providerConfig);
+  await notifyRunningProxyAfterOAuthLogin(name);
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
 }
 
@@ -67,6 +82,7 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     adapter: def.adapter,
     baseUrl: baseUrlOverride ?? def.baseUrl,
     apiKey: key,
+    ...(def.apiKeyTransport !== undefined ? { apiKeyTransport: def.apiKeyTransport } : {}),
     ...(def.defaultModel ? { defaultModel: def.defaultModel } : {}),
     ...(def.models ? { models: [...def.models] } : {}),
     ...(def.contextWindow !== undefined ? { contextWindow: def.contextWindow } : {}),
@@ -92,6 +108,12 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
 
 async function handleKeyLogin(name: string): Promise<void> {
   const def = KEY_LOGIN_PROVIDERS[name];
+  const preflightConfig = loadConfig();
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(preflightConfig.codexAccountNamespaces, name);
+  if (namespaceCollision) {
+    console.error(`Error: ${namespaceCollision}.`);
+    process.exit(1);
+  }
   console.log(`\n🔑 ${def.label} — opening ${def.dashboardUrl} so you can create/copy an API key...`);
   openUrl(def.dashboardUrl);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -113,7 +135,7 @@ async function handleKeyLogin(name: string): Promise<void> {
     process.exit(1);
   }
   process.stdout.write("   validating… ");
-  const valid = await validateApiKey({ ...def, baseUrl }, key);
+  const valid = await validateApiKey(name, { ...def, baseUrl }, key);
   console.log(valid === true ? "valid ✅" : valid === false ? "INVALID ❌" : "couldn't validate (may still work)");
   if (valid === false) {
     console.error("Provider rejected the key. Not saved.");
@@ -121,6 +143,11 @@ async function handleKeyLogin(name: string): Promise<void> {
   }
   const provider = providerConfigFromKeyLoginProvider(def, key, baseUrl);
   const config = loadConfig();
+  const commitCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
+  if (commitCollision) {
+    console.error(`Error: ${commitCollision}.`);
+    process.exit(1);
+  }
   config.providers[name] = provider;
   saveConfig(config);
   await notifyRunningProxy(name, provider);

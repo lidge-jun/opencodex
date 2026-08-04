@@ -42,6 +42,7 @@ import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCooldownError,
+  cooldownErrorResponse,
   CodexAuthContextError,
   CodexDirectAuthenticationError,
   CodexPoolAuthenticationError,
@@ -49,6 +50,8 @@ import {
   headersForCodexAuthContext,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  codexProbeLeaseId,
+  codexProbeQuotaScope,
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
@@ -59,7 +62,7 @@ import {
 import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -202,7 +205,10 @@ export async function handleResponsesCompact(
     }
   }
 
-  if (route.provider.adapter === "openai-responses") {
+  // Native /responses/compact exists on the canonical ChatGPT backend and on the
+  // official OpenAI API. Any other Responses-shaped gateway must take the routed
+  // summarizer path below, or compaction fails against an endpoint it never had (#422).
+  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider)) {
     // Native ChatGPT/OpenAI model: forward the compact request verbatim to the real backend.
     // Resolve the SAME pool/thread auth context as /v1/responses — forwarding the caller's raw
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
@@ -212,7 +218,7 @@ export async function handleResponsesCompact(
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
-        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+        authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, { modelId: selectedModelId });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
@@ -227,7 +233,7 @@ export async function handleResponsesCompact(
       }
     } catch (err) {
       if (err instanceof CodexAccountCooldownError) {
-        return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
+        return cooldownErrorResponse(err);
       }
       if (err instanceof CodexThreadAffinityExpiredError) {
         return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
@@ -250,11 +256,20 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
-    const recordCompactPoolOutcome = (outcome: CodexUpstreamOutcome, meta: { retryAfter?: string | null } = {}) => {
+    const recordCompactPoolOutcome = (
+      outcome: CodexUpstreamOutcome,
+      meta: { retryAfter?: string | null; resetAt?: unknown | unknown[] } = {},
+    ) => {
       if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
       recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
         ...meta,
         threadId: compactThreadId,
+        modelId: selectedModelId,
+        probeLeaseId: codexProbeLeaseId(authCtx),
+        probeQuotaScope: codexProbeQuotaScope(authCtx),
+        writerGeneration: authCtx.kind === "pool" || authCtx.kind === "main-pool"
+          ? authCtx.writerGeneration
+          : undefined,
       });
     };
     let upstream: Response;
@@ -277,28 +292,30 @@ export async function handleResponsesCompact(
         { abortSignal: req.signal, label: safeHostLabel(compactUrl) },
       );
     } catch (err) {
-      if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      if (req.signal.aborted) {
+        recordCompactPoolOutcome(499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
       recordCompactPoolOutcome(outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
     const retryAfter = upstream.headers.get("retry-after");
+    const resetAt = [
+      upstream.headers.get("x-codex-primary-reset-at"),
+      upstream.headers.get("x-codex-secondary-reset-at"),
+      upstream.headers.get("x-codex-tertiary-reset-at"),
+    ].filter(Boolean);
     const buffered = await bufferCompactResponse(upstream, req.signal);
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
+      recordCompactPoolOutcome(499);
       return buffered;
     }
-    if (upstream.ok && buffered.status >= 500) {
-      // The upstream account returned 200 — it is healthy. The buffering failure
-      // (oversized body exceeding COMPACT_RESPONSE_MAX_BYTES, or a rare mid-read
-      // reset on a small JSON payload) is a local proxy issue, not account flakiness.
-      // Record the upstream status so a deterministic payload-size limit does not
-      // soft-avoid a healthy account and rotate a thread for 30s.
-      recordCompactPoolOutcome(upstream.status, { retryAfter });
-    } else {
-      recordCompactPoolOutcome(upstream.status, { retryAfter });
-    }
+    // Always record the real upstream status: a local buffering failure after a
+    // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
+    recordCompactPoolOutcome(upstream.status, { retryAfter, resetAt });
     return buffered;
   }
 
@@ -322,21 +339,46 @@ export async function handleResponsesCompact(
   });
   const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal });
   if (!response.ok) return response;
-  let json: { output?: unknown[] };
+  let json: { output?: unknown[]; status?: unknown; error?: unknown };
   try {
-    json = await response.json() as { output?: unknown[] };
+    json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
   } catch {
     return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
   }
-  const compactionItem = (json.output ?? []).find(
+  // The internal turn answers 200 even when it failed or was truncated, so the body
+  // has to be inspected. Reporting a failure beats installing "(no summary
+  // available)" as replacement history and silently losing the conversation (#422).
+  if (json.error) {
+    const message = typeof json.error === "string"
+      ? json.error
+      : (json.error as { message?: unknown })?.message;
+    return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
+  }
+  if (json.status !== "completed") {
+    return formatErrorResponse(
+      502,
+      "upstream_error",
+      `compaction turn did not complete (status: ${String(json.status ?? "unknown")})`,
+    );
+  }
+  const compactionItems = (json.output ?? []).filter(
     (item): item is { type: string; encrypted_content?: string } =>
       !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
   );
-  const summary = compactionItem?.encrypted_content
-    ? decodeCompactionSummary(compactionItem.encrypted_content) ?? ""
-    : "";
+  if (compactionItems.length !== 1) {
+    return formatErrorResponse(
+      502,
+      "invalid_response_error",
+      `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
+    );
+  }
+  const encrypted = compactionItems[0]!.encrypted_content;
+  const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
+  // An empty `ocx1:` envelope decodes to "" rather than null, so length is what matters.
+  if (decoded === null || decoded.trim().length === 0) {
+    return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
+  }
+  const summary = decoded;
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }
-
-

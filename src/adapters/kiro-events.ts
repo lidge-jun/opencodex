@@ -6,7 +6,7 @@ export type ParsedKiroEvent =
   | { type: "reasoning"; data?: string }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
-  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number }
+  | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string }
   | { type: "message_metadata"; conversationId?: string }
   | { type: "invalid_state"; message?: string }
   | { type: "error"; reason?: string; message?: string };
@@ -89,8 +89,18 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
   // Unknown event types are intentionally ignored without parsing or logging their payload.
   if (!KNOWN_EVENT_TYPES.has(eventType)) return null;
   const parsed = parseObject(eventType, payload);
-  const truncationReason = kiroTruncationReason(parsed);
-  if (truncationReason) return { type: "truncation", data: truncationReason };
+  // A metadataEvent's `stopReason` is Kiro's own terminal verdict and must reach the parser
+  // intact. The generic truncation sniffer matches substrings ("max_tokens", "length",
+  // "context_length") across several keys, so it would swallow MAX_TOKENS before the switch
+  // below ever runs. Gate on position rather than on the value: a value allowlist would keep
+  // eating future reasons such as LENGTH_LIMIT, which matches the pattern today.
+  const nativeStopReason = eventType === "metadataEvent"
+    ? optionalString(eventType, parsed, "stopReason")
+    : undefined;
+  if (nativeStopReason === undefined) {
+    const truncationReason = kiroTruncationReason(parsed);
+    if (truncationReason) return { type: "truncation", data: truncationReason };
+  }
 
   switch (eventType) {
     case "assistantResponseEvent":
@@ -141,12 +151,14 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
       ) {
         return malformed(eventType, "contextUsagePercentage must be a finite number");
       }
+      const stopReason = optionalString(eventType, parsed, "stopReason");
       return {
         type: "metadata",
         ...(parseTokenUsage(eventType, parsed.tokenUsage) !== undefined
           ? { usage: parseTokenUsage(eventType, parsed.tokenUsage) }
           : {}),
         ...(typeof contextUsagePercentage === "number" ? { contextUsagePercentage } : {}),
+        ...(stopReason !== undefined ? { stopReason } : {}),
       };
     }
     case "invalidStateEvent":

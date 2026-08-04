@@ -4,7 +4,7 @@
  * chrome) arrives in WP080b; detail panels in WP090/091.
  */
 /* eslint-disable react-refresh/only-export-components -- label helpers co-locate with the rail row */
-import { useT, type TFn } from "../../i18n";
+import { useT, type TFn } from "../../i18n/shared";
 import { IconServer, IconStar } from "../../icons";
 import {
   binProviderStatus,
@@ -75,7 +75,7 @@ export function RailRow({ item, selected, tabbable, modelCount, isDefault, showC
   const free = isFreeProvider(item);
   const local = isLocalProvider(item);
   const status = statusLabel(item, t);
-  const displayName = formatProviderDisplayName(item.name);
+  const displayName = formatProviderDisplayName(item.name, t);
   const nameTitle = showConfigId ? `${displayName} (${item.name})` : displayName;
   const suffix = `${isDefault ? t("pws.rail.suffixDefault") : ""}${local ? t("pws.rail.suffixLocal") : free ? t("pws.rail.suffixFree") : ""}`;
   const countLabel = modelCount !== undefined && modelCount > 0
@@ -110,11 +110,9 @@ export function RailRow({ item, selected, tabbable, modelCount, isDefault, showC
             <span className="pwi-rail-badge pwi-rail-badge--free" title={t("pws.freeTitle")}>{t("modal.badge.free")}</span>
           ) : null}
         </span>
-        {secondaryLabel && (
-          <span className="providers-workspace-rail-secondary" title={secondaryLabel}>
-            {secondaryLabel}
-          </span>
-        )}
+        <span className="providers-workspace-rail-secondary" title={secondaryLabel || undefined}>
+          {secondaryLabel || "\u00a0"}
+        </span>
       </span>
       <span className="providers-workspace-rail-trail">
         {isDefault && (

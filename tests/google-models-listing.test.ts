@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { gatherRoutedModels } from "../src/codex/catalog";
+import { gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
 import { buildModelsRequest } from "../src/oauth";
 import { clearModelCache, getStaleCached } from "../src/codex/model-cache";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
+
+/** Discovery runs on the pinned transport; hand it back the stubbed global. */
+const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
+  gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
 
 const originalFetch = globalThis.fetch;
 
@@ -33,9 +38,10 @@ describe("buildModelsRequest google routing", () => {
     expect(headers["x-goog-api-key"]).toBe("gk-123");
   });
 
-  test("google-antigravity (oauth) keeps Authorization: Bearer via registry backfill", () => {
-    // A saved config may omit googleMode — the registry entry (cloud-code-assist) must win.
-    const prov = { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" } as OcxProviderConfig;
+  test("an explicit Antigravity live-discovery override keeps Authorization: Bearer", () => {
+    // Static discovery is the preset default. If a user explicitly opts into the generic probe,
+    // a saved config may still omit googleMode — the registry's cloud-code-assist mode must win.
+    const prov = { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com", liveModels: true } as OcxProviderConfig;
     const { url, headers } = buildModelsRequest(prov, "oauth-token", "google-antigravity");
     expect(url).toBe("https://daily-cloudcode-pa.googleapis.com/models");
     expect(headers["Authorization"]).toBe("Bearer oauth-token");
@@ -46,6 +52,34 @@ describe("buildModelsRequest google routing", () => {
     const prov = { adapter: "google", authMode: "key", baseUrl: "https://aiplatform.googleapis.com" } as OcxProviderConfig;
     const { url } = buildModelsRequest(prov, "gk-123", "google-vertex");
     expect(url).toBe("https://aiplatform.googleapis.com/models");
+  });
+});
+
+describe("buildModelsRequest anthropic routing", () => {
+  test("normalizes a /v1 baseUrl and keeps the Anthropic models path singular", () => {
+    const prov = {
+      adapter: "anthropic",
+      authMode: "key",
+      apiKeyTransport: "bearer",
+      baseUrl: "https://gateway.example.com/v1",
+    } as OcxProviderConfig;
+    const { url, headers } = buildModelsRequest(prov, "sk-ant", "gateway");
+    expect(url).toBe("https://gateway.example.com/v1/models?limit=1000");
+    expect(headers["Authorization"]).toBe("Bearer sk-ant");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+  });
+
+  test("uses x-api-key by default for key-auth Anthropic providers", () => {
+    const prov = {
+      adapter: "anthropic",
+      authMode: "key",
+      baseUrl: "https://gateway.example.com",
+    } as OcxProviderConfig;
+    const { url, headers } = buildModelsRequest(prov, "sk-ant", "gateway");
+    expect(url).toBe("https://gateway.example.com/v1/models?limit=1000");
+    expect(headers["x-api-key"]).toBe("sk-ant");
+    expect(headers["Authorization"]).toBeUndefined();
   });
 });
 

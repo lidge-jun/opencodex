@@ -312,25 +312,24 @@ function handleConfiguredModels(args: string[]): void {
   console.log("Note: providers with liveModels may have additional models at runtime.");
 }
 
-function runCustomCommand(command: Promise<void>): void {
-  command.catch(error => {
-    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
-}
-
-export function handleModels(args: string[]): void {
+export async function handleModels(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (subcommand === "add") {
-    runCustomCommand(handleCustomAdd(rest));
+    await handleCustomAdd(rest);
     return;
   }
   if (subcommand === "remove") {
-    runCustomCommand(handleCustomRemove(rest));
+    await handleCustomRemove(rest);
     return;
   }
   if (subcommand === "list-custom") {
     handleCustomList(rest);
+    return;
+  }
+  if (["live", "edit", "enable", "disable", "provider", "selected", "context", "shadow"].includes(subcommand ?? "")) {
+    const { handleModelsRuntimeCommand } = await import("./models-runtime");
+    const code = await handleModelsRuntimeCommand(subcommand!, rest);
+    if (code !== null) process.exitCode = code;
     return;
   }
   handleConfiguredModels(subcommand === "list" ? rest : args);

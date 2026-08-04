@@ -9,10 +9,15 @@ import {
   collectProxyEnv,
   collectRunningProxyEnv,
   collectWslDualInstall,
+  fetchServiceMemory,
+  formatServiceMemoryLines,
   parseProcessEnvBlock,
   probeWham,
+  proxyDownRestartHint,
   resolveCodexHomeDir,
+  type ServiceMemoryData,
 } from "../src/cli/doctor";
+import { collectOrcaCodexHomeDiagnostic } from "../src/codex/home";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -71,6 +76,43 @@ describe("doctor", () => {
   test("resolveCodexHomeDir expands ~ like the hardened runtime paths", () => {
     process.env.CODEX_HOME = "~/custom-codex";
     expect(resolveCodexHomeDir()).toBe(join(homedir(), "custom-codex"));
+  });
+
+  test("Orca home diagnostic warns only for the Windows Orca runtime mismatch", () => {
+    const appHome = "C:\\Users\\alice\\.codex";
+    const orcaHome = "C:\\Users\\alice\\AppData\\Roaming\\orca\\codex-runtime-home\\home";
+    const mismatch = collectOrcaCodexHomeDiagnostic({
+      platform: "win32",
+      env: { CODEX_HOME: orcaHome, ORCA_CODEX_HOME: orcaHome },
+      effectiveCodexHome: orcaHome,
+      appCodexHome: appHome,
+    });
+    expect(mismatch.mismatch).toBe(true);
+    expect(mismatch.warning).toContain("OpenCodex injection will not reach that app");
+    expect(mismatch.effectiveCodexHome).toContain("C:\\Users\\[USER]\\");
+    expect(mismatch.effectiveCodexHome).not.toContain("alice");
+    expect(mismatch.action).toContain("ocx service uninstall");
+    expect(mismatch.action).toContain("ocx service install");
+    expect(mismatch.action).toContain("%USERPROFILE%\\.codex");
+    expect(mismatch.action).toContain("Remove-Item Env:ORCA_CODEX_HOME");
+    expect(mismatch.action).toContain("SilentlyContinue; $env:CODEX_HOME");
+    expect(mismatch.action).not.toContain("C:\\Users\\[USER]");
+
+    const matching = collectOrcaCodexHomeDiagnostic({
+      platform: "win32",
+      env: { CODEX_HOME: appHome, ORCA_CODEX_HOME: orcaHome },
+      effectiveCodexHome: appHome,
+      appCodexHome: appHome,
+    });
+    expect(matching.mismatch).toBe(false);
+
+    const intentionalCustom = collectOrcaCodexHomeDiagnostic({
+      platform: "win32",
+      env: { CODEX_HOME: "D:\\codex-work" },
+      effectiveCodexHome: "D:\\codex-work",
+      appCodexHome: appHome,
+    });
+    expect(intentionalCustom.mismatch).toBe(false);
   });
 
   test("resolveCodexHomeDir discovers a single Windows Codex Desktop home from WSL", () => {
@@ -277,5 +319,140 @@ describe("doctor", () => {
       throw new TypeError("fetch failed");
     }) as typeof fetch);
     expect(connect.classification).toBe("connect_error");
+  });
+});
+
+describe("service memory section (#314 WP4)", () => {
+  const baseData: ServiceMemoryData = {
+    pid: 4242,
+    bunVersion: "1.3.14",
+    platform: "win32",
+    rss: 5 * 1024 ** 3,
+    heapUsed: 200 * 1024 ** 2,
+    external: 300 * 1024 ** 2,
+    arrayBuffers: 200 * 1024 ** 2,
+    jscHeap: { heapSize: 180 * 1024 ** 2 },
+    streamMode: "auto",
+    eagerRelay: { useEagerRelay: false, reason: "auto-known-bad" },
+    watchdog: { warnThresholdBytes: 4 * 1024 ** 3, lastWarnAt: null },
+  };
+
+  test("fetchServiceMemory: ok / unauthorized / unreachable / malformed", async () => {
+    const ok = await fetchServiceMemory("127.0.0.1", 10100, null,
+      (async () => Response.json(baseData)) as typeof fetch);
+    expect(ok.status).toBe("ok");
+    if (ok.status === "ok") expect(ok.data.pid).toBe(4242);
+
+    const unauthorized = await fetchServiceMemory("127.0.0.1", 10100, "wrong",
+      (async () => new Response("{}", { status: 401 })) as typeof fetch);
+    expect(unauthorized.status).toBe("unauthorized");
+
+    const unreachable = await fetchServiceMemory("127.0.0.1", 10100, null,
+      (async () => { throw new TypeError("fetch failed"); }) as typeof fetch);
+    expect(unreachable.status).toBe("unreachable");
+
+    const malformed = await fetchServiceMemory("127.0.0.1", 10100, null,
+      (async () => Response.json({ hello: "world" })) as typeof fetch);
+    expect(malformed.status).toBe("unreachable");
+    if (malformed.status === "unreachable") expect(malformed.error).toBe("malformed response");
+  });
+
+  test("identity labels: doctor process is never presented as the service", () => {
+    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    expect(lines[0]).toContain("NOT the service process");
+    expect(lines.some(l => l.includes(`service pid ${baseData.pid}`))).toBe(true);
+  });
+
+  test("interpretation: high RSS + small JS heap → native-side line", () => {
+    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    expect(lines.some(l => l.includes("native-side growth"))).toBe(true);
+  });
+
+  test("interpretation: high RSS with large JS counters asks for corroboration", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, heapUsed: 4 * 1024 ** 3, jscHeap: { heapSize: 4 * 1024 ** 3 } },
+    });
+    expect(lines.some(l => l.includes("possible JS-side retention"))).toBe(true);
+    expect(lines.some(l => l.includes("likely an opencodex bug"))).toBe(false);
+  });
+
+  test("interpretation: all observed counters below threshold → normal line", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, rss: 300 * 1024 ** 2 },
+    });
+    expect(lines.some(l => l.includes("looks normal"))).toBe(true);
+    expect(lines.some(l => l.includes("native-side growth"))).toBe(false);
+  });
+
+  test("interpretation: high external memory is not hidden by low RSS (#509)", () => {
+    const lines = formatServiceMemoryLines({
+      status: "ok",
+      data: {
+        ...baseData,
+        rss: 300 * 1024 ** 2,
+        external: 5 * 1024 ** 3,
+        arrayBuffers: 2 * 1024 ** 3,
+      },
+    });
+    expect(lines.some(l => l.includes("observed=5120MB (external)"))).toBe(true);
+    expect(lines.some(l => l.includes("high observed memory via external"))).toBe(true);
+    expect(lines.some(l => l.includes("looks normal"))).toBe(false);
+  });
+
+  test("guidance gating: win32 + auto-known-bad prints version-claiming guidance", () => {
+    const lines = formatServiceMemoryLines({ status: "ok", data: baseData });
+    expect(lines.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(true);
+    // Version-claiming, never binary-claiming.
+    expect(lines.join("\n")).not.toContain("bundled binary");
+  });
+
+  test("guidance gating: darwin auto-off or fixed Windows runtime prints no override guidance", () => {
+    const darwin = formatServiceMemoryLines({
+      status: "ok",
+      data: {
+        ...baseData,
+        platform: "darwin",
+        eagerRelay: { useEagerRelay: false, reason: "auto-known-bad" },
+      },
+    });
+    expect(darwin.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
+
+    const fixedRuntime = formatServiceMemoryLines({
+      status: "ok",
+      data: { ...baseData, eagerRelay: { useEagerRelay: true, reason: "auto-fixed-runtime" } },
+    });
+    expect(fixedRuntime.some(l => l.includes("OPENCODEX_BUN_PATH"))).toBe(false);
+  });
+
+  test("unauthorized and unreachable render honest lines without fake data", () => {
+    const unauthorized = formatServiceMemoryLines({ status: "unauthorized" });
+    expect(unauthorized.some(l => l.includes("rejected the request"))).toBe(true);
+    expect(unauthorized.some(l => l.includes("service pid"))).toBe(false);
+
+    const unreachable = formatServiceMemoryLines({ status: "unreachable", error: "ECONNREFUSED" });
+    expect(unreachable.some(l => l.includes("not reachable"))).toBe(true);
+    expect(unreachable.some(l => l.includes("service pid"))).toBe(false);
+  });
+
+  test("proxyDownRestartHint is null while a live proxy exists", () => {
+    expect(proxyDownRestartHint({ proxyRunning: true, port: 10100, serviceViable: false })).toBeNull();
+    expect(proxyDownRestartHint({ proxyRunning: true, port: 10100, serviceViable: true })).toBeNull();
+  });
+
+  test("proxyDownRestartHint names the symptom and both restart paths", () => {
+    const hint = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false });
+    expect(hint).toContain("error sending request for url");
+    expect(hint).toContain("127.0.0.1:10100");
+    expect(hint).toContain("ocx start");
+    expect(hint).toContain("ocx service install");
+  });
+
+  test("proxyDownRestartHint prefers 'ocx service start' when a service is installed", () => {
+    const hint = proxyDownRestartHint({ proxyRunning: false, port: 12000, serviceViable: true });
+    expect(hint).toContain("ocx service start");
+    expect(hint).toContain("127.0.0.1:12000");
+    expect(hint).not.toContain("ocx service install");
   });
 });

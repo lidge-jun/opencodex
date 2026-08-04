@@ -2,8 +2,8 @@
  * ProviderUsage — the usage tab (WP090): 30-day cost/request/token metrics,
  * per-model cost breakdown table, and rate-limit windows on QuotaBars.
  */
-import { useMemo, useState } from "react";
-import { useT, useI18n } from "../../i18n";
+import { Fragment, useMemo, useState } from "react";
+import { useT, useI18n } from "../../i18n/shared";
 import QuotaBars from "../QuotaBars";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
@@ -26,7 +26,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
 
   const sortedModels = useMemo(() => {
     if (!modelUsage?.length) return [];
-    return [...modelUsage].sort((a, b) => b.totalTokens - a.totalTokens);
+    return modelUsage.toSorted((a, b) => b.totalTokens - a.totalTokens);
   }, [modelUsage]);
 
   const providerCost = useMemo(() => {
@@ -88,9 +88,18 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
                   const key = row.model;
                   const isExpanded = expandedModel === key;
                   return (
-                    <>
-                      <tr key={key} className="pws-model-row" onClick={() => setExpandedModel(isExpanded ? null : key)} style={{ cursor: "pointer" }}>
-                        <td className="mono">{row.model}</td>
+                    <Fragment key={key}>
+                      <tr className="pws-model-row">
+                        <td className="mono">
+                          <button
+                            type="button"
+                            className="pws-model-expand"
+                            aria-expanded={isExpanded}
+                            onClick={() => setExpandedModel(isExpanded ? null : key)}
+                          >
+                            {row.model}
+                          </button>
+                        </td>
                         <td className="num mono">{formatCostUsd(row.estimatedCostUsd, locale)}</td>
                         <td className="num mono">{formatTokenCount(row.totalTokens, locale)}</td>
                         <td className="num">{row.requests}</td>
@@ -101,7 +110,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
                         </td>
                       </tr>
                       {isExpanded && (
-                        <tr key={`${key}-detail`} className="pws-model-detail">
+                        <tr className="pws-model-detail">
                           <td colSpan={5}>
                             <div className="pws-model-detail-grid">
                               <div>
@@ -116,7 +125,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

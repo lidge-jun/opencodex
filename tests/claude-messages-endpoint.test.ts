@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { managementFetch as fetch } from "./helpers/management-auth";
+import { logsFromApiBody } from "./helpers/logs-api";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +17,8 @@ import {
 } from "../src/server/claude-messages";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -111,9 +115,9 @@ test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", 
     // Request log regression (live smoke round 2): the tap must see the PRE-translation
     // Responses stream — the translated Anthropic stream has no response.completed, which
     // used to record a bogus 502 with no usage.
-    const logs = await (await fetch(new URL("/api/logs", server.url))).json() as {
+    const logs = logsFromApiBody<{
       status: number; model: string; usage?: { inputTokens: number; outputTokens: number }; usageStatus: string;
-    }[];
+    }>(await (await fetch(new URL("/api/logs", server.url))).json());
     const row = logs.find(l => l.model === "test-model" || l.model === "mock/test-model");
     expect(row).toBeDefined();
     expect(row!.status).toBe(200);
@@ -139,7 +143,7 @@ test("POST /v1/messages?beta=true streams an Anthropic-shaped turn end to end", 
     server.stop(true);
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("non-streaming /v1/messages returns an Anthropic message JSON", async () => {
   const upstream = mockChatUpstream();
@@ -164,6 +168,57 @@ test("non-streaming /v1/messages returns an Anthropic message JSON", async () =>
     expect(json.content[0].type).toBe("text");
     expect(json.content[0].text).toContain("Hello");
     expect(typeof json.usage.input_tokens).toBe("number");
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("native generated-agent passthrough preserves legacy thinking", async () => {
+  let captured: Record<string, unknown> | null = null;
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured = await req.json() as Record<string, unknown>;
+      return Response.json({
+        id: "msg_test",
+        type: "message",
+        role: "assistant",
+        model: "claude-haiku-4-5",
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    },
+  });
+  const config = mockConfig("http://127.0.0.1:1/v1", {
+    anthropicBaseUrl: upstream.url.toString().replace(/\/$/, ""),
+  });
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 16,
+        system: [
+          { type: "text", text: "<!-- ocx-route: claude-haiku-4-5 -->" },
+          { type: "text", text: "<!-- ocx-effort: max -->" },
+        ],
+        thinking: { type: "enabled", budget_tokens: 31999 },
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toMatchObject({
+      model: "claude-haiku-4-5",
+      thinking: { type: "enabled", budget_tokens: 31999 },
+    });
+    expect(captured).not.toHaveProperty("output_config");
   } finally {
     server.stop(true);
     upstream.stop(true);
@@ -450,7 +505,7 @@ test("synthetic error tail parses as a terminal error in the Anthropic dialect (
     '\n\nevent: error\ndata: {"type":"error","error":{"type":"timeout_error","message":"anthropic passthrough body stalled: no upstream bytes for 90s"}}\n\n',
   ].join(""));
   const events: Array<{ type: string }> = [];
-  for await (const event of adapter.parseStream(response)) events.push(event);
+  for await (const event of adapter.parseStream(response, createTestTranslatorBudget())) events.push(event);
   const errorIndex = events.findIndex(e => e.type === "error");
   expect(errorIndex).toBeGreaterThanOrEqual(0);
   expect(events.slice(errorIndex + 1).filter(e => e.type === "done")).toHaveLength(0);
@@ -775,6 +830,36 @@ test("effort safety valve: routes with a definitive no-effort ladder get reasoni
     await response.text();
     expect(captured.length).toBe(1);
     expect(captured[0]!.reasoning_effort).toBeUndefined();
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("generated agent effort directive restores exact xhigh and max after Claude Code collapses them to a thinking budget", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    for (const effort of ["xhigh", "max"]) {
+      const response = await postMessages(server.url.toString(), {
+        model: "claude-haiku-4-5",
+        max_tokens: 32000,
+        stream: true,
+        system: [
+          { type: "text", text: "<!-- ocx-route: claude-ocx-mock--test-model -->" },
+          { type: "text", text: `<!-- ocx-effort: ${effort} -->` },
+        ],
+        thinking: { type: "enabled", budget_tokens: 31999 },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(captured.map(body => ({ model: body.model, effort: body.reasoning_effort }))).toEqual([
+      { model: "test-model", effort: "xhigh" },
+      { model: "test-model", effort: "max" },
+    ]);
   } finally {
     server.stop(true);
     upstream.stop(true);

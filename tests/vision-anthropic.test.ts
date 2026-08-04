@@ -345,3 +345,4 @@ describe("Anthropic vision planning and management config", () => {
     }
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

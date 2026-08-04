@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
 import type { AdapterEvent } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
+  withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
 
@@ -44,6 +48,24 @@ function assembled(events: AdapterEvent[]): AssembledCall[] {
 }
 
 describe("openai-chat parallel tool call stream assembly", () => {
+  test("24 interleaved OpenAI Chat tool calls complete without reordering", async () => {
+    const starts = Array.from({ length: 24 }, (_, index) => chunkOf([{
+      index,
+      id: `call_${index}`,
+      function: { name: `tool_${index}`, arguments: `{"index":` },
+    }]));
+    const finishes = Array.from({ length: 24 }, (_, reverseIndex) => {
+      const index = 23 - reverseIndex;
+      return chunkOf([{ index, function: { arguments: `${index}}` } }]);
+    });
+    const events = await collect(sse([...starts, ...finishes, chunkOf([], "tool_calls")]));
+    expect(assembled(events)).toEqual(Array.from({ length: 24 }, (_, index) => ({
+      id: `call_${index}`,
+      name: `tool_${index}`,
+      args: `{"index":${index}}`,
+    })));
+  });
+
   test("T1: interleaved index-keyed deltas assemble without cross-contamination", async () => {
     const events = await collect(sse([
       chunkOf([{ index: 0, id: "call_a", function: { name: "shell", arguments: "{\"cmd\"" } }]),

@@ -1,0 +1,40 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "deepseek-ai/DeepSeek-V3",
+      "object": "model",
+      "owned_by": "deepinfra",
+      "metadata": {
+        "tags": ["chat"],
+        "context_length": 131072
+      }
+    },
+    {
+      "id": "Qwen/Qwen2.5-VL-72B-Instruct",
+      "object": "model",
+      "owned_by": "deepinfra",
+      "metadata": {
+        "tags": ["chat", "vlm", "vision"],
+        "context_length": 65536
+      }
+    },
+    {
+      "id": "BAAI/bge-large-en-v1.5",
+      "object": "model",
+      "owned_by": "deepinfra",
+      "metadata": {
+        "tags": ["embed"],
+        "context_length": 512
+      }
+    },
+    {
+      "id": "black-forest-labs/FLUX-1-schnell",
+      "object": "model",
+      "owned_by": "deepinfra",
+      "metadata": {
+        "tags": ["image-gen"]
+      }
+    }
+  ]
+}

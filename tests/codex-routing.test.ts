@@ -3,17 +3,21 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_FAILURE_WINDOW_MS,
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
   CODEX_TRANSIENT_SOFT_AVOID_MS,
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   CODEX_THREAD_AFFINITY_MAX_ENTRIES,
   CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS,
   classifyCodexUpstreamOutcome,
+  clearCodexAccountCooldown,
   clearCodexUpstreamHealth,
   clearCodexUpstreamHealthForAccount,
   clearThreadAccountMap,
   clearThreadAccountMapForAccount,
   computeCodexUsageScore,
   getCodexAccountCooldownUntil,
+  getEffectiveActiveCodexAccountId,
+  getCodexQuotaHealthSnapshot,
   getCodexAccountSoftAvoidUntil,
   getCodexUpstreamHealth,
   isCodexAccountInCooldown,
@@ -21,8 +25,10 @@ import {
   pickLowestUsageCodexAccount,
   parseRetryAfterMs,
   recordCodexUpstreamOutcome,
+  resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
+  tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
@@ -33,7 +39,7 @@ import {
   parseUsageQuota,
   updateAccountQuota,
 } from "../src/codex/auth-api";
-import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex/quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/quota";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
 import { consumeForInspection } from "../src/server/relay";
@@ -121,6 +127,18 @@ describe("codex routing", () => {
   test("usage score treats unknown quota conservatively", () => {
     expect(computeCodexUsageScore(null)).toBe(CODEX_UNKNOWN_USAGE_SCORE);
     expect(computeCodexUsageScore({})).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    expect(computeCodexUsageScore({ weeklyPercent: 100 })).toBe(100);
+    expect(CODEX_UNKNOWN_USAGE_SCORE).toBeGreaterThan(100);
+  });
+
+  test("bulk pause exhaustion requires an explicit 100% relevant window", () => {
+    expect(isCodexQuotaExhausted(null, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({}, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 99.9 }, "plus")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 100 }, "plus")).toBe(true);
+    expect(isCodexQuotaExhausted({ monthlyPercent: 100 }, "plus")).toBe(true);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 100, monthlyPercent: 20 }, "free")).toBe(false);
+    expect(isCodexQuotaExhausted({ weeklyPercent: 20, monthlyPercent: 100 }, "go")).toBe(true);
   });
 
   test("weekly threshold breach switches new threads", () => {
@@ -128,6 +146,25 @@ describe("codex routing", () => {
     updateAccountQuota("a", 85);
     updateAccountQuota("b", 20);
     expect(resolveCodexAccountForThread("new-thread", config)).toBe("b");
+  });
+
+  test("known 100% weekly usage is exhausted, not unknown, and switches accounts", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("known-100-weekly", config)).toBe("b");
+  });
+
+  test("known 100% Go monthly usage follows threshold switching", () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "a", email: "a@test", plan: "go", isMain: false },
+        { id: "b", email: "b@test", plan: "go", isMain: false },
+      ],
+    });
+    updateAccountQuota("a", 1, undefined, 100);
+    updateAccountQuota("b", 99, undefined, 20);
+    expect(resolveCodexAccountForThread("known-100-go-monthly", config)).toBe("b");
   });
 
   test("missing OpenAI mode defaults to pool and rotates from hot main to a cool added account", () => {
@@ -156,6 +193,21 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("after-success", config)).toBe("a");
   });
 
+  test("paused main account is excluded even when it is the active and lowest-usage candidate", () => {
+    writeFileSync(join(TEST_DIR, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-access", account_id: "main-chatgpt-id" },
+    }));
+    const config = makeConfig({
+      codexAccounts: [{ id: "a", email: "a@test", isMain: false }],
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
+      pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID],
+    });
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 1);
+    updateAccountQuota("a", 20);
+
+    expect(resolveCodexAccountForThread("paused-main", config)).toBe("a");
+  });
+
   test("go plan pool switching ignores the weekly window", () => {
     const config = makeConfig({
       codexAccounts: [
@@ -169,10 +221,10 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("go-monthly-thread", config)).toBe("a");
   });
 
-  test("unknown active quota can switch to a known lower usage account", () => {
+  test("unknown active quota preserves the explicit selection until priming completes", () => {
     const config = makeConfig();
     updateAccountQuota("b", 20);
-    expect(resolveCodexAccountForThread("unknown-active", config)).toBe("b");
+    expect(resolveCodexAccountForThread("unknown-active", config)).toBe("a");
   });
 
   test("unknown quota does not beat known low quota during lowest-usage selection", () => {
@@ -188,11 +240,31 @@ describe("codex routing", () => {
     expect(pickLowestUsageCodexAccount(config)).toBe("b");
   });
 
+  test("paused accounts are excluded from new selection and existing affinity reuse", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("paused-affinity", config)).toBe("a");
+
+    config.pausedCodexAccountIds = ["a"];
+
+    expect(pickLowestUsageCodexAccount(config)).toBe("b");
+    expect(resolveCodexAccountForThread("paused-affinity", config)).toBe("b");
+  });
+
+  test("all paused accounts fail closed instead of falling back to a configured account", () => {
+    const config = makeConfig({ pausedCodexAccountIds: ["a", "b"] });
+
+    expect(pickLowestUsageCodexAccount(config)).toBeNull();
+    expect(resolveCodexAccountForThread("all-paused", config)).toBeNull();
+  });
+
   test("upstream outcome classifier separates caller, credential, and transient failures", () => {
     expect(classifyCodexUpstreamOutcome(200)).toBe("success");
     expect(classifyCodexUpstreamOutcome(401)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(403)).toBe("credential");
     expect(classifyCodexUpstreamOutcome(429)).toBe("quota");
+    expect(classifyCodexUpstreamOutcome(402)).toBe("quota");
     expect(classifyCodexUpstreamOutcome(422)).toBe("caller");
     expect(classifyCodexUpstreamOutcome(503)).toBe("transient");
     expect(classifyCodexUpstreamOutcome("connect_error")).toBe("transient");
@@ -309,6 +381,67 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("quota-next", config)).toBe("b");
   });
 
+  test("shared native reset cooldown clears affinity and rotates the active account", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.6-terra",
+    });
+
+    expect(config.activeCodexAccountId).toBe("b");
+    expect(resolveCodexAccountForThread("shared-quota-existing", config, now + 1)).toBe("b");
+  });
+
+  test("independent native quota scopes keep separate thread affinities", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+
+    // A known shared-model request binds A for this thread.
+    expect(resolveCodexAccountForThread("scoped-thread", config, now, "shared")).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now: now + 1,
+      resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+      modelId: "gpt-5.3-codex-spark",
+    });
+
+    // Spark sees its scoped cooldown and binds B without moving the global
+    // active account or the same thread's shared-scope affinity.
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 2, "spark")).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 3, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-thread", config, now + 4, "spark")).toBe("b");
+  });
+
+  test("429 fallback skips paused candidates", () => {
+    const config = makeConfig({
+      codexAccounts: [
+        { id: "a", email: "a@test", isMain: false },
+        { id: "b", email: "b@test", isMain: false },
+        { id: "c", email: "c@test", isMain: false },
+      ],
+      pausedCodexAccountIds: ["b"],
+    });
+    saveTestCredential("c");
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 1);
+    updateAccountQuota("c", 30);
+
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "60" });
+
+    expect(config.activeCodexAccountId).toBe("c");
+    expect(resolveCodexAccountForThread("quota-skip-paused", config)).toBe("c");
+  });
+
   test("2xx responses clear transient failures without clearing an unexpired cooldown", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -318,6 +451,285 @@ describe("codex routing", () => {
 
     expect(getCodexAccountCooldownUntil("a", now + 1_000)).toBe(now + 120_000);
     expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 0, cooldownUntil: now + 120_000 });
+  });
+
+  // --- #433: quota cooldown must not pin a recovered account -------------------
+
+  test("far-future resetAt is capped well below the 24h ceiling", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const fourDaysOut = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt: fourDaysOut, now });
+
+    const cooldownUntil = getCodexAccountCooldownUntil("a", now)!;
+    // Before the fix this clamped to the 24h Retry-After ceiling.
+    expect(cooldownUntil - now).toBeLessThanOrEqual(15 * 60_000);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "reset-derived" });
+  });
+
+  test("Retry-After keeps honoring long explicit delays", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+
+    expect(getCodexAccountCooldownUntil("a", now)).toBe(now + 7_200_000);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "retry-after" });
+  });
+
+  test("retry-after cooldown is never probed", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+
+    // An explicit Retry-After is a literal retry directive, not a window hint.
+    expect(tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS + 1)).toBeNull();
+    expect(tryAcquireCodexQuotaProbeLease("a", now + 60 * 60_000)).toBeNull();
+  });
+
+  test("probe lease is granted at most once per interval", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+
+    expect(tryAcquireCodexQuotaProbeLease("a", now)).toBeNull();
+    const lease = tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS);
+    expect(lease).toBeTruthy();
+    // Only one probe may be in flight at a time.
+    expect(tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS)).toBeNull();
+  });
+
+  test("leased probe success clears the hard cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 500, probeLeaseId });
+
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(isCodexAccountInCooldown("a", probeAt + 500)).toBe(false);
+  });
+
+  test("unleased 2xx preserves the hard cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+
+    // A request that started before the 429 landed must not be mistaken for a probe.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 1_000 });
+
+    expect(isCodexAccountInCooldown("a", now + 1_000)).toBe(true);
+  });
+
+  test("mismatched lease id does not consume the probe", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // Another in-flight request fails; it must not kill the live probe.
+    recordCodexUpstreamOutcome(config, "a", 503, { now: probeAt + 100, probeLeaseId: "someone-else" });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ probeLeaseId });
+  });
+
+  test("failed probe releases the lease and restarts the interval", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now: probeAt + 100, probeLeaseId });
+
+    expect(getCodexUpstreamHealth("a")?.probeLeaseId).toBeUndefined();
+    expect(tryAcquireCodexQuotaProbeLease("a", probeAt + 200)).toBeNull();
+    expect(tryAcquireCodexQuotaProbeLease("a", probeAt + 100 + CODEX_QUOTA_PROBE_INTERVAL_MS)).toBeTruthy();
+  });
+
+  test("stale-generation lease cannot clear a newer cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // A different in-flight request receives an explicit Retry-After.
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now: probeAt + 50 });
+    // Now the original probe finally succeeds. It must NOT erase the new directive.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 100, probeLeaseId });
+
+    const health = getCodexUpstreamHealth("a");
+    expect(isCodexAccountInCooldown("a", probeAt + 100)).toBe(true);
+    expect(health).toMatchObject({ cooldownSource: "retry-after" });
+    // The finished probe still hands its lease back (it is no longer in flight).
+    expect(health?.probeLeaseId).toBeUndefined();
+    // ...but a retry-after cooldown is never probed again.
+    expect(tryAcquireCodexQuotaProbeLease("a", probeAt + 100 + CODEX_QUOTA_PROBE_INTERVAL_MS)).toBeNull();
+  });
+
+  // --- manual cooldown escape (260726 lockout hardening) ----------------------
+
+  test("clearCodexAccountCooldown lifts a live cooldown but keeps failure history", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+    expect(isCodexAccountInCooldown("a", now + 1_000)).toBe(true);
+
+    expect(clearCodexAccountCooldown("a", now + 1_000)).toBe(true);
+
+    expect(isCodexAccountInCooldown("a", now + 1_000)).toBe(false);
+    const health = getCodexUpstreamHealth("a");
+    expect(health?.cooldownUntil).toBeUndefined();
+    expect(health?.cooldownSource).toBeUndefined();
+    // Clearing says "the quota window moved", not "this account is healthy":
+    // failover must keep what it learned from the 429.
+    expect(health?.lastFailureStatus).toBe(429);
+  });
+
+  test("clearCodexAccountCooldown lifts every live native-model cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000);
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.3-codex-spark",
+    });
+    recordCodexUpstreamOutcome(config, "a", 429, {
+      now,
+      resetAt,
+      modelId: "gpt-5.6-terra",
+    });
+
+    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).not.toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).not.toBeNull();
+    expect(clearCodexAccountCooldown("a", now + 1)).toBe(true);
+    expect(getCodexQuotaHealthSnapshot("a", "spark", now + 1)).toBeNull();
+    expect(getCodexQuotaHealthSnapshot("a", "shared", now + 1)).toBeNull();
+  });
+
+  test("clearing is a no-op without a live cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    expect(clearCodexAccountCooldown("a", now)).toBe(false);
+
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "60", now });
+    // Already expired on its own.
+    expect(clearCodexAccountCooldown("a", now + 120_000)).toBe(false);
+  });
+
+  test("manual clearing releases the in-flight lease, so a stale probe cannot erase the NEXT cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const staleLease = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // User lifts the cooldown while that probe is still in flight. The lease is dropped
+    // with it, so the stale probe no longer owns anything.
+    expect(clearCodexAccountCooldown("a", probeAt + 10)).toBe(true);
+    expect(getCodexUpstreamHealth("a")?.probeLeaseId).toBeUndefined();
+
+    // Upstream is still exhausted, so the next request re-cools the account.
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now: probeAt + 20 });
+    // The stale probe finally returns 200. It must not void the new limit.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 30, probeLeaseId: staleLease });
+
+    expect(isCodexAccountInCooldown("a", probeAt + 30)).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "retry-after" });
+  });
+
+  test("a stale probe cannot void a later cooldown even while a fresh probe is live", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const staleLease = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    expect(clearCodexAccountCooldown("a", probeAt + 10)).toBe(true);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now: probeAt + 20 });
+    // A fresh probe is granted against the NEW cooldown, so the account holds a lease again.
+    const freshAt = probeAt + 20 + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const freshLease = tryAcquireCodexQuotaProbeLease("a", freshAt)!;
+    expect(freshLease).not.toBe(staleLease);
+
+    // The STALE probe reports success. Lease-id mismatch is what must hold here (the
+    // generation guard is redundant defence): otherwise manual clearing would become a
+    // way to void a later limit.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: freshAt + 100, probeLeaseId: staleLease });
+
+    expect(isCodexAccountInCooldown("a", freshAt + 100)).toBe(true);
+    // The live probe is untouched by an unrelated outcome.
+    expect(getCodexUpstreamHealth("a")?.probeLeaseId).toBe(freshLease);
+  });
+
+  test("credential failure ends the probe", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    // Reauth quarantine supersedes quota state entirely.
+    recordCodexUpstreamOutcome(config, "a", 401, { now: probeAt + 100, probeLeaseId });
+
+    const health = getCodexUpstreamHealth("a");
+    expect(health?.probeLeaseId).toBeUndefined();
+    expect(health?.cooldownUntil).toBeUndefined();
+  });
+
+  test("unowned outcome preserves retry-after source", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 1_000 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2_000 });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ cooldownSource: "retry-after" });
+    expect(tryAcquireCodexQuotaProbeLease("a", now + 60 * 60_000)).toBeNull();
+  });
+
+  test("unowned outcome keeps a reset-derived cooldown probeable", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+
+    // A late unrelated response must not wipe the probe bookkeeping.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 1_000 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2_000 });
+
+    expect(tryAcquireCodexQuotaProbeLease("a", now + CODEX_QUOTA_PROBE_INTERVAL_MS + 1)).toBeTruthy();
+  });
+
+  test("in-flight lease survives an unowned outcome", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const resetAt = Math.floor((now + 4 * 24 * 60 * 60_000) / 1000);
+    recordCodexUpstreamOutcome(config, "a", 429, { resetAt, now });
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const probeLeaseId = tryAcquireCodexQuotaProbeLease("a", probeAt)!;
+
+    recordCodexUpstreamOutcome(config, "a", 200, { now: probeAt + 100 });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ probeLeaseId });
+
+    recordCodexUpstreamOutcome(config, "a", 503, { now: probeAt + 200 });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ probeLeaseId });
   });
 
   test("stale transient failure streaks expire before failover thresholding", () => {
@@ -380,7 +792,7 @@ describe("codex routing", () => {
     expect(getCodexUpstreamHealth("a")).toBeNull();
   });
 
-  test("inspection read rejection reports failed plus synthetic 502 and clears affinity", async () => {
+  test("one inspection read rejection records 502 without clearing affinity", async () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
@@ -401,7 +813,7 @@ describe("codex routing", () => {
 
     expect(terminals).toEqual([["failed", 502]]);
     expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 502 });
-    expect(resolveCodexAccountForThread("reset-thread", config, now + 2)).toBe("b");
+    expect(resolveCodexAccountForThread("reset-thread", config, now + 2)).toBe("a");
   });
 
   test("inspection clean EOF remains incomplete and success-like", async () => {
@@ -425,13 +837,15 @@ describe("codex routing", () => {
 
     recordCodexUpstreamOutcome(config, "a", 503, { now });
     recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1 });
-    expect(getCodexAccountSoftAvoidUntil("a", now + 1)).toBe(now + 1 + 2 * 60_000);
+    expect(getCodexAccountSoftAvoidUntil("a", now + 1)).toBeNull();
     recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2 });
-    expect(getCodexAccountSoftAvoidUntil("a", now + 2)).toBe(now + 2 + 10 * 60_000);
+    expect(getCodexAccountSoftAvoidUntil("a", now + 2)).toBe(now + 2 + 30_000);
     recordCodexUpstreamOutcome(config, "a", 503, { now: now + 3 });
-    expect(getCodexAccountSoftAvoidUntil("a", now + 3)).toBe(now + 3 + 30 * 60_000);
+    expect(getCodexAccountSoftAvoidUntil("a", now + 3)).toBe(now + 3 + 2 * 60_000);
     recordCodexUpstreamOutcome(config, "a", 503, { now: now + 4 });
-    expect(getCodexAccountSoftAvoidUntil("a", now + 4)).toBe(now + 4 + 30 * 60_000);
+    expect(getCodexAccountSoftAvoidUntil("a", now + 4)).toBe(now + 4 + 10 * 60_000);
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 5 });
+    expect(getCodexAccountSoftAvoidUntil("a", now + 5)).toBe(now + 5 + 30 * 60_000);
   });
 
   test("escalation level 2 requires two consecutive healthy terminals to clear", () => {
@@ -445,7 +859,7 @@ describe("codex routing", () => {
       consecutiveFailures: 2,
       consecutiveSuccesses: 1,
     });
-    expect(isCodexAccountSoftAvoided("a", now + 2)).toBe(true);
+    expect(isCodexAccountSoftAvoided("a", now + 2)).toBe(false);
 
     recordCodexUpstreamOutcome(config, "a", 200, { now: now + 3 });
     expect(getCodexUpstreamHealth("a")).toBeNull();
@@ -507,6 +921,27 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("lru-0", config, now + CODEX_THREAD_AFFINITY_MAX_ENTRIES + 2)).toBe("b");
   });
 
+  test("thread affinity LRU cap includes legacy and native quota scopes", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    const threads = Math.floor(CODEX_THREAD_AFFINITY_MAX_ENTRIES / 3) + 1;
+
+    for (let i = 0; i < threads; i++) {
+      const threadId = `scoped-lru-${i}`;
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 1, "shared")).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + i * 3 + 2, "spark")).toBe("a");
+    }
+
+    // The oldest legacy entry was evicted, while the same thread's later
+    // shared and Spark entries remain independently affined to A.
+    config.activeCodexAccountId = "b";
+    const after = now + threads * 3;
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after, "shared")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 1, "spark")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 2)).toBe("b");
+  });
+
   test("generation mismatch invalidates a mapped thread before reuse", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
@@ -541,6 +976,28 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("cleanup-thread", config)).toBe("b");
   });
 
+  test("manual selection clears affinity and transient state but preserves hard cooldown", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("manual-thread", config, now)).toBe("a");
+
+    recordCodexUpstreamOutcome(config, "b", 429, { retryAfter: "120", now });
+    recordCodexUpstreamOutcome(config, "b", 503, { now: now + 1 });
+    recordCodexUpstreamOutcome(config, "b", 503, { now: now + 2 });
+    recordCodexUpstreamOutcome(config, "b", 503, { now: now + 3 });
+    expect(isCodexAccountSoftAvoided("b", now + 4)).toBe(true);
+
+    config.activeCodexAccountId = "b";
+    resetCodexRoutingForManualSelection("b");
+    expect(isCodexAccountSoftAvoided("b", now + 4)).toBe(false);
+    expect(isCodexAccountInCooldown("b", now + 4)).toBe(true);
+    expect(getCodexUpstreamHealth("b")?.consecutiveFailures).toBe(0);
+    expect(clearCodexAccountCooldown("b", now + 4)).toBe(true);
+    expect(resolveCodexAccountForThread("manual-thread", config, now + 4)).toBe("b");
+  });
+
   test("failover threshold API validates and mutates runtime config", async () => {
     const config = makeConfig();
     const badReq = new Request("http://localhost/api/codex-auth/failover", {
@@ -554,6 +1011,71 @@ describe("codex routing", () => {
     });
     expect((await handleCodexAuthAPI(req, new URL(req.url), config))!.status).toBe(200);
     expect(config.upstreamFailoverThreshold).toBe(4);
+  });
+
+  test("clear-cooldown route lifts a live cooldown", async () => {
+    const config = makeConfig();
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "7200", now });
+    expect(isCodexAccountInCooldown("a", now + 1_000)).toBe(true);
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/clear-cooldown", {
+      method: "POST",
+      body: JSON.stringify({ id: "a" }),
+    });
+    const res = (await handleCodexAuthAPI(req, new URL(req.url), config))!;
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, id: "a", cleared: true });
+    expect(isCodexAccountInCooldown("a", now + 1_000)).toBe(false);
+  });
+
+  test("clear-cooldown works for the main login, which is the single-account lockout case", async () => {
+    const config = makeConfig();
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, MAIN_CODEX_ACCOUNT_ID, 429, { retryAfter: "7200", now });
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/clear-cooldown", {
+      method: "POST",
+      body: JSON.stringify({ id: MAIN_CODEX_ACCOUNT_ID }),
+    });
+    const res = (await handleCodexAuthAPI(req, new URL(req.url), config))!;
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ cleared: true });
+    expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID, now + 1_000)).toBe(false);
+  });
+
+  test("clear-cooldown does not disclose whether an account exists", async () => {
+    const config = makeConfig();
+    // Known account with no cooldown, and an id that is not configured at all: both must
+    // answer identically so the route cannot be used to enumerate accounts.
+    const known = new Request("http://localhost/api/codex-auth/accounts/clear-cooldown", {
+      method: "POST",
+      body: JSON.stringify({ id: "a" }),
+    });
+    const unknown = new Request("http://localhost/api/codex-auth/accounts/clear-cooldown", {
+      method: "POST",
+      body: JSON.stringify({ id: "nope-not-configured" }),
+    });
+
+    const knownRes = (await handleCodexAuthAPI(known, new URL(known.url), config))!;
+    const unknownRes = (await handleCodexAuthAPI(unknown, new URL(unknown.url), config))!;
+
+    expect(knownRes.status).toBe(unknownRes.status);
+    expect(knownRes.status).toBe(200);
+    expect(await knownRes.json()).toMatchObject({ cleared: false });
+    expect(await unknownRes.json()).toMatchObject({ cleared: false });
+  });
+
+  test("clear-cooldown rejects a malformed account id", async () => {
+    const config = makeConfig();
+    const req = new Request("http://localhost/api/codex-auth/accounts/clear-cooldown", {
+      method: "POST",
+      body: JSON.stringify({ id: "../../etc/passwd" }),
+    });
+
+    expect((await handleCodexAuthAPI(req, new URL(req.url), config))!.status).toBe(400);
   });
 
   test("WHAM tertiary window parses as optional 30d quota", () => {
@@ -643,12 +1165,11 @@ describe("codex routing", () => {
     });
   });
 
-  // Phase 10 (260630_wsl-account-autoswitch): all-unknown quota deadlock fallback.
-  test("all-unknown pool still rotates off an over-threshold active account", () => {
+  test("all-unknown pool preserves the active account until quota is known", () => {
     const config = makeConfig();
     // No updateAccountQuota calls: both a and b score the unknown sentinel.
-    expect(resolveCodexAccountForThread("all-unknown-rotate", config)).toBe("b");
-    expect(config.activeCodexAccountId).toBe("b");
+    expect(resolveCodexAccountForThread("all-unknown-rotate", config)).toBe("a");
+    expect(config.activeCodexAccountId).toBe("a");
   });
 
   test("all-unknown with no eligible rotation target stays put without throwing", () => {
@@ -691,7 +1212,7 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
-  test("all-unknown rotation skips cooldown/reauth candidates", () => {
+  test("unknown active quota stays selected even when other candidates differ in health", () => {
     const config = makeConfig({
       codexAccounts: [
         { id: "a", email: "a@test", isMain: false },
@@ -704,8 +1225,8 @@ describe("codex routing", () => {
     // Put b into cooldown via a 429 quota outcome; c remains a usable unknown.
     recordCodexUpstreamOutcome(config, "b", 429);
     expect(isCodexAccountInCooldown("b")).toBe(true);
-    expect(resolveCodexAccountForThread("rotate-skip-cooldown", config)).toBe("c");
-    expect(config.activeCodexAccountId).toBe("c");
+    expect(resolveCodexAccountForThread("rotate-skip-cooldown", config)).toBe("a");
+    expect(config.activeCodexAccountId).toBe("a");
   });
 
   // Phase 40 (260630_wsl-account-autoswitch): bound-thread quota re-eval.
@@ -724,6 +1245,19 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("b");
   });
 
+  test("bound thread over threshold switches immediately without waiting for re-eval (#584)", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 5);
+    // Depleted primary must not stay pinned for up to 60s while a cooler account exists.
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("b");
+  });
+
   test("bound thread under threshold stays even if a lower account exists", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
@@ -738,7 +1272,21 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
-  test("bound thread does not flap within the re-eval interval, then switches once", () => {
+  test("bound thread under threshold does not flap within the re-eval interval", () => {
+    const config = makeConfig();
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
+    // Still under threshold — must not rebind on every reuse.
+    updateAccountQuota("a", 50);
+    updateAccountQuota("b", 5);
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("a");
+    const later = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    expect(resolveCodexAccountForThread("t1", config, later)).toBe("a");
+  });
+
+  test("bound thread over threshold switches once and does not ping-pong", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
@@ -746,13 +1294,9 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
     updateAccountQuota("a", 95);
     updateAccountQuota("b", 5);
-    // Within the interval: no rebind yet.
-    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("a");
-    // After the interval: switches once.
-    const later = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
-    expect(resolveCodexAccountForThread("t1", config, later)).toBe("b");
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("b");
     // A subsequent interval does not ping-pong back: b is now the lowest.
-    const later2 = later + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+    const later2 = now + 1_000 + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
     expect(resolveCodexAccountForThread("t1", config, later2)).toBe("b");
   });
 
@@ -784,23 +1328,23 @@ describe("codex routing", () => {
   });
 
   // Soft-avoid: transient failures block pool selection for a bounded window.
-  test("single transient failure soft-avoids the account for 30s", () => {
+  test("transient failures soft-avoid only when the configured threshold is reached", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
 
     recordCodexUpstreamOutcome(config, "a", 503, { now });
-
-    expect(isCodexAccountSoftAvoided("a", now + 1)).toBe(true);
-    expect(getCodexAccountSoftAvoidUntil("a", now + 1)).toBe(now + CODEX_TRANSIENT_SOFT_AVOID_MS);
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1 });
+    expect(isCodexAccountSoftAvoided("a", now + 1)).toBe(false);
+    expect(resolveCodexAccountForThread("soft-before", config, now + 1)).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2 });
+    expect(isCodexAccountSoftAvoided("a", now + 3)).toBe(true);
+    expect(getCodexAccountSoftAvoidUntil("a", now + 3)).toBe(now + 2 + CODEX_TRANSIENT_SOFT_AVOID_MS);
     // New threads skip the soft-avoided account.
-    expect(resolveCodexAccountForThread("soft-next", config, now + 1)).toBe("b");
+    expect(resolveCodexAccountForThread("soft-next", config, now + 3)).toBe("b");
     // After the window expires, the account is selectable again.
-    expect(isCodexAccountSoftAvoided("a", now + CODEX_TRANSIENT_SOFT_AVOID_MS + 1)).toBe(false);
-    // Active switched to "b" during soft-avoid; reset it to verify "a" is selectable.
-    config.activeCodexAccountId = "a";
-    expect(resolveCodexAccountForThread("soft-after", config, now + CODEX_TRANSIENT_SOFT_AVOID_MS + 1)).toBe("a");
+    expect(isCodexAccountSoftAvoided("a", now + 2 + CODEX_TRANSIENT_SOFT_AVOID_MS + 1)).toBe(false);
   });
 
   test("2xx clears soft-avoid but preserves hard quota cooldown", () => {
@@ -810,22 +1354,24 @@ describe("codex routing", () => {
     recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "120", now });
     // Then a transient failure adds soft-avoid on top.
     recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1_000 });
-    expect(isCodexAccountSoftAvoided("a", now + 1_001)).toBe(true);
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1_001 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1_002 });
+    expect(isCodexAccountSoftAvoided("a", now + 1_003)).toBe(true);
 
     // Success clears soft-avoid but the hard cooldown survives.
     recordCodexUpstreamOutcome(config, "a", 200, { now: now + 2_000 });
-    expect(isCodexAccountSoftAvoided("a", now + 2_001)).toBe(false);
-    expect(isCodexAccountInCooldown("a", now + 2_001)).toBe(true);
+    recordCodexUpstreamOutcome(config, "a", 200, { now: now + 2_001 });
+    expect(isCodexAccountSoftAvoided("a", now + 2_002)).toBe(false);
+    expect(isCodexAccountInCooldown("a", now + 2_002)).toBe(true);
   });
 
   test("soft-avoid extends on repeated transient failures", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     recordCodexUpstreamOutcome(config, "a", "connect_error", { now });
-    const firstAvoid = getCodexAccountSoftAvoidUntil("a", now);
-    expect(firstAvoid).toBe(now + CODEX_TRANSIENT_SOFT_AVOID_MS);
-
-    // A second failure 10s later escalates the window to 2m from that point.
+    recordCodexUpstreamOutcome(config, "a", "timeout", { now: now + 1 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2 });
+    expect(getCodexAccountSoftAvoidUntil("a", now + 3)).toBe(now + 2 + CODEX_TRANSIENT_SOFT_AVOID_MS);
     recordCodexUpstreamOutcome(config, "a", "timeout", { now: now + 10_000 });
     expect(getCodexAccountSoftAvoidUntil("a", now + 10_001)).toBe(now + 10_000 + 2 * 60_000);
   });
@@ -854,14 +1400,16 @@ describe("codex routing", () => {
     // Bind thread T to account A.
     expect(resolveCodexAccountForThread("race-thread", config, now)).toBe("a");
 
-    // A fails; thread rebinds to B (soft-avoid pushes selection to B).
+    // The configured third failure rebinds to B.
     recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1, threadId: "race-thread" });
-    expect(resolveCodexAccountForThread("race-thread", config, now + 2)).toBe("b");
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2, threadId: "race-thread" });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 3, threadId: "race-thread" });
+    expect(resolveCodexAccountForThread("race-thread", config, now + 4)).toBe("b");
 
     // Late failure from A arrives AFTER the thread is already on B.
     // Must NOT delete B's healthy mapping.
-    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 3, threadId: "race-thread" });
-    expect(resolveCodexAccountForThread("race-thread", config, now + 4)).toBe("b");
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 5, threadId: "race-thread" });
+    expect(resolveCodexAccountForThread("race-thread", config, now + 6)).toBe("b");
   });
 
   test("threadId meta clears affinity only for the failing account", () => {
@@ -870,11 +1418,13 @@ describe("codex routing", () => {
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
 
-    // Bind to A, then a transient failure with threadId clears the pin.
+    // Bind to A; only the configured third transient clears the pin.
     expect(resolveCodexAccountForThread("unbind-thread", config, now)).toBe("a");
     recordCodexUpstreamOutcome(config, "a", "connect_error", { now: now + 1, threadId: "unbind-thread" });
-    // Next resolve rebinds (to B, since A is soft-avoided).
-    expect(resolveCodexAccountForThread("unbind-thread", config, now + 2)).toBe("b");
+    recordCodexUpstreamOutcome(config, "a", "connect_error", { now: now + 2, threadId: "unbind-thread" });
+    expect(resolveCodexAccountForThread("unbind-thread", config, now + 2)).toBe("a");
+    recordCodexUpstreamOutcome(config, "a", "connect_error", { now: now + 3, threadId: "unbind-thread" });
+    expect(resolveCodexAccountForThread("unbind-thread", config, now + 4)).toBe("b");
   });
 
   test("failover streak clears all affinities for the failing account", () => {

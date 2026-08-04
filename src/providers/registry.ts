@@ -5,6 +5,7 @@ import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
   QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
   ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+  ALIBABA_CODING_BASE_URL_CHOICES, ALIBABA_CODING_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
   CURSOR_STATIC_MODELS,
@@ -17,11 +18,92 @@ import {
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
 
+/**
+ * Wire protocol a client spoke when it reached the proxy. Chat and Anthropic surfaces
+ * translate into a Responses-shaped body and replay through `handleResponses`, so the
+ * original inbound has to travel with the request or the replay looks native.
+ */
+export type InboundWire = "responses" | "chat" | "anthropic";
+
+/**
+ * A per-model wire default: a bare string applies to every inbound, while the object
+ * form applies only to the listed inbound protocols.
+ */
+export type ModelWireDefault = string | { wire: string; inbound: readonly InboundWire[] };
+
+export type ProviderModelDiscoveryScalar = string | number | boolean;
+
+export type ProviderModelDiscoveryPredicate =
+  | {
+      path: readonly string[];
+      equalsAny: readonly ProviderModelDiscoveryScalar[];
+      caseInsensitive?: boolean;
+    }
+  | {
+      path: readonly string[];
+      /**
+       * A string-valued upstream target uses substring matching; an array-valued target uses
+       * exact element matching. Use `equalsAny` when the string must match in full.
+       */
+      containsAny: readonly ProviderModelDiscoveryScalar[];
+      caseInsensitive?: boolean;
+    }
+  | {
+      path: readonly string[];
+      /** Uses the same string-substring and array-element semantics as `containsAny`. */
+      containsAll: readonly ProviderModelDiscoveryScalar[];
+      caseInsensitive?: boolean;
+    };
+
+export interface ProviderModelDiscoveryFilter {
+  /** Every predicate must match. */
+  allOf?: readonly ProviderModelDiscoveryPredicate[];
+  /** At least one predicate must match. */
+  anyOf?: readonly ProviderModelDiscoveryPredicate[];
+  /** No predicate may match. */
+  noneOf?: readonly ProviderModelDiscoveryPredicate[];
+}
+
+interface ProviderModelDiscoverySharedSpec {
+  /** Query parameters applied to the resolved discovery URL. */
+  query?: Readonly<Record<string, string>>;
+  /** Declarative eligibility rules evaluated against each untrusted model row. */
+  filter?: ProviderModelDiscoveryFilter;
+  /** Optional lower byte ceiling; the process-wide hard ceiling still wins. */
+  maxResponseBytes?: number;
+  /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */
+  maxModels?: number;
+}
+
+type ProviderModelDiscoveryLocation =
+  | {
+      /** Registry-owned absolute endpoint. Mutually exclusive with `path`. */
+      url: string;
+      path?: never;
+    }
+  | {
+      /** Resource path relative to baseUrl; query strings and fragments are disallowed. */
+      path: string;
+      url?: never;
+    }
+  | {
+      /** Keep the adapter-derived default discovery endpoint. */
+      url?: never;
+      path?: never;
+    };
+
+/**
+ * Trusted live-model discovery policy. This metadata is registry-only: it must never be copied
+ * into config.json, where a same-named custom provider could otherwise redirect a stored key.
+ */
+export type ProviderModelDiscoverySpec = ProviderModelDiscoverySharedSpec & ProviderModelDiscoveryLocation;
+
 export interface ProviderRegistryEntry {
   id: string;
   label: string;
   adapter: string;
   baseUrl: string;
+  apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
@@ -34,6 +116,11 @@ export interface ProviderRegistryEntry {
    */
   freeTier?: boolean;
   allowBaseUrlOverride?: boolean;
+  /**
+   * Do not claim an existing same-named key provider whose fixed destination differs from this
+   * preset. Enable for newly promoted ids so an older custom key cannot be silently retargeted.
+   */
+  preserveCustomDestination?: boolean;
   /**
    * Optional endpoint picker for providers with multiple official hosts
    * (e.g. Qwen Cloud token plan vs pay-as-you-go). Requires `allowBaseUrlOverride`
@@ -50,6 +137,31 @@ export interface ProviderRegistryEntry {
   defaultModel?: string;
   models?: string[];
   liveModels?: boolean;
+  /**
+   * Registry-only per-model wire defaults for mixed OpenAI-compatible gateways.
+   * These are intentionally not seeded into saved config: an explicit `modelAdapters`
+   * entry must remain distinguishable and must always win over a default.
+   *
+   * A bare string applies to every inbound protocol. The object form scopes the
+   * default to the inbound surfaces named in `inbound`, which is how a model that is
+   * native on two wires can serve each client on the wire it already speaks instead
+   * of paying a translation hop.
+   */
+  modelWireDefaults?: Record<string, ModelWireDefault>;
+  /**
+   * Responses-API resource path for providers whose route is not `/v1/responses`.
+   * Unlike `modelWireDefaults` above, this IS seeded into saved config: it describes
+   * the provider's fixed endpoint rather than a default a user might want to override
+   * per model. DeepSeek documents `POST /responses` with no `/v1` segment.
+   */
+  responsesPath?: string;
+  /**
+   * Responses upstream that stores nothing server-side. Stateful request parameters
+   * are dropped and `store` is pinned false, and orphaned tool results left by a
+   * replay miss are repaired rather than forwarded.
+   */
+  statelessResponses?: boolean;
+  modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
@@ -71,6 +183,7 @@ export interface ProviderRegistryEntry {
   promptCacheKey?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  reasoningSplitModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
@@ -87,12 +200,12 @@ export interface ProviderRegistryEntry {
 
 export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
-  "adapter" | "baseUrl" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
+  "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
 >;
 
@@ -117,6 +230,16 @@ const MINIMAX_MODELS = [
 const MINIMAX_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   MINIMAX_MODELS.map(id => [id, id === "MiniMax-M3" ? 1_000_000 : 204_800]),
 );
+const MINIMAX_M3_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const MINIMAX_M3_REASONING_EFFORT_MAP: Record<string, string> = {
+  none: "disabled",
+  minimal: "disabled",
+  low: "disabled",
+  medium: "adaptive",
+  high: "adaptive",
+  xhigh: "adaptive",
+  max: "adaptive",
+};
 const OPENAI_GPT56_MODELS = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const OPENAI_GPT56_PRO_MODELS = ["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"];
 const OPENAI_API_GPT56_CONTEXT_WINDOW = 1_050_000;
@@ -169,6 +292,19 @@ const THINKING_TOGGLE_MAP: Record<string, string> = {
 const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
   "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-omni", "mimo-v2-pro", "glm-5", "glm-5.1",
 ];
+/**
+ * Zhipu's domestic BigModel platform. Text families first, then the vision member: modalities are
+ * declared per model because `noVisionModels` means the opposite of "text only" here — it routes
+ * images through the proxy's vision sidecar (src/codex/catalog/provider-fetch.ts), a claim nobody
+ * has verified for BigModel-hosted GLM.
+ */
+const ZHIPU_BIGMODEL_TEXT_MODELS = ["glm-4.6", "glm-4.7", "glm-4.7-flash", "glm-5", "glm-5.1"];
+const ZHIPU_BIGMODEL_MODELS = [...ZHIPU_BIGMODEL_TEXT_MODELS, "glm-4.6v"];
+const ZHIPU_BIGMODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  ...Object.fromEntries(ZHIPU_BIGMODEL_TEXT_MODELS.map(id => [id, ["text"]])),
+  "glm-4.6v": ["text", "image"],
+};
+const ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS = ["glm-4.6", "glm-4.7", "glm-5", "glm-5.1"];
 const THINKING_BUDGET_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
@@ -228,6 +364,67 @@ const ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS = [
 // coding tools (not custom application backends or non-interactive batch automation).
 // Evidence: https://cloud.tencent.cn/document/product/1823/130092
 const TENCENT_CODING_PLAN_MODELS = ["tc-code-latest", "glm-5", "kimi-k2.5", "minimax-m2.5"];
+// Volcengine's authenticated /api/v3/models catalog mixes chat models with embedding,
+// image, video, and 3D generation resources. Keep the Codex-facing presets scoped to
+// models documented for text/agent or Coding Plan use.
+//
+// Maintenance owner: @lidge-jun. Verified 2026-08-01 against the vendor's own docs —
+// endpoints https://docs.volcengine.com/docs/82379/1528783 (Coding Plan) and
+// https://docs.volcengine.com/docs/82379/2165245 (Agent Plan); Codex CLI integration
+// https://www.volcengine.com/docs/82379/2556056; supported clients
+// https://www.volcengine.com/docs/82379/2188957; terms https://www.volcengine.com/docs/6256/64903
+// (北京火山引擎科技有限公司). Plan quota is restricted to supported AI coding tools and misuse
+// is documented as grounds for suspension — see the `note` on both Plan entries.
+// Report a break by opening an issue tagging the owner; the three things that rot first are the
+// static catalogs (liveModels:false cannot self-heal), the base URLs, and those Plan terms.
+// Full evidence ledger: devlog/_plan/260801_pr611_volcengine_evidence/000_evidence_ledger.md
+const VOLCENGINE_ARK_MODELS = [
+  "doubao-seed-2-1-pro-260628",
+  "doubao-seed-2-1-turbo-260628",
+  "doubao-seed-evolving",
+  "deepseek-v4-pro-260425",
+  "deepseek-v4-flash-260425",
+  "deepseek-v3-2-251201",
+  "glm-5-2-260617",
+  "glm-4-7-251222",
+];
+const VOLCENGINE_DOUBAO_THINKING_MODELS = [
+  "doubao-seed-2-1-pro-260628",
+  "doubao-seed-2-1-turbo-260628",
+  "doubao-seed-evolving",
+];
+const VOLCENGINE_CODING_PLAN_MODELS = [
+  "ark-code-latest",
+  "doubao-seed-2.0-code",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "kimi-k2.6",
+  "minimax-m3",
+];
+const VOLCENGINE_AGENT_PLAN_MODELS = [
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "kimi-k2.6",
+  "minimax-m3",
+  "doubao-seed-2.0-pro",
+];
+const VOLCENGINE_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
+  "kimi-k2.6": ["text", "image"],
+  "minimax-m3": ["text", "image"],
+};
+// Every other Plan model is text-only. Declaring this explicitly keeps the vision
+// sidecar from advertising image input for models that cannot accept it — the same
+// treatment tencent-coding-plan gives its (entirely text-only) plan catalog.
+const VOLCENGINE_PLAN_TEXT_ONLY_MODELS = [
+  "ark-code-latest",
+  "doubao-seed-2.0-code",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "doubao-seed-2.0-pro",
+];
 const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "qwen3.8-max-preview": ["text", "image"],
   "qwen3.7-max": ["text", "image"],
@@ -310,6 +507,43 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
   "kimi-k2.6", "kimi-k2.7-code",
   "qwen3.5-397b", "qwen3.6-35b",
 ];
+
+// 260728 Baseten Model APIs: `/v1/models` owns the live lineup, while these hints
+// describe only capabilities that Baseten documents per slug. Unlisted live models
+// intentionally inherit the empty provider ladder instead of being advertised with
+// opencodex's generic reasoning defaults. Audio is omitted because the current proxy
+// request model does not carry OpenAI `audio_url` parts.
+// Evidence: https://docs.baseten.co/inference/model-apis/reasoning
+//           https://docs.baseten.co/inference/model-apis/vision
+const BASETEN_FULL_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const BASETEN_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
+  "deepseek-ai/DeepSeek-V4-Pro": BASETEN_FULL_REASONING_EFFORTS,
+  "thinkingmachines/inkling": BASETEN_FULL_REASONING_EFFORTS,
+  "openai/gpt-oss-120b": BASETEN_FULL_REASONING_EFFORTS,
+  "moonshotai/Kimi-K3": ["low", "high", "max"],
+  "zai-org/GLM-5.2": ["high", "max"],
+  "zai-org/GLM-5.2-Fast": ["high", "max"],
+};
+const BASETEN_MODEL_REASONING_EFFORT_MAP: Record<string, Record<string, string>> = {
+  "deepseek-ai/DeepSeek-V4-Pro": { none: "none", minimal: "minimal" },
+  "thinkingmachines/inkling": { none: "none", minimal: "minimal" },
+  "openai/gpt-oss-120b": { none: "none", minimal: "minimal" },
+  "moonshotai/Kimi-K3": { none: "none" },
+  "zai-org/GLM-5.2": { none: "none" },
+  "zai-org/GLM-5.2-Fast": { none: "none" },
+};
+const BASETEN_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, string> = {
+  "deepseek-ai/DeepSeek-V4-Pro": "medium",
+  "thinkingmachines/inkling": "high",
+  "openai/gpt-oss-120b": "medium",
+  "moonshotai/Kimi-K3": "max",
+};
+const BASETEN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "thinkingmachines/inkling": ["text", "image"],
+  "moonshotai/Kimi-K2.6": ["text", "image"],
+  "moonshotai/Kimi-K2.7-Code": ["text", "image"],
+  "moonshotai/Kimi-K3": ["text", "image"],
+};
 const UMANS_MODELS = [
   "umans-coder",
   "umans-kimi-k2.7",
@@ -359,6 +593,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
     modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
+    // Kimi K3 documents `max` as its API default, and its Cursor ladder has no `medium`
+    // rung — so applyReasoningLevels' medium->high->first fallback would settle the catalog
+    // default on `high`, the picker would send `high` explicitly, and the request builder's
+    // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
+    // routes (kimi, kimi-code, opencode-go).
+    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
     // Cursor's wire protocol never forwards image parts (request-builder emits an unsupported-
     // content marker), so the vision sidecar covers ALL cursor models regardless of what the
     // upstream model could natively do. Live-discovered models outside the static list fall back
@@ -390,6 +630,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
     models: ["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     defaultModel: "grok-4.5",
+    // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
+    // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves
+    // inputModalities undefined, and deriveComboCatalogModel defaults an undefined member to
+    // ["text"] — so any combo containing an xAI target is advertised to Codex as text-only and
+    // the app blocks attachments client-side. grok-build-0.1 / grok-composer-2.5-fast stay out
+    // (they are already listed in noVisionModels below).
+    modelInputModalities: {
+      "grok-4.5": ["text", "image"],
+      "grok-4.3": ["text", "image"],
+      "grok-4.20-0309-reasoning": ["text", "image"],
+      "grok-4.20-0309-non-reasoning": ["text", "image"],
+    },
     noReasoningModels: ["grok-4.20-0309-non-reasoning", "grok-build-0.1", "grok-composer-2.5-fast"],
     // Replay assistant reasoning_content for grok reasoning models: xAI documents dropped
     // reasoning_content as the top cause of prompt-cache misses on multi-turn conversations
@@ -444,6 +696,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.kimi.com/coding/v1",
     authKind: "oauth",
     modelSuffixBracketStrip: true,
+    // Kimi Code Plan documents a stable session/task prompt_cache_key as required to improve
+    // cache hit rates.
+    // The chat adapter only forwards a key already on the internal request (Codex's session key,
+    // or the one the Claude /v1/messages inbound derives); the adapter itself never invents one.
+    // Evidence: https://platform.kimi.com/docs/api/chat
+    promptCacheKey: true,
     featured: true,
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
@@ -470,7 +728,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://runtime.us-east-1.kiro.dev",
     authKind: "oauth",
     oauthId: "kiro",
-    note: "Import-first: reuses your installed kiro-cli login (no browser). Experimental third-party harness — see Kiro ToS.",
+    note: "Import-first: reuses your installed and signed-in Kiro CLI session (requires `kiro-cli login`). Add account logs `kiro-cli` out, switches it through a fresh browser login, stores the account by profile ARN, and restores the previous CLI session on cancellation or failure. Experimental third-party harness — see Kiro ToS.",
     models: KIRO_MODELS,
     defaultModel: "kiro-auto",
     // Kiro speaks CodeWhisperer wire, not OpenAI-style GET /models. Keep the static
@@ -669,6 +927,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
     note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
   },
+  {
+    // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are
+    // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
+    // Live-verified 2026-07-24: /v1/chat/completions accepts the `tools` field and
+    // streams, and GET /v1/models returns the per-API-key allowed catalog in the
+    // OpenAI list shape, so live model discovery narrows to what the key can use.
+    id: "bizrouter", label: "BizRouter", adapter: "openai-chat", baseUrl: "https://api.bizrouter.ai/v1",
+    authKind: "key", dashboardUrl: "https://bizrouter.ai/settings/keys",
+    defaultModel: "openai/gpt-5.6-sol",
+    models: ["openai/gpt-5.6-sol", "anthropic/claude-sonnet-5", "google/gemini-3.5-flash"],
+    note: "Korean enterprise LLM gateway. Per-key allowed models are discovered live from /v1/models. Full catalog: https://bizrouter.ai/models",
+  },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },
   // 2026-07-10 Gemini API refresh: Tier-2 ai.google.dev evidence recorded in
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
@@ -687,7 +957,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, defaultModel: "gemini-3.6-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: false, defaultModel: "gemini-3.6-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -704,6 +974,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
     defaultModel: "deepseek-v4-flash",
     modelContextWindows: { "deepseek-v4-flash": 1_000_000, "deepseek-v4-pro": 1_000_000 },
+    // DeepSeek documents V4-Flash as a native Responses API model adapted for Codex. The
+    // API id is `deepseek-v4-flash`; `DeepSeek-V4-Flash-0731` is a release/version label.
+    modelWireDefaults: {
+      // Codex speaks Responses natively and DeepSeek ships a Codex-compatible
+      // apply_patch tool on that wire, so a Responses inbound goes straight out with
+      // no translation. Claude Code and OpenAI-compatible clients keep the
+      // provider-wide Chat wire: DeepSeek serves Chat Completions natively too, so
+      // translating them into Responses would add a hop onto our newest upstream path
+      // for no gain.
+      "deepseek-v4-flash": { wire: "openai-responses", inbound: ["responses"] },
+    },
+    // DeepSeek's Responses route is `POST /responses` with no `/v1` segment. Without
+    // this the passthrough adapter falls back to its legacy `/v1/responses`
+    // construction and the wire above can never route.
+    // Evidence: https://api-docs.deepseek.com/api/create-response/
+    responsesPath: "/responses",
+    // "The API is stateless: responses and conversations are not stored on the
+    // server." https://api-docs.deepseek.com/api/create-response/
+    statelessResponses: true,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
@@ -719,6 +1008,68 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
+  {
+    id: "deepinfra",
+    label: "DeepInfra",
+    baseUrl: "https://api.deepinfra.com/v1/openai",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://deepinfra.com/dash/api_keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelDiscovery: {
+      // DeepInfra documents the OpenAI model catalog outside the chat-compatible `/v1/openai`
+      // namespace, so keep this destination registry-owned instead of deriving it from baseUrl.
+      url: "https://api.deepinfra.com/v1/models",
+      maxResponseBytes: 512 * 1024,
+      maxModels: 512,
+      filter: {
+        allOf: [{ path: ["metadata", "tags"], containsAny: ["chat"] }],
+      },
+    },
+    note: "OpenAI-compatible chat models only; live discovery excludes non-chat rows from DeepInfra's mixed model catalog.",
+  },
+  {
+    id: "hyperbolic",
+    label: "Hyperbolic",
+    baseUrl: "https://api.hyperbolic.xyz/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://app.hyperbolic.ai",
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 256 * 1024,
+      maxModels: 256,
+    },
+    note: "Serverless text and vision-language chat models only; Hyperbolic's separate image, audio, and GPU endpoints are out of scope.",
+  },
+  {
+    id: "baseten",
+    label: "Baseten Model APIs",
+    baseUrl: "https://inference.baseten.co/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://app.baseten.co/settings/api_keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    // Baseten's Chat Completions contract documents parallel_tool_calls as default-on.
+    parallelToolCalls: true,
+    // Baseten says models outside its reasoning table do not support reasoning. Keep
+    // unknown/new live slugs conservative until an official-docs registry refresh proves it.
+    reasoningEfforts: [],
+    modelReasoningEfforts: BASETEN_MODEL_REASONING_EFFORTS,
+    modelReasoningEffortMap: BASETEN_MODEL_REASONING_EFFORT_MAP,
+    modelDefaultReasoningEfforts: BASETEN_MODEL_DEFAULT_REASONING_EFFORTS,
+    modelInputModalities: BASETEN_MODEL_INPUT_MODALITIES,
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 1_048_576,
+      maxModels: 256,
+    },
+    note: "Shared Model APIs only (personal API key, or team key with Call Model APIs access); dedicated Truss predict endpoints are outside this preset.",
+  },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
   { id: "fireworks", label: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://fireworks.ai/account/api-keys" },
@@ -775,6 +1126,45 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
     preserveReasoningContentModels: ZAI_GLM_52_MODELS,
   },
+  // Zhipu's domestic BigModel platform: OpenAI-compatible pay-as-you-go on open.bigmodel.cn — a
+  // different host and billing product from the `zai` coding-plan subscription above.
+  // The id is deliberately NOT `glm` or `glm-cn`: both are already bound in FREE_PROVIDER_DIRECTORY
+  // (to api.z.ai and to the BigModel *coding* path), and routedProviderConfig() canonicalizes a
+  // saved provider onto the registry baseUrl — reusing either id would silently retarget an
+  // existing config's endpoint and send its API key to another host.
+  // Evidence: docs.bigmodel.cn/api-reference (OpenAI-compatible chat completions),
+  // docs.bigmodel.cn/cn/guide/models/text/glm-4.6 (thinking: {type: enabled|disabled}).
+  // Originally proposed in #536 by @Lucinegogo.
+  {
+    id: "zhipu-bigmodel",
+    label: "Zhipu AI — BigModel",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
+    defaultModel: "glm-4.6",
+    models: ZHIPU_BIGMODEL_MODELS,
+    // The GLM families here are the same ones the `zai` metadata bundle already describes, so the
+    // bundle owns context windows and modalities for the whole list instead of a hand-copied table.
+    jawcodeBundle: "zai",
+    // Declared explicitly for the default model so its window survives a bundle-lookup miss:
+    // without it, catalog normalization falls back to a generic 128k and compacts ~76,800 early.
+    modelContextWindows: { "glm-4.6": 204_800 },
+    modelInputModalities: ZHIPU_BIGMODEL_INPUT_MODALITIES,
+    // GLM exposes a binary thinking knob, not an effort ladder: the adapter emits
+    // `thinking: {type}` for these ids and would otherwise send a rejected reasoning_effort.
+    thinkingToggleModels: ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
+    modelReasoningEfforts: Object.fromEntries(
+      ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS]),
+    ),
+    modelReasoningEffortMap: Object.fromEntries(
+      ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP]),
+    ),
+    preserveReasoningContentModels: ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
+    // No liveModels: GET /api/paas/v4/models has not been observed to answer on this host, and a
+    // false live claim yields an empty picker at runtime. Flip it on once someone verifies it.
+    note: "Domestic BigModel pay-as-you-go endpoint (open.bigmodel.cn)",
+  },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },
   // SiliconFlow publishes an OpenAI-compatible chat endpoint and a dynamic model catalog. Do not
@@ -818,10 +1208,81 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: TENCENT_CODING_PLAN_MODELS,
     note: "Coding tools only. Tencent forbids general API automation, custom backends, and non-interactive batch use.",
   },
+  {
+    id: "volcengine",
+    label: "Volcengine Ark",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    adapter: "openai-chat",
+    authKind: "key",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+    defaultModel: "doubao-seed-2-1-pro-260628",
+    models: VOLCENGINE_ARK_MODELS,
+    liveModels: false,
+    modelReasoningEfforts: Object.fromEntries(
+      VOLCENGINE_DOUBAO_THINKING_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS]),
+    ),
+    modelReasoningEffortMap: Object.fromEntries(
+      VOLCENGINE_DOUBAO_THINKING_MODELS.map(id => [id, THINKING_TOGGLE_MAP]),
+    ),
+    thinkingToggleModels: VOLCENGINE_DOUBAO_THINKING_MODELS,
+    preserveReasoningContentModels: [
+      "deepseek-v4-pro-260425",
+      "deepseek-v4-flash-260425",
+      "glm-5-2-260617",
+      "glm-4-7-251222",
+    ],
+    noVisionModels: [
+      "deepseek-v4-pro-260425",
+      "deepseek-v4-flash-260425",
+      "deepseek-v3-2-251201",
+      "glm-5-2-260617",
+      "glm-4-7-251222",
+    ],
+    note: "Pay-as-you-go Ark API with a curated text/agent catalog. Calls on this endpoint do not consume Coding Plan or Agent Plan quota.",
+  },
+  {
+    id: "volcengine-coding-plan",
+    label: "Volcengine Ark Coding Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+    adapter: "openai-chat",
+    authKind: "key",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
+    defaultModel: "ark-code-latest",
+    models: VOLCENGINE_CODING_PLAN_MODELS,
+    liveModels: false,
+    modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
+    noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
+    modelReasoningEfforts: Object.fromEntries(
+      DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS]),
+    ),
+    modelReasoningEffortMap: Object.fromEntries(
+      DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP]),
+    ),
+    preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
+    note: "Coding tools only. Volcengine restricts Coding Plan quota to supported AI coding tools and warns that using this key for general API calls may suspend the subscription or ban the account. Use the plan key issued by the Ark console.",
+  },
+  {
+    id: "volcengine-agent-plan",
+    label: "Volcengine Ark Agent Plan",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+    responsesPath: "/responses",
+    adapter: "openai-responses",
+    authKind: "key",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
+    defaultModel: "deepseek-v4-pro",
+    models: VOLCENGINE_AGENT_PLAN_MODELS,
+    liveModels: false,
+    modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
+    noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
+    note: "Coding tools only. Agent Plan is a subscription endpoint over the native Responses API with a static fallback catalog; Ark plan quota is intended for supported AI coding and agent tools, so avoid using this key as a general-purpose API key.",
+  },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
   { id: "qianfan", label: "Qianfan (Baidu)", baseUrl: "https://qianfan.baidubce.com/v2", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.bce.baidu.com/iam/#/iam/apikey/list" },
   // 2026-07-10: docs unverified; model data frozen. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
-  { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
+  { id: "alibaba", label: "Alibaba Coding Plan", baseUrl: ALIBABA_CODING_INTL_BASE_URL, adapter: "openai-chat", authKind: "key", allowBaseUrlOverride: true, baseUrlChoices: ALIBABA_CODING_BASE_URL_CHOICES, dashboardUrl: "https://dashscope.console.aliyun.com/apiKey" },
   {
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
@@ -916,7 +1377,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://ollama.com/settings/keys",
     // Live IDs verified 2026-07-10; qwen3-coder:480b retires 2026-07-15.
-    // Evidence: .codexclaw/evidence/260710_wp9_ollama_cloud_model_ids.md.
     models: ["glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
     defaultModel: "glm-5.2",
     noVisionModels: [
@@ -933,18 +1393,32 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.minimax.io", defaultModel: "MiniMax-M3", models: MINIMAX_MODELS,
     modelContextWindows: MINIMAX_MODEL_CONTEXT_WINDOWS,
+    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
+    modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
+    preserveReasoningContentModels: MINIMAX_MODELS,
+    reasoningSplitModels: MINIMAX_MODELS,
+    thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "Subscription Key or API Key",
   },
   {
     id: "minimax-cn", label: "MiniMax — Coding Plan (CN)", baseUrl: "https://api.minimaxi.com/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.minimaxi.com", defaultModel: "MiniMax-M3", models: MINIMAX_MODELS,
     modelContextWindows: MINIMAX_MODEL_CONTEXT_WINDOWS,
+    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
+    modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
+    preserveReasoningContentModels: MINIMAX_MODELS,
+    reasoningSplitModels: MINIMAX_MODELS,
+    thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "中国区 Subscription Key",
   },
   {
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
     modelSuffixBracketStrip: true,
+    // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
+    promptCacheKey: true,
     models: KIMI_CODING_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
@@ -1037,6 +1511,91 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
   return PROVIDER_REGISTRY.find(entry => entry.id === id);
+}
+
+function normalizedProviderEndpoint(value: string): string {
+  const trimmed = value.trim();
+  try {
+    const parsed = new URL(trimmed);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+/**
+ * Whether registry transport defaults own this configured row.
+ *
+ * OAuth/forward providers stay pinned because their credentials must never be sent to an
+ * arbitrary same-named host. Existing key presets keep their historical pinning behavior; a new
+ * preset can opt into collision preservation, in which case its fixed endpoint owns only rows
+ * that still match that destination.
+ */
+export function providerMatchesRegistryTransport(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+): boolean {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry) return false;
+  if (entry.authKind !== "key" || entry.preserveCustomDestination !== true) return true;
+  // The opt-in is intentionally limited to fixed key destinations. Fail closed if a future
+  // registry edit combines it with an override/template despite the registry parity tests.
+  if (entry.allowBaseUrlOverride || /\{[^}]*\}/.test(entry.baseUrl)) return false;
+  if (typeof provider.baseUrl !== "string") return false;
+  if (provider.adapter !== entry.adapter) return false;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return false;
+  return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
+}
+
+/**
+ * Resolve the registry entry a configured provider actually points at, by TRANSPORT
+ * rather than by name.
+ *
+ * `providerMatchesRegistryTransport` answers "does the row named X still point at X's
+ * documented destination", which is the right question for routing but the wrong one
+ * for user-facing metadata: the GUI lets a preset be saved under any name, and a
+ * renamed row would silently lose a usage restriction it still needs to display.
+ *
+ * Only fixed key destinations are matched. Entries with an overridable or templated
+ * base URL are skipped, because their configured URL cannot identify one vendor route.
+ */
+export function registryEntryForProviderDestination(
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+): ProviderRegistryEntry | undefined {
+  if (typeof provider.baseUrl !== "string" || !provider.baseUrl) return undefined;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
+  const endpoint = normalizedProviderEndpoint(provider.baseUrl);
+  return PROVIDER_REGISTRY.find(entry =>
+    entry.authKind === "key"
+    && !entry.allowBaseUrlOverride
+    && !/\{[^}]*\}/.test(entry.baseUrl)
+    && entry.adapter === provider.adapter
+    && normalizedProviderEndpoint(entry.baseUrl) === endpoint);
+}
+
+/**
+ * Resolve a registry-only default for a mixed-wire provider. Defaults only move a provider
+ * between the two OpenAI-shaped adapters and never override a provider configured on another
+ * wire. The resolver receives the allow-list so this helper cannot accidentally widen the
+ * adapter-selection boundary when a new registry entry is added.
+ */
+export function providerModelWireDefault(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  modelId: string,
+  allowedWires: ReadonlySet<string>,
+  inbound: InboundWire,
+): string | undefined {
+  if (!allowedWires.has(provider.adapter)) return undefined;
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  if (declared === undefined) return undefined;
+  // A bare string applies to every inbound; the object form only to the listed ones.
+  if (typeof declared !== "string" && !declared.inbound.includes(inbound)) return undefined;
+  const wire = typeof declared === "string" ? declared : declared.wire;
+  return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
 }
 
 /**

@@ -1,0 +1,744 @@
+/* ============================================================================
+   storage-workspace — rail + overview/detail (providers-workspace DNA, flattened)
+   Namespace: storage-workspace-  |  widgets: stw-
+   Uses only design tokens from styles.css.
+   ============================================================================ */
+
+.main-inner:has(.storage-workspace-root) {
+  max-width: 1200px;
+}
+
+.storage-workspace-root {
+  display: grid;
+  /*
+    Single column, page-scrolled. The fixed-height two-pane shell meant the bucket list and
+    the detail body each owned an inner scroller with `overscroll-behavior: contain`, so the
+    wheel never reached the page and everything below the shell was unreachable.
+  */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  align-items: start;
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.storage-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Stacked: the seam runs underneath. */
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+
+.storage-workspace-rail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.storage-workspace-rail-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.storage-workspace-rail-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  /* Soft cap so a long bucket list does not bury the overview; page scroll owns the rest. */
+  max-height: min(14rem, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+  /* Keep size labels ("GB") clear of the scrollbar track. */
+  padding-right: 10px;
+}
+
+.storage-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-0-5);
+  width: 100%;
+  /* Equal row height — long labels ellipsize instead of growing the rail. */
+  height: 3.25rem;
+  min-height: 3.25rem;
+  flex: 0 0 auto;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+  transition: background var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.storage-workspace-rail-row:hover {
+  background: var(--surface);
+}
+
+.storage-workspace-rail-row--selected {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.storage-workspace-rail-row:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -2px;
+}
+
+.storage-workspace-rail-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.storage-workspace-rail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
+}
+
+.storage-workspace-rail-size {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
+
+.storage-workspace-rail-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption);
+  line-height: var(--leading-ui);
+  color: var(--muted);
+}
+
+.storage-workspace-rail-empty {
+  font-size: 12px;
+  padding: 8px 4px;
+  color: var(--muted);
+}
+
+/* ── Main ─────────────────────────────────────────────── */
+
+.storage-workspace-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+}
+
+.stw-overview,
+.stw-detail-body {
+  min-height: 0;
+  overflow-x: hidden;
+}
+
+.stw-detail-body {
+  /* Room between the toolbar divider and the bucket heading. */
+  padding-top: 14px;
+}
+
+.storage-workspace-main .stw-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-3);
+  margin-bottom: 16px;
+}
+
+.stw-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.stw-summary-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+}
+
+.stw-summary-value {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stw-summary-value.mono,
+.stw-home-path {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.stw-section {
+  margin-bottom: 16px;
+}
+
+.stw-section-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 8px 0;
+}
+
+.stw-hint {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px 0 12px;
+}
+
+/* Largest-files rows — flat list, no card-in-card */
+.stw-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft, var(--border));
+}
+
+.stw-file-row:last-child {
+  border-bottom: none;
+}
+
+.stw-file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.stw-file-size {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.stw-file-bucket {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* Bucket detail */
+.stw-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  max-width: 760px;
+}
+
+.stw-detail-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.stw-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-ui);
+  cursor: pointer;
+  padding: 6px 12px 6px 8px;
+  margin: 0;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+
+.stw-detail-back:hover {
+  background: var(--raised-hover, var(--surface));
+  border-color: var(--faint);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.stw-detail-back:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.stw-detail-back-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  transform: rotate(180deg);
+  color: var(--muted);
+}
+
+.stw-detail-back:hover .stw-detail-back-chevron {
+  color: var(--text);
+}
+
+.stw-detail-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.stw-kv {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 16px 0;
+}
+
+.stw-kv-row {
+  display: flex;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.stw-kv-row dt {
+  flex-shrink: 0;
+  width: 110px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.stw-kv-row dd {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.stw-kv-row dd code,
+.stw-kv-mono {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-policy-help {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.storage-policy-enable {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.storage-policy-enable-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: default;
+}
+
+.storage-policy-fields {
+  display: grid;
+  gap: 10px;
+  margin-top: 0;
+  max-width: none;
+}
+
+.storage-policy-fields .field {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.storage-policy-fields .field-label {
+  margin-bottom: 0;
+}
+
+.storage-policy-fields fieldset.field {
+  border: none;
+  padding: 0;
+  min-width: 0;
+}
+
+.storage-policy-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 32px;
+}
+
+.storage-policy-trigger-hint {
+  flex: 0 1 auto;
+  font-size: var(--text-control);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+.storage-policy-target {
+  display: grid;
+  gap: 6px;
+}
+
+.storage-policy-target > .field-label {
+  padding: 0;
+}
+
+.storage-policy-target-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 32px;
+}
+
+.storage-policy-target-label {
+  flex: 0 1 auto;
+  font-size: var(--text-control);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+.storage-policy-target-row .codex-auto-switch-input-wrap,
+.storage-policy-trigger-row .codex-auto-switch-input-wrap {
+  flex: 0 0 auto;
+}
+
+.storage-policy-selects {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.storage-policy-warn {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.storage-policy-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.storage-policy-meta-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.storage-policy-meta-item > .muted {
+  flex: 0 0 auto;
+}
+
+.storage-policy-meta-value {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-policy-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 0;
+  min-height: 28px;
+}
+
+.storage-policy-actions__status {
+  min-width: 7rem;
+  font-size: var(--text-label);
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+
+.storage-policy-actions__status.is-error {
+  color: var(--red);
+}
+
+.storage-page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.storage-page-head-feedback {
+  min-width: 7rem;
+  max-width: 16rem;
+  text-align: right;
+  font-size: var(--text-label);
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+
+.storage-page-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin: -12px 0 16px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+
+.storage-page-meta__home {
+  max-width: min(100%, 42rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: inherit;
+}
+
+.storage-page-meta__sep {
+  color: var(--faint);
+}
+
+.storage-cleanup-card {
+  margin-top: 16px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.storage-cleanup-card > .panel-title {
+  margin: 0;
+  width: 100%;
+}
+
+.storage-cleanup-card__tabs {
+  justify-self: start;
+}
+
+.storage-cleanup-card__stack {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Stack all tab panels in one cell so height = max(panels) → no shift on switch. */
+.storage-cleanup-card__body {
+  grid-area: 1 / 1;
+  min-width: 0;
+  width: 100%;
+}
+
+.storage-cleanup-card__body[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.storage-cleanup-policy-split {
+  display: grid;
+  /*
+    Single column: the side-by-side policy/manual split read as cramped against the card
+    border. Switching happens through the tab strip at the top of the card instead, so
+    each panel gets the full width.
+  */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px 20px;
+  align-items: start;
+}
+
+.storage-cleanup-pane {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.storage-cleanup-manual {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  /* Stacked under the policy pane: the seam is a rule above it, not beside it. */
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.storage-cleanup-manual__title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+/* Nested run-once pane: drop duplicate outer gap when titled above. */
+.storage-cleanup-manual .storage-cleanup-pane {
+  gap: 8px;
+}
+
+.storage-cleanup-manual .storage-manual-panel__controls {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.storage-cleanup-manual .storage-manual-panel__slider {
+  flex: 1 1 auto;
+}
+
+.storage-cleanup-pane.storage-quarantine-pane {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  align-content: start;
+  min-height: 8rem;
+}
+
+.storage-manual-panel {
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.storage-manual-panel > .panel-title {
+  margin: 0;
+}
+
+.storage-manual-panel__help {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.storage-manual-panel__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.storage-manual-panel__slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.storage-manual-panel__presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.storage-manual-panel__status {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.storage-manual-panel__table {
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .storage-cleanup-card__tabs {
+    width: 100%;
+  }
+
+  .storage-cleanup-card__tabs.usage-segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .storage-cleanup-card__tabs .usage-segmented-btn {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .storage-policy-selects,
+  .storage-policy-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .storage-policy-enable {
+    align-items: flex-start;
+  }
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /*
+    The layout is single-column and page-scrolled at every width now, so this block no longer
+    switches the grid or re-introduces inner scrollers. The rail also stops sticking here:
+    on a short viewport a pinned bucket list would eat most of the screen.
+  */
+  .storage-workspace-rail {
+    position: static;
+  }
+}

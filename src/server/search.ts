@@ -11,6 +11,7 @@
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
+  cooldownErrorResponse,
   CodexAuthContextError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
@@ -77,7 +78,7 @@ export async function handleSearch(
     logCtx.provider = formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
-      return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
+      return cooldownErrorResponse(err);
     }
     if (err instanceof CodexThreadAffinityExpiredError) {
       return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");

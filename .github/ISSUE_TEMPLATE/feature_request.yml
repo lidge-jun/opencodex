@@ -19,8 +19,12 @@ body:
         - Dashboard
         - Provider adapters
         - Authentication and account pool
+        - Catalog / models
+        - Streaming
+        - Tools / MCP / web search
         - Installation or packaging
         - Service lifecycle
+        - Platform (Windows / macOS / Linux)
         - Documentation
         - Multiple areas
         - Other

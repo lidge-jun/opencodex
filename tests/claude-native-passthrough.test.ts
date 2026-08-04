@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { managementFetch as fetch } from "./helpers/management-auth";
+import { logsFromApiBody } from "./helpers/logs-api";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,8 +117,8 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
     expect(hit.body).toEqual(claudeBody());
 
     // Request log: native provider tag + usage incl. cache detail from the SSE tap.
-    const logs = await (await fetch(new URL("/api/logs", server.url))).json() as any[];
-    const row = logs.find(l => l.provider === "anthropic-native");
+    const logs = logsFromApiBody(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
+    const row = logs.at(-1);
     expect(row).toBeDefined();
     expect(row.status).toBe(200);
     expect(row.model).toBe("claude-fable-5");
@@ -140,6 +142,40 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
     };
     expect(codexUsage.surface).toBe("codex");
     expect(codexUsage.summary.requests).toBe(0);
+  } finally {
+    server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("native passthrough persists conversationId from metadata.user_id", async () => {
+  const { createHash } = await import("node:crypto");
+  const { clearRequestLogsForTests } = await import("../src/server/request-log");
+  clearRequestLogsForTests();
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const userId = "user_session_opaque_abc";
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({
+        ...claudeBody(),
+        metadata: { user_id: userId },
+      }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const logs = logsFromApiBody<{
+      provider?: string;
+      conversationId?: string;
+    }>(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.provider).toBe("anthropic-native");
+    expect(logs[0]?.conversationId).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
   } finally {
     server.stop(true);
     upstream.stop(true);

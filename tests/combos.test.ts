@@ -27,6 +27,7 @@ import {
   parseComboModelId,
   parseRetryAfterMs,
   pickComboTarget,
+  preservesPhysicalComboProvider,
   resetComboEffortWarningStateForTests,
   resolveComboId,
   targetKey,
@@ -40,6 +41,7 @@ import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import { syncCatalogModels } from "../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
+import { reconcileComboRotationState } from "../src/combos/resolve";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
@@ -322,6 +324,27 @@ describe("combo failure policy and advancement", () => {
     expect(third.attempted).toEqual(["a/m1", "b/m2", "c/m3"]);
     expect(exhausted).toBeNull();
   });
+
+  test("advancement preserves an explicit payload-eligibility filter", () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+            { provider: "c", model: "m3" },
+          ],
+        },
+      },
+    });
+    const first = pickComboTarget(config, "free")!;
+    const next = advanceComboAfterFailure(config, first, {
+      now: 1_000,
+      eligible: target => target.provider === "c",
+    });
+    expect(next?.target.provider).toBe("c");
+    expect(next?.attempted).toEqual(["a/m1", "c/m3"]);
+  });
 });
 
 describe("deterministic combo selection", () => {
@@ -513,6 +536,12 @@ describe("combo validation and normalization", () => {
         combo: { adapter: "openai-chat", baseUrl: "https://combo.example/v1" },
       },
     };
+    expect(preservesPhysicalComboProvider(config)).toBeTrue();
+    expect(preservesPhysicalComboProvider({ ...config, combos: {} })).toBeTrue();
+    expect(preservesPhysicalComboProvider({ providers: {}, combos: {} })).toBeFalse();
+    expect(preservesPhysicalComboProvider({ ...config, combos: { free: VALID_COMBO } })).toBeFalse();
+    const inheritedProviders = Object.create({ combo: config.providers.combo }) as OcxConfig["providers"];
+    expect(preservesPhysicalComboProvider({ providers: inheritedProviders, combos: {} })).toBeFalse();
     expect(routeModel(config, "combo/model")).toMatchObject({
       providerName: "combo",
       modelId: "model",
@@ -611,5 +640,61 @@ describe("persisted combo config parity", () => {
         requireEnabledTarget: true,
       })).toContain("at least one enabled");
     });
+  });
+});
+
+describe("combo generation reconciliation", () => {
+  test("a surviving target accepts a late completion after a sibling topology change", () => {
+    clearComboSelectionState();
+    const original = rrConfig(2, [1, 1]);
+    const oldPick = pickComboTarget(original, "free")!;
+    expect(oldPick.target.provider).toBe("a");
+
+    const removed = reconcileComboRotationState({
+      generation: 10_000,
+      providerNames: new Set(["a", "c"]),
+      comboIds: new Set(["free"]),
+      comboTargets: new Set(["free::a/m1", "free::c/m3"]),
+      codexAccountIds: new Set(),
+      oauthAccountKeys: new Set(),
+      configRoots: new Set(),
+    });
+    expect(removed).toBeGreaterThan(0);
+
+    const current = baseConfig({
+      combos: {
+        free: {
+          strategy: "round-robin",
+          stickyLimit: 2,
+          targets: [
+            { provider: "a", model: "m1", weight: 1 },
+            { provider: "c", model: "m3", weight: 1 },
+          ],
+        },
+      },
+    });
+    noteComboFailure("free", oldPick.target, oldPick.writerGeneration);
+    expect(pickComboTarget(current, "free")?.target.provider).toBe("c");
+  });
+
+  test("a removed target rejects a late completion", () => {
+    clearComboSelectionState();
+    const original = rrConfig(1, [1, 1]);
+    const originalCombo = getCombo(original, "free")!;
+
+    reconcileComboRotationState({
+      generation: 10_000,
+      providerNames: new Set(["a", "c"]),
+      comboIds: new Set(["free"]),
+      comboTargets: new Set(["free::a/m1", "free::c/m3"]),
+      codexAccountIds: new Set(),
+      oauthAccountKeys: new Set(),
+      configRoots: new Set(),
+    });
+
+    const removedPick = pickComboTarget(original, "free", { exclude: ["a/m1"] })!;
+    expect(removedPick.target.provider).toBe("b");
+    noteComboSuccess("free", originalCombo, removedPick.target, 0);
+    expect(pickComboTarget(original, "free")?.target.provider).toBe("b");
   });
 });

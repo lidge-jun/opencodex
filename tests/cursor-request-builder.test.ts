@@ -38,6 +38,117 @@ describe("Cursor request builder", () => {
     expect(request.conversationId).toBe("cursor_stable");
   });
 
+  test("uses stable client thread identity for external store:false continuations", () => {
+    const initial = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "start", timestamp: 1 }] },
+      _clientThreadId: "thread-a",
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    const continuation = createCursorRequest({
+      ...base,
+      modelId: "cursor/gpt-5.6-sol",
+      context: {
+        messages: [{
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read_file",
+          content: "result",
+          isError: false,
+          timestamp: 2,
+        }],
+      },
+      _clientThreadId: "thread-a",
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+
+    expect(continuation.conversationId).toBe(initial.conversationId);
+  });
+
+  test("isolates client threads even when they share a prompt cache key", () => {
+    const first = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    const second = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-b",
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+
+    expect(second.conversationId).not.toBe(first.conversationId);
+  });
+
+  test("native and external models do not pin conversation id from prompt_cache_key alone", () => {
+    const nativeA = createCursorRequest({
+      modelId: "cursor/composer-2.5",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      stream: false,
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    const nativeB = createCursorRequest({
+      modelId: "cursor/composer-2.5",
+      context: { messages: [{ role: "user", content: "hi again", timestamp: 2 }] },
+      stream: false,
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    expect(nativeA.conversationId).not.toBe(nativeB.conversationId);
+
+    const externalA = createCursorRequest({
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      stream: false,
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    const externalB = createCursorRequest({
+      modelId: "cursor/gpt-5.6-sol",
+      context: { messages: [{ role: "user", content: "hi again", timestamp: 2 }] },
+      stream: false,
+      options: { promptCacheKey: "shared-cache-key" },
+    });
+    expect(externalA.conversationId).not.toBe(externalB.conversationId);
+  });
+
+  test("identity scope namespaces client thread conversation ids", () => {
+    const a = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorIdentityScope: "account-1",
+    });
+    const b = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorIdentityScope: "account-2",
+    });
+    expect(a.conversationId).not.toBe(b.conversationId);
+  });
+
+  test("isolated helper turns mint a fresh conversation id", () => {
+    const main = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+    });
+    const helper = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorIsolateConversation: true,
+    });
+    expect(helper.conversationId).not.toBe(main.conversationId);
+  });
+
+  test("isolation wins over a remembered parent conversation id", () => {
+    const helper = createCursorRequest({
+      ...base,
+      _clientThreadId: "thread-a",
+      _cursorConversationId: "cursor_parent_remembered",
+      _cursorIsolateConversation: true,
+    });
+    expect(helper.conversationId).not.toBe("cursor_parent_remembered");
+    expect(helper.conversationId.startsWith("cursor_")).toBe(true);
+  });
+
   test("marks Cursor context-usage boundaries for compaction epochs", () => {
     expect(createCursorRequest({ ...base, _contextCompactionBoundary: true }).contextUsageReset).toBe(true);
 
@@ -201,6 +312,134 @@ describe("Cursor request builder", () => {
     expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
   });
 
+  test("pins the Codex shell bridge and apply_patch through truncation", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 20 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const shell = { name: "shell_command", description: "Run", parameters: {} };
+    const patch = { name: "apply_patch", description: "Patch", parameters: {}, freeform: true };
+    const budget = applyCursorToolBudget([...regular, shell, patch], "auto");
+
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("keeps the shell bridge when tool_choice names the exec_command alias", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 20 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const shell = { name: "shell_command", description: "Run", parameters: {} };
+    const budget = applyCursorToolBudget([...regular, shell], { name: "exec_command" });
+
+    expect(budget.tools).toEqual([shell]);
+    expect(budget.omitted).toEqual([]);
+  });
+
+  test("keeps shell_command even when a large apply_patch would otherwise consume the byte budget first", () => {
+    const hugePatch = {
+      name: "apply_patch",
+      description: "x".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.7)),
+      parameters: { type: "object", properties: {} },
+      freeform: true,
+    };
+    const shell = { name: "shell_command", description: "Run", parameters: { type: "object", properties: { command: { type: "string" } } } };
+    const filler = Array.from({ length: 40 }, (_, index) => ({
+      name: `filler_${index}`,
+      namespace: "mcp__filler",
+      description: "y".repeat(2_000),
+      parameters: { type: "object", properties: {} },
+    }));
+    const budget = applyCursorToolBudget([hugePatch, ...filler, shell], "auto");
+
+    expect(budget.tools).toContain(shell);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("admits shell_command and apply_patch before filler when the byte budget is tight", () => {
+    const patch = {
+      name: "apply_patch",
+      description: "p".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.45)),
+      parameters: { type: "object", properties: {} },
+      freeform: true,
+    };
+    const shell = {
+      name: "shell_command",
+      description: "s".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.45)),
+      parameters: { type: "object", properties: { command: { type: "string" } } },
+    };
+    const filler = Array.from({ length: 30 }, (_, index) => ({
+      name: `filler_${index}`,
+      namespace: "mcp__filler",
+      description: "f".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.2)),
+      parameters: { type: "object", properties: {} },
+    }));
+    const budget = applyCursorToolBudget([...filler, shell, patch], "auto");
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.omitted.some(tool => tool.namespace === "mcp__filler")).toBe(true);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("allowed_tools keeps shell and apply_patch ahead of a near-limit unrelated selected tool", () => {
+    const huge = {
+      name: "huge_tool",
+      namespace: "mcp__huge",
+      description: "x".repeat(CURSOR_TOOL_BYTES_LIMIT - 2_000),
+      parameters: { type: "object", properties: {} },
+    };
+    const shell = {
+      name: "shell_command",
+      description: "s".repeat(8_000),
+      parameters: { type: "object", properties: { command: { type: "string" } } },
+    };
+    const patch = {
+      name: "apply_patch",
+      description: "p".repeat(8_000),
+      parameters: { type: "object", properties: {} },
+      freeform: true,
+    };
+    const choice = {
+      mode: "required" as const,
+      allowedTools: ["huge_tool", "shell_command", "apply_patch"],
+    };
+    // Combined catalog exceeds the byte budget; shell+patch alone must still fit.
+    expect(cursorMcpToolsEncodedSize([huge, shell, patch], choice)).toBeGreaterThan(CURSOR_TOOL_BYTES_LIMIT);
+    expect(cursorMcpToolsEncodedSize([shell, patch], choice)).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+
+    const budget = applyCursorToolBudget([huge, shell, patch], choice);
+
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.tools).not.toContain(huge);
+    expect(cursorMcpToolsEncodedSize(budget.tools, choice)).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("allowed_tools keeps shell and apply_patch when count limit would otherwise drop later selected tools", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 5 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const shell = { name: "shell_command", description: "Run", parameters: {} };
+    const patch = { name: "apply_patch", description: "Patch", parameters: {}, freeform: true };
+    const allowedTools = [...regular.map(tool => tool.name), "shell_command", "apply_patch"];
+    const choice = { mode: "required" as const, allowedTools };
+    const budget = applyCursorToolBudget([...regular, shell, patch], choice);
+
+    expect(budget.tools).toContain(shell);
+    expect(budget.tools).toContain(patch);
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+  });
+
   test("adds an honest recovery note only when tool_search survives", () => {
     const tools = [
       { name: "tool_search", description: "Discover", parameters: {}, toolSearch: true },
@@ -225,7 +464,7 @@ describe("Cursor request builder", () => {
   });
 
 
-  test("external Cursor tool-result continuation forces a fresh conversation id", () => {
+  test("external Cursor tool-result continuation keeps the remembered conversation id", () => {
     const request = createCursorRequest({
       modelId: "cursor/gpt-5.6-sol",
       context: {
@@ -254,8 +493,7 @@ describe("Cursor request builder", () => {
     });
 
     expect(request.modelId).toBe("gpt-5.6-sol-xhigh");
-    expect(request.conversationId).not.toBe("cursor_old_external");
-    expect(request.conversationId.startsWith("cursor_")).toBe(true);
+    expect(request.conversationId).toBe("cursor_old_external");
   });
 
   test("native Cursor tool-result continuation keeps the remembered conversation id", () => {

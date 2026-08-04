@@ -1,0 +1,261 @@
+/* ============================================================================
+   claudecode-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: claudecode-workspace-  |  widgets: ccw-
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.claudecode-workspace-shell) {
+  max-width: 1200px;
+}
+
+.claudecode-workspace-shell {
+  width: 100%;
+  min-width: 0;
+}
+
+.claudecode-workspace-root {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+}
+
+.claude-effective-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 16px 12px;
+  margin-top: -4px;
+  font-size: var(--text-caption);
+  line-height: 1.45;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.claude-effective-auth.warn {
+  color: var(--amber);
+}
+
+.claude-effective-auth-label {
+  font-weight: var(--weight-semibold);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10.5px;
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.claudecode-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-3);
+  min-width: 0;
+}
+
+.claudecode-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.claudecode-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  width: 100%;
+  min-height: 46px;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+}
+
+.claudecode-workspace-rail-row:hover {
+  background: var(--raised);
+}
+
+.claudecode-workspace-rail-row--selected {
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.claudecode-workspace-rail-name {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.claudecode-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/*
+  One pane head for every rail tab: same title baseline under the Code/Desktop selector,
+  and a permanently reserved Save slot so editable panes cannot shove the rail down.
+*/
+.ccw-main-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 32px;
+  min-width: 0;
+}
+
+.ccw-main-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-ui);
+  color: var(--text);
+}
+
+.ccw-main-title .count {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+}
+
+.claudecode-workspace-save[data-visible="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ccw-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Available models — dense chip grid instead of one card per alias. */
+.claude-aliases {
+  min-width: 0;
+}
+
+.claude-aliases-hint {
+  /* Match the other pane hint paragraphs (inline margin 0 0 8px). */
+  margin: 0 0 8px;
+}
+
+.claude-aliases-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(22rem, 48vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 2px;
+}
+
+.claude-aliases-group {
+  min-width: 0;
+}
+
+.claude-aliases-group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 5px;
+  font-size: 10.5px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.claude-aliases-group-count {
+  font-family: var(--font-code);
+  font-weight: var(--weight-medium);
+  font-size: 10px;
+  color: var(--faint);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.claude-aliases-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.claude-aliases-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--radius-xs);
+  background: var(--raised);
+  color: var(--text);
+  line-height: 1.35;
+  overflow: hidden;
+}
+
+.claude-aliases-chip-id {
+  font-family: var(--font-code);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.claude-aliases-chip-name {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.claudecode-workspace-save {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .claudecode-workspace-root {
+    grid-template-columns: 1fr;
+  }
+
+  .claudecode-workspace-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+  }
+}

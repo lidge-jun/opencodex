@@ -1,3 +1,5 @@
+import type { TFn, TKey } from "./i18n/shared";
+
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
   "anthropic-apikey": "claude-color.svg",
@@ -42,32 +44,6 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   xai: "grok-color.svg",
   "mimo-free": "xiaomi-color.svg",
   xiaomi: "xiaomi-color.svg",
-};
-
-/** Brand colors for monochrome Simple-Icons SVGs (fill is black by default). */
-const PROVIDER_BRAND_COLORS: Record<string, string> = {
-  nvidia: "#76B900",
-  "mimo-free": "#FF6900",
-  xiaomi: "#FF6900",
-  anthropic: "#D97757",
-  "anthropic-apikey": "#D97757",
-  openai: "#10A37F",
-  "openai-apikey": "#10A37F",
-  chatgpt: "#10A37F",
-  "azure-openai": "#10A37F",
-  // xAI / Ollama monochrome marks stay as-authored (black/white per theme SVG).
-  deepseek: "#4D6BFE",
-  groq: "#F55036",
-  mistral: "#FF7000",
-  openrouter: "#6566F1",
-  google: "#8E75B2",
- "google-vertex": "#8E75B2",
-  alibaba: "#FF6A00",
-  "alibaba-token-plan": "#FF6A00",
-  "alibaba-token-plan-intl": "#FF6A00",
- kimi: "#1A6CFF",
-  "kimi-code": "#1A6CFF",
-  moonshot: "#1A6CFF",
 };
 
 /**
@@ -118,6 +94,17 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   litellm: "LiteLLM",
 };
 
+const PROVIDER_DISPLAY_NAME_KEYS: Record<string, TKey> = {
+  volcengine: "provider.name.volcengine",
+  "volcengine-coding-plan": "provider.name.volcengineCodingPlan",
+  "volcengine-agent-plan": "provider.name.volcengineAgentPlan",
+};
+
+const CATALOG_PROVIDER_IDS = new Set([
+  ...Object.keys(PROVIDER_DISPLAY_NAMES),
+  ...Object.keys(PROVIDER_DISPLAY_NAME_KEYS),
+]);
+
 type ProviderIconHints = {
   adapter?: string;
   baseUrl?: string;
@@ -134,14 +121,11 @@ export function providerIconSrc(provider: string, _hints?: ProviderIconHints): s
   return icon ? `/provider-icons/${icon}` : undefined;
 }
 
-/** Brand accent for monochrome icons; undefined = leave SVG as-authored. */
-export function providerBrandColor(provider: string): string | undefined {
-  return PROVIDER_BRAND_COLORS[provider.toLowerCase()];
-}
-
 /** Display label with proper brand casing when known; otherwise original name. */
-export function formatProviderDisplayName(provider: string): string {
+export function formatProviderDisplayName(provider: string, t: TFn): string {
   const key = provider.toLowerCase();
+  const displayNameKey = PROVIDER_DISPLAY_NAME_KEYS[key];
+  if (displayNameKey) return t(displayNameKey);
   if (PROVIDER_DISPLAY_NAMES[key]) return PROVIDER_DISPLAY_NAMES[key]!;
   // Title-case simple ids like "my-provider" without mangling mixedCase custom names.
   if (provider === key && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(provider)) {
@@ -155,5 +139,5 @@ export function formatProviderDisplayName(provider: string): string {
 
 /** True for known registry/preset ids (hide ID/adapter/URL behind Advanced by default). */
 export function isCatalogProviderId(provider: string): boolean {
-  return Object.prototype.hasOwnProperty.call(PROVIDER_DISPLAY_NAMES, provider.toLowerCase());
+  return CATALOG_PROVIDER_IDS.has(provider.toLowerCase());
 }

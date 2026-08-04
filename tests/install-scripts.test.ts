@@ -38,6 +38,7 @@ describe("install scripts", () => {
     expect(pkg.scripts?.prepack).toBe("bun run prepare:package");
     expect(pkg.files).toContain("assets/banner.png");
     expect(pkg.files).toContain("assets/architecture.png");
+    expect(pkg.files).toContain("assets/claude-code-models.gif");
     expect(pkg.files).toContain("assets/codex-app-picker.png");
   });
 
@@ -105,8 +106,12 @@ describe("install scripts", () => {
     const script = await readText("scripts/release.ts");
 
     expect(script).toContain("waitForReleaseWorkflowRun");
-    expect(script).toContain("gh run list --workflow release.yml --branch");
-    expect(script).toContain("--commit");
+    // The invariant is that the dispatched run is located by workflow, branch
+    // and commit — not that the call is a shell string. Every external command
+    // now goes through the shared launcher as an argv array, because Bun.$
+    // resolved PATH itself and walked past the Windows `.cmd` test shims.
+    expect(script).toContain('"gh", "run", "list", "--workflow", "release.yml", "--branch"');
+    expect(script).toContain('"--commit"');
     expect(script).toContain("createdAt,databaseId,headSha,status,url");
     expect(script).toContain("await watchRun(releaseRun.databaseId)");
   });

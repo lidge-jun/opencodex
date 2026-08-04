@@ -36,19 +36,21 @@ describe("oauth ToS risk map", () => {
 
 describe("oauth ToS warning UI seam", () => {
   test("Providers and AddProvider gate OAuth login behind the warning modal", async () => {
-    const [page, modal, warn, risk] = await Promise.all([
+    const [page, modals, modal, warn, risk] = await Promise.all([
       Bun.file("gui/src/pages/Providers.tsx").text(),
+      Bun.file("gui/src/pages/providers-page-modals.tsx").text(),
       Bun.file("gui/src/components/AddProviderModal.tsx").text(),
       Bun.file("gui/src/components/OAuthTosWarningModal.tsx").text(),
       Bun.file("gui/src/oauth-tos-risk.ts").text(),
     ]);
+    const providersSeam = page + modals;
     expect(risk).toContain('"anthropic"');
     expect(risk).toContain('"google-antigravity"');
     expect(risk).toContain('"github-copilot"');
-    expect(page).toContain("OAuthTosWarningModal");
-    expect(page).toContain("requestLoginOAuth");
-    expect(page).toContain("oauthTosRisk(provider)");
-    expect(page).toContain("if (busy === provider) return");
+    expect(providersSeam).toContain("OAuthTosWarningModal");
+    expect(providersSeam).toContain("requestLoginOAuth");
+    expect(providersSeam).toContain("oauthTosRisk(provider)");
+    expect(providersSeam).toContain("if (busy === provider) return");
     expect(modal).toContain("OAuthTosWarningModal");
     expect(modal).toContain("requestLoginOAuth");
     expect(modal).toContain("if (oauthBusy) return");

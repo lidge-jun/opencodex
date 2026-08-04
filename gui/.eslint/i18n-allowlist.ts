@@ -46,6 +46,8 @@ const TECHNICAL_UNITS = new Set([
   "Mo",
   "Mi",
   "Fr",
+  // IEC binary unit rendered next to a formatted number; a unit symbol, not UI prose.
+  "GiB",
 ]);
 
 /** Non-UI technical strings (API paths, CSS, shell, headers, debug fields). */
@@ -87,6 +89,11 @@ export function isTechnicalLiteral(value: string): boolean {
   if (/^curl\b/i.test(trimmed)) return true;
   if (/^-H\b/.test(trimmed)) return true;
   if (/^-d\b/.test(trimmed)) return true;
+  // Line-continuation fragment: a multi-line curl sample split by `${...}` interpolation
+  // resumes with the escaped backslash and a newline before the next flag, so the bare
+  // `^-H` rule above never sees it. Still a shell sample, still not translatable. The
+  // leading run is one-or-more because the raw template text keeps the escape.
+  if (/^\\+\s+-(?:H|d)\b/.test(trimmed)) return true;
   if (/^ocx\b/i.test(trimmed)) return true;
   if (/^codex\b/i.test(trimmed)) return true;
 

@@ -2,8 +2,9 @@
  * ProviderOverview — 2-column layout: left (CONNECTION + Auth summary) / right
  * (STATS + Notes). Phase 030 of workspace design parity.
  */
-import { useCallback, useState } from "react";
-import { useT, useI18n } from "../../i18n";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { readJsonOrThrow } from "../../fetch-json";
+import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconCheck } from "../../icons";
 import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
@@ -12,21 +13,47 @@ import type { ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
 import type { ProviderUpdatePatch } from "./types";
 
+type ConnectionTestResult = {
+  applicable?: boolean;
+  ok?: boolean;
+  latencyMs?: number;
+  reason?: string;
+  message?: string;
+  error?: string;
+};
+
+type ConnectionTestState = {
+  key: string;
+  testing: boolean;
+  result: ConnectionTestResult | null;
+};
+
 export default function ProviderOverview({
   item, usageTotals, quotaReport, oauthEmail,
+  apiBase, connectionIdentity,
   onEditSettings, onViewUsage, onUpdateProvider,
   onReauthenticate, onCancelLogin, reauthBusy = false,
+  accountPanel,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
   oauthEmail?: string;
+  apiBase?: string;
+  /** Opaque active credential identity used only to invalidate stale probe results. */
+  connectionIdentity?: string;
   onEditSettings?: () => void;
   onViewUsage?: () => void;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
   onReauthenticate?: () => void;
   onCancelLogin?: () => void;
   reauthBusy?: boolean;
+  /**
+   * WP3: the same account rows the Accounts tab renders, backed by the same shared
+   * state. Overview is the main surface, so the operations live here too; the
+   * duplication is intentional (D2) and cannot desync because both read one controller.
+   */
+  accountPanel?: ReactNode;
 }) {
   const t = useT();
   const { locale } = useI18n();
@@ -41,6 +68,81 @@ export default function ProviderOverview({
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
   const quota = accountQuotaFromReport(quotaReport);
+  const connectionProbeKey = JSON.stringify([
+    apiBase ?? null,
+    item.name,
+    item.adapter,
+    item.baseUrl,
+    item.authMode ?? null,
+    item.apiKeyTransport ?? null,
+    item.liveModels ?? null,
+    item.disabled === true,
+    item.hasApiKey === true,
+    item.hasHeaders === true,
+    item.allowPrivateNetwork === true,
+    item.keyOptional === true,
+    item.activeNeedsReauth === true,
+    connectionIdentity ?? null,
+  ]);
+  const [connectionTest, setConnectionTest] = useState<ConnectionTestState | null>(null);
+  const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
+  const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
+  const connectionResult = connectionTest?.key === connectionProbeKey ? connectionTest.result : null;
+
+  useEffect(() => {
+    return () => {
+      if (connectionAbortRef.current?.key === connectionProbeKey) {
+        connectionAbortRef.current.controller.abort();
+        connectionAbortRef.current = null;
+      }
+    };
+  }, [connectionProbeKey]);
+
+  const testConnection = useCallback(async () => {
+    if (!apiBase) return;
+    connectionAbortRef.current?.controller.abort();
+    const controller = new AbortController();
+    connectionAbortRef.current = { key: connectionProbeKey, controller };
+    setConnectionTest({ key: connectionProbeKey, testing: true, result: null });
+    try {
+      const response = await fetch(`${apiBase}/api/providers/test?name=${encodeURIComponent(item.name)}`, {
+        method: "POST",
+        signal: controller.signal,
+      });
+      const result = await readJsonOrThrow<ConnectionTestResult>(response, t("pws.connectionFailed"));
+      if (!result) throw new Error(t("pws.connectionFailed"));
+      if (!controller.signal.aborted) {
+        setConnectionTest({ key: connectionProbeKey, testing: false, result });
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setConnectionTest({
+          key: connectionProbeKey,
+          testing: false,
+          result: {
+            applicable: true,
+            ok: false,
+            error: error instanceof Error ? error.message : t("pws.connectionFailed"),
+          },
+        });
+      }
+    } finally {
+      if (connectionAbortRef.current?.controller === controller) {
+        connectionAbortRef.current = null;
+      }
+    }
+  }, [apiBase, connectionProbeKey, item.name, t]);
+
+  const connectionState = connectionResult?.applicable === false
+    ? "not-applicable"
+    : connectionResult?.ok === true
+      ? "ok"
+      : "failed";
+  const connectionText = connectionResult?.applicable === false
+    ? t("pws.connectionNotApplicable")
+    : connectionResult?.ok === true
+      ? (connectionResult.message || t("pws.connectionOk"))
+      : (connectionResult?.error || t("pws.connectionFailed"));
   return (
     <div className="pws-overview-layout">
       <div className="pws-overview-main">
@@ -75,6 +177,27 @@ export default function ProviderOverview({
             </div>
           )}
         </dl>
+        {apiBase && (
+          <div className="row" style={{ marginTop: 12, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={testingConnection}
+              onClick={() => void testConnection()}
+            >
+              {testingConnection ? t("pws.testing") : t("pws.testConnection")}
+            </button>
+            {connectionResult && (
+              <span
+                role="status"
+                className={connectionState === "ok" ? "pws-status-ok" : connectionState === "failed" ? "pws-status-warn" : "muted"}
+                data-connection-test-state={connectionState}
+              >
+                {connectionText}
+              </span>
+            )}
+          </div>
+        )}
         {onEditSettings && (
           <button type="button" className="link-btn pws-edit-settings-link" onClick={onEditSettings}>
             {t("pws.editSettings")}
@@ -82,51 +205,58 @@ export default function ProviderOverview({
         )}
       </section>
 
-      <section className="pws-section" aria-label={t("pws.authSummary")}>
-        <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
-        {needsAttention ? (
-          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
-            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
-            <div className="pws-auth-summary-body">
-              <span>
-                <strong>{t("pws.status.needsAttention")}</strong>
-                {" — "}
-                {item.authMode === "forward"
-                  ? t("pws.attention.reauthForward")
-                  : t("pws.attention.reauth")}
-              </span>
-              {onReauthenticate && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  disabled={reauthBusy}
-                  onClick={() => onReauthenticate()}
-                >
-                  {reauthBusy ? t("prov.waitingBrowser") : t("pws.reauthenticate")}
-                </button>
-              )}
-              {reauthBusy && onCancelLogin && (
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCancelLogin()}>
-                  {t("common.cancel")}
-                </button>
-              )}
+      {accountPanel ? (
+        <section className="pws-section" aria-label={t("pws.availableAccounts")}>
+          {accountPanel}
+        </section>
+      ) : (
+        <section className="pws-section" aria-label={t("pws.authSummary")}>
+          <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
+          {needsAttention ? (
+            <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+              <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+              <div className="pws-auth-summary-body">
+                <span>
+                  <strong>{t("pws.status.needsAttention")}</strong>
+                  {" — "}
+                  {item.authMode === "forward"
+                    ? t("pws.attention.reauthForward")
+                    : t("pws.attention.reauth")}
+                </span>
+                {onReauthenticate && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={reauthBusy}
+                    onClick={() => onReauthenticate()}
+                  >
+                    {reauthBusy ? t("prov.waitingBrowser") : t("pws.reauthenticate")}
+                  </button>
+                )}
+                {reauthBusy && onCancelLogin && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCancelLogin()}>
+                    {t("common.cancel")}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="pws-auth-summary">
-            <span className="pws-auth-dot" />
-            <span>
-              {item.authMode === "forward"
-                ? t("pws.passthrough")
-                : item.authMode === "oauth"
-                  ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
-                  : item.hasApiKey
-                    ? t("pws.apiKeyConfigured")
-                    : authModeLabel(item, t)}
-            </span>
-          </div>
-        )}
-      </section>
+          ) : (
+            <div className="pws-auth-summary">
+              <span className="pws-auth-dot" />
+              <span>
+                {item.authMode === "forward"
+                  ? t("pws.passthrough")
+                  : item.authMode === "oauth"
+                    ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
+                    : item.hasApiKey
+                      ? t("pws.apiKeyConfigured")
+                      : authModeLabel(item, t)}
+              </span>
+            </div>
+          )}
+
+        </section>
+      )}
       </div>
 
       <aside className="pws-overview-sidebar">
@@ -182,19 +312,34 @@ function NotesSection({ item, onUpdateProvider }: {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (editing) textareaRef.current?.focus();
+  }, [editing]);
 
   const save = useCallback(async () => {
     if (saving || !onUpdateProvider) return;
     const trimmed = draft.trim();
     if (trimmed === (item.note ?? "")) {
       setEditing(false);
+      setError("");
       return;
     }
     setSaving(true);
-    await onUpdateProvider(item.name, { note: trimmed || undefined });
-    setSaving(false);
-    setEditing(false);
-  }, [draft, item.name, item.note, onUpdateProvider, saving]);
+    try {
+      const result = await onUpdateProvider(item.name, { note: trimmed || undefined });
+      if (!result.ok) {
+        setError(result.error || t("prov.saveFailed"));
+        return;
+      }
+      setError("");
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, item.name, item.note, onUpdateProvider, saving, t]);
 
   if (!editing) {
     return (
@@ -206,6 +351,7 @@ function NotesSection({ item, onUpdateProvider }: {
           onClick={() => {
             if (!onUpdateProvider) return;
             setDraft(item.note ?? "");
+            setError("");
             setEditing(true);
           }}
           disabled={!onUpdateProvider}
@@ -220,18 +366,19 @@ function NotesSection({ item, onUpdateProvider }: {
     <section className="pws-section pws-notes-section" aria-label={t("pws.notes")}>
       <h3 className="pws-section-title">{t("pws.notes")}</h3>
       <textarea
+        ref={textareaRef}
         className="pws-notes-textarea"
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={() => void save()}
         onKeyDown={e => {
-          if (e.key === "Escape") { setDraft(item.note ?? ""); setEditing(false); }
+          if (e.key === "Escape") { setDraft(item.note ?? ""); setError(""); setEditing(false); }
         }}
         placeholder={t("pws.notePlaceholder")}
-        autoFocus
         rows={3}
         disabled={saving}
       />
+      {error ? <p className="pws-inline-error" role="alert">{error}</p> : null}
     </section>
   );
 }

@@ -1,0 +1,202 @@
+/* ============================================================================
+   usage-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: usage-workspace-  |  widgets: usw-
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.usage-workspace-shell) {
+  max-width: 1200px;
+}
+
+.usage-workspace-shell {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: usage-workspace;
+}
+
+.usage-workspace-root {
+  display: grid;
+  /* Single column at every width: section list on top, selected section below. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+}
+
+/* Sections are stacked in the document; each panel already carries its own heading. */
+.usw-section-block + .usw-section-block {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.usage-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Stacked layout: the seam runs underneath, not down the side. */
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-3);
+  min-width: 0;
+}
+
+.usage-workspace-rail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.usage-workspace-rail-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.usage-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.usage-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  max-width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+}
+
+.usage-workspace-rail-row:hover {
+  background: var(--raised);
+}
+
+.usage-workspace-rail-row--selected {
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.usage-workspace-rail-name {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-workspace-rail-meta {
+  font-size: var(--text-caption);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.usage-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.usw-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.usw-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.usw-section .h-section {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.usw-section-toolbar {
+  margin: 0 0 var(--space-5);
+  max-width: 220px;
+}
+
+.usw-section .tbl-wrap {
+  min-width: 0;
+  /* Inset table from border+surface so cells aren't flush to the frame. */
+  padding: var(--space-3);
+  /*
+    The model and provider tables are the two long regions on this tab; unbounded they push the
+    rest of the report far below the fold. Cap them and scroll inside instead. A partially
+    visible last row is the scroll affordance. `overscroll-behavior: auto` hands the wheel back
+    to the page at either end, which keeps the sections below reachable by scrolling.
+  */
+  max-height: min(574px, 58vh);
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Keep column labels visible while the body scrolls under them. */
+.usw-section .tbl-wrap thead th {
+  position: sticky;
+  /*
+    The wrapper's own top padding scrolls with the content, so the header must stick at the
+    negative padding offset and repaint that strip; otherwise rows show through the gap.
+  */
+  top: calc(-1 * var(--space-3));
+  z-index: 1;
+  background: var(--surface);
+  /*
+    A sticky cell keeps its own border only while the table is at rest, so redraw the seam as a
+    shadow. The first value repaints the padding strip above; the second holds the rule below.
+  */
+  border-bottom-color: transparent;
+  box-shadow:
+    0 calc(-1 * var(--space-3)) 0 var(--surface),
+    inset 0 -1px 0 var(--border);
+}
+
+.usw-section .usage-cards {
+  margin-top: 0;
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+/* The layout is single-column at every width, so these blocks no longer switch the grid. */
+
+@container usage-workspace (max-width: 720px) {
+  .usage-workspace-root {
+    min-height: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .usage-workspace-root {
+    min-height: auto;
+  }
+}

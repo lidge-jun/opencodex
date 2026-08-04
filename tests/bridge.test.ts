@@ -129,6 +129,149 @@ describe("Responses bridge reasoning and usage parity", () => {
     });
   });
 
+  test("absolute context total drives Responses compaction without double-counting output", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      {
+        type: "done",
+        usage: {
+          inputTokens: 58,
+          contextTotalTokens: 226_000,
+          outputTokens: 12,
+          estimated: true,
+        },
+      },
+    ]), "kiro/claude-opus-5"));
+
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.usage).toEqual({
+      input_tokens: 225_988,
+      output_tokens: 12,
+      total_tokens: 226_000,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+  });
+
+  test("consecutive context checkpoints remain absolute instead of accumulating in the bridge", async () => {
+    const totals: number[] = [];
+    for (const [contextTotalTokens, outputTokens] of [[10_000, 42], [10_300, 20]] as const) {
+      const frames = await collectSse(bridgeToResponsesSSE(replay([{
+        type: "done",
+        usage: { inputTokens: 1, contextTotalTokens, outputTokens, estimated: true },
+      }]), "kiro/claude-opus-5"));
+      const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+      const usage = completed.usage as Record<string, number>;
+      expect(usage.input_tokens).toBe(contextTotalTokens - outputTokens);
+      expect(usage.total_tokens).toBe(contextTotalTokens);
+      totals.push(usage.total_tokens);
+    }
+    expect(totals).toEqual([10_000, 10_300]);
+  });
+
+  test("usage details are always present with zero defaults (grok-build strict Responses client)", async () => {
+    // grok-build's pinned async-openai deserializes input_tokens_details/output_tokens_details
+    // as required fields; omitting them fails the turn after successful text (2026-07-23 live).
+    const withoutDetails = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "done", usage: { inputTokens: 10, outputTokens: 5 } },
+    ]), "routed/model"));
+    const completed = withoutDetails.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.usage).toMatchObject({
+      input_tokens: 10,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 5,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 15,
+    });
+
+    const noUsage = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "done" },
+    ]), "routed/model"));
+    const bare = noUsage.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(bare.usage).toMatchObject({
+      input_tokens: 0,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 0,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 0,
+    });
+
+    const json = buildResponseJSON([
+      { type: "done", usage: { inputTokens: 7, outputTokens: 3 } },
+    ], "routed/model");
+    expect(json.usage).toMatchObject({
+      input_tokens: 7,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 3,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 10,
+    });
+  });
+
+  test("onUsage reports raw adapter usage while the wire carries synthetic zero details", async () => {
+    // Provenance guard: request-log consumers must see the adapter-reported usage (no
+    // cache/reasoning numbers => cache_detail_missing), not the normalized wire zeros.
+    let rawUsage: unknown = "unset";
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "done", usage: { inputTokens: 10, outputTokens: 5 } },
+    ]), "routed/model", undefined, undefined, undefined, undefined, 2_000, {
+      onUsage: usage => { rawUsage = usage; },
+    }));
+    expect(rawUsage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect((completed.usage as Record<string, unknown>).input_tokens_details).toEqual({ cached_tokens: 0 });
+
+    let jsonRawUsage: unknown = "unset";
+    buildResponseJSON([
+      { type: "done", usage: { inputTokens: 4, outputTokens: 2 } },
+    ], "routed/model", { onUsage: usage => { jsonRawUsage = usage; } });
+    expect(jsonRawUsage).toEqual({ inputTokens: 4, outputTokens: 2 });
+
+    // Adapter EOF (no terminal event): onUsage must still fire with undefined so the
+    // request log keeps provenance (usageFromBridge) instead of re-parsing wire zeros.
+    let eofUsage: unknown = "unset";
+    const eofFrames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "partial" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, 2_000, {
+      onUsage: usage => { eofUsage = usage; },
+    }));
+    expect(eofUsage).toBeUndefined();
+    const eofResponse = eofFrames.find(f => f.event === "response.incomplete")?.data.response as Record<string, unknown>;
+    expect(eofResponse.incomplete_details).toMatchObject({ reason: "adapter_eof" });
+    expect(eofResponse.usage).toMatchObject({
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+  });
+
+  test("incomplete and failed terminal events also carry zero-default usage details", async () => {
+    const incomplete = await collectSse(bridgeToResponsesSSE(replay([
+      {
+        type: "incomplete",
+        reason: "upstream_truncated",
+        retryable: true,
+        endTurn: false,
+        usage: { inputTokens: 8, outputTokens: 1 },
+      },
+    ]), "routed/model"));
+    const incompleteResponse = incomplete.find(f => f.event === "response.incomplete")?.data.response as Record<string, unknown>;
+    expect(incompleteResponse.usage).toMatchObject({
+      input_tokens: 8,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+
+    const failed = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "partial" },
+      { type: "error", message: "boom", status: 502, usage: { inputTokens: 3, outputTokens: 1 } },
+    ]), "routed/model"));
+    const failedResponse = failed.find(f => f.event === "response.failed")?.data.response as Record<string, unknown>;
+    expect(failedResponse.usage).toMatchObject({
+      input_tokens: 3,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+  });
+
   test("Anthropic cache read and write tokens pass through Responses usage without re-adding", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       {
@@ -150,6 +293,28 @@ describe("Responses bridge reasoning and usage parity", () => {
       input_tokens_details: { cached_tokens: 77_000, cache_write_tokens: 1_000 },
       output_tokens: 20,
       total_tokens: 78_620,
+    });
+  });
+
+  test("absolute context projection keeps cache details within derived input", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([{
+      type: "done",
+      usage: {
+        inputTokens: 200,
+        outputTokens: 10,
+        contextTotalTokens: 100,
+        cachedInputTokens: 150,
+        cacheReadInputTokens: 150,
+        cacheCreationInputTokens: 50,
+      },
+    }]), "kiro/claude-opus-5"));
+
+    const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(completed.usage).toMatchObject({
+      input_tokens: 90,
+      output_tokens: 10,
+      total_tokens: 100,
+      input_tokens_details: { cached_tokens: 90, cache_write_tokens: 0 },
     });
   });
 
@@ -241,6 +406,39 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect((completed.output as Record<string, unknown>[]).map(item => item.phase)).toEqual(["commentary", "final_answer"]);
   });
 
+  test("unphased terminal text is finalized as one final_answer message (#542)", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "Only " },
+      { type: "text_delta", text: "once." },
+      { type: "done" },
+    ]), "routed/chat-model"));
+
+    const added = frames.find(frame => frame.event === "response.output_item.added")?.data.item as Record<string, unknown>;
+    const done = frames.find(frame => frame.event === "response.output_item.done")?.data.item as Record<string, unknown>;
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+
+    expect(added.phase).toBeUndefined();
+    expect(done).toMatchObject({ id: added.id, phase: "final_answer" });
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ id: added.id, phase: "final_answer" });
+  });
+
+  test("unphased text before a tool call is finalized as commentary (#542)", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "I will inspect that." },
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end", id: "call_1" },
+      { type: "done" },
+    ]), "routed/chat-model"));
+
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+    expect(output[0]).toMatchObject({ type: "message", phase: "commentary" });
+    expect(output[1]).toMatchObject({ type: "function_call", name: "read_file" });
+  });
+
   test("explicit incomplete event stays incomplete with retry metadata", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "reasoning_raw_delta", text: "partial reasoning" },
@@ -305,6 +503,57 @@ describe("Responses bridge reasoning and usage parity", () => {
       status: "incomplete",
       end_turn: false,
       incomplete_details: { reason: "empty_kiro_stream", retryable: true },
+    });
+  });
+
+  test("non-streaming JSON infers terminal and pre-tool phases without overriding explicit phases (#542)", () => {
+    const terminal = buildResponseJSON([
+      { type: "text_delta", text: "Only once." },
+      { type: "done" },
+    ], "routed/chat-model");
+    expect((terminal.output as Record<string, unknown>[])[0]).toMatchObject({ phase: "final_answer" });
+
+    const preTool = buildResponseJSON([
+      { type: "text_delta", text: "I will inspect that." },
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end", id: "call_1" },
+      { type: "done" },
+    ], "routed/chat-model");
+    expect((preTool.output as Record<string, unknown>[])[0]).toMatchObject({ phase: "commentary" });
+
+    const explicit = buildResponseJSON([
+      { type: "text_delta", text: "Explicit.", phase: "commentary" },
+      { type: "done" },
+    ], "routed/chat-model");
+    expect((explicit.output as Record<string, unknown>[])[0]).toMatchObject({ phase: "commentary" });
+  });
+
+  test("later text_delta omitting phase keeps the prior explicit phase", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "Hello ", phase: "final_answer" },
+      { type: "text_delta", text: "world." },
+      { type: "done" },
+    ]), "routed/chat-model"));
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    const output = completed.output as Record<string, unknown>[];
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      type: "message",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Hello world." }],
+    });
+
+    const batch = buildResponseJSON([
+      { type: "text_delta", text: "Hello ", phase: "final_answer" },
+      { type: "text_delta", text: "world." },
+      { type: "done" },
+    ], "routed/chat-model");
+    expect((batch.output as Record<string, unknown>[])).toHaveLength(1);
+    expect((batch.output as Record<string, unknown>[])[0]).toMatchObject({
+      type: "message",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Hello world." }],
     });
   });
 
@@ -461,25 +710,148 @@ describe("Responses bridge reasoning and usage parity", () => {
   test("heartbeat events reset the stall watchdog and emit no protocol frame", async () => {
     // Regression for the Cursor parallel-tool-call stall: while the upstream silently assembles tool
     // calls, the adapter emits `heartbeat` events. They must keep the stall watchdog alive (no
-    // upstream_stall_timeout) without producing any Responses protocol event of their own.
+    // upstream_stall_timeout). Adapter heartbeats themselves are not translated into Responses
+    // protocol items; wire keepalives use a separate `response.heartbeat` frame (see next test).
+    //
+    // resolveStallTimeoutSec ceils to a minimum of 1s, so sub-second stallTimeoutSec values cannot
+    // prove the reset. Drive the beat loop through a test clock seam and run adapter-only progress
+    // past the effective deadline.
+    const heartbeatMs = 50;
+    const stallTimeoutSec = 1; // effective after resolveStallTimeoutSec
+    const maxStallTicks = Math.ceil((stallTimeoutSec * 1000) / heartbeatMs);
+    const cycles = maxStallTicks + 5; // wall-clock equivalent >> stall deadline
+
+    let beatTick: (() => void) | undefined;
+    const timers = {
+      setInterval(handler: () => void, _ms: number) {
+        beatTick = handler;
+        return 1;
+      },
+      clearInterval(_id: unknown) {
+        beatTick = undefined;
+      },
+    };
+
+    let waitResolve: (() => void) | undefined;
+    const waitDelay = () => new Promise<void>(resolve => { waitResolve = resolve; });
+    const releaseDelay = () => {
+      const resolve = waitResolve;
+      waitResolve = undefined;
+      resolve?.();
+    };
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
     async function* heartbeatsThenDone(): AsyncGenerator<AdapterEvent> {
-      // More heartbeats than maxStallTicks would allow if they did NOT reset the counter.
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < cycles; i++) {
         yield { type: "heartbeat" };
-        await new Promise(r => setTimeout(r, 12));
+        await waitDelay();
       }
       yield { type: "text_delta", text: "ok" };
       yield { type: "done" };
     }
-    // heartbeatMs=10ms, stallTimeoutSec=0.03s -> maxStallTicks=3. 6 spaced heartbeats only survive
-    // if each one resets stallTicks.
-    const frames = await collectSse(bridgeToResponsesSSE(
-      heartbeatsThenDone(), "model", undefined, undefined, undefined, undefined, 10, { stallTimeoutSec: 0.03 },
+
+    const framesPromise = collectSse(bridgeToResponsesSSE(
+      heartbeatsThenDone(),
+      "model",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      heartbeatMs,
+      { stallTimeoutSec, timers },
     ));
-    expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
+
+    // First heartbeat is pulled; step blocks on the delay gate with gated=false.
+    await flush();
+    for (let i = 0; i < cycles; i++) {
+      // maxStallTicks silent ticks would trip the watchdog if the preceding heartbeat did not
+      // count as upstream activity (first tick clears the flag; the rest must not reach the limit).
+      // Heartbeats between cycles reset the counter, so the stream must survive the full run.
+      for (let t = 0; t < maxStallTicks; t++) beatTick?.();
+      releaseDelay();
+      await flush();
+    }
+
+    const frames = await framesPromise;
+    expect(frames.some(f => {
+      const response = f.data.response as Record<string, unknown> | undefined;
+      const details = response?.incomplete_details as Record<string, unknown> | undefined;
+      return details?.reason === "upstream_stall_timeout";
+    })).toBe(false);
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
-    // No protocol frame is produced by a heartbeat itself (only created/text/completed appear).
-    expect(frames.some(f => f.event === "response.heartbeat" && f.data.type === "heartbeat" && Object.keys(f.data).length > 2)).toBe(false);
+    // Adapter heartbeats must not be mis-translated into a protocol event of their own.
+    expect(frames.some(f => f.data.type === "heartbeat")).toBe(false);
+  });
+
+  test("wire response.heartbeat keeps firing while only adapter heartbeats flow", async () => {
+    // Issue #521: web-search buffers semantic events and yields invisible adapter heartbeats from
+    // raw-byte progress. Those must not suppress wire keepalives, or Codex Desktop idle-timeouts
+    // (~5 min) while OCX still considers the upstream alive.
+    const heartbeatMs = 50;
+    const stallTimeoutSec = 1;
+    const cycles = 4;
+
+    let beatTick: (() => void) | undefined;
+    const timers = {
+      setInterval(handler: () => void, _ms: number) {
+        beatTick = handler;
+        return 1;
+      },
+      clearInterval(_id: unknown) {
+        beatTick = undefined;
+      },
+    };
+
+    let waitResolve: (() => void) | undefined;
+    const waitDelay = () => new Promise<void>(resolve => { waitResolve = resolve; });
+    const releaseDelay = () => {
+      const resolve = waitResolve;
+      waitResolve = undefined;
+      resolve?.();
+    };
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
+    async function* adapterHeartbeatsOnly(): AsyncGenerator<AdapterEvent> {
+      for (let i = 0; i < cycles; i++) {
+        yield { type: "heartbeat" };
+        await waitDelay();
+      }
+      yield { type: "text_delta", text: "ok" };
+      yield { type: "done" };
+    }
+
+    const framesPromise = collectSse(bridgeToResponsesSSE(
+      adapterHeartbeatsOnly(),
+      "model",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      heartbeatMs,
+      { stallTimeoutSec, timers },
+    ));
+
+    await flush();
+    for (let i = 0; i < cycles; i++) {
+      // Several silent beat ticks per adapter-only gap → multiple wire keepalives.
+      for (let t = 0; t < 3; t++) beatTick?.();
+      releaseDelay();
+      await flush();
+    }
+
+    const frames = await framesPromise;
+    const wireHeartbeats = frames.filter(f =>
+      f.event === "response.heartbeat" && f.data.type === "response.heartbeat"
+    );
+    expect(wireHeartbeats.length).toBeGreaterThan(1);
+    expect(frames.some(f => f.event === "response.completed")).toBe(true);
+    expect(frames.some(f => (f.data.response as Record<string, unknown> | undefined)?.incomplete_details)).toBe(false);
+    // Reject every adapter-shaped heartbeat payload, regardless of event name or field count.
+    expect(frames.some(f => f.data.type === "heartbeat")).toBe(false);
   });
 });
 
@@ -590,6 +962,19 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     expect(frames.find(f => f.event === "response.completed")).toBeUndefined();
   });
 
+  test("done with stopReason content_filter emits response.incomplete", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "partial" },
+      { type: "done", stopReason: "content_filter" },
+    ]), "routed/model"));
+    const terminal = frames.find(f => f.event === "response.incomplete");
+    expect(terminal).toBeDefined();
+    const response = terminal!.data.response as Record<string, unknown>;
+    expect(response.status).toBe("incomplete");
+    expect(response.incomplete_details).toEqual({ reason: "content_filter" });
+    expect(frames.find(f => f.event === "response.completed")).toBeUndefined();
+  });
+
   test("done without stopReason emits response.completed as before", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "text_delta", text: "hello" },
@@ -615,6 +1000,17 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     ], "routed/model");
     expect(json.status).toBe("incomplete");
     expect(json.incomplete_details).toEqual({ reason: "max_output_tokens" });
+  });
+
+  test("batch buildResponseJSON with stopReason content_filter returns incomplete status", () => {
+    const json = buildResponseJSON([
+      { type: "text_delta", text: "partial" },
+      { type: "done", stopReason: "content_filter" },
+    ], "routed/model", { compaction: true });
+    expect(json.status).toBe("incomplete");
+    expect(json.incomplete_details).toEqual({ reason: "content_filter" });
+    // Truncated turns must not install a compaction replacement (#422).
+    expect((json.output as Record<string, unknown>[]).some(item => item.type === "compaction")).toBe(false);
   });
 
   test("batch buildResponseJSON without stopReason returns completed status", () => {

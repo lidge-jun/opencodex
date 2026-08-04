@@ -45,7 +45,7 @@ cd docs-site && bun install && bun dev
 
 ## Публикация документации
 
-Публичная документация публикуется на GitHub Pages по адресу <https://lidge-jun.github.io/opencodex/ru/>.
+Публичная документация публикуется на GitHub Pages по адресу <https://opencodex.me/ru/>.
 Воркфлоу `.github/workflows/deploy-docs.yml` запускается на push в `main`, затрагивающих
 `docs-site/**` или сам воркфлоу, собирает `docs-site` и разворачивает сгенерированный сайт. Перед
 push изменений документации выполните:
@@ -77,6 +77,21 @@ bun run release <version>           # коммитит/пушит bump верс�
 bun run release <version> --publish # publish после осознанного CI-gated dry-run
 bun run release:watch               # наблюдение за последним запуском Release workflow
 ```
+
+## Ветки
+
+- `dev` — единственная цель интеграции. Открывайте все PR сюда.
+- `main` — только релизы. Двигается лишь при продвижении из `dev` мейнтейнером; не
+  открывайте сюда PR с функциональностью.
+- `preview` — ветка предрелизов.
+
+Ветка `dev2-go`, которая несла нативный порт на Go, закрыта, и вместе с ней закончилась
+политика двух линий интеграции. Её история опубликована только для чтения в
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive).
+Теперь единственная линия рантайма — Bun-нативный TypeScript в `dev`.
+
+Pull request'ы с ребейзом приветствуются: ребейз устаревшей ветки на текущий head — это
+обычный вклад, а не шум. Укажите исходные коммиты в описании.
 
 ## Конвенции
 
@@ -116,7 +131,7 @@ bun run release:watch               # наблюдение за последни
 
 ## Добавление адаптера
 
-Реализуйте `ProviderAdapter` (см. [Адаптеры](/opencodex/ru/reference/adapters/)) в `src/adapters/`,
+Реализуйте `ProviderAdapter` (см. [Адаптеры](/ru/reference/adapters/)) в `src/adapters/`,
 зарегистрируйте его имя в `src/server/adapter-resolve.ts` и приведите его вывод к внутренним
 событиям `AdapterEvent`. Переиспользуйте `image.ts` для работы с изображениями и ориентируйтесь на
 `openai-chat.ts` для обычной потоковой передачи и вызовов инструментов; используйте `fetchResponse`

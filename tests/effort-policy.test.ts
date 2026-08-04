@@ -467,3 +467,4 @@ describe("/api/effort-caps", () => {
     expect(config.subagentEffortCap).toBe("low");
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

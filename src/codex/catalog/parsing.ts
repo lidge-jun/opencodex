@@ -110,6 +110,8 @@ export interface CatalogModel {
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
   supportsReasoningSummaries?: boolean;
+  /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
+  capabilities?: string[];
 }
 
 export type RawEntry = Record<string, unknown>;
@@ -141,9 +143,24 @@ export function isMediaGenerationModelId(id: string): boolean {
   return MEDIA_GEN_ID_RE.test(id);
 }
 
+/**
+ * Gemini image-capable chat models produce inline images within text responses
+ * via the Responses API. Explicit allowlist only — a broad `/gemini/ && /image/`
+ * heuristic resurrects standalone media-gen IDs (e.g. gemini-3-pro-image).
+ */
+const GEMINI_IMAGE_CHAT_MODEL_IDS = new Set([
+  "gemini-3.1-flash-image",
+  "gemini-2.0-flash-preview-image-generation",
+  "gemini-3-pro-image-preview",
+]);
+
+function isGeminiImageChatModel(id: string): boolean {
+  return GEMINI_IMAGE_CHAT_MODEL_IDS.has(id);
+}
+
 export function shouldExposeRoutedModel(model: CatalogModel): boolean {
   if (isRoutedModelCompatibilityExcluded(`${model.provider}/${model.id}`)) return false;
-  if (model.provider === "cursor" && model.id === "gemini-3-pro-image-preview") return true;
+  if (isGeminiImageChatModel(model.id)) return true;
   return !isMediaGenerationModelId(model.id);
 }
 
@@ -179,7 +196,24 @@ export function findNativeTemplate(catalog: RawCatalog | null): RawEntry | null 
   ) ?? null;
 }
 
+/**
+ * Native OpenAI slugs that do NOT support the Fast (priority) service tier.
+ * Upstream may advertise service_tiers for these models, but the tier is not
+ * actually available — strip it so the Codex UI does not offer a dead toggle.
+ */
+const NO_FAST_TIER_NATIVE_SLUGS = new Set([
+  "gpt-5.3-codex-spark",
+]);
+
 export function normalizeServiceTiers(entry: RawEntry): RawEntry {
+  // Strip service tiers for models that do not actually support the Fast tier.
+  if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
+    delete entry.service_tier;
+    delete entry.service_tiers;
+    delete entry.default_service_tier;
+    delete entry.additional_speed_tiers;
+    return entry;
+  }
   // Codex stores the user-facing config spelling as "fast", but the catalog/request
   // service tier id is "priority" in current codex-rs. Keep legacy catalogs working.
   if (entry.service_tier === "fast") entry.service_tier = "priority";
@@ -240,6 +274,16 @@ export function ensureStrictCatalogFields(
   if (!Array.isArray(entry.input_modalities) && !options.preserveExactInputModalities) {
     entry.input_modalities = ["text"];
   }
+  // Codex parses `input_modalities` as a closed enum. One out-of-enum value (zenmux advertises
+  // "video") makes its config loader reject the entire catalog, which takes down plugins, apps and
+  // MCP servers — not just that model. Normalize at the single point every entry passes through,
+  // because provider metadata, jawcode metadata and effort sync each write this field.
+  if (Array.isArray(entry.input_modalities)) {
+    const accepted = entry.input_modalities.filter(value =>
+      value === "text" || value === "image" || value === "audio");
+    // Never leave it empty: an entry with no modality at all is worse than a text-only one.
+    entry.input_modalities = accepted.length > 0 ? accepted : ["text"];
+  }
   const contextWindow = typeof entry.context_window === "number" && entry.context_window > 0 ? entry.context_window : 128000;
   entry.context_window = contextWindow;
   if (
@@ -256,7 +300,18 @@ export function ensureStrictCatalogFields(
 
 export type MultiAgentMode = "v1" | "default" | "v2";
 
-export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode): RawEntry[] {
+/**
+ * @param v2FeatureEnabled When the native multi_agent_v2 feature is on, "default"
+ *   mode stamps unpinned entries as "v2" instead of deleting the key. The native
+ *   binary validates spawn_agent models against THIS catalog with its own
+ *   `multi_agent_version == Some(V2)` test (codex-rs multi_agents_common.rs), so an
+ *   absent pin means a clean refusal at spawn time — exactly the cross-provider
+ *   spawns opencodex exists to enable (option B, devlog
+ *   260730_codex_rs_upstream_v2_live_handoff/060). Upstream pins are always
+ *   preserved: a genuine "v1" pin is a real capability statement and stays excluded.
+ *   With the feature off the output is byte-identical to the historical behavior.
+ */
+export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v2FeatureEnabled = false): RawEntry[] {
   if (mode === "default") {
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.
@@ -266,6 +321,8 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode): 
       const upstreamPin = upstream?.multi_agent_version;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
+      } else if (v2FeatureEnabled) {
+        entry.multi_agent_version = "v2";
       } else {
         delete entry.multi_agent_version;
       }

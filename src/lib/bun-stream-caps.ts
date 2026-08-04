@@ -1,0 +1,126 @@
+/**
+ * Bun runtime stream-capability gate for eager SSE passthrough (#314).
+ *
+ * The eager bounded relay (src/server/relay-eager.ts) uses a JS async producer
+ * loop — the exact shape of the Bun#32111 use-after-free (fixed upstream by Bun
+ * PR #32120, merged 2026-06-21). No RELEASED Bun version is proven to carry
+ * that fix yet, so `MIN_FIXED_BUN_VERSION` is null: every runtime is
+ * "known-bad" until a bundle-bump commit sets it. Windows no-rewrite traffic
+ * follows this runtime/config decision. Darwin no-rewrite traffic stays on tee
+ * for `auto` regardless of runtime capability and reaches eager relay only via
+ * explicit `streamMode: "eager-relay"` opt-in (see
+ * devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
+ *
+ * Prerelease conservatism: a version carrying a prerelease suffix (e.g.
+ * `1.4.0-canary.3`) is NEVER treated as fixed even when its numeric triple
+ * reaches the threshold — canaries are exactly the OPENCODEX_BUN_PATH audience
+ * and may predate the fix commit.
+ */
+
+/**
+ * Bump in the SAME commit that bumps package.json's bundled Bun to a version
+ * verified to include Bun PR #32120. null = no released version is known-fixed.
+ */
+export const MIN_FIXED_BUN_VERSION: string | null = null;
+
+export type StreamMode = "auto" | "legacy-tee" | "eager-relay";
+
+export const STREAM_MODES: readonly StreamMode[] = ["auto", "legacy-tee", "eager-relay"];
+
+export function isStreamMode(value: unknown): value is StreamMode {
+  return typeof value === "string" && (STREAM_MODES as readonly string[]).includes(value);
+}
+
+/** Numeric [major, minor, patch] triple, or null for unparseable input. */
+export function parseBunVersion(version: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/** Compare two version strings numerically; null when either is unparseable. */
+export function compareBunVersions(a: string, b: string): number | null {
+  const pa = parseBunVersion(a);
+  const pb = parseBunVersion(b);
+  if (!pa || !pb) return null;
+  for (let i = 0; i < 3; i++) {
+    if (pa[i]! !== pb[i]!) return pa[i]! - pb[i]!;
+  }
+  return 0;
+}
+
+function hasPrereleaseSuffix(version: string): boolean {
+  return /^\d+\.\d+\.\d+-/.test(version.trim());
+}
+
+/**
+ * True only when `version` is proven to carry the Bun#32120 async-pull cancel
+ * fix. Conservative: unknown, unparseable, prerelease, or no threshold → false.
+ */
+export function bunHasAsyncPullCancelFix(
+  version: string,
+  minFixed: string | null = MIN_FIXED_BUN_VERSION,
+): boolean {
+  if (!minFixed) return false;
+  if (hasPrereleaseSuffix(version)) return false;
+  const cmp = compareBunVersions(version, minFixed);
+  return cmp !== null && cmp >= 0;
+}
+
+export type EagerRelayDecision = {
+  useEagerRelay: boolean;
+  reason: "config-legacy" | "config-eager" | "auto-fixed-runtime" | "auto-known-bad";
+};
+
+/**
+ * Decide the runtime/config SSE client-path capability. `version`/`minFixed`
+ * are injectable for tests; `selectEagerPath` applies platform policy.
+ */
+export function decideEagerRelay(
+  mode: StreamMode,
+  version: string = Bun.version,
+  minFixed: string | null = MIN_FIXED_BUN_VERSION,
+): EagerRelayDecision {
+  if (mode === "legacy-tee") return { useEagerRelay: false, reason: "config-legacy" };
+  if (mode === "eager-relay") return { useEagerRelay: true, reason: "config-eager" };
+  return bunHasAsyncPullCancelFix(version, minFixed)
+    ? { useEagerRelay: true, reason: "auto-fixed-runtime" }
+    : { useEagerRelay: false, reason: "auto-known-bad" };
+}
+
+/**
+ * Apply the two-platform eager-relay policy to the runtime/config capability.
+ * Windows preserves the decision for no-rewrite traffic. Darwin permits only
+ * explicit config opt-in; `auto` remains tee even on a future fixed runtime.
+ * Returns the normalized effective decision, or null when platform policy,
+ * rewrite needs, or a Darwin non-config-eager mode selects tee.
+ */
+export function selectEagerPath(
+  platform: NodeJS.Platform,
+  needsClientRewrite: boolean,
+  mode: StreamMode,
+  version: string = Bun.version,
+  minFixed: string | null = MIN_FIXED_BUN_VERSION,
+): EagerRelayDecision | null {
+  if (needsClientRewrite || (platform !== "win32" && platform !== "darwin")) {
+    return null;
+  }
+
+  const decision = decideEagerRelay(mode, version, minFixed);
+  if (platform === "win32") return decision;
+  return decision.reason === "config-eager" ? decision : null;
+}
+
+/**
+ * #864 transport gate: win32 traffic that needs a client payload rewrite must
+ * use the eager single reader with the rewrite applied inline, because the
+ * alternative tee()+JS-pull chain is the Bun#32111-unsafe path that loses the
+ * terminal SSE block on Windows. Independent of the version-based eager
+ * policy: the pull chain is unsafe on the AFFECTED runtimes by definition.
+ */
+export function isWin32EagerRewrite(
+  platform: NodeJS.Platform,
+  needsClientRewrite: boolean,
+): boolean {
+  return platform === "win32" && needsClientRewrite;
+}

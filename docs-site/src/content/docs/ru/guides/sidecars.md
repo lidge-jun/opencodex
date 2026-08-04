@@ -140,4 +140,4 @@ SSE-событие `response.failed`.
 существующий прецедент OAuth-отпечатка Claude Code, но их стоит обкатать с целевым аккаунтом и
 нагрузкой.
 
-Все поля описаны в [справочнике по конфигурации](/opencodex/ru/reference/configuration/#sidecars).
+Все поля описаны в [справочнике по конфигурации](/ru/reference/configuration/#sidecars).

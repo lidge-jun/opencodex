@@ -1,11 +1,53 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
+const skipStabilityWait = () => {};
+
+function withInstalledShim(run: (paths: {
+  binDir: string;
+  home: string;
+  wrappers: string[];
+  backups: string[];
+  statePath: string;
+}) => void): void {
+  const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "ocx-shim-home-"));
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.OPENCODEX_HOME;
+  const wrappers = process.platform === "win32"
+    ? [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")]
+    : [join(binDir, "codex")];
+  try {
+    process.env.PATH = binDir;
+    process.env.OPENCODEX_HOME = home;
+    for (const wrapper of wrappers) {
+      writeFileSync(wrapper, process.platform === "win32" ? `real ${wrapper}\n` : "#!/bin/sh\necho real\n", "utf8");
+      if (process.platform !== "win32") chmodSync(wrapper, 0o755);
+    }
+    expect(installCodexShim().installed).toBe(true);
+    const statePath = join(home, "codex-shim.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<{ wrapperPath: string; backupPath: string }> };
+    run({
+      binDir,
+      home,
+      wrappers: state.wrappers.map(file => file.wrapperPath),
+      backups: state.wrappers.map(file => file.backupPath),
+      statePath,
+    });
+  } finally {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+}
 
 describe("Codex autostart shim", () => {
   test("builds a Unix shim that starts ocx before execing Codex", () => {
@@ -317,6 +359,344 @@ describe("Codex autostart shim", () => {
       rmSync(dir, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  test("shim intact -> zero-overhead path is read-only and never loads config", () => {
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const paths = [...wrappers, ...backups, statePath];
+      const before = paths.map(path => ({
+        path,
+        bytes: readFileSync(path),
+        mtimeMs: statSync(path).mtimeMs,
+      }));
+      let enabledCalls = 0;
+
+      expect(autoRestoreCodexShim({
+        enabled: () => {
+          enabledCalls += 1;
+          return true;
+        },
+      })).toEqual({ status: "healthy" });
+      expect(enabledCalls).toBe(0);
+      for (const snapshot of before) {
+        expect(readFileSync(snapshot.path)).toEqual(snapshot.bytes);
+        expect(statSync(snapshot.path).mtimeMs).toBe(snapshot.mtimeMs);
+      }
+    });
+  });
+
+  test("stable shim replacement restores through the shared install transaction", () => {
+    withInstalledShim(({ wrappers, backups }) => {
+      const replacements = wrappers.map((wrapper, index) => `replacement-${index}\n`);
+      wrappers.forEach((wrapper, index) => writeFileSync(wrapper, replacements[index], "utf8"));
+
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+
+      expect(result.status).toBe("restored");
+      wrappers.forEach(wrapper => expect(readFileSync(wrapper, "utf8")).toContain(SHIM_MARKER));
+      backups.forEach((backup, index) => expect(readFileSync(backup, "utf8")).toBe(replacements[index]));
+    });
+  });
+
+  test("an aged lock held by a live restore owner is never reclaimed", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-concurrent-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-concurrent-home-"));
+    const readyPath = join(home, "first-lock-ready");
+    const releasePath = join(home, "release-first-lock");
+    const restoreLockPath = join(home, "codex-shim.autorestore.lock");
+    const wrapper = join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    const backup = join(binDir, process.platform === "win32" ? "codex.opencodex-real.cmd" : "codex.opencodex-real");
+    const replacement = "concurrent replacement launcher\n";
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    let first: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      process.env.PATH = binDir;
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(wrapper, process.platform === "win32" ? "@echo off\r\necho original\r\n" : "#!/bin/sh\necho original\n", "utf8");
+      if (process.platform !== "win32") chmodSync(wrapper, 0o755);
+      expect(installCodexShim().installed).toBe(true);
+      writeFileSync(wrapper, replacement, "utf8");
+      if (process.platform !== "win32") chmodSync(wrapper, 0o755);
+
+      const shimModule = join(import.meta.dir, "..", "src", "codex", "shim.ts");
+      const firstScript = `
+        import { existsSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});
+        const result = autoRestoreCodexShim({
+          enabled: () => true,
+          stabilitySleep: () => {},
+          afterRestoreLockAcquired: () => {
+            const ownerPath = join(${JSON.stringify(restoreLockPath)}, readdirSync(${JSON.stringify(restoreLockPath)})[0]);
+            const held = JSON.parse(readFileSync(ownerPath, "utf8"));
+            held.createdAt = 0;
+            writeFileSync(ownerPath, JSON.stringify(held) + "\\n");
+            utimesSync(ownerPath, new Date(0), new Date(0));
+            writeFileSync(${JSON.stringify(readyPath)}, readFileSync(ownerPath));
+            while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(5);
+          },
+        });
+        console.log(JSON.stringify(result));
+      `;
+      const secondScript = `
+        const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});
+        console.log(JSON.stringify(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} })));
+      `;
+      const childEnv = { ...process.env, PATH: binDir, OPENCODEX_HOME: home };
+      first = Bun.spawn([process.execPath, "-e", firstScript], {
+        cwd: join(import.meta.dir, ".."),
+        env: childEnv,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(readyPath) && Date.now() < deadline) await Bun.sleep(5);
+      expect(existsSync(readyPath)).toBe(true);
+
+      const second = spawnSync(process.execPath, ["-e", secondScript], {
+        cwd: join(import.meta.dir, ".."),
+        env: childEnv,
+        encoding: "utf8",
+      });
+      expect(second.status).toBe(0);
+      expect(JSON.parse(second.stdout.trim())).toEqual({ status: "deferred" });
+      const heldLock = JSON.parse(readFileSync(readyPath, "utf8")) as { pid?: number; token?: string };
+      expect(heldLock.pid).toBe(first.pid);
+      expect(heldLock.token).toBeString();
+
+      writeFileSync(releasePath, "release", "utf8");
+      expect(await first.exited).toBe(0);
+      const firstStdout = await new Response(first.stdout).text();
+      expect(JSON.parse(firstStdout.trim()).status).toBe("restored");
+      expect(readFileSync(wrapper, "utf8")).toContain(SHIM_MARKER);
+      expect(readFileSync(backup, "utf8")).toBe(replacement);
+    } finally {
+      try { writeFileSync(releasePath, "release", "utf8"); } catch { /* temp dir may already be gone */ }
+      if (first) await first.exited;
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("stale-lock compare-and-delete never unlinks a successor lock", () => {
+    withInstalledShim(({ home, wrappers, backups }) => {
+      const lockPath = join(home, "codex-shim.autorestore.lock");
+      const stalePath = join(lockPath, "stale-owner.json");
+      const successorPath = join(lockPath, "successor-owner.json");
+      const stale = JSON.stringify({ version: 1, token: "stale-owner", pid: 2_147_483_647, createdAt: 0 }) + "\n";
+      const successor = JSON.stringify({ version: 1, token: "successor-owner", pid: process.pid, createdAt: Date.now() }) + "\n";
+      const oldBackups = backups.map(path => readFileSync(path));
+      wrappers.forEach((path, index) => writeFileSync(path, `replacement-${index}\n`, "utf8"));
+      mkdirSync(lockPath);
+      writeFileSync(stalePath, stale, "utf8");
+      utimesSync(stalePath, new Date(0), new Date(0));
+
+      const result = autoRestoreCodexShim({
+        enabled: () => true,
+        stabilitySleep: skipStabilityWait,
+        beforeStaleRestoreLockDelete: () => {
+          rmSync(lockPath, { recursive: true });
+          mkdirSync(lockPath);
+          writeFileSync(successorPath, successor, "utf8");
+        },
+      });
+
+      expect(result).toEqual({ status: "deferred" });
+      expect(readdirSync(lockPath)).toEqual(["successor-owner.json"]);
+      expect(readFileSync(successorPath, "utf8")).toBe(successor);
+      wrappers.forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(`replacement-${index}\n`));
+      backups.forEach((path, index) => expect(readFileSync(path)).toEqual(oldBackups[index]));
+    });
+  });
+
+  test("an unchanged stale lock from a dead owner is reclaimed", () => {
+    withInstalledShim(({ home, wrappers, backups }) => {
+      const lockPath = join(home, "codex-shim.autorestore.lock");
+      const ownerPath = join(lockPath, "dead-owner.json");
+      const replacements = wrappers.map((_, index) => `dead-owner-replacement-${index}\n`);
+      wrappers.forEach((path, index) => writeFileSync(path, replacements[index], "utf8"));
+      mkdirSync(lockPath);
+      writeFileSync(ownerPath, `${JSON.stringify({
+        version: 1,
+        token: "dead-owner",
+        pid: 2_147_483_647,
+        createdAt: 0,
+      })}\n`, "utf8");
+      utimesSync(ownerPath, new Date(0), new Date(0));
+
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+
+      expect(result.status).toBe("restored");
+      expect(existsSync(lockPath)).toBe(false);
+      wrappers.forEach(path => expect(readFileSync(path, "utf8")).toContain(SHIM_MARKER));
+      backups.forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(replacements[index]));
+    });
+  });
+
+  test("stalled partial write changing during the observation interval is never promoted", () => {
+    withInstalledShim(({ wrappers, backups }) => {
+      const oldBackups = backups.map(path => readFileSync(path));
+      wrappers.forEach((wrapper, index) => writeFileSync(wrapper, `partial-${index}\n`, "utf8"));
+
+      const result = autoRestoreCodexShim({
+        enabled: () => true,
+        stabilitySleep: () => writeFileSync(wrappers[0], "completed after stalled partial write\n", "utf8"),
+      });
+
+      expect(result).toEqual({ status: "deferred" });
+      expect(readFileSync(wrappers[0], "utf8")).toBe("completed after stalled partial write\n");
+      backups.forEach((backup, index) => expect(readFileSync(backup)).toEqual(oldBackups[index]));
+    });
+  });
+
+  test("mixed launcher siblings defer the whole restore without piecemeal mutation", () => {
+    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
+      if (wrappers.length === 1) {
+        const sibling = join(binDir, "codex.ps1");
+        const siblingBackup = join(binDir, "codex.opencodex-real.ps1");
+        writeFileSync(sibling, readFileSync(wrappers[0]));
+        chmodSync(sibling, 0o755);
+        writeFileSync(siblingBackup, "prior sibling launcher\n", "utf8");
+        const state = JSON.parse(readFileSync(statePath, "utf8")) as {
+          wrappers: Array<{ wrapperPath: string; originalPath: string; backupPath: string }>;
+        };
+        state.wrappers.push({ wrapperPath: sibling, originalPath: sibling, backupPath: siblingBackup });
+        writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+        wrappers.push(sibling);
+        backups.push(siblingBackup);
+      }
+      const oldBackups = backups.map(path => readFileSync(path));
+      const healthySiblings = wrappers.slice(1).map(path => readFileSync(path));
+      writeFileSync(wrappers[0], "one updated sibling\n", "utf8");
+
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+
+      expect(result.status).toBe("deferred");
+      expect(result.message).toContain("mixed shim/replacement state");
+      expect(readFileSync(wrappers[0], "utf8")).toBe("one updated sibling\n");
+      wrappers.slice(1).forEach((path, index) => expect(readFileSync(path)).toEqual(healthySiblings[index]));
+      backups.forEach((path, index) => expect(readFileSync(path)).toEqual(oldBackups[index]));
+    });
+  });
+
+  test("opt-out set -> no restore and explicit install remains available", () => {
+    withInstalledShim(({ wrappers }) => {
+      wrappers.forEach((wrapper, index) => writeFileSync(wrapper, `disabled-${index}\n`, "utf8"));
+
+      expect(autoRestoreCodexShim({ enabled: () => false, stabilitySleep: skipStabilityWait })).toEqual({ status: "disabled" });
+      wrappers.forEach((wrapper, index) => expect(readFileSync(wrapper, "utf8")).toBe(`disabled-${index}\n`));
+      expect(installCodexShim().installed).toBe(true);
+      wrappers.forEach(wrapper => expect(readFileSync(wrapper, "utf8")).toContain(SHIM_MARKER));
+    });
+  });
+
+  test("fingerprint mismatch before guarded rename defers without owned-path mutation", () => {
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      wrappers.forEach((wrapper, index) => writeFileSync(wrapper, `candidate-${index}\n`, "utf8"));
+      const oldBackups = backups.map(path => readFileSync(path));
+      const oldState = readFileSync(statePath);
+
+      const result = autoRestoreCodexShim({
+        enabled: () => true,
+        stabilitySleep: skipStabilityWait,
+        beforeGuardedRefresh: (wrapperPath, index) => {
+          if (index === 0) writeFileSync(wrapperPath, "concurrent replacement\n", "utf8");
+        },
+      });
+
+      expect(result).toEqual({ status: "deferred" });
+      expect(readFileSync(wrappers[0], "utf8")).toBe("concurrent replacement\n");
+      backups.forEach((backup, index) => expect(readFileSync(backup)).toEqual(oldBackups[index]));
+      expect(readFileSync(statePath)).toEqual(oldState);
+    });
+  });
+
+  test("multi-wrapper restore rolls back when a later sibling fingerprint changes", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-transaction-home-"));
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-transaction-bin-"));
+    const oldHome = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OPENCODEX_HOME = home;
+      const wrappers = [join(binDir, "codex.cmd"), join(binDir, "codex.ps1")];
+      const backups = [join(binDir, "codex.opencodex-real.cmd"), join(binDir, "codex.opencodex-real.ps1")];
+      const wrapperBytes = ["replacement cmd\n", "replacement ps1\n"];
+      const backupBytes = ["prior cmd\n", "prior ps1\n"];
+      wrappers.forEach((path, index) => writeFileSync(path, wrapperBytes[index], "utf8"));
+      backups.forEach((path, index) => writeFileSync(path, backupBytes[index], "utf8"));
+      const statePath = join(home, "codex-shim.json");
+      writeFileSync(statePath, JSON.stringify({
+        platform: process.platform,
+        wrapperPath: wrappers[0],
+        originalPath: wrappers[0],
+        backupPath: backups[0],
+        wrappers: wrappers.map((wrapperPath, index) => ({
+          wrapperPath,
+          originalPath: wrapperPath,
+          backupPath: backups[index],
+        })),
+      }, null, 2) + "\n", "utf8");
+      const stateBytes = readFileSync(statePath);
+      const modes = [...wrappers, ...backups].map(path => statSync(path).mode & 0o777);
+
+      const result = autoRestoreCodexShim({
+        enabled: () => true,
+        stabilitySleep: skipStabilityWait,
+        beforeGuardedRefresh: (wrapperPath, index) => {
+          if (index === 1) {
+            const originalMtime = statSync(wrapperPath).mtime;
+            utimesSync(wrapperPath, originalMtime.getTime() / 1_000 - 1, originalMtime);
+          }
+        },
+      });
+
+      expect(result).toEqual({ status: "deferred" });
+      wrappers.forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(wrapperBytes[index]));
+      backups.forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(backupBytes[index]));
+      expect(readFileSync(statePath)).toEqual(stateBytes);
+      [...wrappers, ...backups].forEach((path, index) => expect(statSync(path).mode & 0o777).toBe(modes[index]));
+      expect(readdirSync(binDir).filter(name => name.includes(".autorestore-"))).toEqual([]);
+    } finally {
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("missing backup, missing wrapper, corrupt state, and platform mismatch never fresh-install", () => {
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      rmSync(backups[0]);
+      expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("ineligible");
+
+      writeFileSync(backups[0], "backup\n", "utf8");
+      rmSync(wrappers[0]);
+      expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("ineligible");
+
+      if (process.platform !== "win32") {
+        mkdirSync(wrappers[0]);
+        expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("deferred");
+        rmSync(wrappers[0], { recursive: true });
+        symlinkSync(join(dirname(wrappers[0]), "missing-target"), wrappers[0]);
+        expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("ineligible");
+      }
+
+      writeFileSync(statePath, "{broken", "utf8");
+      expect(autoRestoreCodexShim({ enabled: () => true }).status).toBe("ineligible");
+
+      const otherPlatform = process.platform === "win32" ? "linux" : "win32";
+      writeFileSync(statePath, JSON.stringify({
+        platform: otherPlatform,
+        wrapperPath: wrappers[0],
+        originalPath: wrappers[0],
+        backupPath: backups[0],
+      }), "utf8");
+      expect(autoRestoreCodexShim({ enabled: () => true }).status).toBe("ineligible");
+    });
   });
 });
 

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { getConfigDir } from "../config";
 import type { OAuthController, OAuthCredentials } from "./types";
 
@@ -106,6 +107,7 @@ function getDeviceId(): string {
     if ((e as { code?: string })?.code !== "ENOENT") throw e;
   }
   const id = randomUUID().replace(/-/g, "");
+  recordOwnedConfigPath(getConfigDir(), p);
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeFileSync(p, id + "\n", { mode: 0o600 });
   deviceIdCache = id;

@@ -22,7 +22,7 @@ interface ProviderAdapter {
 `parseStream` / `parseResponse` поднимают ответ провайдера обратно во внутренние события
 `AdapterEvent`. `fetchResponse` позволяет адаптеру самому управлять повторными попытками и
 таймаутами, а `runTurn` поддерживает транспорты, которые нельзя представить как один HTTP-запрос
-с последующим одним потоком ответа. Затем [`bridge.ts`](/opencodex/ru/reference/architecture/#мост)
+с последующим одним потоком ответа. Затем [`bridge.ts`](/ru/reference/architecture/#мост)
 превращает события в Responses SSE.
 
 ## `openai-chat`
@@ -52,12 +52,12 @@ interface ProviderAdapter {
 - Провайдер с `key` может задать проверенный относительный `responsesPath`: адаптер удаляет один завершающий `/` из `baseUrl` и отправляет запрос на `{trimmedBaseUrl}{responsesPath}`. Для Ark Agent Plan используйте `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` и `responsesPath: "/responses"`.
 - В режиме `forward` ретранслируется только безопасный allowlist заголовков (`FORWARD_HEADERS`):
   authorization, ChatGPT account id и заголовки OpenAI beta/originator/session. Это путь входа
-  через ChatGPT, на котором также работают [сайдкары](/opencodex/ru/guides/sidecars/).
+  через ChatGPT, на котором также работают [сайдкары](/ru/guides/sidecars/).
 
 ## `anthropic`
 
 **Назначение:** Anthropic **Messages** (`/v1/messages`).
-**Аутентификация:** `key` (`x-api-key`) или `oauth` (Bearer + `anthropic-beta`, для Claude Pro/Max).
+**Аутентификация:** `key` (по умолчанию `x-api-key`, либо `Authorization: Bearer` при `apiKeyTransport: "bearer"`) или `oauth` (Bearer + `anthropic-beta`, для Claude Pro/Max).
 
 - Преобразует сообщения в блоки контента Anthropic (text, base64 image, `tool_use`, `thinking`).
 - **Арифметика extended thinking:** Anthropic требует `max_tokens > thinking.budget_tokens`.
@@ -96,6 +96,30 @@ Kiro (`https://runtime.{region}.kiro.dev/`).
 - Через `fetchResponse` сам управляет ограниченными повторными попытками и классифицированными
   ошибками с удалением чувствительных данных; его непотоковый парсер вычитывает тот же поток
   событий для цикла веб-поиска.
+### Завершение и нативный stop reason
+
+Текст ассистента Kiro сам по себе не даёт надёжного признака конца хода. Однако завершающий
+`metadataEvent` может нести нативный `stopReason`, но Kiro иногда помечает `END_TURN` обычный текст
+о прогрессе. Поэтому в ходе с инструментами такой текст остаётся commentary и проходит одну
+проверку приватным инструментом завершения.
+
+Путь совместимости может использоваться для `END_TURN`, `STOP_SEQUENCE` или отсутствующего stop reason. Любая другая явная причина уже
+завершила вывод на стороне провайдера, поэтому адаптер сообщает о ней, а не отправляет ещё один
+запрос: лимит выходных токенов становится продолжаемым incomplete, исчерпание контекстного окна —
+неповторяемой ошибкой context-length, фильтрация и срабатывание guardrail — отфильтрованным
+incomplete. `TOOL_USE` без фактического вызова инструмента трактуется как противоречие, а не прогресс.
+
+В ходе с инструментами opencodex добавляет приватный `codex_kiro_final_answer`. Повторная попытка не
+создаёт пустые assistant/user-сообщения, сохраняет исходный user/tool-result и перед отправкой проверяет
+чередование ролей, непустые структурные сообщения и пары tool use/result. Ответ инструмента завершения
+всегда выдаётся как `final_answer`, даже если он совпадает с предыдущим commentary.
+
+### Reasoning effort
+
+`gpt-5.6-sol` и `claude-opus-5` поддерживают нативный effort, но называют поле запроса по-разному.
+Значения `low` / `medium` / `high` / `xhigh` / `max` отправляются как
+`additionalModelRequestFields.reasoning.effort` и `output_config.effort` соответственно.
+
 
 ## `cursor`
 

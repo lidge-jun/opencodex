@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { create, toBinary } from "@bufbuild/protobuf";
 import { clientToolFinalizeGraceMsForRequest, createLiveCursorTransport } from "../src/adapters/cursor/live-transport";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 import { createCursorProtobufEventState } from "../src/adapters/cursor/protobuf-events";
 import type { CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
 import {
@@ -66,6 +67,7 @@ interface Harness {
 function makeHarness(graceMs: number, clientToolNames: string[]): Harness {
   const transport = createLiveCursorTransport({
     provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
+    translatorBudget: createTestTranslatorBudget(),
     headers: new Headers(),
     clientToolFinalizeGraceMs: graceMs,
   }) as unknown as {

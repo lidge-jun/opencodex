@@ -46,7 +46,7 @@ cd docs-site && bun install && bun dev
 
 ## ドキュメントのデプロイ
 
-公開ドキュメントは GitHub Pages の <https://lidge-jun.github.io/opencodex/ja/> に公開されます。
+公開ドキュメントは GitHub Pages の <https://opencodex.me/ja/> に公開されます。
 `.github/workflows/deploy-docs.yml` は `main` push で `docs-site/**` またはワークフロー自体が変わると
 実行されます。`docs-site` をビルドした後、生成されたサイトをデプロイします。ドキュメント変更を push する前に以下を
 実行してください。
@@ -77,6 +77,22 @@ bun run release <version>           # バージョン bump を commit/push、pub
 bun run release <version> --publish # CI-gated dry-run を確認した後、実際の publish
 bun run release:watch               # 直近の Release ワークフロー run を監視
 ```
+
+## ブランチ
+
+- `dev` — 唯一の統合先。すべての PR をここに出します。
+- `main` — リリース専用。`dev` からメンテナーが昇格させるときだけ動きます。機能 PR を直接
+  出さないでください。
+- `preview` — プレリリーストレイン。
+
+Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の統合ラインを維持する方針も
+終了しました。履歴は
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)
+に読み取り専用で残しています。現在は `dev` の Bun ネイティブ TypeScript が単一のランタイム
+ラインです。
+
+リベース PR を歓迎します。古いブランチを現在の head にリベースすることは、ノイズではなく
+通常の貢献です。説明欄に元のコミットを記載してください。
 
 ## 規約
 
@@ -115,7 +131,7 @@ OAuth 設定 seed に供給します。`enrichProviderFromCatalog()` はモデ�
 
 ## アダプターを追加
 
-`src/adapters/` に `ProviderAdapter`([アダプター](/opencodex/ja/reference/adapters/)参照)を実装し、
+`src/adapters/` に `ProviderAdapter`([アダプター](/ja/reference/adapters/)参照)を実装し、
 `src/server/adapter-resolve.ts` に名前を登録した後、出力を内部 `AdapterEvent` にブリッジしてください。画像
 処理には `image.ts` を再利用し、一般的なストリーミング/ツール呼び出しは `openai-chat.ts` を参考にしてください。
 アダプターが送信再試行を自ら担う場合のみ `fetchResponse` を使い、Cursor のような実際の双方向転送には

@@ -1,11 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildWindowsTrayLauncherScript,
+  buildWindowsTrayPowerShellCommand,
   buildWindowsTrayRunCommand,
+  launchWindowsTrayHost,
   parseWindowsTrayRunValue,
   readWindowsTrayRunValueWithAsyncRunner,
   readWindowsTrayRunValueWithRunner,
+  replaceWindowsTrayOwnedFile,
   windowsTrayProcessArgs,
   windowsTrayRunValue,
   windowsTrayStatePathsOwned,
@@ -13,8 +27,16 @@ import {
   windowsRegistryParentShowsRunKey,
   type WindowsTrayEntry,
 } from "../src/tray/windows";
+import {
+  hardenSecretPath,
+  hardenedSecretPathCountForTests,
+  resetHardenedStateForTests,
+  setIcaclsRunnerForTests,
+  setPlatformForTests,
+} from "../src/lib/windows-secret-acl";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const entry: WindowsTrayEntry = {
   bun: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\bun.exe",
@@ -25,6 +47,46 @@ const entry: WindowsTrayEntry = {
 };
 
 describe("Windows tray packaging and command safety", () => {
+  test("owned-file temp cleanup forgets successful ACL memos and retains failed removals", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-tray-acl-"));
+    const target = join(root, "tray-state.json");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    const write = (path: string, contents: string | Buffer): void => {
+      writeFileSync(path, contents, { mode: 0o600 });
+    };
+    const harden = (path: string): void => {
+      hardenSecretPath(path, { required: true });
+    };
+    try {
+      replaceWindowsTrayOwnedFile(target, "success", {
+        write,
+        harden,
+        rename: renameSync,
+        unlink: unlinkSync,
+      });
+      expect(hardenedSecretPathCountForTests()).toBe(0);
+
+      expect(() => replaceWindowsTrayOwnedFile(target, "failure", {
+        write,
+        harden,
+        rename: () => { throw new Error("injected rename failure"); },
+        unlink: () => { throw Object.assign(new Error("injected unlink failure"), { code: "EPERM" }); },
+      })).toThrow("injected rename failure");
+      expect(hardenedSecretPathCountForTests()).toBe(1);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("uses fixed argv for the hidden PowerShell host", () => {
     const args = windowsTrayProcessArgs(entry);
     expect(args).toContain("-NoProfile");
@@ -38,11 +100,39 @@ describe("Windows tray packaging and command safety", () => {
   });
 
   test("quotes metacharacter and Unicode paths without shell interpolation", () => {
-    const powershellCommand = buildWindowsTrayRunCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    const powershellCommand = buildWindowsTrayPowerShellCommand(entry, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
     expect(powershellCommand).toContain(`-File "${entry.script}"`);
     expect(powershellCommand).toContain(`-OpenCodexHome "${entry.opencodexHome}"`);
     expect(powershellCommand).not.toContain("cmd /c");
     expect(powershellCommand).not.toContain("-Command");
+    const runCommand = buildWindowsTrayRunCommand({
+      ...entry,
+      launcherPath: `${entry.opencodexHome}\\opencodex-tray.vbs`,
+    });
+    expect(runCommand.toLowerCase()).toContain("wscript.exe");
+    expect(runCommand.length).toBeLessThanOrEqual(260);
+  });
+  test("keeps UNC backslashes literal in the VBS Run command", () => {
+    const uncRoot = "\\\\server\\share";
+    const uncEntry: WindowsTrayEntry = {
+      bun: `${uncRoot}\\tools\\bun.exe`,
+      cli: `${uncRoot}\\repo\\src\\cli\\index.ts`,
+      script: `${uncRoot}\\repo\\src\\tray\\windows-tray.ps1`,
+      codexHome: "C:\\Users\\Test\\.codex",
+      opencodexHome: `${uncRoot}\\opencodex`,
+    };
+    const launcher = buildWindowsTrayLauncherScript(uncEntry);
+    expect(launcher).toContain(`${uncRoot}\\tools\\bun.exe`);
+    expect(launcher).not.toMatch(/\\\\\\\\server/);
+  });
+
+
+  test("preserves non-ASCII paths in the tray launcher script and UTF-16LE install encoding", () => {
+    const launcher = buildWindowsTrayLauncherScript(entry);
+    expect(launcher).toContain("사용자 공간");
+    const encoded = Buffer.from("\uFEFF" + launcher, "utf16le");
+    expect(encoded.subarray(0, 2).equals(Buffer.from([0xff, 0xfe]))).toBe(true);
+    expect(encoded.toString("utf16le")).toContain("사용자 공간");
   });
 
   test("rejects quote and control-character path injection", () => {
@@ -195,7 +285,7 @@ describe("Windows tray packaging and command safety", () => {
     const source = readFileSync(join(import.meta.dir, "..", "src", "tray", "windows-tray.ps1"), "utf8");
     expect(typescript).not.toContain("\u0000");
     expect(typescript).toContain("OCX_TRAY_ENTRY_B64");
-    expect(typescript).toContain('detached: true');
+    expect(typescript).toContain("$startInfo.UseShellExecute = $true");
     expect(source).toContain("System.Threading.Mutex");
     expect(source).toContain("System.Threading.EventWaitHandle");
     expect(source).toContain("GetFullPath");
@@ -211,6 +301,80 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).not.toContain("taskkill");
     expect(source).not.toContain("Stop-Process");
   });
+
+  // This test really does launch PowerShell, which really does launch a Bun child, and
+  // then rebinds the port to prove the child did not inherit the listen socket. Those
+  // processes ARE the assertion — there is no version of this proof that fakes them.
+  //
+  // So the budget has to cover work the test genuinely performs. Production allows
+  // PowerShell 15s (`execFileSync` timeout in src/tray/windows.ts), while Bun's default
+  // test budget is 5s; a contended windows-latest runner lands between the two and the
+  // test fails at ~5.1s having done nothing wrong.
+  //
+  // Raising a budget is NOT the general answer to a flaky test. Earlier in this same
+  // round the sidebar route tests were fixed by DELETING their real `gh` spawn, because
+  // spawning a binary was incidental to what those tests claimed. The distinction is
+  // whether the wait is intrinsic to the assertion. Here it is; there it was not.
+  const PID_FILE_WAIT_MS = INTERNAL_DEADLINE_MS;
+  const TRAY_LAUNCH_TIMEOUT_MS = SPAWN_BUDGET_MS;
+
+  test("launches the detached tray host without retaining the proxy listen socket", async () => {
+    if (process.platform !== "win32") return;
+    const directory = mkdtempSync(join(tmpdir(), "ocx-tray-inheritance-"));
+    const pidPath = join(directory, "child.pid");
+    const childPath = join(directory, "child & %TEMP% 테스트.ts");
+    copyFileSync(join(import.meta.dir, "helpers", "windows-tray-inheritance-child.ts"), childPath);
+    const previousPidPath = process.env.OCX_TRAY_TEST_PID_FILE;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response("ok"),
+    });
+    const port = server.port;
+    let childPid = 0;
+    let replacement: ReturnType<typeof Bun.serve> | undefined;
+
+    try {
+      process.env.OCX_TRAY_TEST_PID_FILE = pidPath;
+      launchWindowsTrayHost({
+        ...entry,
+        bun: process.execPath,
+        cli: childPath,
+      });
+      const pidDeadline = Date.now() + PID_FILE_WAIT_MS;
+      while (!existsSync(pidPath) && Date.now() < pidDeadline) {
+        await Bun.sleep(25);
+      }
+      // Name what actually went wrong. A bare `false` here means "the pid file is
+      // missing" and nothing about whether PowerShell never started, the child died,
+      // or the runner was simply slow — which is most of the work in diagnosing it.
+      expect(
+        existsSync(pidPath),
+        `tray child never wrote ${pidPath} within ${PID_FILE_WAIT_MS}ms`,
+      ).toBe(true);
+      childPid = Number(readFileSync(pidPath, "utf8"));
+      expect(Number.isSafeInteger(childPid) && childPid > 0).toBe(true);
+      expect(() => process.kill(childPid, 0)).not.toThrow();
+
+      await server.stop(true);
+      replacement = Bun.serve({
+        hostname: "127.0.0.1",
+        port,
+        fetch: () => new Response("replacement"),
+      });
+      expect(replacement.port).toBe(port);
+      expect(() => process.kill(childPid, 0)).not.toThrow();
+    } finally {
+      if (previousPidPath === undefined) delete process.env.OCX_TRAY_TEST_PID_FILE;
+      else process.env.OCX_TRAY_TEST_PID_FILE = previousPidPath;
+      if (replacement) await replacement.stop(true);
+      await server.stop(true);
+      if (childPid > 0) {
+        try { process.kill(childPid); } catch { /* exact test child already exited */ }
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, { timeout: TRAY_LAUNCH_TIMEOUT_MS });
 
   test("ships branded multi-size Windows tray icons", () => {
     const assets = join(import.meta.dir, "..", "src", "tray", "assets");
@@ -251,7 +415,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(tray).toContain('join(getConfigDir(), "opencodex-tray.ps1")');
     expect(tray).toContain('join(import.meta.dir, "assets", name)');
     expect(tray).toContain("installedTrayIconPaths()");
-    expect(tray).toContain("const hardened = hardenSecretPath(temporary, { required: true })");
+    expect(tray).toContain("const hardened = hardenSecretPath(target, { required: true })");
     expect(tray).toContain("if (!hardened.ok)");
     expect(tray).toContain("if (!hardenedDir.ok)");
     expect(tray).toContain("refusing to replace its persistent script");
@@ -275,3 +439,4 @@ describe("Windows tray packaging and command safety", () => {
     }
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

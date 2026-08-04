@@ -2,7 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests } from "../src/codex/catalog";
+import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
   CURSOR_STATIC_MODELS,
   filterCursorConfiguredModelsByLiveDiscovery,
@@ -12,12 +13,29 @@ import {
   cursorModelReasoningEfforts,
 } from "../src/adapters/cursor/discovery";
 import { getJawcodeModelMetadata, resolveJawcodeProvider } from "../src/generated/jawcode-model-metadata";
-import { clearModelCache, getStaleCached, setCached } from "../src/codex/model-cache";
+import {
+  clearModelCache,
+  getProviderDiscoveryStatus,
+  getStaleCached,
+  markProviderDiscoveryFailed,
+  setCached,
+  type ProviderModelDiscoveryStatus,
+} from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import type { NormalizedComboConfig } from "../src/combos/types";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
+import { handleManagementAPI } from "../src/server/management-api";
+import { OAUTH_PROVIDERS } from "../src/oauth";
 
 const originalFetch = globalThis.fetch;
+
+/**
+ * Discovery runs on the pinned outbound transport, which does not read
+ * `globalThis.fetch`. These tests stub that global, so every config gets the
+ * caller-owned executor that hands control back to the stub.
+ */
+const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
+  gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -40,6 +58,82 @@ function normalizedCombo(
     ...overrides,
   };
 }
+
+async function providerDiscoveryDto(provider: string): Promise<Record<string, unknown>> {
+  const requestUrl = new URL("http://127.0.0.1/api/providers");
+  const response = await handleManagementAPI(
+    new Request(requestUrl),
+    requestUrl,
+    {
+      port: 10100,
+      defaultProvider: provider,
+      providers: {
+        [provider]: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          models: [],
+        },
+      },
+    },
+  );
+  const providers = await response!.json() as Array<Record<string, unknown>>;
+  return providers[0] ?? {};
+}
+
+/**
+ * Drive the real discovery path (not `markProviderDiscoveryOk` directly) and read the
+ * live-model provenance back out of `/api/selected-models`. Calling the marker by hand would
+ * still pass if a production branch forgot to record the count.
+ */
+async function liveModelCountAfterDiscovery(provider: string, models: string[] | "fail"): Promise<number | undefined> {
+  const config = {
+    port: 10100,
+    defaultProvider: provider,
+    providers: {
+      [provider]: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.example.test/v1",
+        apiKey: "k",
+        liveModels: true,
+        models: ["configured-fallback"],
+        fetch: ((input: RequestInfo | URL) => globalThis.fetch(input)) as typeof fetch,
+      },
+    },
+  } as unknown as Parameters<typeof handleManagementAPI>[2];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (!String(input).includes("/models")) return new Response(null, { status: 404 });
+    if (models === "fail") return new Response("nope", { status: 500 });
+    return Response.json({ data: models.map(id => ({ id })) });
+  }) as typeof fetch;
+
+  await gatherRoutedModels(config);
+
+  const url = new URL("http://127.0.0.1/api/selected-models");
+  const response = await handleManagementAPI(new Request(url), url, config);
+  const body = await response!.json() as { liveModelCounts?: Record<string, number> };
+  return body.liveModelCounts?.[provider];
+}
+
+describe("live model provenance (#448 custom-model misclassification)", () => {
+  afterEach(() => { globalThis.fetch = originalFetch; clearModelCache(); });
+
+  test("a non-empty discovery records how many rows it actually returned", async () => {
+    clearModelCache();
+    expect(await liveModelCountAfterDiscovery("prov-live", ["a", "b", "c"])).toBe(3);
+  });
+
+  test("a successful but empty discovery records zero, not 'never discovered'", async () => {
+    clearModelCache();
+    expect(await liveModelCountAfterDiscovery("prov-empty", [])).toBe(0);
+  });
+
+  test("a failed refresh keeps the last successful count so a stale catalog stays live-origin", async () => {
+    clearModelCache();
+    expect(await liveModelCountAfterDiscovery("prov-stale", ["a", "b"])).toBe(2);
+    expect(await liveModelCountAfterDiscovery("prov-stale", "fail")).toBe(2);
+  });
+});
 
 describe("combo catalog capability intersection", () => {
   const memberA = {
@@ -119,6 +213,33 @@ describe("combo catalog capability intersection", () => {
         { provider: "a", model: "m1", weight: 1 },
       ],
     }), [memberA, memberA])).toBeNull();
+  });
+
+  test("omission diagnostics distinguish incomplete metadata from disjoint modalities (#516)", () => {
+    const incompleteMembers = [memberA];
+    expect(comboCatalogOmissionReason(normalizedCombo(), incompleteMembers)).toBe("incomplete_metadata");
+    const incomplete = buildComboCatalogOmission("missing-meta", normalizedCombo(), incompleteMembers);
+    expect(incomplete).toMatchObject({
+      id: "missing-meta",
+      reason: "incomplete_metadata",
+    });
+    expect(incomplete.message).toContain("member capabilities are incomplete");
+    expect(incomplete.message).not.toContain("no common input modalities");
+
+    const disjointMembers = [
+      { ...memberA, inputModalities: ["image"] },
+      { ...memberB, inputModalities: ["text"] },
+    ];
+    expect(comboCatalogOmissionReason(normalizedCombo(), disjointMembers)).toBe("incompatible_modalities");
+    expect(deriveComboCatalogModel("disjoint", normalizedCombo(), disjointMembers)).toBeNull();
+    const incompatible = buildComboCatalogOmission("disjoint", normalizedCombo(), disjointMembers);
+    expect(incompatible).toMatchObject({
+      id: "disjoint",
+      reason: "incompatible_modalities",
+      targets: ["a/m1", "b/m2"],
+    });
+    expect(incompatible.message).toContain("no common input modalities");
+    expect(incompatible.message).not.toContain("member capabilities are incomplete");
   });
 
   test("requires member identity to follow target order", () => {
@@ -394,6 +515,14 @@ describe("combo catalog capability intersection", () => {
       expect(String(warn.mock.calls[0]?.[0])).toContain("[REDACTED]");
       expect(String(warn.mock.calls[0]?.[0])).not.toContain(warningSentinel);
       expect(second).toEqual(first);
+      const { getLastComboCatalogOmissions } = await import("../src/codex/catalog");
+      const hidden = getLastComboCatalogOmissions().find(item => item.id === "hidden");
+      expect(hidden).toMatchObject({
+        id: "hidden",
+        reason: "incomplete_metadata",
+      });
+      expect(hidden?.message).toContain("member capabilities are incomplete");
+      expect(hidden?.message).toContain("[REDACTED]");
 
       resetCatalogRuntimeStateForTests();
       await gatherRoutedModels(config);
@@ -401,7 +530,54 @@ describe("combo catalog capability intersection", () => {
     } finally {
       warn.mockRestore();
     }
-  });
+  }, 15_000);
+
+  test("gather warns about disjoint modalities without calling them incomplete (#516)", async () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "a",
+      providers: {
+        a: {
+          adapter: "openai-chat",
+          baseUrl: "https://a.example/v1",
+          liveModels: false,
+          models: ["m1"],
+          modelContextWindows: { m1: 200_000 },
+          modelInputModalities: { m1: ["image"] },
+        },
+        b: {
+          adapter: "openai-chat",
+          baseUrl: "https://b.example/v1",
+          liveModels: false,
+          models: ["m2"],
+          modelContextWindows: { m2: 128_000 },
+          modelInputModalities: { m2: ["text"] },
+        },
+      },
+      combos: {
+        disjoint: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+      },
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      resetCatalogRuntimeStateForTests();
+      const models = await gatherRoutedModels(config);
+      expect(models.some(model => model.provider === "combo" && model.id === "disjoint")).toBe(false);
+      const { getLastComboCatalogOmissions } = await import("../src/codex/catalog");
+      const omission = getLastComboCatalogOmissions().find(item => item.id === "disjoint");
+      expect(omission).toMatchObject({
+        id: "disjoint",
+        reason: "incompatible_modalities",
+      });
+      expect(omission?.message).toContain("no common input modalities");
+      expect(omission?.message).not.toContain("member capabilities are incomplete");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("no common input modalities");
+      expect(String(warn.mock.calls[0]?.[0])).not.toContain("member capabilities are incomplete");
+    } finally {
+      warn.mockRestore();
+    }
+  }, 15_000);
 
   test("exact combo slugs come only from current config", () => {
     expect(exactComboCatalogSlugs({ combos: {
@@ -518,6 +694,34 @@ describe("Google Gemini catalog metadata", () => {
       .toEqual(["low", "medium", "high", "max", "ultra"]);
     expect(entry?.input_modalities).toEqual(["text", "image"]);
     expect(entry?.context_window).toBe(1_048_576);
+  });
+});
+
+describe("Cursor Kimi K3 catalog default effort", () => {
+  // Regression for the effort-tier ladder added with cursor/kimi-k3: the Cursor ladder is
+  // low/high/max with NO medium rung, so applyReasoningLevels' medium -> high -> first
+  // preference would settle default_reasoning_level on "high" unless the registry supplies a
+  // default. Kimi documents `max` as K3's API default, and a "high" default makes the picker
+  // send high explicitly so the request builder never falls back to kimi-k3-max.
+  test("keeps max as the catalog default instead of falling back to high", async () => {
+    const cursor = {
+      adapter: "cursor",
+      authMode: "oauth" as const,
+      liveModels: false,
+    };
+    enrichProviderFromRegistry("cursor", cursor);
+    const models = await gatherRoutedModels({
+      port: 0,
+      defaultProvider: "cursor",
+      providers: { cursor },
+    });
+    const entry = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(row => row.slug === "cursor/kimi-k3");
+
+    expect(entry).toBeDefined();
+    expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
+    expect(entry?.default_reasoning_level).toBe("max");
   });
 });
 
@@ -1066,6 +1270,42 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  test("Google Antigravity uses its static registry catalog and suppresses stale discovery (#723)", async () => {
+    const providerName = "google-antigravity";
+    const provider = structuredClone(OAUTH_PROVIDERS[providerName].providerConfig);
+    const config = {
+      port: 10100,
+      defaultProvider: providerName,
+      providers: { [providerName]: provider },
+    } as OcxConfig;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("static Antigravity catalog must not call /models");
+    }) as typeof fetch;
+    markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });
+
+    const models = await gatherRoutedModels(config);
+    const ids = models.filter(model => model.provider === providerName).map(model => model.id).sort();
+
+    expect(fetchCalls).toBe(0);
+    expect(ids).toEqual([...(provider.models ?? [])].sort());
+    expect(ids).toHaveLength(6);
+    expect(getProviderDiscoveryStatus(providerName)).toBeUndefined();
+
+    markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });
+    const url = new URL("http://127.0.0.1/api/providers");
+    const response = await handleManagementAPI(new Request(url), url, config);
+    const rows = await response!.json() as Array<Record<string, unknown>>;
+    const row = rows.find(item => item.name === providerName);
+    expect(row).toMatchObject({
+      name: providerName,
+      liveModels: false,
+      models: provider.models,
+    });
+    expect(row).not.toHaveProperty("discovery");
+  });
+
   test("failed discovery falls back to defaultModel when no static models are configured (#308)", async () => {
     clearModelCache("anthropic-compatible-default");
     const originalFetch = globalThis.fetch;
@@ -1419,7 +1659,7 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
-  test("model discovery blocks a private destination by default before fetch", async () => {
+  test("destination-blocked discovery records blocked status", async () => {
     const provider = "discovery-private-blocked";
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     let fetchCalls = 0;
@@ -1439,6 +1679,7 @@ describe("Codex catalog routed normalization", () => {
             baseUrl: "http://198.18.0.1/v1",
             apiKey: "sk-test",
             models: ["static-fallback"],
+            fetch: globalThis.fetch,
           },
         },
       });
@@ -1447,6 +1688,10 @@ describe("Codex catalog routed normalization", () => {
       expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
         `${provider}/static-fallback`,
       ]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "blocked" });
+      expect(await providerDiscoveryDto(provider)).toMatchObject({
+        discovery: { status: "failed", reason: "blocked" },
+      });
       const warningText = warning.mock.calls.flat().join(" ");
       expect(warningText).toContain("blocked by destination policy");
       expect(warningText).toContain("benchmark address");
@@ -1476,6 +1721,7 @@ describe("Codex catalog routed normalization", () => {
             baseUrl: "http://198.18.0.1/v1",
             allowPrivateNetwork: true,
             apiKey: "sk-test",
+            fetch: globalThis.fetch,
           },
         },
       });
@@ -1484,6 +1730,7 @@ describe("Codex catalog routed normalization", () => {
       expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
         `${provider}/live-private-model`,
       ]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "ok" });
     } finally {
       clearModelCache(provider);
     }
@@ -1553,6 +1800,7 @@ describe("Codex catalog routed normalization", () => {
         `${provider}/last-known-good`,
       ]);
       expect(getStaleCached(provider)).toEqual(stale);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "invalid_response" });
       const warningText = warning.mock.calls.flat().join(" ");
       expect(warningText).toContain("returned invalid JSON in a 2xx response");
       expect(warningText).toContain("contentType=application/problem+json");
@@ -1565,9 +1813,9 @@ describe("Codex catalog routed normalization", () => {
   });
 
   test("HTTP non-OK discovery returns configured models with status diagnostics", async () => {
-    const provider = "discovery-http-503";
+    const provider = "discovery-http-401";
     const warning = spyOn(console, "warn").mockImplementation(() => {});
-    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 401 })) as typeof fetch;
 
     try {
       const models = await gatherRoutedModels({
@@ -1584,8 +1832,16 @@ describe("Codex catalog routed normalization", () => {
       expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
         `${provider}/static-fallback`,
       ]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({
+        status: "failed",
+        reason: "http",
+        httpStatus: 401,
+      });
+      expect(await providerDiscoveryDto(provider)).toMatchObject({
+        discovery: { status: "failed", reason: "http", httpStatus: 401 },
+      });
       const warningText = warning.mock.calls.flat().join(" ");
-      expect(warningText).toContain("failed with HTTP 503");
+      expect(warningText).toContain("failed with HTTP 401");
       expect(warningText).toContain("fallback=configured");
     } finally {
       warning.mockRestore();
@@ -1593,11 +1849,12 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
-  test("thrown fetch discovery returns configured models without SyntaxError conflation", async () => {
+  test("network discovery failure records sanitized network status", async () => {
     const provider = "discovery-fetch-throw";
+    const sentinel = "SENTINEL-PRIVATE-URL-https://secret.invalid/account";
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     globalThis.fetch = (async () => {
-      throw new TypeError("fetch failed");
+      throw new TypeError(sentinel);
     }) as typeof fetch;
 
     try {
@@ -1615,11 +1872,16 @@ describe("Codex catalog routed normalization", () => {
       expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
         `${provider}/static-fallback`,
       ]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "network" });
+      expect(JSON.stringify(getProviderDiscoveryStatus(provider))).not.toContain(sentinel);
+      const dto = await providerDiscoveryDto(provider);
+      expect(dto).toMatchObject({ discovery: { status: "failed", reason: "network" } });
+      expect(JSON.stringify(dto)).not.toContain(sentinel);
       const warningText = warning.mock.calls.flat().join(" ");
       expect(warningText).toContain("threw TypeError");
       expect(warningText).toContain("fallback=configured");
       expect(warningText).not.toContain("SyntaxError");
-      expect(warningText).not.toContain("fetch failed");
+      expect(warningText).not.toContain(sentinel);
     } finally {
       warning.mockRestore();
       clearModelCache(provider);
@@ -1657,6 +1919,7 @@ describe("Codex catalog routed normalization", () => {
         `${provider}/last-known-good`,
       ]);
       expect(getStaleCached(provider)).toEqual([{ provider, id: "last-known-good" }]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "invalid_response" });
     } finally {
       warning.mockRestore();
       clearModelCache(provider);
@@ -1689,9 +1952,55 @@ describe("Codex catalog routed normalization", () => {
         `${provider}/static-fallback`,
       ]);
       expect(getStaleCached(provider)).toBeNull();
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "invalid_response" });
     } finally {
       warning.mockRestore();
       clearModelCache(provider);
+    }
+  });
+
+  test("invalid JSON or malformed model data records invalid-response status", async () => {
+    const cases = [
+      { name: "invalid-json", body: "{not-json" },
+      { name: "missing-data", body: JSON.stringify({ models: [] }) },
+      { name: "malformed-data", body: JSON.stringify({ data: [{ id: 42 }] }) },
+    ];
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      for (const fixture of cases) {
+        const provider = `discovery-${fixture.name}`;
+        globalThis.fetch = (async () => new Response(fixture.body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+
+        const models = await gatherRoutedModels({
+          providers: {
+            [provider]: {
+              adapter: "openai-chat",
+              baseUrl: "https://93.184.216.34/v1",
+              apiKey: "sk-test",
+              models: ["static-fallback"],
+            },
+          },
+        });
+
+        expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
+          `${provider}/static-fallback`,
+        ]);
+        expect(getProviderDiscoveryStatus(provider)).toEqual({
+          status: "failed",
+          reason: "invalid_response",
+        });
+        expect(await providerDiscoveryDto(provider)).toMatchObject({
+          discovery: { status: "failed", reason: "invalid_response" },
+        });
+        clearModelCache(provider);
+      }
+    } finally {
+      warning.mockRestore();
+      clearModelCache();
     }
   });
 
@@ -1725,6 +2034,7 @@ describe("Codex catalog routed normalization", () => {
       expect(second).toEqual([]);
       expect(fetchCalls).toBe(1);
       expect(getStaleCached(provider)).toEqual([]);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "ok" });
       const warningText = warning.mock.calls.flat().join(" ");
       expect(warningText).toContain(provider);
       expect(warningText).toContain("configured-ghost");
@@ -1733,6 +2043,41 @@ describe("Codex catalog routed normalization", () => {
       warning.mockRestore();
       clearModelCache(provider);
     }
+  });
+
+  test("successful catalog discovery clears every prior failure reason", async () => {
+    const provider = "discovery-status-reset";
+    const failures: Array<Extract<ProviderModelDiscoveryStatus, { status: "failed" }>> = [
+      { status: "failed", reason: "blocked" },
+      { status: "failed", reason: "http", httpStatus: 401 },
+      { status: "failed", reason: "invalid_response" },
+      { status: "failed", reason: "network" },
+      { status: "failed", reason: "provider" },
+    ];
+    globalThis.fetch = (async () => Response.json({ data: [] })) as typeof fetch;
+
+    for (const { status: _status, ...failure } of failures) {
+      markProviderDiscoveryFailed(provider, failure);
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", ...failure });
+
+      await gatherRoutedModels({
+        modelCacheTtlMs: 0,
+        providers: {
+          [provider]: {
+            adapter: "openai-chat",
+            baseUrl: "https://93.184.216.34/v1",
+            apiKey: "sk-test",
+          },
+        },
+      });
+
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "ok" });
+      expect(await providerDiscoveryDto(provider)).toMatchObject({ discovery: { status: "ok" } });
+    }
+
+    clearModelCache(provider);
+    expect(getProviderDiscoveryStatus(provider)).toBeUndefined();
+    expect(await providerDiscoveryDto(provider)).not.toHaveProperty("discovery");
   });
 
   test("routed entries receive exact jawcode context metadata", () => {
@@ -1763,9 +2108,11 @@ describe("Codex catalog routed normalization", () => {
   test("opencode-go high-risk models use official jawcode metadata in the Codex catalog", () => {
     const cases = [
       { id: "glm-5.2", context: 1_000_000, auto: 900_000, input: ["text"] },
-      { id: "qwen3.5-plus", context: 262_144, auto: 235_929, input: ["text", "image"] },
+      // Upstream raised qwen3.5-plus to a 1M window and cut minimax-m3 to the 512K tier that
+      // matches MiniMax's own <=512K pricing band; both are catalogue refreshes, not overrides.
+      { id: "qwen3.5-plus", context: 1_000_000, auto: 900_000, input: ["text", "image"] },
       { id: "kimi-k2.7-code", context: 262_144, auto: 235_929, input: ["text", "image"] },
-      { id: "minimax-m3", context: 1_000_000, auto: 900_000, input: ["text", "image"] },
+      { id: "minimax-m3", context: 512_000, auto: 460_800, input: ["text", "image"] },
       { id: "qwen3.7-max", context: 1_000_000, auto: 900_000, input: ["text"] },
     ] as const;
     const entries = buildCatalogEntries(nativeTemplate(), [], cases.map(({ id }) => ({ provider: "opencode-go", id })));
@@ -1916,6 +2263,26 @@ describe("Codex catalog routed normalization", () => {
 
     expect(models.find(model => model.id === "strict-summary-model")?.supportsReasoningSummaries).toBe(false);
     expect(routed?.supports_reasoning_summaries).toBe(false);
+  });
+
+  test("model-specific reasoning-summary delivery keeps summaries enabled in the routed catalog (#538)", async () => {
+    const models = await gatherRoutedModels({
+      providers: {
+        compat: {
+          adapter: "openai-responses",
+          baseUrl: "https://compat.example.test/v1",
+          authMode: "key",
+          liveModels: false,
+          models: ["summary-model"],
+          modelReasoningSummaryDelivery: { "summary-model": "sequential" },
+        },
+      },
+    });
+    const entries = buildCatalogEntries(null, [], models);
+    const routed = entries.find(e => e.slug === "compat/summary-model");
+
+    expect(models.find(model => model.id === "summary-model")?.supportsReasoningSummaries).toBe(true);
+    expect(routed?.supports_reasoning_summaries).toBe(true);
   });
 
   test("generated jawcode snapshot is restricted to mapped providers", () => {
@@ -2250,7 +2617,10 @@ describe("OpenAI API trusted catalog augmentation", () => {
       });
     };
     try {
-      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true }));
+      // This test exercises the catalog fetch/augmentation path, not DNS destination
+      // classification. Keep it hermetic on NAT64 hosts whose resolver also returns
+      // 64:ff9b::/96 answers for api.openai.com.
+      const rows = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: true, allowPrivateNetwork: true }));
       const apiRows = rows.filter(row => row.provider === "openai-apikey");
       expect(calls).toEqual(["https://api.openai.com/v1/models"]);
       expect(apiRows.map(row => row.id)).toEqual([...exactIds].sort());
@@ -2383,6 +2753,33 @@ describe("media-generation model filtering", () => {
   });
 });
 
+describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
+  test("exposes gemini-3.1-flash-image (image-capable chat model, not media-gen)", () => {
+    expect(shouldExposeRoutedModel({ provider: "google-antigravity", id: "gemini-3.1-flash-image" })).toBe(true);
+  });
+
+  test("exposes cursor gemini-3-pro-image-preview", () => {
+    expect(shouldExposeRoutedModel({ provider: "cursor", id: "gemini-3-pro-image-preview" })).toBe(true);
+  });
+
+  test("does not resurrect standalone media-gen gemini image ids", () => {
+    expect(shouldExposeRoutedModel({ provider: "google-antigravity", id: "gemini-3-pro-image" })).toBe(false);
+    expect(shouldExposeRoutedModel({ provider: "openrouter", id: "gemini-3-pro-image" })).toBe(false);
+  });
+
+  test("still filters true media-generation models", () => {
+    for (const id of [
+      "grok-2-image", "gpt-image-1", "dall-e-3", "imagen-4", "sora-2", "veo-3", "flux",
+    ]) {
+      expect(shouldExposeRoutedModel({ provider: "openrouter", id })).toBe(false);
+    }
+  });
+
+  test("still filters compatibility-excluded slugs", () => {
+    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "hy3-preview" })).toBe(false);
+  });
+});
+
 describe("Codex reasoning-effort capability clamp", () => {
   function bundledCatalogDeps(efforts: string[]) {
     return {
@@ -2454,3 +2851,4 @@ describe("Codex reasoning-effort capability clamp", () => {
     expect(models).toEqual(before);
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

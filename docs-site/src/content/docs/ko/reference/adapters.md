@@ -21,7 +21,7 @@ interface ProviderAdapter {
 `parseResponse`는 프로바이더 응답을 내부 `AdapterEvent`로 올립니다. `fetchResponse`가 있으면
 어댑터가 재시도와 타임아웃을 직접 맡습니다. `runTurn`은 한 번의 HTTP fetch와 뒤이은 응답
 스트림으로 표현할 수 없는 전송 방식을 지원합니다. 이후
-[`bridge.ts`](/opencodex/ko/reference/architecture/#브리지)가 이벤트를 Responses SSE로 바꿉니다.
+[`bridge.ts`](/ko/reference/architecture/#브리지)가 이벤트를 Responses SSE로 바꿉니다.
 
 ## `openai-chat`
 
@@ -49,12 +49,12 @@ interface ProviderAdapter {
 - `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
 - `forward` 모드에서는 안전한 헤더 허용 목록(`FORWARD_HEADERS`)만 중계합니다. authorization,
   ChatGPT account id, OpenAI beta/originator/session 헤더가 대상입니다. 이 ChatGPT 로그인 경로는
-  [사이드카](/opencodex/ko/guides/sidecars/)에도 쓰입니다.
+  [사이드카](/ko/guides/sidecars/)에도 쓰입니다.
 
 ## `anthropic`
 
 **대상:** Anthropic **Messages**(`/v1/messages`).
-**인증:** `key`(`x-api-key`) 또는 `oauth`(Bearer + `anthropic-beta`, Claude Pro/Max용).
+**인증:** `key`(기본 `x-api-key`, 또는 `apiKeyTransport: "bearer"` 설정 시 `Authorization: Bearer`) 또는 `oauth`(Bearer + `anthropic-beta`, Claude Pro/Max용).
 
 - 메시지를 Anthropic content block(text, base64 image, `tool_use`, `thinking`)으로 변환합니다.
 - **Extended thinking 계산:** Anthropic은 `max_tokens > thinking.budget_tokens`를 요구합니다.
@@ -88,6 +88,28 @@ interface ProviderAdapter {
   JSON을 감지합니다. 업스트림이 토큰 수를 반환하지 않아 사용량은 추정합니다.
 - `fetchResponse`에서 제한된 횟수만 재시도하고 오류를 분류/마스킹합니다. 비스트리밍 파서는 웹 검색
   루프를 위해 같은 이벤트 스트림을 끝까지 소비합니다.
+### 완료와 네이티브 stop reason
+
+Kiro의 어시스턴트 텍스트에는 그 자체로 턴 종료를 알리는 신뢰할 만한 구분이 없습니다. 다만 종단
+`metadataEvent`가 네이티브 `stopReason`을 실어 올 수 있습니다. 하지만 Kiro가 진행 문구에도 `END_TURN`을
+붙일 수 있으므로, 툴이 있는 턴에서는 `END_TURN`과 `STOP_SEQUENCE`만으로 완료하지 않습니다. 일반 텍스트는
+commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
+
+`END_TURN`, `STOP_SEQUENCE`, 또는 stop reason이 없을 때는 한 번의 완료 호환 경로를 탈 수 있습니다. 그 외 명시적인 이유는 이미 상류에서 추론을 끝냈으므로
+다시 모델에 요청하지 않고 그대로 보고합니다. 출력 토큰 한도는 이어쓸 수 있는 incomplete로, 컨텍스트 윈도
+고갈은 재시도 불가한 context-length 오류로, 필터링이나 가드레일 정지는 filtered incomplete로 표면화합니다.
+실제 툴 호출 없이 온 `TOOL_USE`는 진행이 아니라 모순으로 처리합니다.
+
+툴이 있는 턴에는 비공개 `codex_kiro_final_answer`를 추가합니다. 완료 재시도는 빈 assistant/user 턴을 만들지
+않고 원래 user/tool-result를 보존하며, 전송 전에 역할 교대·빈 구조 메시지·tool use/result 짝을 검증합니다.
+완료 툴 답변은 이전 commentary와 같더라도 `final_answer`로 내보냅니다.
+
+### Reasoning effort
+
+`gpt-5.6-sol`과 `claude-opus-5`는 네이티브 effort를 지원하며 요청 필드 이름이 다릅니다.
+`low` / `medium` / `high` / `xhigh` / `max` 값은 각각
+`additionalModelRequestFields.reasoning.effort`와 `output_config.effort`로 전송됩니다.
+
 
 ## `cursor`
 

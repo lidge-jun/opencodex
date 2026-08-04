@@ -1,13 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-prov-codex-home-"));
+
+// Every case below spawns the real CLI. Cold Bun starts on a loaded windows-latest runner
+// routinely blow the 5s default before --help returns; the spawn IS the assertion.
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 function runCli(args: string[], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
@@ -17,6 +22,9 @@ function runCli(args: string[], env: Record<string, string> = {}) {
     // a test run would WIPE the user's routed catalog entries (live-catalog pollution).
     env: { ...process.env, CODEX_HOME: isolatedCodexHome, ...env },
     encoding: "utf8",
+    // Contended windows-latest cold starts regularly exceed Bun's 5s default before --help
+    // even prints; keep the child deadline under the test budget so status is not null.
+    timeout: SPAWN_BUDGET_MS - 5_000,
   });
 }
 
@@ -92,6 +100,38 @@ describe("ocx provider", () => {
       expect(config.providers.deepseek).toBeDefined();
       expect(config.providers.deepseek.adapter).toBe("openai-chat");
       expect(config.providers.deepseek.apiKey).toBe("sk-test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("provider add rejects a configured Codex account namespace without mutating config", () => {
+    const { dir, configPath } = freshConfig({
+      codexAccountNamespaces: { deepseek: "side-account-id" },
+    });
+    try {
+      const before = readFileSync(configPath, "utf8");
+      const result = runCli(["provider", "add", "deepseek", "--api-key", "sk-test"], { OPENCODEX_HOME: dir });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("must not collide with a configured Codex account namespace");
+      expect(readFileSync(configPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["xai", "deepseek"])("login %s rejects a configured Codex account namespace before prompting", provider => {
+    const { dir, configPath } = freshConfig({
+      codexAccountNamespaces: { [provider]: "side-account-id" },
+    });
+    try {
+      const before = readFileSync(configPath, "utf8");
+      const result = runCli(["login", provider], { OPENCODEX_HOME: dir });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("must not collide with a configured Codex account namespace");
+      expect(readFileSync(configPath, "utf8")).toBe(before);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -388,7 +428,7 @@ describe("ocx provider add --sync", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("provider add --sync --json reports needsSync false", () => {
     const { dir } = freshConfig();

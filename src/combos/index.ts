@@ -11,6 +11,7 @@ export {
   listComboIds,
   normalizeComboConfig,
   parseComboModelId,
+  preservesPhysicalComboProvider,
   resolveComboId,
   targetKey,
 } from "./types";

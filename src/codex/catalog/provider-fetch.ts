@@ -4,14 +4,27 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
-import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
+import {
+  clearModelCache,
+  clearProviderDiscoveryStatus,
+  DEFAULT_MODEL_CACHE_TTL_MS,
+  getFreshCached,
+  getStaleCached,
+  isModelsFetchCoolingDown,
+  markModelsFetchFailure,
+  markProviderDiscoveryFailed,
+  markProviderDiscoveryOk,
+  shouldLogDiscoveryFailure,
+  setCached,
+  type ProviderModelDiscoveryFailure,
+} from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
+import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
@@ -26,39 +39,112 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
-import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import {
+  ProviderOutboundPolicyError,
+  providerOutboundGet,
+  providerRedirectError,
+} from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
+import {
+  extractProviderModelItems,
+  readBoundedDiscoveryJson,
+  resolveProviderModelDiscovery,
+  type ModelDiscoveryResponseFailure,
+  type ProviderModelsApiItem,
+} from "../../providers/model-discovery";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
 
 
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
-import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, warnUncataloguedComboOnce } from "./aggregation";
+import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
+import type { ComboCatalogOmission } from "./aggregation";
 
-type OcxProviderConfigWithReasoningSummaries = OcxProviderConfig & {
-  modelSupportsReasoningSummaries?: Record<string, boolean>;
-};
+/** Concurrent gatherRoutedModels callers with the same catalog identity share one live discovery.
+ *  Keyed by gatherFlightKey so a different config cannot join or evict the wrong flight. */
+interface GatherFlightResult {
+  models: CatalogModel[];
+  comboOmissions: ComboCatalogOmission[];
+}
 
-export type ProviderModelsApiItem = {
-  id: string;
-  owned_by?: string;
-  context_length?: number;
-  max_model_len?: number;
-  metadata?: {
-    capabilities?: Record<string, unknown>;
-    limits?: Record<string, unknown>;
+const gatherInflight = new Map<string, Promise<GatherFlightResult>>();
+const MAX_CONCURRENT_CATALOG_GATHERS = 8;
+const gatherGate = createAdmissionGate("catalog_gathers", MAX_CONCURRENT_CATALOG_GATHERS);
+
+export class CatalogGatherBusyError extends ResourceAdmissionError {
+  override readonly code = "catalog_busy";
+  readonly retryAfterSeconds = 1;
+  constructor() {
+    super("catalog_gathers", MAX_CONCURRENT_CATALOG_GATHERS);
+    this.name = "CatalogGatherBusyError";
+  }
+}
+
+export function catalogGatherAdmissionMetrics(): AdmissionMetrics {
+  return gatherGate.metrics();
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, nested) => {
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      return Object.fromEntries(Object.entries(nested as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return nested;
+  });
+}
+
+function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Record<string, unknown> {
+  return {
+    n: name,
+    // Preserve the persisted tri-state. Registry enrichment may turn an omitted value into
+    // `false` while an explicit `true` stays live, so those callers must not share a flight.
+    live: prov.liveModels ?? null,
+    base: prov.baseUrl ?? "",
+    adapter: prov.adapter ?? "",
+    models: [...(prov.models ?? [])].sort(),
+    selected: [...(prov.selectedModels ?? [])].sort(),
+    defaultModel: prov.defaultModel ?? null,
+    ctx: prov.contextWindow ?? null,
+    ctxW: prov.modelContextWindows ?? null,
+    maxIn: prov.modelMaxInputTokens ?? null,
+    inMod: prov.modelInputModalities ?? null,
+    re: prov.modelReasoningEfforts ?? null,
+    defRe: prov.modelDefaultReasoningEfforts ?? null,
+    rsSum: prov.modelSupportsReasoningSummaries ?? null,
+    rsDel: prov.modelReasoningSummaryDelivery ?? null,
+    noVis: [...(prov.noVisionModels ?? [])].sort(),
+    ptc: prov.parallelToolCalls ?? null,
+    gMode: prov.googleMode ?? null,
   };
-};
+}
 
-export function isProviderModelsApiItems(value: unknown): value is ProviderModelsApiItem[] {
-  return Array.isArray(value) && value.every(item =>
-    item !== null
-    && typeof item === "object"
-    && !Array.isArray(item)
-    && typeof (item as { id?: unknown }).id === "string"
-    && (item as { id: string }).id.trim().length > 0
-  );
+function gatherFlightKey(config: OcxConfig): string {
+  const providers = Object.entries(config.providers)
+    .filter(([, prov]) => prov.disabled !== true)
+    .map(([name, prov]) => providerCatalogFingerprint(name, prov))
+    .sort((a, b) => String(a.n).localeCompare(String(b.n)));
+  const assembly = stableJson({
+    providers,
+    disabledModels: [...(config.disabledModels ?? [])].sort(),
+    combos: config.combos ?? {},
+    customModels: (config.customModels ?? []).map((cm) => ({
+      p: cm.provider,
+      m: cm.modelId,
+      d: cm.displayName ?? null,
+      cw: cm.contextWindow ?? null,
+      im: cm.inputModalities ?? null,
+    })),
+    caps: config.providerContextCaps ?? null,
+  });
+  const digest = createHash("sha256").update(assembly).digest("hex").slice(0, 16);
+  return `${digest}#${config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS}`;
+}
+
+/** Drop in-flight gather so tests / full cache clears do not reuse a stale promise. */
+export function clearGatherRoutedModelsInflight(): void {
+  gatherInflight.clear();
 }
 
 export function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
@@ -76,6 +162,13 @@ export function configuredMaxInputTokens(prov: OcxProviderConfig, id: string): n
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
+function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, id: string): boolean | undefined {
+  if (!prov) return undefined;
+  const explicit = modelRecordValue(prov.modelSupportsReasoningSummaries, id);
+  if (explicit !== undefined) return explicit;
+  return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
+}
+
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
   void name;
   const configuredCap = configuredContextWindow(prov, model.id);
@@ -91,10 +184,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
-  const supportsReasoningSummaries = modelRecordValue(
-    (prov as OcxProviderConfigWithReasoningSummaries).modelSupportsReasoningSummaries,
-    model.id,
-  );
+  const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
     ...(configuredCap !== undefined
@@ -145,6 +235,15 @@ export function isDatedVariantId(liveId: string, configuredId: string): boolean 
 }
 
 export const lastDropWarnSignature = new Map<string, string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileProviderFetchWarnings(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = lastDropWarnSignature.size;
+  lastDropWarnSignature.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 
@@ -179,34 +278,137 @@ export function isGlm52ModelId(id: string): boolean {
   return normalized === "glm-5.2" || normalized === "glm-5.2[1m]";
 }
 
-export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
-  const capabilities = item.metadata?.capabilities;
-  const limits = item.metadata?.limits;
-  const contextWindow =
-    typeof limits?.max_context_length === "number" ? limits.max_context_length
-      : typeof item.context_length === "number" ? item.context_length
-      : typeof item.max_model_len === "number" ? item.max_model_len
-        : undefined;
- const reasoningEfforts = capabilities && typeof capabilities.reasoning_effort === "boolean"
-   ? (capabilities.reasoning_effort
-     ? ((providerName === "neuralwatt" || providerName === "zai") && isGlm52ModelId(item.id)
-       ? ["low", "medium", "high", "xhigh", "max"]
-       : ["low", "medium", "high", "xhigh"])
-     : [])
-   : undefined;
- const inputModalities = capabilities && typeof capabilities.vision === "boolean"
-    ? (capabilities.vision ? ["text", "image"] : ["text"])
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : undefined;
+}
+
+const MODEL_DISCOVERY_METADATA_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+function positiveSafeInteger(...values: unknown[]): number | undefined {
+  return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value > 0) as number | undefined;
+}
+
+function normalizedMetadataString(raw: string, maxLength: number): string | undefined {
+  if (raw.length > maxLength * 4 || MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(raw)) return undefined;
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, maxLength);
+  return normalized || undefined;
+}
+
+function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const maxInspectedItems = Math.max(maxItems * 8, maxItems);
+  for (let i = 0; i < value.length && i < maxInspectedItems; i += 1) {
+    const raw = value[i];
+    if (typeof raw !== "string") continue;
+    const normalized = normalizedMetadataString(raw, maxLength);
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+    if (out.length >= maxItems) break;
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
+  const metadata = plainRecord(item.metadata);
+  const metadataCapabilities = metadata?.capabilities;
+  const capabilityRecord = plainRecord(metadataCapabilities) ?? plainRecord(item.capabilities);
+  const out = new Set<string>();
+  for (const list of [item.capabilities, item.features, item.supported_features, metadataCapabilities]) {
+    for (const capability of normalizedStringList(list) ?? []) out.add(capability);
+  }
+  const capabilityFields = capabilityRecord ?? {};
+  let inspectedCapabilityFields = 0;
+  for (const key in capabilityFields) {
+    if (!Object.hasOwn(capabilityFields, key)) continue;
+    inspectedCapabilityFields += 1;
+    if (inspectedCapabilityFields > 256 || out.size >= 32) break;
+    if (capabilityFields[key] === true) {
+      const normalized = normalizedMetadataString(key, 64);
+      if (normalized) out.add(normalized);
+    }
+  }
+  for (const field of ["supports_tools", "supports_tool_calling", "supports_function_calling"] as const) {
+    if (item[field] === true) out.add("tools");
+  }
+  for (const field of ["supports_reasoning", "reasoning"] as const) {
+    if (item[field] === true) out.add("reasoning");
+  }
+  return out.size > 0 ? [...out].filter(Boolean).slice(0, 32) : undefined;
+}
+
+function modelInputModalities(
+  item: ProviderModelsApiItem,
+  capabilities: readonly string[] | undefined,
+): string[] | undefined {
+  const metadata = plainRecord(item.metadata);
+  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const explicit = normalizedStringList(
+    item.input_modalities
+      ?? item.modalities
+      ?? metadata?.input_modalities
+      ?? capabilityRecord?.input_modalities,
+    8,
+    24,
+  )?.filter(value => (
+    // Codex parses `input_modalities` as a closed enum of text | image | audio. A provider that
+    // advertises anything else (zenmux reports "video") must not reach the catalog: Codex rejects
+    // the whole file, so plugins, apps and MCP servers all stop loading over one model's metadata.
+    value === "text" || value === "image" || value === "audio"
+  ));
+  if (explicit && explicit.length > 0) return explicit;
+  if (capabilityRecord?.vision === false) return ["text"];
+  if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
+    return ["text", "image"];
+  }
+  return undefined;
+}
+
+export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
+  const metadata = plainRecord(item.metadata);
+  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const limits = plainRecord(metadata?.limits);
+  const contextWindow =
+    positiveSafeInteger(
+      limits?.max_context_length,
+      metadata?.context_length,
+      item.context_length,
+      item.context_size,
+      item.max_model_len,
+      item.max_context_length,
+    );
+  const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
+  const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
+  const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
+  const reasoningEfforts = listedReasoningEfforts
+    ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
+    : typeof rawReasoningEfforts === "boolean"
+      ? (rawReasoningEfforts
+        ? ((providerName === "neuralwatt" || providerName === "zai") && isGlm52ModelId(item.id)
+          ? ["low", "medium", "high", "xhigh", "max"]
+          : ["low", "medium", "high", "xhigh"])
+        : [])
+      : undefined;
+  const capabilities = modelCapabilities(item);
+  const inputModalities = modelInputModalities(item, capabilities);
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+    ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
+    ...(capabilities ? { capabilities } : {}),
   };
+}
+
+function boundedOwnedBy(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) return undefined;
+  if (MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(value)) return undefined;
+  return value;
 }
 
 export async function fetchProviderModels(name: string, prov: OcxProviderConfig, ttlMs: number, contextCap?: number): Promise<CatalogModel[]> {
   if (prov.authMode === "forward") return []; // ChatGPT backend has no /models
-  const apiKey = await resolveModelsAuthToken(name, prov);
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
@@ -217,6 +419,13 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     provider: name,
     ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
   }));
+  // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
+  // discovery failure left by an older live configuration even when the account is logged out.
+  if (prov.liveModels === false) {
+    clearProviderDiscoveryStatus(name);
+    return configured;
+  }
+  const apiKey = await resolveModelsAuthToken(name, prov);
   // A configured default is a real callable selector and must remain discoverable when a
   // compatible provider's live /models request fails (issue #308). Keep this separate from the
   // explicit static list: `liveModels: false` + empty `models[]` intentionally publishes zero
@@ -235,7 +444,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       : models
   );
   if (prov.adapter === "cursor") {
-    if (prov.liveModels === false || !apiKey) return configured;
+    if (!apiKey) return configured;
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
     // variants this PLAN can use. Keep the base-model UX (the request builder appends the effort
     // suffix) but filter the static seed to the bases the account actually has — so models not on the
@@ -250,10 +459,13 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
       const result = available.length > 0 ? available : configured;
+      // Count what discovery actually returned, not the configured rows we fall back to.
+      markProviderDiscoveryOk(name, liveResult.models.length);
       setCached(name, result);
       return result;
     }
     markModelsFetchFailure(name);
+    markProviderDiscoveryFailed(name, { reason: "provider" });
     console.warn(
       `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
     );
@@ -266,9 +478,6 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
     return configured;
   }
-  if (prov.liveModels === false) {
-    return configured;
-  }
   const fresh = getFreshCached(name, ttlMs);
   if (fresh) return withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap)); // dedups Codex's frequent /v1/models polling within the TTL
   if (isModelsFetchCoolingDown(name)) {
@@ -277,77 +486,102 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
     const stale = getStaleCached(name);
     return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : failedDiscoveryConfigured;
   }
+  const discovery = resolveProviderModelDiscovery(name, prov);
   const { url, headers } = buildModelsRequest(prov, apiKey, name);
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
-  const failedDiscoveryFallback = (): { models: CatalogModel[]; fallback: "stale" | "configured" } => {
+  const failedDiscoveryFallback = (
+    failure: ProviderModelDiscoveryFailure,
+  ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
+    // Decide logging BEFORE recording the new status, so we can compare against the prior one and
+    // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
+    // discovery-status API regardless.
+    const shouldLog = shouldLogDiscoveryFailure(name, failure);
     markModelsFetchFailure(name);
+    markProviderDiscoveryFailed(name, failure);
     const stale = getStaleCached(name);
     return {
       models: stale
         ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
         : failedDiscoveryConfigured,
       fallback: stale ? "stale" : "configured",
+      shouldLog,
     };
   };
   try {
-    const destinationError = await providerDestinationResolvedError(name, {
-      baseUrl: url,
-      allowPrivateNetwork: prov.allowPrivateNetwork,
+    const res = await providerOutboundGet(name, prov, url, {
+      headers,
+      signal: AbortSignal.timeout(8000),
     });
-    if (destinationError) {
-      const { models, fallback } = failedDiscoveryFallback();
-      console.warn(
-        `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${destinationError} [urlClass=${urlClass}, fallback=${fallback}].`,
-      );
+    const redirectError = await providerRedirectError(res, url);
+    if (redirectError) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" ${redirectError} [urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
       return models;
     }
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
-      const { models, fallback } = failedDiscoveryFallback();
-      console.warn(
-        `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
-      );
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
       return models;
     }
 
     const contentType = (
       res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
     ).slice(0, 80);
-    const body = await res.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(body) as unknown;
-    } catch {
-      const { models, fallback } = failedDiscoveryFallback();
-      const diagnostic = contentType === "application/json" || contentType.endsWith("+json")
-        ? "returned invalid JSON in a 2xx response"
-        : "returned a non-JSON 2xx response";
-      console.warn(
-        `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
-      );
+    const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+    if (!bounded.ok) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      const diagnostic = bounded.reason === "response_too_large"
+        ? `exceeded the ${discovery.maxResponseBytes}-byte response limit`
+        : contentType === "application/json" || contentType.endsWith("+json")
+          ? "returned invalid JSON in a 2xx response"
+          : "returned a non-JSON 2xx response";
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
       return models;
     }
-    const data = json !== null && typeof json === "object" && !Array.isArray(json)
-      ? (json as { data?: unknown }).data
-      : undefined;
-    if (!isProviderModelsApiItems(data)) {
-      const { models, fallback } = failedDiscoveryFallback();
-      console.warn(
-        `[opencodex] Provider model discovery for "${name}" returned malformed 2xx data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
-      );
+    const extracted = extractProviderModelItems(bounded.value, discovery);
+    if (!extracted.ok) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {
+        response_too_large: "returned an oversized 2xx response",
+        invalid_json: "returned invalid JSON in a 2xx response",
+        invalid_shape: "returned malformed 2xx data",
+        too_many_models: `exceeded the ${discovery.maxModels}-row model limit`,
+      };
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
       return models;
     }
-    const items = data;
-    const live = items.map(m => applyProviderConfigHints(name, prov, {
-      id: m.id,
-      provider: name,
-      owned_by: m.owned_by,
-      ...catalogHintsFromModelsApiItem(name, m),
-    }, contextCap))
+    const items = extracted.items;
+    const live = items.map(m => {
+      const ownedBy = boundedOwnedBy(m.owned_by);
+      return applyProviderConfigHints(name, prov, {
+        id: m.id,
+        provider: name,
+        ...(ownedBy ? { owned_by: ownedBy } : {}),
+        ...catalogHintsFromModelsApiItem(name, m),
+      }, contextCap);
+    })
       .filter(m => shouldExposeProviderModel(name, m.id));
+    // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
+    // `live`; otherwise configured entries would be reported as discovered ones.
+    const liveModelCount = live.length;
     const liveIds = new Set(live.map(m => m.id));
     // Dated-release aliases (Anthropic pattern): older models may appear in the live catalog
     // ONLY under their dated id (claude-haiku-4-5-20251001) while the config names the
@@ -376,13 +610,25 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
       && !QUIET_AUTHORITATIVE_CATALOG_PROVIDERS.has(name)) {
       warnDroppedConfiguredIdsOnce(name, droppedConfiguredIds);
     }
+    markProviderDiscoveryOk(name, liveModelCount);
     setCached(name, live);
     return live;
   } catch (error) {
-    const { models, fallback } = failedDiscoveryFallback();
-    console.warn(
-      `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)} [urlClass=${urlClass}, fallback=${fallback}].`,
-    );
+    if (error instanceof ProviderOutboundPolicyError) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" was blocked by destination policy: ${error.message} [urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
+      return models;
+    }
+    const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "network" });
+    if (shouldLog) {
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)} [urlClass=${urlClass}, fallback=${fallback}].`,
+      );
+    }
     return models;
   }
 }
@@ -421,7 +667,37 @@ export function filterCatalogVisibleModels(
   });
 }
 
-export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogModel[]> {
+export async function gatherRoutedModels(
+  config: OcxConfig,
+  options?: { comboOmissions?: ComboCatalogOmission[] },
+): Promise<CatalogModel[]> {
+  const key = gatherFlightKey(config);
+  let promise = gatherInflight.get(key);
+  if (!promise) {
+    const lease = gatherGate.tryAcquire();
+    if (!lease) throw new CatalogGatherBusyError();
+    // Claim the slot synchronously before any await so same-key callers join this flight.
+    // Distinct keys keep their own entries — a second config must not evict the first.
+    const flight = gatherRoutedModelsUncached(config).finally(() => {
+      if (gatherInflight.get(key) === flight) gatherInflight.delete(key);
+      lease.release();
+    });
+    gatherInflight.set(key, flight);
+    promise = flight;
+  }
+  const { models, comboOmissions } = await promise;
+  if (options?.comboOmissions) {
+    options.comboOmissions.length = 0;
+    options.comboOmissions.push(...comboOmissions);
+  }
+  return models;
+}
+
+async function gatherRoutedModelsUncached(
+  config: OcxConfig,
+): Promise<GatherFlightResult> {
+  // Flight-local list: joiners copy from the resolved promise, not a process-global last write.
+  const localOmissions: ComboCatalogOmission[] = [];
   const ttlMs = config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS;
   // Persisted provider entries can predate newer registry fields (noVisionModels,
   // modelInputModalities, ...). The ROUTER merges registry seeds at request time
@@ -499,13 +775,17 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
     if (derived) all.push(derived);
-    else warnUncataloguedComboOnce(id, combo, members);
+    else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
+  replaceLastComboCatalogOmissions(localOmissions);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+  // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
+  // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
+  const enrichedByName = new Map(activeProviders);
   const customModels = (config.customModels ?? []).map(cm => {
-    const provider = config.providers[cm.provider] as OcxProviderConfigWithReasoningSummaries | undefined;
-    const supportsReasoningSummaries = modelRecordValue(provider?.modelSupportsReasoningSummaries, cm.modelId);
-    return {
+    const rawProvider = config.providers[cm.provider];
+    const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
+    const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
@@ -514,11 +794,24 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     };
+    // Vision-sidecar coverage ONLY: if the custom model is in the enriched provider's
+    // noVisionModels, advertise image input so the Codex app lets images reach the sidecar
+    // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
+    // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
+    // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
+    const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
+    if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, base.id)) {
+      const current = base.inputModalities ?? ["text"];
+      if (!current.includes("image")) {
+        return { ...base, inputModalities: [...current, "image"] };
+      }
+    }
+    return base;
   });
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
   const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
-  return [...deduped, ...customModels];
+  return { models: [...deduped, ...customModels], comboOmissions: localOmissions };
 }
 
 export function augmentRoutedModelsWithRegistryOpenAiApiRows(
@@ -526,7 +819,7 @@ export function augmentRoutedModelsWithRegistryOpenAiApiRows(
   config: OcxConfig,
 ): CatalogModel[] {
   const configured = config.providers[OPENAI_API_PROVIDER_ID];
-  if (!configured || configured.disabled === true) return models;
+  if (!configured || configured.disabled === true || !providerMatchesRegistryTransport(OPENAI_API_PROVIDER_ID, configured)) return models;
   const entry = getProviderRegistryEntry(OPENAI_API_PROVIDER_ID);
   if (!entry?.models) return models;
 

@@ -64,13 +64,21 @@ export function filterModels(
   base: string[],
   defaultModel: string | undefined,
   query: string,
-  configuredModels?: string[],
+  configuredModels: string[] | undefined,
+  customModels: string[],
+  /**
+   * Whether the last successful discovery returned any rows, taken from the server. Required:
+   * inferring it by subtracting custom ids from `base` misreads a live catalog as custom-only
+   * whenever a custom id also appears upstream, which wrongly keeps the configured fallback
+   * authoritative.
+   */
+  hasLiveModels: boolean,
 ): string[] {
-  const list = base.length > 0
-    ? base
-    : (configuredModels && configuredModels.length > 0)
-      ? configuredModels
-      : defaultModel ? [defaultModel] : [];
+  const fallback = configuredModels && configuredModels.length > 0
+    ? configuredModels
+    : defaultModel ? [defaultModel] : [];
+  const primary = hasLiveModels ? base : fallback;
+  const list = [...new Set([...primary, ...customModels])];
   const q = query.trim().toLowerCase();
   if (!q) return list;
   return list.filter(id => id.toLowerCase().includes(q));

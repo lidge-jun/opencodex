@@ -62,6 +62,14 @@ macOS；在其他平台上，请使用 `ocx claude`。
 `claudeCode.anthropicBaseUrl` 指向其他位置。
 
 ## /model 选择器（“From gateway”）
+每个条目带有诚实的显示名（如 `gemini-3-pro (gemini)`），并以官方 ModelInfo 形态附带模型能力
+信息（推理强度梯度、thinking 类型），使 Claude Desktop 的第三方网关模式能够启用推理强度选择
+UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部槽位，不是发布日期。旧版哈希
+别名和 `claude-ocx-<provider>--<model>` 别名仍可解析。拥有 1M 上下文的模型会多出一行 `…[1m]`：
+选中后 Claude Code 会按 1M 计算该模型的上下文（自动压缩保留，代理在路由前去掉该标记）。
+选中后会保存到 Claude Code 的 `settings.json` `model` 字段；入站请求会将别名解析回路由
+模型。旧版 Claude Code 中选择器保持原生 — 通过 `ANTHROPIC_MODEL` 设置槽位，或直接在 `/model`
+中输入任意路由 id（Claude Code 会原样传递字符串）。
 
 Claude Code 2.1.129+ 通过 `GET /v1/models?limit=1000` 发现网关模型，并在原生 `/model`
 选择器中以“From gateway”标签列出。由于选择器只接受以 `claude` 或 `anthropic` 开头的 ID，
@@ -69,16 +77,24 @@ opencodex 会将已路由模型公开为稳定且可逆的别名：
 
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `claude-ocx-<provider>--<model>`（plain）或 `claude-ocx2-…`（escaped） | `claude-ocx-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字符 base36 哈希） | `claude-opus-4-8-ncb` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
 user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 哈希形式。两种别名族都会永久
 保持可解码——以任一形式保存在 `settings.json` 中的模型都能继续工作。
 
-**别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`；model 不得包含
-`/`。易读形式无法表达的路由会回退到哈希别名。模型 ID **可以**包含 `--`（解析时只按第一个
-`--` 拆分）；包含 `--` 的原生 slug 会回退到哈希形式。
+如果 Claude Desktop 底部的选择器没有切换已运行 3P 对话的模型，请在该对话中使用
+`/model <id>`。OpenCodex 无法读取选择器状态，只会路由每个请求实际携带的模型 ID；可在
+**Logs → requestedModel** 中确认结果。
+
+**别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`。
+不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `claude-ocx-…`。包含 `/` 或 `~` 的 model ID
+会使用 v2 前缀 `claude-ocx2-…` 并转义（`/` → `~s`，`~` → `~t`），例如
+`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` / `~t` 会被保留）；v2 别名会展开转义。
+易读形式无法表达的路由会回退到哈希别名。模型 ID **可以**包含 `--`（解析时只按第一个 `--` 分割）；
+含 `--` 的原生 slug 会回退到哈希形式。
 
 **模型解析顺序：**移除 `[1m]` 标记 → 解码易读别名 → 解码 Desktop 哈希别名 →
 `modelMap` 精确匹配 → 移除日期后的匹配（移除 `-20250514`）→ 透传。
@@ -120,6 +136,8 @@ user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 哈�
 `ANTHROPIC_MODEL`、四个 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`，以及旧版
 `ANTHROPIC_SMALL_FAST_MODEL`。有效 Haiku 值为 `tierModels.haiku ?? smallFastModel`，并会
 提供给两个 Haiku 变量。
+
+当 `tierModels.haiku` 和 `smallFastModel` 均未设置时，OpenCodex 会让两个辅助模型变量保持未设置；随后 Claude Code 会选择其原生辅助模型（目前为 Sonnet），并可能产生原生提供方费用。
 
 ## 名册代理（injectAgents）
 
@@ -213,7 +231,7 @@ Claude 入站的路由重放会把主 ChatGPT 登录附加到内部请求，因�
 进行中描述不会消耗配额。成功的 `data:` 图像描述会按后端、模型、detail、图像字节和请求上下文
 缓存，避免每次重放都重复描述同一图像与上下文。内容可能变化的远程 `https:` 图像不会缓存。
 
-全部配置项见[配置参考](/opencodex/zh-cn/reference/configuration/#sidecars)。Anthropic OAuth Web
+全部配置项见[配置参考](/zh-cn/reference/configuration/#sidecars)。Anthropic OAuth Web
 Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例，但在用于长时间无人值守任务前，
 仍应使用你的账户和实际负载进行充分 soak test。
 

@@ -1,0 +1,8 @@
+/* LoginUrlBlock — shared OAuth login-URL recovery affordance.
+   Used by the provider workspace panel, the add-provider modal, and the Codex
+   account modal, so these rules do not belong to any one of them. */
+
+.login-url-block { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.login-url-block-text { display: block; max-width: 100%; overflow-wrap: anywhere; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--surface); font-size: var(--text-label); color: var(--text); user-select: all; }
+.login-url-block-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.login-url-block-open { font-size: var(--text-label); color: var(--accent); text-decoration: underline; cursor: pointer; }

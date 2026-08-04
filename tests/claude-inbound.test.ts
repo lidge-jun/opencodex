@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, resolveInboundModel } from "../src/claude/inbound";
+import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel } from "../src/claude/inbound";
 import { parseRequest } from "../src/responses/parser";
 import { responsesRequestSchema } from "../src/responses/schema";
 
@@ -382,10 +382,19 @@ describe("ocx-route directive (devlog 072)", () => {
     })).toBe("gemini/gemini-3-pro");
   });
 
+  test("extracts only supported generated-agent effort values", () => {
+    expect(extractOcxEffortDirective({ system: "<!-- ocx-effort: max -->" })).toBe("max");
+    expect(extractOcxEffortDirective({
+      system: [{ type: "text", text: "<!-- ocx-effort: xhigh -->" }],
+    })).toBe("xhigh");
+    expect(extractOcxEffortDirective({ system: "<!-- ocx-effort: ultra -->" })).toBeNull();
+  });
+
   test("absent or malformed directives return null", () => {
     expect(extractOcxRouteDirective({ system: "no directive here" })).toBeNull();
     expect(extractOcxRouteDirective({ system: [{ type: "text", text: "<!-- ocx-route: -->" }] })).toBeNull();
     expect(extractOcxRouteDirective({})).toBeNull();
     expect(extractOcxRouteDirective(null)).toBeNull();
+    expect(extractOcxEffortDirective(null)).toBeNull();
   });
 });

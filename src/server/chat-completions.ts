@@ -14,8 +14,12 @@ import {
   responsesJsonToChatCompletion,
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
+import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import { redactSecretString } from "../lib/redact";
+import { resolveClientRetryAfter } from "../lib/retry-after";
 import { estimateTokens } from "../lib/token-estimate";
 import { routeModel } from "../router";
+import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import {
@@ -27,16 +31,24 @@ import {
 } from "./request-log";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import type { AdmissionLease } from "../lib/admission";
+import {
+  createTranslatorBudget,
+  finalizeTranslatorBudgetResponse,
+  isTranslatorBudgetExceededError,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 
 type Rec = Record<string, unknown>;
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
-async function readChatBody(req: Request): Promise<unknown> {
+async function readChatBody(req: Request, budget: TranslatorBudget): Promise<unknown> {
   try {
-    return await readJsonRequestBody(req);
+    return await readJsonRequestBody(req, budget);
   } catch (err) {
+    if (isTranslatorBudgetExceededError(err)) throw err;
     throw new ChatCompletionsRequestError(err instanceof Error && err.message ? err.message : "Invalid JSON body");
   }
 }
@@ -45,21 +57,51 @@ export async function handleChatCompletions(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: { requestId: string; start: number },
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+): Promise<Response> {
+  const translatorBudget = createTranslatorBudget();
+  try {
+    return finalizeTranslatorBudgetResponse(
+      await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds),
+      translatorBudget,
+    );
+  } catch (error) {
+    translatorBudget.dispose();
+    throw error;
+  }
+}
+
+async function handleChatCompletionsWithBudget(
+  req: Request,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  translatorBudget: TranslatorBudget,
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
 ): Promise<Response> {
   let chatBody: unknown;
   let internalBody: Rec;
   try {
-    chatBody = await readChatBody(req);
+    chatBody = await readChatBody(req, translatorBudget);
     internalBody = chatCompletionsToResponsesBody(chatBody);
+    translatorBudget.chargeRetained(new TextEncoder().encode(JSON.stringify(internalBody)).byteLength, { kind: "request_copies" });
   } catch (err) {
-    const status = err instanceof ChatCompletionsRequestError ? 400 : 500;
+    const overflow = isTranslatorBudgetExceededError(err);
+    const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
-    return chatCompletionsErrorResponse(status, err instanceof Error ? err.message : String(err));
+    return chatCompletionsErrorResponse(
+      status,
+      overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
+      overflow ? "request_too_large" : undefined,
+      overflow ? "translation_buffer_limit" : undefined,
+    );
   }
 
   const requestedModel = (chatBody as Rec).model as string;
   const stream = internalBody.stream === true;
+  // Best-effort Grok attribution: the managed fence stamps this header on every model
+  // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
+  // bucketing only — never an auth or billing signal.
+  if (req.headers.get("x-opencodex-grok") === "1") logCtx.surface = "grok";
   // Routed adapters only support streamed turns; always stream internally and fold
   // for non-streaming clients.
   internalBody.stream = true;
@@ -68,6 +110,9 @@ export async function handleChatCompletions(
   let directRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string);
+    // Settle the wire once so every branch below reads the adapter this model will
+    // actually use, not the provider-wide default (#404).
+    route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "chat");
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
@@ -124,10 +169,12 @@ export async function handleChatCompletions(
     /* optional */
   }
 
+  const internalBodyJson = JSON.stringify(internalBody);
+  translatorBudget.chargeRetained(new TextEncoder().encode(internalBodyJson).byteLength, { kind: "request_copies" });
   const internalReq = new Request("http://localhost/v1/responses", {
     method: "POST",
     headers,
-    body: JSON.stringify(internalBody),
+    body: internalBodyJson,
   });
 
   let nativeLogged = false;
@@ -137,51 +184,94 @@ export async function handleChatCompletions(
     addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
   };
   const upstream = await handleResponses(internalReq, config, logCtx, {
+    ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     abortSignal: req.signal,
+    // Body is Responses-shaped by now, but the client spoke Chat Completions.
+    inboundWire: "chat",
+    translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });
-  const response = logIds
-    ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx)
-    : upstream;
 
-  if (!response.ok) {
-    let message = `upstream error (${response.status})`;
+  // Rewrite non-2xx before deferred logging so /api/logs records the client-facing status
+  // (e.g. cyber_policy remapped from a passthrough 5xx to HTTP 400).
+  if (!upstream.ok) {
+    let message = `upstream error (${upstream.status})`;
+    let upstreamCode: string | null | undefined;
+    let upstreamType: string | undefined;
     try {
-      const text = await response.text();
+      const text = await upstream.text();
       try {
-        const parsed = JSON.parse(text) as { error?: { message?: string; type?: string } | string; message?: string };
-        const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.message : undefined;
+        const parsed = JSON.parse(text) as {
+          error?: { message?: string; type?: string; code?: string | null } | string;
+          message?: string;
+        };
+        const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error : undefined;
         const flat = typeof parsed?.error === "string" ? parsed.error : parsed?.message;
-        message = nested || flat || (text ? `upstream error (${response.status}): ${text.slice(0, 400)}` : message);
+        const rawFallback = text
+          ? `upstream error (${upstream.status}): ${redactSecretString(text).slice(0, 400)}`
+          : message;
+        message = nested?.message || flat || rawFallback;
+        if (nested) {
+          if (typeof nested.type === "string") upstreamType = nested.type;
+          if (nested.code === null || typeof nested.code === "string") upstreamCode = nested.code;
+        }
       } catch {
-        if (text) message = `upstream error (${response.status}): ${text.slice(0, 400)}`;
+        if (text) message = `upstream error (${upstream.status}): ${redactSecretString(text).slice(0, 400)}`;
       }
     } catch { /* keep fallback */ }
-    const retryAfter = response.headers.get("retry-after");
-    return new Response(JSON.stringify({
+    const retryAfter = resolveClientRetryAfter({
+      status: upstream.status,
+      message,
+      upstreamRetryAfter: upstream.headers.get("retry-after"),
+    });
+    const classified = classifyError(
+      upstream.status,
+      upstreamType
+        ?? (upstream.status === 401 ? "authentication_error"
+          : upstream.status === 429 ? "rate_limit_error"
+          : upstream.status >= 500 ? "server_error"
+          : "invalid_request_error"),
+      message,
+    );
+    if (isCyberPolicyCode(upstreamCode)) {
+      classified.code = CYBER_POLICY_ERROR_CODE;
+      classified.type = "invalid_request_error";
+    } else if (upstreamCode === "model_not_found") {
+      // Structured model_not_found must win over classifyError's generic remaps.
+      classified.code = "model_not_found";
+      classified.type = "invalid_request_error";
+    } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
+      classified.code = upstreamCode;
+    }
+    const status = isCyberPolicyCode(classified.code) ? 400 : upstream.status;
+    const rewritten = new Response(JSON.stringify({
       error: {
-        message,
-        type: response.status === 401 ? "authentication_error"
-          : response.status === 429 ? "rate_limit_error"
-          : response.status >= 500 ? "server_error"
-          : "invalid_request_error",
+        message: classified.message,
+        type: classified.type,
         param: null,
-        code: null,
+        code: classified.code,
       },
     }), {
-      status: response.status,
+      status,
       headers: {
         "Content-Type": "application/json",
         ...(retryAfter ? { "Retry-After": retryAfter } : {}),
       },
     });
+    return logIds
+      ? responseWithDeferredRequestLog(rewritten, logIds.requestId, logIds.start, logCtx)
+      : rewritten;
   }
+
+  const response = logIds
+    ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx)
+    : upstream;
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel);
+    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget });
     if (stream) {
       // Stream failures surface as an error SSE frame then abort the body — never a
       // success completion that embeds `[error] ...` + clean [DONE].
@@ -195,14 +285,14 @@ export async function handleChatCompletions(
       });
     }
     try {
-      const completion = await collectChatCompletion(chatSse, requestedModel);
+      const completion = await collectChatCompletion(chatSse, requestedModel, translatorBudget);
       return new Response(JSON.stringify(completion), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     } catch (err) {
       if (isChatCompletionsStreamError(err)) {
-        return chatCompletionsErrorResponse(err.status, err.message, err.type);
+        return chatCompletionsErrorResponse(err.status, err.message, err.type, err.code);
       }
       return chatCompletionsErrorResponse(
         502,
@@ -221,8 +311,28 @@ export async function handleChatCompletions(
   }
   const status = (json as Rec)?.status;
   if (status === "failed") {
-    const error = (json as { error?: { message?: string } }).error;
-    return chatCompletionsErrorResponse(502, error?.message ?? "upstream request failed", "server_error");
+    const error = (json as { error?: { message?: string; type?: string; code?: string | null } }).error;
+    const message = error?.message ?? "upstream request failed";
+    const classified = classifyError(502, error?.type ?? "server_error", message);
+    if (error?.code === "translation_buffer_limit") {
+      classified.code = "translation_buffer_limit";
+      classified.type = "invalid_request_error";
+    } else if (isCyberPolicyCode(error?.code)) {
+      classified.code = CYBER_POLICY_ERROR_CODE;
+      classified.type = "invalid_request_error";
+    } else if (error?.code === "model_not_found") {
+      // Same deliberate preserve as the non-OK path: structured code beats generic classify.
+      classified.code = "model_not_found";
+      classified.type = "invalid_request_error";
+    }
+    return chatCompletionsErrorResponse(
+      classified.code === "translation_buffer_limit"
+        ? 413
+        : isCyberPolicyCode(classified.code) ? 400 : 502,
+      message,
+      classified.type,
+      classified.code,
+    );
   }
   const completion = responsesJsonToChatCompletion(json, requestedModel);
   if (!stream) {

@@ -17,13 +17,19 @@ or the latest published package before triage continues.
 
 Please avoid posting undisclosed vulnerabilities as public GitHub issues.
 
-- Prefer this repository's GitHub private vulnerability reporting or GitHub Security Advisory flow
-  when that option is available in the repository UI.
-- If no private reporting option is available, do not include exploit details, secrets, or live
-  targets in a public issue. Open a minimal issue that asks maintainers for a safe coordination path.
-- Include affected versions, reproduction steps, impact, and any required configuration details.
+Report privately through GitHub private vulnerability reporting, which is enabled on this
+repository:
 
-The project does not publish a dedicated private security email in this repository.
+**<https://github.com/lidge-jun/opencodex/security/advisories/new>**
+
+The same form is reachable from the repository's **Security** tab under **Report a vulnerability**.
+It is private between you and the maintainers, and it is the only channel this project offers for
+undisclosed vulnerabilities — there is no dedicated private security email.
+
+Include affected versions, reproduction steps, impact, and any required configuration details.
+
+If the form is ever unreachable for you, open a minimal public issue that asks maintainers for a
+safe coordination path. Do not include exploit details, secrets, or live targets in that issue.
 
 ## Response Expectations
 

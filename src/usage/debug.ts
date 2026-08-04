@@ -4,6 +4,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFi
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { DEBUG_ENV } from "../lib/debug-settings";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { DebugLogEntry } from "../lib/debug-log-buffer";
 import { redactSecretString, redactSecrets } from "../lib/redact";
 import type { OcxUsage } from "../types";
@@ -42,6 +43,7 @@ export function truncateForDebug(text: string, max = USAGE_DEBUG_BODY_SAMPLE_BYT
 
 function ensureUsageDebugDir(): void {
   const dir = getConfigDir();
+  recordOwnedConfigPath(dir, usageDebugPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
 }

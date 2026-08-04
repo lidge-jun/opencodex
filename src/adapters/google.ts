@@ -1,6 +1,7 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
+import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -22,6 +23,11 @@ import { compileGoogleWireBody } from "./google-wire-compiler";
 import { neutralizeIdentity } from "./identity";
 import { antigravityUsesReplayCache, applyAntigravityReplay, clearAntigravityReplay, observeAntigravityReplay } from "./google-antigravity-replay";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
+import {
+  isTranslatorBudgetExceededError,
+  retainTranslatedEventBatch,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { mapReasoningEffort } from "../reasoning-effort";
 
@@ -87,6 +93,35 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
   return parts;
 }
 
+/**
+ * Antigravity translates these Gemini `contents` into Anthropic `messages` for Claude models, and
+ * Anthropic rejects a text block whose `text` is empty or absent. An empty Gemini text part reaches
+ * that upstream as `{"type":"text"}` — a proto3 empty string is omitted from the translated JSON —
+ * and 400s with `messages.N.content.M.text.text: Field required` (issue #420). An empty `parts: []`
+ * model turn fails the same way. Gemini itself accepts both shapes, which is why this only ever
+ * surfaced on Claude-on-Antigravity; the guard lives here because this is where the parts are
+ * built. Mirrors the Anthropic adapter's own empty-block guard (src/adapters/anthropic.ts).
+ */
+const GEMINI_EMPTY_PLACEHOLDER = "(empty)";
+const GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER = "(empty tool output)";
+
+/** A Gemini text part, or undefined when the value cannot form a valid non-empty text block. */
+function geminiTextPart(text: unknown): { text: string } | undefined {
+  return typeof text === "string" && text.length > 0 ? { text } : undefined;
+}
+
+/**
+ * Text for `functionResponse.response.result`. `contentPartsToText` collapses an empty array — or one
+ * holding only empty text — to its "[image]" marker, which would claim an image the turn does not
+ * actually carry (`toolResultImageParts` adds none). Fall back to the placeholder unless the content
+ * has something representable.
+ */
+function geminiToolResultText(content: string | OcxContentPart[]): string {
+  if (typeof content === "string") return content || GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+  const hasContent = content.some(p => p.type === "image" || (typeof p.text === "string" && p.text.length > 0));
+  return hasContent ? contentPartsToText(content) : GEMINI_EMPTY_TOOL_OUTPUT_PLACEHOLDER;
+}
+
 function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?: unknown; contents: unknown[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -105,18 +140,22 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
       case "user":
       case "developer": {
         if (typeof msg.content === "string") {
-          contents.push({ role: "user", parts: [{ text: msg.content }] });
+          contents.push({ role: "user", parts: [{ text: msg.content || GEMINI_EMPTY_PLACEHOLDER }] });
         } else {
-          const parts = (msg.content as OcxContentPart[]).map(p => {
+          const parts: unknown[] = [];
+          for (const p of msg.content as OcxContentPart[]) {
             if (p.type === "image") {
               const data = parseDataUrl(p.imageUrl);
               // Gemini takes base64 via inline_data; a remote URL needs a mime type we don't have, so
               // fall back to a short marker rather than inlining the URL as a huge text blob.
-              return data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[image: ${p.imageUrl}]` };
+              parts.push(data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[image: ${p.imageUrl}]` });
+              continue;
             }
-            return { text: p.text };
-          });
-          contents.push({ role: "user", parts });
+            // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.
+            const textPart = geminiTextPart(p.text);
+            if (textPart) parts.push(textPart);
+          }
+          contents.push({ role: "user", parts: parts.length > 0 ? parts : [{ text: GEMINI_EMPTY_PLACEHOLDER }] });
         }
         break;
       }
@@ -124,8 +163,10 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
         for (const p of aMsg.content) {
-          if (p.type === "text") parts.push({ text: (p as OcxTextContent).text });
-          else if (p.type === "toolCall") {
+          if (p.type === "text") {
+            const textPart = geminiTextPart((p as OcxTextContent).text);
+            if (textPart) parts.push(textPart);
+          } else if (p.type === "toolCall") {
             const tc = p as OcxToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process
@@ -142,6 +183,10 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
             parts.push(part);
           }
         }
+        // A turn with nothing Gemini can represent (e.g. thinking-only) would serialize as
+        // `parts: []`, which the Anthropic translation rejects. Skip it, as the Anthropic
+        // adapter does for its own empty assistant content.
+        if (parts.length === 0) break;
         contents.push({ role: "model", parts });
         break;
       }
@@ -151,7 +196,7 @@ function messagesToGeminiFormat(parsed: OcxParsedRequest): { systemInstruction?:
         // tool-result screenshots (e.g. Computer Use) ride along as inline_data instead of being
         // flattened to a "[image]" marker the model can't actually see.
         const responseId = geminiToolCallId(msg.toolCallId);
-        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: contentPartsToText(msg.content) } };
+        const functionResponse: Record<string, unknown> = { name: namespacedToolName(msg.toolNamespace, msg.toolName), response: { result: geminiToolResultText(msg.content) } };
         // Mirror the matching functionCall id so Claude-on-Antigravity can pair this result with its
         // `tool_use` block (-> Anthropic `tool_result.tool_use_id`).
         if (responseId !== undefined) functionResponse.id = responseId;
@@ -194,6 +239,38 @@ function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | 
   };
 }
 
+/**
+ * Cap on the buffered non-streaming response body (100 MiB), matching
+ * IMAGES_RESPONSE_MAX_BYTES in src/server/images.ts. Enforced by streaming the
+ * body with a hard byte cap before JSON.parse — Content-Length alone is not
+ * trusted (missing/lying headers must still reject oversized payloads).
+ * Streaming SSE responses also cap each data frame before JSON.parse.
+ */
+const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
+const MAX_SSE_FRAME_BYTES = MAX_RESPONSE_BYTES;
+
+// Note: imagen-* models use a different API surface (prediction/image-generation
+// schema) and must NOT be treated as responseModalities-capable Gemini models.
+// Explicit allowlist only — never `/gemini/ && /image/` (resurrects media-gen IDs).
+const IMAGE_CAPABLE_MODELS = new Set([
+  "gemini-3.1-flash-image",
+  "gemini-2.0-flash-preview-image-generation",
+  "gemini-3-pro-image-preview",
+]);
+
+function isImageCapableModel(modelId: string): boolean {
+  return IMAGE_CAPABLE_MODELS.has(modelId);
+}
+
+/**
+ * Model-visible markdown link for a materialized artifact. Uses the authenticated
+ * opaque HTTP route so remote/container clients can fetch the image without host
+ * filesystem paths leaking into the transcript.
+ */
+function artifactMarkdownUrl(filePath: string): string {
+  return artifactHttpUrl(filePath).replace(/([()])/g, "\\$1");
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
@@ -233,6 +310,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
       if (directFlashThinking) generationConfig.thinkingConfig = { thinkingLevel: directFlashThinking };
+      if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
+        generationConfig.responseModalities = ["TEXT", "IMAGE"];
+      }
       if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
       const method = parsed.stream ? "streamGenerateContent" : "generateContent";
@@ -333,92 +413,176 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },
 
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
       }
+      // Streaming responses are processed incrementally (SSE chunks), so the full body
+      // is never buffered — no Content-Length pre-check is needed here. Per-image size
+      // protection is enforced on each chunk via MAX_ENCODED_BYTES_PER_IMAGE before
+      // materializeInlineImage is called (see the inline.data check below).
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      const budgetEncoder = new TextEncoder();
       let buffer = "";
+      let bufferBytes = 0;
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
+      let sawAnyFrame = false;
+      let sawTerminalSignal = false;
+
+      const handleDataLine = async function* (line: string): AsyncGenerator<AdapterEvent, "continue" | "content" | "terminate"> {
+        const payload = line.slice(5).trim();
+        if (!payload) return "continue";
+        if (payload.length > MAX_SSE_FRAME_BYTES) {
+          yield { type: "error", message: `upstream SSE data frame exceeds ${MAX_SSE_FRAME_BYTES} bytes` };
+          return "terminate";
+        }
+        let emittedContentEvent = false;
+
+        let chunk: Record<string, unknown>;
+        try {
+          chunk = JSON.parse(payload);
+        } catch {
+          yield { type: "error", message: "malformed upstream SSE data frame" };
+          return "terminate";
+        }
+        sawAnyFrame = true;
+
+        // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
+        if (chunk.error) {
+          const err = chunk.error as { message?: string } | undefined;
+          // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
+          // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
+          if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession
+            && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
+            clearAntigravityReplay(antigravityModel, antigravitySession);
+          }
+          yield { type: "error", message: err?.message ?? "upstream error" };
+          return "terminate";
+        }
+
+        // Antigravity (CCA) nests the standard Gemini payload under `response`.
+        let root = chunk;
+        if (provider.googleMode === "cloud-code-assist") {
+          const wrapped = chunk.response;
+          if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
+            yield { type: "error", message: "google-antigravity response missing response wrapper" };
+            return "terminate";
+          }
+          root = wrapped as Record<string, unknown>;
+        }
+        // usageMetadata is a top-level field independent of candidates; read it BEFORE the
+        // candidates guard so a usage-only final chunk is not dropped.
+        const usageMeta = root.usageMetadata as Record<string, number> | undefined;
+        if (usageMeta) {
+          // Accumulate usage; emit a single terminal `done` post-loop so usage is never
+          // dropped on EOF and the stream never yields two `done` events.
+          pendingUsage = usageFromGemini(usageMeta);
+          sawTerminalSignal = true;
+        }
+        const candidates = root.candidates as { content?: { parts?: unknown[] }; finishReason?: string }[] | undefined;
+        if (!candidates?.length) return "continue";
+
+        if (typeof candidates[0].finishReason === "string" && candidates[0].finishReason) {
+          lastFinishReason = candidates[0].finishReason;
+          sawTerminalSignal = true;
+        }
+
+        const parts = candidates[0].content?.parts as { text?: string; functionCall?: { name: string; args: unknown } }[] | undefined;
+        // Antigravity reasoning-replay: record thoughtSignatures from the model parts for the next turn.
+        if (provider.googleMode === "cloud-code-assist" && parts && antigravityModel && antigravitySession) {
+          observeAntigravityReplay(antigravityModel, antigravitySession, parts as unknown[]);
+        }
+        if (parts) {
+          for (const part of parts) {
+            if (part.text) {
+              emittedContentEvent = true;
+              yield { type: "text_delta", text: part.text };
+            }
+            const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
+            if (inline && typeof inline.data === "string") {
+              if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+                yield { type: "error", message: "inline image exceeds per-image size cap" };
+              } else {
+                try {
+                  const filePath = await materializeInlineImage(inline.data, imageBudget);
+                  const escapedPath = artifactMarkdownUrl(filePath);
+                  emittedContentEvent = true;
+                  yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
+                } catch {
+                  yield { type: "error", message: "failed to materialize inline image" };
+                }
+              }
+            }
+            if (part.functionCall) {
+              const id = `call_${crypto.randomUUID().slice(0, 8)}`;
+              toolCallsStarted++;
+              emittedContentEvent = true;
+              yield { type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) };
+              yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
+              yield { type: "tool_call_end" };
+            }
+          }
+        }
+        return emittedContentEvent ? "content" : "continue";
+      };
+      const imageBudget = createImageBudget();
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          const nextBuffer = buffer + decoder.decode(value, { stream: true });
+          const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
+          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
+          buffer = nextBuffer;
+          appendReservation.commitRetained();
+          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          bufferBytes = nextBufferBytes;
+          // Cap incomplete frames before waiting for a newline — otherwise a single
+          // unterminated data: payload can grow without bound.
+          if (buffer.length > MAX_SSE_FRAME_BYTES) {
+            yield { type: "error", message: `upstream SSE data frame exceeds ${MAX_SSE_FRAME_BYTES} bytes` };
+            try { await reader.cancel(); } catch { /* ignore */ }
+            return;
+          }
 
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
+          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
+          residualReservation.commitRetained();
+          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          bufferBytes = residualBytes;
 
+          let sawLiveness = false;
+          let sawContentEvent = false;
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const payload = line.slice(6).trim();
-            if (!payload) continue;
-
-            let chunk: Record<string, unknown>;
-            try { chunk = JSON.parse(payload); } catch { debugDroppedFrame("google", payload); continue; }
-
-            // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
-            if (chunk.error) {
-              const err = chunk.error as { message?: string } | undefined;
-              // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
-              // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
-              if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession
-                && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
-                clearAntigravityReplay(antigravityModel, antigravitySession);
-              }
-              yield { type: "error", message: err?.message ?? "upstream error" };
-              return;
+            if (line.startsWith("data:")) {
+              const result = yield* handleDataLine(line);
+              if (result === "terminate") return;
+              if (result === "content") sawContentEvent = true;
+              continue;
             }
-
-            // Antigravity (CCA) nests the standard Gemini payload under `response`.
-            let root = chunk;
-            if (provider.googleMode === "cloud-code-assist") {
-              const wrapped = chunk.response;
-              if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-                yield { type: "error", message: "google-antigravity response missing response wrapper" };
-                return;
-              }
-              root = wrapped as Record<string, unknown>;
-            }
-            // usageMetadata is a top-level field independent of candidates; read it BEFORE the
-            // candidates guard so a usage-only final chunk is not dropped.
-            const usageMeta = root.usageMetadata as Record<string, number> | undefined;
-            if (usageMeta) {
-              // Accumulate usage; emit a single terminal `done` post-loop so usage is never
-              // dropped on EOF and the stream never yields two `done` events.
-              pendingUsage = usageFromGemini(usageMeta);
-            }
-            const candidates = root.candidates as { content?: { parts?: unknown[] }; finishReason?: string }[] | undefined;
-            if (!candidates?.length) continue;
-
-            lastFinishReason = candidates[0].finishReason ?? lastFinishReason;
-
-            const parts = candidates[0].content?.parts as { text?: string; functionCall?: { name: string; args: unknown } }[] | undefined;
-            // Antigravity reasoning-replay: record thoughtSignatures from the model parts for the next turn.
-            if (provider.googleMode === "cloud-code-assist" && parts && antigravityModel && antigravitySession) {
-              observeAntigravityReplay(antigravityModel, antigravitySession, parts as unknown[]);
-            }
-            if (parts) {
-              for (const part of parts) {
-                if (part.text) {
-                  yield { type: "text_delta", text: part.text };
-                }
-                if (part.functionCall) {
-                  const id = `call_${crypto.randomUUID().slice(0, 8)}`;
-                  toolCallsStarted++;
-                  yield { type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) };
-                  yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
-                  yield { type: "tool_call_end" };
-                }
-              }
-            }
+            sawLiveness = true;
+            if (line.startsWith(":") || !line.trim()) continue;
+            debugDroppedFrame("google", line);
           }
+          if (sawLiveness && !sawContentEvent) yield { type: "heartbeat" };
+        }
+        buffer += decoder.decode();
+        if (buffer.trim().length > 0) {
+          const residual = buffer.trim();
+          if (residual.startsWith(":")) {
+            yield { type: "heartbeat" };
+          } else if (!residual.startsWith("data:")) {
+            yield { type: "error", message: "upstream stream ended with an incomplete SSE frame — possible truncation" };
+            return;
+          } else if ((yield* handleDataLine(residual)) === "terminate") return;
         }
         // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
         // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
@@ -427,24 +591,113 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           yield { type: "error", message: vertexTruncationErrorMessage(lastFinishReason) };
           return;
         }
-        yield { type: "done", usage: pendingUsage };
+        if (!sawAnyFrame || !sawTerminalSignal) {
+          yield { type: "error", message: "upstream stream ended without a terminal signal — possible truncation" };
+          return;
+        }
+        const stopReason = lastFinishReason === "MAX_TOKENS"
+          ? "max_tokens"
+          : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(lastFinishReason ?? "")
+            ? "content_filter"
+            : undefined;
+        yield {
+          type: "done",
+          usage: pendingUsage,
+          ...(stopReason ? { stopReason } : {}),
+        };
+      } catch (error) {
+        if (!isTranslatorBudgetExceededError(error)) throw error;
+        try { await reader.cancel(error); } catch { /* already closed */ }
+        yield {
+          type: "error",
+          status: 502,
+          errorType: "upstream_error",
+          code: "translation_buffer_limit",
+          message: "upstream translation buffer exceeded the safe limit",
+        };
       } finally {
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
         reader.releaseLock();
       }
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
-      const raw = await response.json() as Record<string, unknown>;
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
+      // Reject oversized responses before JSON parse. Prefer Content-Length when
+      // present and truthful; always stream-read with a hard byte cap so a missing
+      // or lying Content-Length cannot force a full in-memory buffer + parse.
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+        try { await response.body?.cancel(); } catch { /* ignore */ }
+        return [{ type: "error", message: `google response too large (content-length ${contentLength} exceeds ${MAX_RESPONSE_BYTES} bytes)` }];
+      }
+      let rawText: string;
+      let rawTextBytes = 0;
+      try {
+        const reader = response.body?.getReader();
+        if (!reader) return [{ type: "error", message: "google response had no body" }];
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > MAX_RESPONSE_BYTES) {
+              await reader.cancel().catch(() => {});
+              return [{ type: "error", message: `google response too large (exceeded ${MAX_RESPONSE_BYTES} bytes)` }];
+            }
+            budget.chargeRetained(value.byteLength, { kind: "retained_collectors" });
+            chunks.push(value);
+          }
+        } finally {
+          try { await reader.cancel(); } catch { /* ignore */ }
+          reader.releaseLock();
+        }
+        const bytesReservation = budget.reserveTransient(total, { kind: "retained_collectors" });
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        bytesReservation.commitRetained();
+        budget.releaseRetained(total, { kind: "retained_collectors" });
+        rawText = new TextDecoder().decode(bytes);
+        rawTextBytes = new TextEncoder().encode(rawText).byteLength;
+        const textReservation = budget.reserveTransient(rawTextBytes, { kind: "retained_collectors" });
+        textReservation.commitRetained();
+        budget.releaseRetained(total, { kind: "retained_collectors" });
+      } catch (err) {
+        return [{ type: "error", message: err instanceof Error ? err.message : "failed to read google response body" }];
+      }
+      let raw: Record<string, unknown>;
+      let rawBytes = 0;
+      try {
+        raw = JSON.parse(rawText) as Record<string, unknown>;
+        rawBytes = new TextEncoder().encode(JSON.stringify(raw)).byteLength;
+        const rawReservation = budget.reserveTransient(rawBytes, { kind: "retained_collectors" });
+        rawReservation.commitRetained();
+        budget.releaseRetained(rawTextBytes, { kind: "retained_collectors" });
+      } catch {
+        budget.releaseRetained(rawTextBytes, { kind: "retained_collectors" });
+        return [{ type: "error", message: "google response was not valid JSON" }];
+      }
+      const finish = (events: AdapterEvent[]): AdapterEvent[] => {
+        retainTranslatedEventBatch(events, budget);
+        budget.releaseRetained(rawBytes, { kind: "retained_collectors" });
+        rawBytes = 0;
+        return events;
+      };
       if (raw.error) {
         const err = raw.error as { message?: string };
-        return [{ type: "error", message: err.message ?? "upstream error" }];
+        return finish([{ type: "error", message: err.message ?? "upstream error" }]);
       }
       // Antigravity (CCA) nests the standard Gemini payload under `response`; unwrap it.
       let json = raw;
       if (provider.googleMode === "cloud-code-assist") {
         const wrapped = raw.response;
         if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-          return [{ type: "error", message: "google-antigravity response missing response wrapper" }];
+          return finish([{ type: "error", message: "google-antigravity response missing response wrapper" }]);
         }
         json = wrapped as Record<string, unknown>;
       }
@@ -452,9 +705,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] }; finishReason?: string }[] | undefined;
       if (!candidates?.length) {
-        return [{ type: "error", message: "google response contained no candidates" }];
+        return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
       let toolCallsStarted = 0;
+      const imageBudget = createImageBudget();
       if (candidates?.[0]?.content?.parts) {
         // Non-streaming CCA: observe thoughtSignatures for the next turn, same as the stream path.
         if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession) {
@@ -462,6 +716,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         for (const part of candidates[0].content.parts) {
           if (part.text) events.push({ type: "text_delta", text: part.text });
+          const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
+          if (inline && typeof inline.data === "string") {
+            if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
+              events.push({ type: "error", message: "inline image exceeds per-image size cap" });
+            } else {
+              try {
+                const filePath = await materializeInlineImage(inline.data, imageBudget);
+                const escapedPath = artifactMarkdownUrl(filePath);
+                events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
+              } catch {
+                events.push({ type: "error", message: "failed to materialize inline image" });
+              }
+            }
+          }
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
@@ -476,7 +744,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
       if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
         && toolCallsStarted > 0 && isVertexTruncationReason(candidates?.[0]?.finishReason)) {
-        return [{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }];
+        return finish([{ type: "error", message: vertexTruncationErrorMessage(candidates?.[0]?.finishReason) }]);
       }
 
       const usage = json.usageMetadata as Record<string, number> | undefined;
@@ -484,7 +752,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         type: "done",
         usage: usageFromGemini(usage),
       });
-      return events;
+      return finish(events);
     },
   };
 }

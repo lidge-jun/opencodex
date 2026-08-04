@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "acme/chat-pro",
+      "type": "chat",
+      "context_size": 262144,
+      "max_input_tokens": 250000,
+      "input_modalities": ["text", "image"],
+      "supported_features": ["tools", "reasoning"]
+    },
+    {
+      "id": "acme/embed-small",
+      "type": "embedding",
+      "context_length": 8192
+    },
+    {
+      "id": "acme/video-gen",
+      "type": "video",
+      "capabilities": ["video-generation"]
+    }
+  ]
+}

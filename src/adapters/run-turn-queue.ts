@@ -2,6 +2,8 @@ import type { AdapterEvent } from "../types";
 
 type QueueReader = (result: IteratorResult<AdapterEvent>) => void;
 
+export const PREFLIGHT_HEARTBEAT_RETAIN_LIMIT = 16;
+
 export interface AdapterEventQueue {
   push(event: AdapterEvent): void;
   close(): void;
@@ -39,8 +41,12 @@ export async function preflightAdapterEvents(
   while (true) {
     const next = await iterator.next();
     if (next.done) return { stream: replay(buffered, iterator), empty: true };
+    if (next.value.type === "heartbeat") {
+      buffered.push(next.value);
+      if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
+      continue;
+    }
     buffered.push(next.value);
-    if (next.value.type === "heartbeat") continue;
     if (next.value.type === "error") {
       await iterator.return?.();
       return { stream: replay(buffered, iterator), error: next.value, empty: false };
@@ -49,9 +55,13 @@ export async function preflightAdapterEvents(
   }
 }
 
-export function createAdapterEventQueue(): AdapterEventQueue {
+export function createAdapterEventQueue(opts?: {
+  maxBacklog?: number;
+  onBacklogExceeded?: () => void;
+}): AdapterEventQueue {
   const queued: AdapterEvent[] = [];
   const readers: QueueReader[] = [];
+  const maxBacklog = opts?.maxBacklog ?? 1_024;
   let closed = false;
 
   const push = (event: AdapterEvent): void => {
@@ -59,6 +69,12 @@ export function createAdapterEventQueue(): AdapterEventQueue {
     const reader = readers.shift();
     if (reader) {
       reader({ done: false, value: event });
+      return;
+    }
+    if (queued.length >= maxBacklog) {
+      opts?.onBacklogExceeded?.();
+      queued.push({ type: "error", message: "consumer backlog exceeded — turn aborted" });
+      close();
       return;
     }
     queued.push(event);

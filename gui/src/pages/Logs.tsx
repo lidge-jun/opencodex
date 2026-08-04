@@ -2,21 +2,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
+import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
+import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { useDataSurface } from "../data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 
-type LogsTab = "logs" | "debug";
+import type { LogsTab } from "./logs-tab-keydown";
+import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
+import { speedLabel } from "./logs-speed-label";
+import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
+import { logMatchesSurface } from "./logs-surface-filter";
 
-function readTabFromHash(): LogsTab {
-  return window.location.hash.replace(/^#\/?/, "") === "logs/debug" ? "debug" : "logs";
+function logsCacheKey(apiBase: string): string {
+  return `ocx.logs.list.v1:${apiBase}`;
 }
 
 interface UsageBreakdown {
   inputTokens: number;
   outputTokens: number;
+  /** Absolute active-context snapshot after the response (stateful providers such as Kiro). */
+  contextTotalTokens?: number;
   totalTokens?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
@@ -88,16 +98,24 @@ interface LogAttempt {
   totalTokens?: number;
   errorCode?: string;
   firstOutputMs?: number;
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   displayMetrics?: LogDisplayMetrics;
 }
 
-interface LogEntry {
+export interface LogEntry {
   requestId?: string;
   timestamp: number;
   model: string;
   provider: string;
-  surface?: "claude";
+  surface?: LogSurface;
+  conversationId?: string;
   requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -117,6 +135,25 @@ interface LogEntry {
   displayMetrics?: LogDisplayMetrics;
 }
 
+/** Session-cache entries are arbitrary JSON — reject shapes that would crash the table. */
+function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
+  if (!Array.isArray(cached)) return null;
+  for (const entry of cached) {
+    if (
+      !entry
+      || typeof entry !== "object"
+      || typeof entry.timestamp !== "number"
+      || typeof entry.model !== "string"
+      || typeof entry.provider !== "string"
+      || typeof entry.status !== "number"
+      || typeof entry.durationMs !== "number"
+    ) {
+      return null;
+    }
+  }
+  return cached;
+}
+
 function isCursorUsageProvider(provider: string): boolean {
   return provider === "cursor" || provider.startsWith("cursor-");
 }
@@ -130,6 +167,9 @@ function tokensTitle(log: LogEntry, t: TFn): string | undefined {
   ];
   if (split.read !== undefined) parts.push(`${t("logs.tokens.cacheRead")}=${split.read}`);
   if (split.write !== undefined) parts.push(`${t("logs.tokens.cacheWrite")}=${split.write}`);
+  if (typeof log.usage.contextTotalTokens === "number") {
+    parts.push(`${t("logs.tokens.contextTotal")}=${log.usage.contextTotalTokens}`);
+  }
   if (typeof log.usage.reasoningOutputTokens === "number") parts.push(`${t("logs.tokens.reasoning")}=${log.usage.reasoningOutputTokens}`);
   if (log.usageStatus === "estimated") parts.push(t("logs.tokens.estimatedNote"));
   if (log.usageStatus === "estimated" && split.read === undefined && split.write === undefined) {
@@ -147,6 +187,23 @@ function displayTokenTotal(log: LogEntry): number | undefined {
   return typeof explicitTotal === "number" ? Math.max(explicitTotal, baseTotal) : baseTotal;
 }
 
+/**
+ * Row/detail display total that also honors an absolute context checkpoint.
+ *
+ * Stateful providers (Kiro) report per-attempt usage only, so their per-request total stays
+ * small while the real active context grows. `contextTotalTokens` is that absolute snapshot.
+ *
+ * NEVER SUM THIS ACROSS REQUESTS. A checkpoint is not a per-request delta: adding it up over
+ * a conversation counts the same context once per request and inflates aggregates wildly.
+ * Aggregate rollups must keep using `displayTokenTotal`.
+ */
+function displayContextTokenTotal(log: LogEntry): number | undefined {
+  const base = displayTokenTotal(log);
+  const contextTotal = log.usage?.contextTotalTokens;
+  if (typeof contextTotal !== "number") return base;
+  return Math.max(base ?? 0, contextTotal) || undefined;
+}
+
 /** Cache read/write split; recovers reads from legacy rows that stored read+write combined. */
 function cacheSplit(log: LogEntry): { read?: number; write?: number } {
   const u = log.usage;
@@ -160,10 +217,26 @@ function cacheSplit(log: LogEntry): { read?: number; write?: number } {
   return { read, write };
 }
 
-function speedLabel(log: LogEntry): string | undefined {
-  if (log.requestedSpeedLabel) return log.requestedSpeedLabel;
-  if (log.modelSupportsServiceTier && log.configuredSpeedLabel) return log.configuredSpeedLabel;
-  return undefined;
+interface ReasoningLogFields {
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
+}
+
+function effortLabel(log: ReasoningLogFields): string {
+  const requested = log.requestedEffort?.replace(/\s*->\s*/g, " → ");
+  const effective = log.effectiveEffort;
+  if (!requested) return effective ?? "-";
+  // requestedEffort may already contain a cap/clamp chain (for example max->high).
+  // Only append the adapter result when it differs from that chain's terminal value.
+  if (!effective || requested === effective || requested.split(" → ").at(-1) === effective) return requested;
+  return `${requested} → ${effective}`;
+}
+
+function reasoningWireLabel(log: ReasoningLogFields): string | undefined {
+  if (!log.reasoningWireField || log.reasoningWireValue === undefined) return undefined;
+  return `${log.reasoningWireField}=${log.reasoningWireValue}`;
 }
 
 function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: string): string {
@@ -192,6 +265,9 @@ function formatEstimatedUsdValue(value: number, localeTag?: string): string {
     maximumFractionDigits: 4,
   }).format(value)}`;
 }
+
+/** Consecutive failed polls before a stale table is called out. Two seconds each, so ~6s. */
+const STALE_POLL_FAILURE_LIMIT = 3;
 
 const METRIC_REASON_KEYS = {
   usage_missing: "logs.detail.reason.usage_missing",
@@ -228,12 +304,26 @@ function statusColor(status: number): string {
   return "var(--amber)";
 }
 
-function formatLogTimestamp(ts: number, localeTag?: string): string {
-  return new Date(ts).toLocaleTimeString(localeTag);
+/** Date and time as separate locale strings (no joining comma) for stacked table cells. */
+function formatLogDateParts(ts: number, localeTag?: string, timeZone?: string): { date: string; time: string } {
+  const zone = timeZone ? { timeZone } : undefined;
+  try {
+    return {
+      date: new Date(ts).toLocaleDateString(localeTag, zone),
+      time: new Date(ts).toLocaleTimeString(localeTag, zone),
+    };
+  } catch {
+    // An IANA zone the browser's ICU build does not know throws RangeError.
+    return {
+      date: new Date(ts).toLocaleDateString(localeTag),
+      time: new Date(ts).toLocaleTimeString(localeTag),
+    };
+  }
 }
 
-function formatLogDateTime(ts: number, localeTag?: string): string {
-  return new Date(ts).toLocaleString(localeTag);
+function formatLogDateTime(ts: number, localeTag?: string, timeZone?: string): string {
+  const { date, time } = formatLogDateParts(ts, localeTag, timeZone);
+  return `${date} ${time}`;
 }
 
 function modelTitle(log: LogEntry): string {
@@ -248,19 +338,79 @@ function modelTitle(log: LogEntry): string {
   return details.join(" \xC2\xB7 ");
 }
 
+function summarizeFilteredLogs(entries: LogEntry[]): {
+  requests: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  unpricedRequests: number;
+  unmeteredRequests: number;
+} {
+  let totalTokens = 0;
+  let estimatedCostUsd = 0;
+  let unpricedRequests = 0;
+  let unmeteredRequests = 0;
+  for (const entry of entries) {
+    const tokens = displayTokenTotal(entry);
+    if (tokens !== undefined) totalTokens += tokens;
+    if (entry.usageStatus === "unsupported") {
+      unmeteredRequests += 1;
+      continue;
+    }
+    const cost = entry.displayMetrics?.cost;
+    const total = cost?.kind === "value" ? cost.estimate.cost.total : undefined;
+    if (total !== undefined && Number.isFinite(total) && total >= 0) {
+      estimatedCostUsd += total;
+      continue;
+    }
+    unpricedRequests += 1;
+  }
+  return { requests: entries.length, totalTokens, estimatedCostUsd, unpricedRequests, unmeteredRequests };
+}
+
 export default function Logs({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const resourceKey = logsCacheKey(apiBase);
+  const cachedLogs = validCachedLogs(readSessionListCache<LogEntry[]>(resourceKey));
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [detail, setDetail] = useState<LogEntry | null>(null);
-  const [surfaceFilter, setSurfaceFilter] = useState<"all" | "claude" | "codex">("all");
+  const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
+  const [conversationFilter, setConversationFilter] = useState("");
+  const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
+  // The proxy's own zone, so timestamps read the same as the server's logs rather than being
+  // silently shifted into the viewer's zone (#725). Fetched once: it cannot change while the
+  // page is open, so it must not join the 2s log poll. Undefined until it arrives, which
+  // formats browser-local exactly as before.
+  const [serverTimeZone, setServerTimeZone] = useState<string | undefined>();
+  useEffect(() => {
+    const controller = new AbortController();
+    // Abort already rejects the in-flight fetch, but the flag keeps the guarantee
+    // local: the setter is visibly gated without having to reason about whether
+    // the abort propagates through the body read.
+    let cancelled = false;
+    fetch(`${apiBase}/api/settings`, { signal: controller.signal })
+      .then(res => (res.ok ? res.json() as Promise<{ timeZone?: unknown }> : null))
+      .then(body => {
+        if (cancelled || !body) return;
+        if (typeof body.timeZone === "string" && body.timeZone.trim()) {
+          setServerTimeZone(body.timeZone.trim());
+        }
+      })
+      .catch(() => {
+        // Offline or an older proxy without the field: keep browser-local formatting.
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [apiBase]);
   // The hash is the source of truth for the active tab (#logs vs #logs/debug),
   // so refresh/bookmark/back-forward keep the tab choice.
   const [tab, setTab] = useState<LogsTab>(readTabFromHash);
+  // Lazy-mount Debug on first visit, then keep it mounted so switch toggles
+  // and Logs↔Debug hops do not remount (avoids settings/log refetch storms).
+  const [debugMounted, setDebugMounted] = useState(() => readTabFromHash() === "debug");
 
   useEffect(() => {
     const onHash = () => setTab(readTabFromHash());
@@ -268,43 +418,81 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const selectTab = (next: LogsTab) => {
-    window.location.hash = next === "debug" ? "logs/debug" : "logs";
-  };
-
-  const onTabKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowLeft" || e.key === "Home") { e.preventDefault(); selectTab("logs"); document.getElementById("logs-tab-logs")?.focus(); }
-    else if (e.key === "ArrowRight" || e.key === "End") { e.preventDefault(); selectTab("debug"); document.getElementById("logs-tab-debug")?.focus(); }
-  };
-
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${apiBase}/api/logs`);
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      setLogs(await res.json());
-    } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : "";
-      setError(detail ? `${t("logs.loadError")} ${detail}` : t("logs.loadError"));
-    } finally {
-      setLoading(false);
-    }
-  }, [apiBase, t]);
-
   useEffect(() => {
-    if (tab !== "logs") return;
-    void fetchLogs();
-    if (!autoRefresh) return;
-    const interval = setInterval(() => void fetchLogs(), 2000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, fetchLogs, tab]);
+    if (tab === "debug") setDebugMounted(true);
+  }, [tab]);
+
+  const selectTab = selectLogsTab;
+
+  const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
+    const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
+    const next = Array.isArray(body) ? body : (body.logs ?? []);
+    writeSessionListCache(resourceKey, next);
+    return next;
+  }, [apiBase, resourceKey]);
+
+  // The resource layer owns the request and the 2s poll. It keeps held rows through a quiet
+  // poll on its own, which is what the old silent/non-silent split was hand-rolling — and an
+  // empty successful response is now a real empty result rather than a cold load.
+  const logsResource = useDataSurface<LogEntry[]>(
+    resourceKey,
+    [apiBase],
+    loadLogs,
+    {
+      isEmpty: rows => rows.length === 0,
+      enabled: tab === "logs",
+      pollMs: autoRefresh ? 2000 : undefined,
+      initialData: cachedLogs ?? undefined,
+    },
+  );
+  const logsState = logsResource.state;
+  const logs = logsState.data ?? cachedLogs ?? [];
+  const fetchLogs = logsResource.refresh;
+
+  // A single failed tick on a two-second poll is noise, but an outage that never recovers must not
+  // leave the user reading stale rows as if they were current. Count consecutive failures and speak
+  // up once it is clearly not transient.
+  const settledFailure = !logsResource.refreshing && logsState.showError;
+  const settledSuccess = !logsResource.refreshing && !logsState.showError && logsState.data !== undefined;
+  // Derived from the settlement itself, so there is no second copy of this state to keep
+  // in sync and no frame painted with a stale banner. `streak` counts CONSECUTIVE failed
+  // settlements: it is stored keyed by the error identity that produced it, so repeated
+  // renders of the same failure do not inflate the count and a success clears it.
+  const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
+    { error: null, count: 0 },
+  );
+  if (settledSuccess && failureStreak.count !== 0) {
+    setFailureStreak({ error: null, count: 0 });
+  } else if (settledFailure && failureStreak.error !== logsState.error) {
+    setFailureStreak(previous => ({ error: logsState.error, count: previous.count + 1 }));
+  }
+  // Auto-refresh off: one settled failure is enough — there is no next poll to recover quietly.
+  const pollFailing =
+    failureStreak.count >= STALE_POLL_FAILURE_LIMIT
+    || (!autoRefresh && settledFailure);
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
+  const conversationQuery = conversationFilter.trim();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!conversationQuery) {
+      setConversationQueryHash(undefined);
+      return;
+    }
+    void hashLogConversationQuery(conversationQuery).then(hash => {
+      if (!cancelled) setConversationQueryHash(hash);
+    });
+    return () => { cancelled = true; };
+  }, [conversationQuery]);
+
   const filteredLogs = logs.filter(log => (
-    surfaceFilter === "all"
-    || (surfaceFilter === "claude" ? log.surface === "claude" : log.surface !== "claude")
+    logMatchesSurface(log, surfaceFilter)
+    && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
   ));
+  const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.
   // eslint-disable-next-line react-hooks/incompatible-library -- known useVirtualizer limitation
@@ -321,11 +509,11 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     : 0;
 
   return (
-    <>
+    <div className="logs-page">
       <div className="page-head">
         <h2>{t("nav.logs")}</h2>
         {tab === "logs" && (
-          <label className="muted text-control" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <label className="muted text-control logs-auto-refresh">
             <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
             {t("logs.autoRefresh")}
           </label>
@@ -341,7 +529,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           tabIndex={tab === "logs" ? 0 : -1}
           className={`page-tab${tab === "logs" ? " page-tab--active" : ""}`}
           onClick={() => selectTab("logs")}
-          onKeyDown={onTabKeyDown}
+          onKeyDown={logsTabKeyDown}
         >
           {t("logs.tabLogs")}
         </button>
@@ -354,58 +542,124 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           tabIndex={tab === "debug" ? 0 : -1}
           className={`page-tab${tab === "debug" ? " page-tab--active" : ""}`}
           onClick={() => selectTab("debug")}
-          onKeyDown={onTabKeyDown}
+          onKeyDown={logsTabKeyDown}
         >
           {t("logs.tabDebug")}
         </button>
       </div>
 
-      {tab === "debug" && (
-        <div role="tabpanel" id="logs-panel-debug" aria-labelledby="logs-tab-debug">
-          <Debug apiBase={apiBase} embedded />
+      {debugMounted && (
+        <div
+          role="tabpanel"
+          id="logs-panel-debug"
+          aria-labelledby="logs-tab-debug"
+          hidden={tab !== "debug"}
+        >
+          <Debug apiBase={apiBase} embedded active={tab === "debug"} />
         </div>
       )}
 
-      {tab === "logs" && (
-      <div role="tabpanel" id="logs-panel-logs" aria-labelledby="logs-tab-logs">
+      <div
+        role="tabpanel"
+        id="logs-panel-logs"
+        aria-labelledby="logs-tab-logs"
+        hidden={tab !== "logs"}
+      >
       <p className="page-sub">{t("logs.subtitle")}</p>
 
-      <div className="row" style={{ gap: 8, marginBottom: 12, alignItems: "center" }}>
+      <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
-        <div className="segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
-          {(["all", "claude", "codex"] as const).map(surface => (
+        <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
+          {(["all", "claude", "codex", "grok"] as const).map(surface => (
             <button
               key={surface}
               type="button"
               role="radio"
               aria-checked={surfaceFilter === surface}
               className={`btn btn-sm${surfaceFilter === surface ? " btn-primary" : " btn-ghost"}`}
-              style={{ borderRadius: "var(--radius-pill)", minWidth: 64, padding: "5px 12px", border: "none", background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
+              style={{ background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
               onClick={() => setSurfaceFilter(surface)}
             >
               {t(`logs.filter.surface.${surface}`)}
             </button>
           ))}
         </div>
+        <label className="muted text-control logs-filter-field">
+          {t("logs.filter.conversation.label")}
+          <input
+            type="search"
+            className="input mono"
+            value={conversationFilter}
+            onChange={e => setConversationFilter(e.target.value)}
+            placeholder={t("logs.filter.conversation.placeholder")}
+            aria-label={t("logs.filter.conversation.label")}
+          />
+        </label>
+        {conversationQuery && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConversationFilter("")}>
+            {t("logs.filter.conversation.clear")}
+          </button>
+        )}
       </div>
 
-      {error ? (
+      {conversationTotals && (
+        <div className="logs-conversation-totals">
+          <Notice tone="ok">
+            {t("logs.conversation.totals", {
+              requests: conversationTotals.requests,
+              tokens: formatTokens(conversationTotals.totalTokens, localeTag ?? locale),
+              cost: formatEstimatedUsdValue(conversationTotals.estimatedCostUsd, localeTag),
+            })}
+            {" "}
+            <span className="muted">
+              {t("logs.conversation.scope")}
+              {(conversationTotals.unpricedRequests + conversationTotals.unmeteredRequests) > 0
+                ? ` ${t("logs.conversation.excluded", {
+                  unpriced: conversationTotals.unpricedRequests,
+                  unmetered: conversationTotals.unmeteredRequests,
+                })}`
+                : ""}
+            </span>
+          </Notice>
+        </div>
+      )}
+
+      {/*
+        Only a cold failure or a user-initiated retry surfaces here. This tab polls every two
+        seconds, so a transient 5xx would otherwise flash the banner on and off under a table
+        that is still perfectly readable — noise, not information. A quiet poll failure keeps the
+        held rows and waits for the next tick, which is the behaviour the auto-refresh tests pin.
+      */}
+      {logsState.kind === "failed-cold" && (
         <Notice tone="err">
-          {error}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void fetchLogs()} disabled={loading}>
+          {logsState.error instanceof Error ? `${t("logs.loadError")} ${logsState.error.message}` : t("logs.loadError")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchLogs({ forceLoading: true })} disabled={logsState.refreshing}>
             {t("common.retry")}
           </button>
         </Notice>
-      ) : loading && logs.length === 0 ? (
-        <EmptyState title={t("common.loading")} />
+      )}
+      {/* Stale rows after a sustained poll outage, or any settled failure while auto-refresh is
+          off (no next tick will recover). Cleared by the first successful fetch. */}
+      {pollFailing && logs.length > 0 && (
+        <Notice tone="err">
+          {t("logs.loadError")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchLogs({ forceLoading: true })} disabled={logsResource.refreshing}>
+            {t("common.retry")}
+          </button>
+        </Notice>
+      )}
+
+      {/* A cold failure must not also render the empty state: "nothing came back" and "there is
+          nothing to show" are different answers, and showing both at once tells the user neither. */}
+      {logsState.kind === "failed-cold" ? null : logsState.showSkeleton && logs.length === 0 ? (
+        <DataSurfaceSkeleton label={t("common.loading")} rows={6} />
       ) : filteredLogs.length === 0 ? (
         <EmptyState title={t("logs.noRequests")} />
       ) : (
         <>
-        {loading && <div className="row muted" role="status"><span className="spin" /> {t("common.loading")}</div>}
-        <div ref={scrollContainerRef} className="tbl-wrap" style={{ overflowY: "auto", maxHeight: "calc(100vh - 260px)" }}>
+        <div ref={scrollContainerRef} className="tbl-wrap logs-table-wrap">
           <table className="tbl logs-table">
-            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "var(--surface)" }}>
+            <thead>
              <tr>
                <th>{t("logs.col.time")}</th>
                 <th className="num log-col-tokens">{t("logs.col.tokens")}</th>
@@ -416,31 +670,38 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                <th>{t("logs.col.provider")}</th>
                <th>{t("logs.col.status")}</th>
                 <th>{t("logs.col.request")}</th>
-               <th className="num">{t("logs.col.duration")}</th>
+               <th className="num log-col-duration">{t("logs.col.duration")}</th>
              </tr>
             </thead>
             <tbody>
               {paddingTop > 0 && (
                 <tr>
-                  <td colSpan={10} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingTop }} />
                 </tr>
               )}
               {virtualRows.map(virtualRow => {
                 const log = filteredLogs[filteredLogs.length - 1 - virtualRow.index];
+                const reasoningWire = reasoningWireLabel(log);
+                const when = formatLogDateParts(log.timestamp, localeTag, serverTimeZone);
                 return (
                <tr
                  key={log.requestId ?? `${log.timestamp}-${virtualRow.index}`}
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
                >
-                 <td className="muted mono">{formatLogTimestamp(log.timestamp, localeTag)}</td>
+                 <td className="muted mono log-col-time">
+                   <span className="logs-stack-start">
+                     <span>{when.date}</span>
+                     <span>{when.time}</span>
+                   </span>
+                 </td>
                   <td className="num mono log-col-tokens" title={tokensTitle(log, t)}>
                     {(() => {
-                      const tokenTotal = displayTokenTotal(log);
+                      const tokenTotal = displayContextTokenTotal(log);
                       const { read, write } = cacheSplit(log);
                       return tokenTotal !== undefined
                         ? (
-                            <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                            <span className="logs-stack-end">
                               <span>{log.usageStatus === "estimated" ? "~" : ""}{formatTokens(tokenTotal, locale)}</span>
                               {(read !== undefined && read > 0) && (
                                 <span className="muted text-caption leading-tight">
@@ -469,13 +730,21 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                     {formatEstimatedUsd(log.displayMetrics?.cost, localeTag)}
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log)}>
-                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                   <span className="logs-model-cell">
                     <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
-                      {log.surface === "claude" && <span className="badge badge-accent">{t("logs.badge.claude")}</span>}
+                      {(log.surface === "claude" || log.surface === "claude-desktop") && (
+                        <span className="badge badge-accent">{t("logs.badge.claude")}</span>
+                      )}
+                      {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
-                  <td className="mono">{log.requestedEffort ?? "-"}</td>
+                  <td className="mono log-reasoning-cell" title={reasoningWire}>
+                    <span className="logs-stack-start">
+                      <span>{effortLabel(log)}</span>
+                      {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
+                    </span>
+                  </td>
                   <td className="muted">{log.provider}</td>
                   <td>
                     <span className="log-status-cell">
@@ -491,13 +760,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                     </span>
                  </td>
                   <td className="muted mono"><span className="log-reqid" title={log.requestId}>{log.requestId ?? "-"}</span></td>
-                 <td className="num">{log.durationMs}ms</td>
+                 <td className="num log-col-duration">{log.durationMs}ms</td>
                 </tr>
                 );
               })}
               {paddingBottom > 0 && (
                 <tr>
-                  <td colSpan={10} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                  <td colSpan={10} className="logs-virtual-spacer" style={{ height: paddingBottom }} />
                 </tr>
               )}
             </tbody>
@@ -507,11 +776,22 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       )}
 
       {detail && (
-        <LogDetailDialog detail={detail} detailInfo={detailInfo} localeCode={locale} localeTag={localeTag} t={t} onClose={() => setDetail(null)} />
+        <LogDetailDialog
+          detail={detail}
+          detailInfo={detailInfo}
+          localeCode={locale}
+          localeTag={localeTag}
+          serverTimeZone={serverTimeZone}
+          t={t}
+          onClose={() => setDetail(null)}
+          onFilterConversation={id => {
+            setConversationFilter(id);
+            setDetail(null);
+          }}
+        />
       )}
       </div>
-      )}
-    </>
+    </div>
   );
 }
 
@@ -527,19 +807,22 @@ function useModalDialog(open: boolean) {
 }
 
 function LogDetailDialog({
-  detail, detailInfo, localeCode, localeTag, t, onClose,
+  detail, detailInfo, localeCode, localeTag, serverTimeZone, t, onClose, onFilterConversation,
 }: {
   detail: LogEntry;
   detailInfo: ReturnType<typeof statusCodeInfo> | null;
   localeCode: string;
   localeTag?: string;
+  serverTimeZone?: string;
   t: TFn;
   onClose: () => void;
+  onFilterConversation?: (conversationId: string) => void;
 }) {
   const dialogRef = useModalDialog(true);
   const [copied, setCopied] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
+  const reasoningWire = reasoningWireLabel(detail);
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -563,7 +846,7 @@ function LogDetailDialog({
         <div className="modal-head">
           <h3 id="log-detail-title">
             <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
-            {detailInfo && <span style={{ marginLeft: 8 }}>{detailInfo.label}</span>}
+            {detailInfo && <span className="logs-detail-info">{detailInfo.label}</span>}
           </h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
         </div>
@@ -572,7 +855,7 @@ function LogDetailDialog({
         <section className="log-detail-section" aria-labelledby="log-detail-basic">
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
           <div className="log-detail-grid">
-            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag)}</span>
+            <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag, serverTimeZone)}</span>
             <span className="muted">{t("logs.col.request")}</span>
             <span className="log-detail-request-row">
               <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>
@@ -582,8 +865,28 @@ function LogDetailDialog({
                 </button>
               )}
             </span>
+            {detail.conversationId && (
+              <>
+                <span className="muted">{t("logs.detail.conversation")}</span>
+                <span className="log-detail-request-row">
+                  <span className="mono log-detail-break">{detail.conversationId}</span>
+                  {onFilterConversation && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onFilterConversation(detail.conversationId!)}
+                    >
+                      {t("logs.filter.conversation.apply")}
+                    </button>
+                  )}
+                </span>
+              </>
+            )}
             <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
+            {(detail.requestedEffort || detail.effectiveEffort) && (
+              <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
+            )}
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
           </div>
@@ -652,8 +955,9 @@ function LogDetailDialog({
                   <th className="num">{t("logs.col.estimatedCost")}</th>
                   <th>{t("logs.detail.attempt.reason")}</th>
                 </tr></thead>
-                <tbody>{[...detail.attempts].sort((a, b) => a.ordinal - b.ordinal).map(attempt => {
+                <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
+                  const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
                   const reason = attempt.errorCode
                     ?? (attempt.recoveryKinds.length ? attempt.recoveryKinds.join(", ") : undefined)
@@ -664,6 +968,14 @@ function LogDetailDialog({
                       <td>
                         <span>{attempt.provider}</span><br />
                         <span className="mono muted log-detail-break">{attempt.model}</span>
+                        {(attempt.requestedEffort || attempt.effectiveEffort) && (
+                          <>
+                            <br />
+                            <span className="mono muted text-caption log-detail-break">
+                              {effortLabel(attempt)}{attemptReasoningWire ? ` (${attemptReasoningWire})` : ""}
+                            </span>
+                          </>
+                        )}
                         {matched && (
                           <>
                             <br />
@@ -693,7 +1005,13 @@ function LogDetailDialog({
             <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{tokenSplit.read !== undefined ? formatTokens(tokenSplit.read, localeCode) : "\u2014"}</span>
             <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{tokenSplit.write !== undefined ? formatTokens(tokenSplit.write, localeCode) : "\u2014"}</span>
             <span className="muted">{t("logs.tokens.reasoning")}</span><span className="mono">{detail.usage?.reasoningOutputTokens !== undefined ? formatTokens(detail.usage.reasoningOutputTokens, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayTokenTotal(detail) !== undefined ? formatTokens(displayTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayContextTokenTotal(detail) !== undefined ? formatTokens(displayContextTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            {detail.usage?.contextTotalTokens !== undefined && (
+              <>
+                <span className="muted">{t("logs.tokens.contextTotal")}</span>
+                <span className="mono">{formatTokens(detail.usage.contextTotalTokens, localeCode)}</span>
+              </>
+            )}
           </div>
           {detail.usageStatus === "estimated" && (
             <p className="log-detail-notes-line muted">{t("logs.tokens.estimatedNote")}</p>

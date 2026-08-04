@@ -5,7 +5,7 @@ description: opencodex internals — module map, the AdapterEvent bridge, the re
 
 opencodex is a single Bun process. A request enters as OpenAI Responses, is normalized to an internal
 model, routed, sent to a provider via an adapter, and bridged back to Responses SSE. See
-[How It Works](/opencodex/getting-started/how-it-works/) for the end-to-end flow.
+[How It Works](/getting-started/how-it-works/) for the end-to-end flow.
 
 ## Module map
 
@@ -48,7 +48,10 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
    records request lifecycle metadata. It serves `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (relayed to an OpenAI-family upstream by `server/images.ts` for codex's built-in `image_gen`
-   tool), and the optional WebSocket upgrade on `/v1/responses`.
+   tool), `POST /v1/live` / `POST /v1/realtime/calls` (ChatGPT / Codex App voice and OpenAI
+   Realtime call-create, relayed by `server/live.ts`), sideband WebSocket joins on
+   `/v1/live/{callId}` (and `/v1/realtime?call_id=`), and the optional WebSocket upgrade on
+   `/v1/responses`.
 2. `server/responses/core.ts` decompresses and parses JSON, expands locally remembered
    `previous_response_id` input when available, then calls `responses/parser.ts`.
 3. `router.ts` resolves a bare or `provider/model` id. The server then resolves Codex account
@@ -122,9 +125,14 @@ loopback; configured `corsAllowOrigins` entries extend the local-origin allowlis
 
 OAuth implementations live in `oauth/`; access tokens are loaded or refreshed immediately before a
 routed call, while `oauth/token-guardian.ts` can proactively refresh only providers whose policy
-allows it. Codex/ChatGPT pool credentials and thread affinity live under `codex/` and are kept out of
-management responses. Request usage is normalized to `OcxUsage`, surfaced in Responses terminal
-events, and aggregated by `usage/` for the dashboard and optional JSONL diagnostics.
+allows it. Refresh is coordinated with in-process single-flight, a per-account file lock, and
+generation CAS so concurrent writers cannot clobber a newer credential. A shared health projection
+(`oauth/health.ts`) feeds `ocx status`, `ocx doctor`, the management API, and the dashboard.
+Codex/ChatGPT pool credentials and process-local thread affinity live under `codex/` and are kept out
+of management responses; affinity clears on `401` / `403` / `429` (not pinned through rate limits)
+and is not persisted across restarts. Request usage is normalized to `OcxUsage`, surfaced in
+Responses terminal events, and aggregated by `usage/` for the dashboard and optional JSONL
+diagnostics.
 
 ## Transport and compaction
 
@@ -144,7 +152,7 @@ history, while `responses/parser.ts` and `bridge.ts` handle remote compaction v2
   matching Codex's own cache), with a stale-fallback when a fetch fails.
 - `codex/catalog/sync.ts`, exported through the `codex/catalog.ts` facade, merges routed models into
   Codex's catalog as namespaced entries, ranks featured
-  [subagent models](/opencodex/guides/codex-integration/#the-subagent-picker) first, filters
+  [subagent models](/guides/codex-integration/#the-subagent-picker) first, filters
   `disabledModels`, and can fully restore the pristine catalog from a one-time backup.
 
 ## Reasoning effort

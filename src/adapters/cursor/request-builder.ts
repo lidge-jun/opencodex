@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   OcxAssistantContentPart,
   OcxContentPart,
@@ -8,15 +9,18 @@ import type {
 } from "../../types";
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRunRequest } from "./types";
-import { cursorWireModelSelection, isCursorExternalWireModel, type CursorRoutingLevel } from "./discovery";
-import { cursorEffortSuffix } from "./effort-map";
+import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
+import { cursorEffortSuffix, cursorWireModelIdWithEffort } from "./effort-map";
 import {
   cursorMcpToolEncodedSize,
   cursorMcpToolsEncodedSize,
   cursorToolAllowedByChoice,
+  cursorToolChoiceAliases,
   cursorToolWireName,
   cursorToolsForActivePrompt,
+  isBareCodexShellBridgeTool,
 } from "./tool-definitions";
+import { lookupCursorThreadConversation } from "./thread-continuity";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -33,10 +37,18 @@ function explicitlySelectedNames(choice: OcxToolChoice | undefined): Set<string>
 }
 
 function toolPriority(tool: OcxTool, selectedNames: ReadonlySet<string>): number {
-  if (toolChoiceAliases(tool).some(name => selectedNames.has(name))) return 0;
-  if (tool.loadedFromToolSearch) return 1;
-  if (!tool.namespace) return 2;
-  return 3;
+  // Shell bridge and apply_patch outrank unrelated allowed_tools entries so a large
+  // selected filler cannot starve the Codex execution path during truncation (#399).
+  if (isBareCodexShellBridgeTool(tool)) return 0;
+  if (!tool.namespace && tool.name === "apply_patch") return 1;
+  if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 2;
+  if (tool.loadedFromToolSearch) return 3;
+  if (!tool.namespace) return 4;
+  return 5;
+}
+
+function isPinnedCursorTool(tool: OcxTool, selectedNames: ReadonlySet<string>): boolean {
+  return toolPriority(tool, selectedNames) <= 2;
 }
 
 /**
@@ -48,7 +60,8 @@ export function applyCursorToolBudget(
   tools: readonly OcxTool[] | undefined,
   toolChoice: OcxToolChoice | undefined,
 ): CursorToolBudgetResult {
-  const eligible = (tools ?? []).filter(tool => cursorToolAllowedByChoice(tool, toolChoice));
+  const catalog = tools ?? [];
+  const eligible = catalog.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog));
   if (
     eligible.length <= CURSOR_TOOL_COUNT_LIMIT
     && cursorMcpToolsEncodedSize(eligible, toolChoice) <= CURSOR_TOOL_BYTES_LIMIT
@@ -62,15 +75,28 @@ export function applyCursorToolBudget(
   const keptSet = new Set<OcxTool>();
   let keptBytes = 0;
 
-  for (const candidate of candidates) {
-    if (kept.length >= CURSOR_TOOL_COUNT_LIMIT) continue;
+  const tryKeep = (tool: OcxTool): boolean => {
+    if (keptSet.has(tool) || kept.length >= CURSOR_TOOL_COUNT_LIMIT) return keptSet.has(tool);
     // Repeated protobuf message fields serialize as concatenated tag/length/value entries,
     // so each one-entry wrapper size is the exact additive contribution to McpTools.
-    const candidateBytes = cursorMcpToolEncodedSize(candidate.tool, toolChoice);
-    if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) continue;
-    kept.push(candidate.tool);
-    keptSet.add(candidate.tool);
+    const candidateBytes = cursorMcpToolEncodedSize(tool, toolChoice);
+    if (keptBytes + candidateBytes > CURSOR_TOOL_BYTES_LIMIT) return false;
+    kept.push(tool);
+    keptSet.add(tool);
     keptBytes += candidateBytes;
+    return true;
+  };
+
+  // Phase 1: selected tools + shell bridge + apply_patch (priority <= 2).
+  // Pins are admitted before filler so a crowded catalog cannot drop the Codex execution path (#399).
+  for (const candidate of candidates) {
+    if (!isPinnedCursorTool(candidate.tool, selectedNames)) continue;
+    tryKeep(candidate.tool);
+  }
+
+  // Phase 2: remaining tools by priority.
+  for (const candidate of candidates) {
+    tryKeep(candidate.tool);
   }
 
   return {
@@ -101,7 +127,7 @@ function normalizeCursorModelId(modelId: string, reasoning?: string): { modelId:
   const selection = cursorWireModelSelection(modelId);
   const id = selection.modelId;
   const suffix = cursorEffortSuffix(id, reasoning);
-  return { ...selection, modelId: suffix ? `${id}-${suffix}` : id };
+  return { ...selection, modelId: suffix ? cursorWireModelIdWithEffort(id, suffix) : id };
 }
 
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {
@@ -159,6 +185,43 @@ export function generatedCursorConversationId(): string {
   return `cursor_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
+/** Derive an opaque provider-scoped Cursor id from the upstream client's conversation identity. */
+export function cursorConversationIdFromClientThread(threadId: string, identityScope?: string): string {
+  const digest = createHash("sha256")
+    .update("ocx:cursor:thread:")
+    .update(identityScope?.trim() || "local")
+    .update("\0")
+    .update(threadId)
+    .digest("hex")
+    .slice(0, 32);
+  return `cursor_${digest}`;
+}
+
+/**
+ * Resolve the Cursor conversation id for this turn.
+ * Priority: force-fresh → isolate helper → remembered → thread override → client thread → random.
+ * Never use OpenAI Responses `previous_response_id` (resp_*) or shared `prompt_cache_key`
+ * (cache-cohort fingerprint, not conversation ownership).
+ */
+export function resolveCursorConversationId(
+  parsed: OcxParsedRequest,
+  _wireModelId: string,
+  options: CreateCursorRequestOptions = {},
+): string {
+  if (options.forceFreshConversation === true) return generatedCursorConversationId();
+  // Helper/shadow/compaction turns must not append into the parent's Cursor conversation,
+  // even when previous_response_id restored the parent's remembered id.
+  if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
+  if (parsed._cursorConversationId) return parsed._cursorConversationId;
+  const threadId = parsed._clientThreadId?.trim();
+  if (threadId) {
+    const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
+    if (recovered) return recovered;
+    return cursorConversationIdFromClientThread(threadId, parsed._cursorIdentityScope);
+  }
+  return generatedCursorConversationId();
+}
+
 export interface CreateCursorRequestOptions {
   /** Force a brand-new Cursor conversation id even when remembered state exists. */
   forceFreshConversation?: boolean;
@@ -176,23 +239,10 @@ export function createCursorRequest(
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
   const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning);
-  const lastRaw = parsed.context.messages.at(-1);
-  // External Cursor models (e.g. gpt-5.6-sol) can corrupt server-side conversation state across
-  // tool-result continuations when ResumeAction reuses the same conversationId. Force a fresh id
-  // so the full history is replayed without depending on that state.
-  const forceFreshConversation =
-    options.forceFreshConversation === true
-    || (lastRaw?.role === "toolResult" && isCursorExternalWireModel(model.modelId));
   return {
     modelId: model.modelId,
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
-    // The Cursor conversation id comes ONLY from remembered state (_cursorConversationId). Do NOT fall
-    // back to the OpenAI Responses previous_response_id (resp_*): that is a Responses-chain id in a
-    // different namespace and would start an unrelated Cursor conversation, breaking tool-result
-    // continuation. If we have no remembered Cursor conversation, start a fresh one.
-    conversationId: forceFreshConversation
-      ? generatedCursorConversationId()
-      : (parsed._cursorConversationId ?? generatedCursorConversationId()),
+    conversationId: resolveCursorConversationId(parsed, model.modelId, options),
     system: [...(parsed.context.systemPrompt ?? []), ...(limitNote ? [limitNote] : [])],
     messages,
     rawMessages: parsed.context.messages,

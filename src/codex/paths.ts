@@ -29,6 +29,11 @@ export const CODEX_PROFILE_PATH = join(CODEX_HOME, "opencodex.config.toml");
 export const DEFAULT_CATALOG_PATH = join(CODEX_HOME, "opencodex-catalog.json");
 export const CODEX_MODELS_CACHE_PATH = join(CODEX_HOME, "models_cache.json");
 
+/** Runtime CODEX_HOME lookup (honors CODEX_HOME env changes after import). */
+export function getCodexHome(): string {
+  return resolveCodexHome();
+}
+
 export function tomlString(value: string): string {
   return JSON.stringify(value);
 }

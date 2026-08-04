@@ -13,7 +13,7 @@ let lastEnterAt = 0;
 
 export function sidecarEnter(label: string): () => void {
   inFlight++;
-  lastLabel = label;
+  lastLabel = truncateRetainedUtf8(label, MAX_DIAGNOSTIC_VALUE_BYTES);
   lastEnterAt = Date.now();
   let exited = false;
   return () => {
@@ -40,10 +40,13 @@ let lastActivity = "";
 let lastActivityAt = 0;
 
 export function markActivity(note: string): void {
-  lastActivity = note;
+  lastActivity = truncateRetainedUtf8(note, MAX_DIAGNOSTIC_VALUE_BYTES);
   lastActivityAt = Date.now();
 }
 
 export function activityBreadcrumb(): { note: string; sinceMs: number } {
   return { note: lastActivity, sinceMs: lastActivityAt ? Date.now() - lastActivityAt : 0 };
 }
+import { truncateRetainedUtf8 } from "./admission";
+
+const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;

@@ -11,8 +11,9 @@ describe("update stops the running proxy before replacing files", () => {
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {
     expect(updateSource).toContain('spawnSync(process.execPath, [process.argv[1], "stop"]');
     const stopAt = updateSource.indexOf('[process.argv[1], "stop"]');
-    const updateAt = updateSource.indexOf("const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);");
+    const updateAt = updateSource.indexOf("spawnSync(target.bin, target.args");
     expect(stopAt).toBeGreaterThan(-1);
+    expect(updateAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(updateAt);
     expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
   });
@@ -30,11 +31,28 @@ describe("update stops the running proxy before replacing files", () => {
   test("npm launcher update path stops via its own launcher path before npm install", () => {
     expect(launcherSource).toContain('spawnSync(process.execPath, [launcher, "stop"]');
     const stopAt = launcherSource.indexOf('[launcher, "stop"]');
-    const installAt = launcherSource.indexOf('spawnSync(npm, ["install", "-g"');
+    const installAt = launcherSource.indexOf("spawnSync(installInvocation.file, installInvocation.args");
     expect(stopAt).toBeGreaterThan(-1);
+    expect(installAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(installAt);
     expect(launcherSource).toContain('existsSync(join(configDir(), "ocx.pid"))');
     expect(launcherSource).toContain('existsSync(join(configDir(), "runtime-port.json"))');
+  });
+
+  test("Windows npm paths resolve safely before stop and never use shell:true", () => {
+    const updateResolveAt = updateSource.indexOf("const target = updateSpawnTarget(bin, cmdArgs);");
+    const updateStopAt = updateSource.indexOf('[process.argv[1], "stop"]');
+    const launcherResolveAt = launcherSource.indexOf("const installInvocation = npmInvocation(");
+    const launcherStopAt = launcherSource.indexOf('[launcher, "stop"]');
+
+    expect(updateResolveAt).toBeGreaterThan(-1);
+    expect(launcherResolveAt).toBeGreaterThan(-1);
+    expect(updateResolveAt).toBeLessThan(updateStopAt);
+    expect(launcherResolveAt).toBeLessThan(launcherStopAt);
+    expect(updateSource).not.toContain("shell: true");
+    expect(launcherSource).not.toContain("shell: true");
+    expect(updateSource).not.toContain('"npm.cmd"');
+    expect(launcherSource).not.toContain('"npm.cmd"');
   });
 
   test("both paths abort when the stop fails, and reinstall a managed service after success", () => {
@@ -64,8 +82,9 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
     expect(launcherSource).toContain("if (historyRestoreIncomplete())");
     const warnAt = launcherSource.indexOf("Codex resume history was NOT restored");
-    const installAt = launcherSource.indexOf('spawnSync(npm, ["install", "-g"');
+    const installAt = launcherSource.indexOf("spawnSync(installInvocation.file, installInvocation.args");
     expect(warnAt).toBeGreaterThan(-1);
+    expect(installAt).toBeGreaterThan(-1);
     expect(warnAt).toBeLessThan(installAt);
   });
 
@@ -75,7 +94,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain("stopRes.status !== 0 || stillHasRuntimeState");
   });
 
-  test("GUI worker update children use pipe stdio so Windows npm.cmd does not open consoles", () => {
+  test("GUI worker update children use pipe stdio so background updates do not open consoles", () => {
     expect(updateSource).toContain("function updateChildStdio()");
     expect(updateSource).toContain('process.env.OCX_SERVICE === "1"');
     expect(updateSource).toContain('return "pipe"');

@@ -53,6 +53,52 @@ function buildToolCallBody(modelId: string, reasoning: string): {
 }
 
 describe("opencode-go DeepSeek V4 thinking mode", () => {
+  test("normalizes Desktop-style root composition schemas for Console Go", () => {
+    const route = routeModel(configFor("deepseek-v4-pro"), "opencode-go/deepseek-v4-pro");
+    const req = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: {
+        messages: [{ role: "user", content: "inspect the repo", timestamp: 0 }],
+        tools: [{
+          name: "automation_update",
+          description: "Update an automation",
+          parameters: {
+            oneOf: [
+              {
+                type: "object",
+                properties: { mode: { $ref: "#/$defs/mode" } },
+                required: ["mode"],
+              },
+              {
+                type: "object",
+                properties: { id: { type: "string" } },
+                required: ["id"],
+              },
+            ],
+            $defs: { mode: { type: "string", enum: ["create", "update"] } },
+          },
+        }],
+      },
+      stream: true,
+      options: { reasoning: "high" },
+    });
+
+    const body = JSON.parse(req.body as string) as {
+      tools: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+    const parameters = body.tools[0].function.parameters;
+
+    expect(parameters.type).toBe("object");
+    expect(parameters.oneOf).toBeUndefined();
+    expect(parameters.properties).toEqual({
+      mode: { $ref: "#/$defs/mode" },
+      id: { type: "string" },
+    });
+    expect(parameters.$defs).toEqual({
+      mode: { type: "string", enum: ["create", "update"] },
+    });
+  });
+
   test.each(["deepseek-v4-flash", "deepseek-v4-pro"])(
     "%s replays tool-call reasoning and maps Codex efforts",
     modelId => {

@@ -13,6 +13,7 @@ import {
   providerConfigSeed,
 } from "../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { FREE_PROVIDER_DIRECTORY } from "../src/providers/free-directory";
 import { applyProviderConfigHints } from "../src/codex/catalog";
 import { routeModel } from "../src/router";
 import { resolveAdapter } from "../src/server";
@@ -29,10 +30,10 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "agentrouter", "orcarouter", "groq", "google", "google-vertex", "azure-openai",
-  "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
-  "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "agentrouter", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
+  "deepseek", "cerebras", "deepinfra", "hyperbolic", "baseten", "together", "fireworks", "firepass", "moonshot",
+  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
+  "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "kilo", "mimo-free", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
 ];
@@ -234,6 +235,12 @@ describe("provider registry parity", () => {
       expect(entry?.defaultModel).toBe("MiniMax-M3");
       expect(entry?.models).toEqual(minimaxModels);
       expect(entry?.modelContextWindows?.["MiniMax-M3"]).toBe(1_000_000);
+      expect(entry?.modelReasoningEfforts?.["MiniMax-M3"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3"]).toBe("medium");
+      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3"]).toMatchObject({ low: "disabled", medium: "adaptive", high: "adaptive" });
+      expect(entry?.preserveReasoningContentModels).toEqual(minimaxModels);
+      expect(entry?.reasoningSplitModels).toEqual(minimaxModels);
+      expect(entry?.thinkingToggleModels).toEqual(["MiniMax-M3"]);
       for (const modelId of minimaxModels.slice(1)) {
         expect(entry?.modelContextWindows?.[modelId]).toBe(204_800);
       }
@@ -245,6 +252,11 @@ describe("provider registry parity", () => {
       label: "Alibaba Coding Plan",
       baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
     });
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba")?.baseUrlChoices).toEqual([
+      { id: "intl", label: "International", baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1" },
+      { id: "china", label: "China", baseUrl: "https://coding.dashscope.aliyuncs.com/v1" },
+      { id: "custom", label: "Custom" },
+    ]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"]).toMatchObject({
       label: "Alibaba Token Plan (Beijing)",
       adapter: "openai-chat",
@@ -367,6 +379,13 @@ describe("provider registry parity", () => {
         expect(entry?.[field]).toContain("kimi-for-coding");
       }
       expect(entry?.modelSuffixBracketStrip).toBe(true);
+      expect(entry?.promptCacheKey).toBe(true);
+      // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
+      // one), so the flag must survive seeding/enrichment, not just the router's registry backfill.
+      expect(providerConfigSeed(entry!).promptCacheKey).toBe(true);
+      const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
+      enrichProviderFromCatalog(providerId, enriched);
+      expect(enriched.promptCacheKey).toBe(true);
       expect(entry?.noReasoningModels).not.toContain("k3");
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
@@ -465,7 +484,7 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
@@ -594,6 +613,10 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
+    const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
+    expect(antigravityRegistry?.liveModels).toBe(false);
+    expect(providerConfigSeed(antigravityRegistry!).liveModels).toBe(false);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.liveModels).toBe(false);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash");
     // Collapsed picker: base models only, no effort-suffix variants.
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.6-flash");
@@ -601,7 +624,8 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("claude-sonnet-4-6");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("claude-opus-4-6-thinking");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gpt-oss-120b-medium");
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toHaveLength(5);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-flash-image");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toHaveLength(6);
     // Effort ladders on collapsed base models.
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.6-flash"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.1-pro"]).toEqual(["low", "high"]);
@@ -714,6 +738,7 @@ describe("provider registry parity", () => {
       moonshot: "moonshot",
       minimax: "minimax",
       "minimax-cn": "minimax",
+      "zhipu-bigmodel": "zai",
     });
     expect(resolveJawcodeProvider("gemini")).toBe("google");
     expect(resolveJawcodeProvider("minimax-cn")).toBe("minimax");
@@ -754,5 +779,104 @@ describe("provider registry parity", () => {
     expect(entry?.context_window).toBe(500_000);
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "max", "ultra"]);
+  });
+
+  // The id-list assertion above only proves the preset exists. Pin the contract a user actually
+  // depends on: which endpoint the key is sent to, which adapter parses the stream, and that the
+  // vendor-namespaced seed models survive into a real catalog entry.
+  test("the BizRouter preset seeds a usable OpenAI-compatible provider", () => {
+    const bizrouter = PROVIDER_REGISTRY.find(entry => entry.id === "bizrouter");
+    expect(bizrouter).toBeTruthy();
+    expect(bizrouter?.adapter).toBe("openai-chat");
+    expect(bizrouter?.authKind).toBe("key");
+    expect(bizrouter?.baseUrl).toBe("https://api.bizrouter.ai/v1");
+    // A default the picker can actually route to, and it must be one of the seeded ids.
+    expect(bizrouter?.models).toContain(bizrouter?.defaultModel);
+
+    const seed = providerConfigSeed(bizrouter!);
+    expect(seed.baseUrl).toBe("https://api.bizrouter.ai/v1");
+    expect(seed.adapter).toBe("openai-chat");
+
+    // Vendor-namespaced ids pass through unchanged: rewriting them would break upstream routing.
+    const model = applyProviderConfigHints("bizrouter", seed, {
+      id: "openai/gpt-5.6-sol",
+      provider: "bizrouter",
+    });
+    expect(model.id).toBe("openai/gpt-5.6-sol");
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    // The catalog slug flattens the vendor separator, but the routed model id itself is untouched,
+    // so the request still reaches BizRouter as `openai/gpt-5.6-sol`.
+    expect(entries.find(e => e.slug === "bizrouter/openai-gpt-5.6-sol")).toBeTruthy();
+  });
+});
+
+describe("free-provider directory isolation", () => {
+  test("directory metadata never becomes a canonical runtime provider", () => {
+    // The directory is a catalog of endpoints we have not adopted. If its ids reached
+    // PROVIDER_REGISTRY, routedProviderConfig() would canonicalize a user's same-named provider
+    // onto the directory's adapter and baseUrl — for `qoder` that baseUrl is the empty string,
+    // so the request would lose its destination entirely.
+    const directoryOnlyIds = FREE_PROVIDER_DIRECTORY
+      .filter(entry => entry.supportLevel === "reference")
+      .map(entry => entry.id);
+    expect(directoryOnlyIds.length).toBeGreaterThan(0);
+    expect(directoryOnlyIds).toContain("qoder");
+
+    const registryIds = new Set(PROVIDER_REGISTRY.map(entry => entry.id));
+    for (const id of directoryOnlyIds) {
+      expect(registryIds.has(id)).toBe(false);
+    }
+  });
+
+  test("an id shared by both lists must resolve to the same endpoint", () => {
+    // The rule above only covers `reference` rows, so a CONNECTABLE directory id could be
+    // re-registered against a different host and stay green — that is exactly what #536 proposed
+    // for `glm` (directory: api.z.ai, proposed registry: open.bigmodel.cn). routedProviderConfig()
+    // canonicalizes a saved provider onto the registry baseUrl, so the user's key would have gone
+    // to the other vendor on the next request. Sharing an id is fine; disagreeing on where it
+    // points is not.
+    const registryById = new Map(PROVIDER_REGISTRY.map(entry => [entry.id, entry]));
+    const shared = FREE_PROVIDER_DIRECTORY.filter(row => registryById.has(row.id));
+    expect(shared.length).toBeGreaterThan(0);
+
+    for (const row of shared) {
+      const registryEntry = registryById.get(row.id)!;
+      expect(`${row.id} -> ${registryEntry.baseUrl}`).toBe(`${row.id} -> ${row.baseUrl}`);
+    }
+  });
+
+  test("a custom provider named after a directory entry keeps its own destination", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "qoder",
+      providers: {
+        qoder: {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.example.test/v1",
+          apiKey: "test-key",
+          liveModels: true,
+        },
+      },
+    };
+
+    const routed = routeModel(config, "qoder/custom-model");
+    expect(routed.provider).toMatchObject({
+      adapter: "openai-chat",
+      baseUrl: "https://custom.example.test/v1",
+      liveModels: true,
+    });
+    expect(routed.modelId).toBe("custom-model");
+  });
+
+  test("only rows with checked provenance claim a verification date", () => {
+    for (const entry of FREE_PROVIDER_DIRECTORY) {
+      if (entry.verification === "unverified") {
+        expect(entry.lastVerified).toBeUndefined();
+      } else {
+        expect(entry.lastVerified).toBeTruthy();
+        expect(entry.documentationUrl ?? entry.modelsUrl ?? entry.dashboardUrl).toBeTruthy();
+      }
+    }
   });
 });

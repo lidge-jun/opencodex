@@ -14,8 +14,18 @@
  * to be a specific first-party client.
  */
 
-/** The exact identity line Codex injects for every model. */
+/** Historical exact identity line Codex injected for every model. */
 export const CODEX_GPT5_IDENTITY_LINE = "You are Codex, a coding agent based on GPT-5.";
+
+/** Codex CLI 0.145.0+ wording (#622) — still GPT-5 identity, slightly different phrasing. */
+export const CODEX_GPT5_IDENTITY_LINE_AGENT = "You are Codex, an agent based on GPT-5.";
+
+/**
+ * Known Codex GPT-5 identity sentences. Narrow: only "coding agent" / "an agent" + GPT-5(.x)?
+ * Avoid a broad `You are Codex.*` rewrite that could touch unrelated content.
+ */
+const CODEX_GPT5_IDENTITY_RE =
+  /You are Codex, (?:a coding agent|an agent) based on GPT-5(?:\.[0-9]+)*\./g;
 
 /** Proxy-neutral replacement: no "opencodex proxy" mention, just the GPT-5/OpenAI disclaimer. */
 export const NEUTRAL_IDENTITY_LINE = "You are a coding agent. Do not claim to be GPT-5 or to be made by OpenAI.";
@@ -27,7 +37,7 @@ export const NEUTRAL_IDENTITY_LINE = "You are a coding agent. Do not claim to be
  * the leak can't reappear in one adapter while being fixed in another.
  */
 export function neutralizeIdentity(systemText: string): string {
-  return systemText.replace(CODEX_GPT5_IDENTITY_LINE, NEUTRAL_IDENTITY_LINE);
+  return systemText.replace(CODEX_GPT5_IDENTITY_RE, NEUTRAL_IDENTITY_LINE);
 }
 
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */

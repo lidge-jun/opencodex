@@ -44,7 +44,7 @@ cd docs-site && bun install && bun dev
 
 ## 文档发布
 
-公开文档发布到 GitHub Pages：<https://lidge-jun.github.io/opencodex/zh-cn/>。
+公开文档发布到 GitHub Pages：<https://opencodex.me/zh-cn/>。
 `.github/workflows/deploy-docs.yml` 会在 `main` push 中 `docs-site/**` 或 workflow 本身发生变化时
 运行，构建 `docs-site` 并部署生成的网站。推送文档变更前请运行：
 
@@ -73,6 +73,19 @@ bun run release <version>           # commit/push 版本 bump；publish workflow
 bun run release <version> --publish # 确认 CI-gated dry-run 后真正 publish
 bun run release:watch               # 观察最新的 Release workflow run
 ```
+
+## 分支
+
+- `dev` — 唯一的集成目标。请把所有 PR 提到这里。
+- `main` — 仅用于发布。只有维护者从 `dev` 提升时才会变动，请勿直接提功能 PR。
+- `preview` — 预发布通道。
+
+承载 Go 原生移植的 `dev2-go` 已经退役，同时维护两条集成线的政策也一并结束。其历史以只读
+形式保存在
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)。
+现在 `dev` 上的 Bun 原生 TypeScript 是唯一的运行时线。
+
+欢迎变基 PR。把陈旧分支变基到当前 head 是正常的贡献而非噪音。请在描述中注明来源提交。
 
 ## 约定
 
@@ -111,7 +124,7 @@ bun run release:watch               # 观察最新的 Release workflow run
 ## 添加 adapter
 
 在 `src/adapters/` 中实现 `ProviderAdapter`（参见
-[Adapters](/opencodex/zh-cn/reference/adapters/)），在 `src/server/adapter-resolve.ts` 注册其名称，
+[Adapters](/zh-cn/reference/adapters/)），在 `src/server/adapter-resolve.ts` 注册其名称，
 并把输出桥接成内部 `AdapterEvent`。图像处理请复用 `image.ts`；普通 streaming/tool call 以
 `openai-chat.ts` 为参考。只有 adapter 自己负责 transport retry 时才使用 `fetchResponse`；Cursor
 这类真正的双向 transport 应使用 `runTurn`。在 `tests/` 中添加聚焦测试；如果 factory 属于 public

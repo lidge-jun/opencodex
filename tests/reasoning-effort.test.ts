@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex/catalog";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import type { AdapterRequest } from "../src/adapters/base";
 import { configuredReasoningEfforts, mapReasoningEffort, sanitizeCodexReasoningEfforts } from "../src/reasoning-effort";
 import { routeModel } from "../src/router";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
@@ -34,8 +35,16 @@ function parsed(modelId: string, providerOptions: OcxParsedRequest["options"]): 
 }
 
 function buildBody(provider: OcxProviderConfig, modelId: string, options: OcxParsedRequest["options"]): Record<string, unknown> {
-  const req = createOpenAIChatAdapter(provider).buildRequest(parsed(modelId, options));
+  const req = buildChatRequest(provider, modelId, options);
   return JSON.parse(req.body as string) as Record<string, unknown>;
+}
+
+function buildChatRequest(
+  provider: OcxProviderConfig,
+  modelId: string,
+  options: OcxParsedRequest["options"],
+): AdapterRequest {
+  return createOpenAIChatAdapter(provider).buildRequest(parsed(modelId, options)) as AdapterRequest;
 }
 
 describe("provider-specific reasoning effort mapping", () => {
@@ -73,8 +82,21 @@ describe("provider-specific reasoning effort mapping", () => {
       reasoningEfforts: ["low", "medium", "high"],
     };
 
-    expect(buildBody(provider, "glm-5.2", { reasoning: "xhigh" }).reasoning_effort).toBe("high");
-    expect(buildBody(provider, "glm-5.2", { reasoning: "max" }).reasoning_effort).toBe("high");
+    const xhigh = buildChatRequest(provider, "glm-5.2", { reasoning: "xhigh" });
+    const max = buildChatRequest(provider, "glm-5.2", { reasoning: "max" });
+
+    expect(JSON.parse(xhigh.body).reasoning_effort).toBe("high");
+    expect(JSON.parse(max.body).reasoning_effort).toBe("high");
+    expect(xhigh.reasoningLog).toEqual({
+      effectiveEffort: "high",
+      wireField: "reasoning_effort",
+      wireValue: "high",
+    });
+    expect(max.reasoningLog).toEqual({
+      effectiveEffort: "high",
+      wireField: "reasoning_effort",
+      wireValue: "high",
+    });
   });
 
   test("Neuralwatt GLM-5.2 sends direct max and preserves reasoning history", () => {
@@ -248,16 +270,22 @@ describe("provider-specific reasoning effort mapping", () => {
         max: "max",
         ultra: "max",
       })) {
-        const body = buildBody(route.provider, route.modelId, {
+        const req = buildChatRequest(route.provider, route.modelId, {
           reasoning: requested,
           temperature: 0.2,
           topP: 0.7,
           presencePenalty: 1,
           frequencyPenalty: 1,
         });
+        const body = JSON.parse(req.body) as Record<string, unknown>;
 
         expect(body.model).toBe("k3");
         expect(body.reasoning_effort).toBe(wire);
+        expect(req.reasoningLog).toEqual({
+          effectiveEffort: wire,
+          wireField: "reasoning_effort",
+          wireValue: wire,
+        });
         expect(body).not.toHaveProperty("temperature");
         expect(body).not.toHaveProperty("top_p");
         expect(body).not.toHaveProperty("presence_penalty");
@@ -458,9 +486,15 @@ describe("thinking-toggle models (260707)", () => {
   };
 
   test("high effort emits thinking enabled, never reasoning_effort", () => {
-    const body = buildBody(toggleProvider, "mimo-v2.5", { reasoning: "high" });
+    const req = buildChatRequest(toggleProvider, "mimo-v2.5", { reasoning: "high" });
+    const body = JSON.parse(req.body) as Record<string, unknown>;
     expect(body.thinking).toEqual({ type: "enabled" });
     expect(body).not.toHaveProperty("reasoning_effort");
+    expect(req.reasoningLog).toEqual({
+      effectiveEffort: "enabled",
+      wireField: "thinking.type",
+      wireValue: "enabled",
+    });
   });
 
   test("low effort emits thinking disabled", () => {
@@ -546,10 +580,16 @@ describe("thinking-budget models (260709)", () => {
     ] as const;
 
     for (const [reasoning, budget] of cases) {
-      const body = buildBody(budgetProvider, "qwen3.5-397b", { reasoning, maxOutputTokens: 10000 });
+      const req = buildChatRequest(budgetProvider, "qwen3.5-397b", { reasoning, maxOutputTokens: 10000 });
+      const body = JSON.parse(req.body) as Record<string, unknown>;
       expect(body.thinking_budget).toBe(budget);
       expect(body).not.toHaveProperty("reasoning_effort");
       expect(body).not.toHaveProperty("thinking");
+      expect(req.reasoningLog).toEqual({
+        effectiveEffort: reasoning,
+        wireField: "thinking_budget",
+        wireValue: budget,
+      });
     }
   });
 
@@ -560,9 +600,15 @@ describe("thinking-budget models (260709)", () => {
   });
 
   test("minimal Qwen reasoning maps to a zero budget", () => {
-    const body = buildBody(budgetProvider, "qwen3.5-397b", { reasoning: "minimal", maxOutputTokens: 10000 });
+    const req = buildChatRequest(budgetProvider, "qwen3.5-397b", { reasoning: "minimal", maxOutputTokens: 10000 });
+    const body = JSON.parse(req.body) as Record<string, unknown>;
     expect(body.thinking_budget).toBe(0);
     expect(body).not.toHaveProperty("reasoning_effort");
+    expect(req.reasoningLog).toEqual({
+      effectiveEffort: "minimal",
+      wireField: "thinking_budget",
+      wireValue: 0,
+    });
   });
 
   test("routed Qwen models advertise five levels and send thinking_budget over openai-chat", () => {

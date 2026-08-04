@@ -1,8 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { formatCrashEntry, installCrashGuards, isBenignAbortTeardown } from "../src/lib/crash-guard";
+import { appendCrashTraceForTests, crashRingEntriesForTests, formatCrashEntry, installCrashGuards, isBenignAbortTeardown, resetCrashRingForTests } from "../src/lib/crash-guard";
+import { RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../src/lib/admission";
 import { sidecarEnter } from "../src/lib/sidecar-tracker";
 
 describe("crash-guard diagnostics", () => {
+  test("the 13th fetch trace evicts the oldest and 8 KiB values truncate on UTF-8 boundaries", () => {
+    resetCrashRingForTests();
+    for (let index = 1; index <= 12; index++) appendCrashTraceForTests(`https://example.test/${index}`, `origin-${index}`);
+    const oversized = "한".repeat(8_000);
+    appendCrashTraceForTests("https://example.test/13", oversized, oversized);
+
+    const traces = crashRingEntriesForTests();
+    expect(traces).toHaveLength(12);
+    expect(traces.some(trace => trace.url.endsWith("/1"))).toBe(false);
+    expect(traces[0]?.url).toEndWith("/2");
+    const last = traces.at(-1)!;
+    for (const value of [last.origin, last.rejected!]) {
+      expect(value.endsWith(RETAINED_TRUNCATION_MARKER)).toBe(true);
+      expect(retainedUtf8Bytes(value)).toBeLessThanOrEqual(8 * 1024);
+      expect(value).not.toContain("�");
+    }
+    resetCrashRingForTests();
+  });
+
   test("surfaces the JSC throw site from hidden source fields when the stack is native-only", () => {
     const err = new TypeError("null is not an object");
     err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)\n    at processTicksAndRejections (native:7:39)";

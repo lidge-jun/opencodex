@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { logsFromApiBody } from "./helpers/logs-api";
+import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,13 +17,21 @@ import { XAI_OAUTH_DISCOVERY_URL } from "../src/oauth/xai";
 import { XAI_GROK_CLI_BASE_URL } from "../src/providers/xai-transport";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
-import { clearRequestLogsForTests, type RequestLogContext } from "../src/server/request-log";
+import { clearRequestLogsForTests, hydrateRequestLogsFromDisk, type RequestLogContext } from "../src/server/request-log";
 import { responseWithDeferredRequestLog } from "../src/server/relay";
 import { readUsageEntries } from "../src/usage/log";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
-import { formatCodexProviderForLog } from "../src/codex/routing";
+import {
+  clearCodexUpstreamHealth,
+  formatCodexProviderForLog,
+  getCodexUpstreamHealth,
+} from "../src/codex/routing";
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+
+// Full-suite Windows load: startServer + combo rename/delete management flows exceed the
+// default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
+setDefaultTimeout(30_000);
 
 const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
@@ -114,6 +124,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearCodexUpstreamHealth();
   customRunTurn = undefined;
   customFetchResponse = undefined;
   customTransientResponse = undefined;
@@ -135,6 +146,7 @@ afterEach(async () => {
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearCodexUpstreamHealth();
   clearRequestLogsForTests();
 });
 
@@ -275,7 +287,7 @@ async function postModelLogged(
 
 async function latestAttemptReceipts(config: OcxConfig) {
   const response = await management(config, "GET", "/api/logs?tail=1");
-  const logs = await response!.json() as Array<Record<string, unknown>>;
+  const logs = logsFromApiBody(await response!.json());
   const usage = readUsageEntries();
   return { log: logs[0]!, usage: usage.at(-1)! };
 }
@@ -412,6 +424,116 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
+  test("preserves distinct failed and winning reasoning wires through restart hydration", async () => {
+    const bodies: Array<{ provider: string; effort?: unknown }> = [];
+    const a = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push({ provider: "a", effort: body.reasoning_effort });
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push({ provider: "b", effort: body.reasoning_effort });
+      return chatSuccess("mapped backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "low" },
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "high" },
+      }),
+    });
+
+    const response = await postLogged(config, { reasoning: { effort: "max" } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("mapped backup");
+    expect(bodies).toEqual([
+      { provider: "a", effort: "low" },
+      { provider: "b", effort: "high" },
+    ]);
+
+    const expectMappedReceipt = (receipt: Record<string, unknown>) => {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
+        attempts: [
+          {
+            ordinal: 1,
+            provider: "a",
+            status: 503,
+            requestedEffort: "max",
+            effectiveEffort: "low",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "low",
+          },
+          {
+            ordinal: 2,
+            provider: "b",
+            status: 200,
+            requestedEffort: "max",
+            effectiveEffort: "high",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "high",
+          },
+        ],
+      });
+    };
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    expectMappedReceipt(log);
+    expectMappedReceipt(usage);
+    expect(log).not.toHaveProperty("upstreamError");
+
+    clearRequestLogsForTests();
+    expect(hydrateRequestLogsFromDisk()).toBe(1);
+    const hydratedResponse = await management(config, "GET", "/api/logs?tail=1");
+    const hydrated = logsFromApiBody(await hydratedResponse!.json());
+    expect(hydrated).toHaveLength(1);
+    expectMappedReceipt(hydrated[0]!);
+  });
+
+  test("all-target exhaustion promotes the final attempt reasoning wire to the logical row", async () => {
+    const a = serve(() => Response.json({ error: { message: "first overloaded" } }, { status: 503 }));
+    const b = serve(() => Response.json({ error: { message: "last overloaded" } }, { status: 503 }));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "low" },
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "high" },
+      }),
+    });
+
+    const response = await postLogged(config, { reasoning: { effort: "max" } });
+    expect(response.status).toBe(503);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
+        attempts: [
+          { provider: "a", status: 503, effectiveEffort: "low", reasoningWireValue: "low" },
+          { provider: "b", status: 503, effectiveEffort: "high", reasoningWireValue: "high" },
+        ],
+      });
+    }
+  });
+
   test("bare alias runs full failover and preserves structural combo log identity", async () => {
     const targetBodies: Array<{ provider: string; model?: unknown }> = [];
     const a = serve(async request => {
@@ -506,7 +628,7 @@ describe("server combo failover 030 activation matrix", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, 60_000);
 
   test("ordinary /v1/models preserves raw nested selectors while an exact combo alias wins", async () => {
     const config = comboConfig({
@@ -629,6 +751,152 @@ describe("server combo failover 030 activation matrix", () => {
       expect(JSON.stringify(receipt)).not.toContain(rawAccountId);
       expect(JSON.stringify(receipt)).not.toContain("acct-pool-safe");
     }
+  });
+
+  test("lets a same-provider combo try its next model after a reset-derived 429", async () => {
+    const rawAccountId = "combo-reset-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.4" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "combo-reset@example.test",
+      isMain: false,
+      logLabel: "preset01",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "combo-reset-access",
+      refreshToken: "combo-reset-refresh",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-combo-reset",
+    });
+    let calls = 0;
+    customTransientResponse = async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json(
+          { error: { message: "spark quota window exhausted", type: "rate_limit_error" } },
+          {
+            status: 429,
+            headers: { "x-codex-primary-reset-at": String(Math.floor(Date.now() / 1000) + 3600) },
+          },
+        )
+        : Response.json(responsesSuccess("model fallback succeeded", "gpt-5.4"));
+    };
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(calls).toBe(2);
+    expect(getCodexUpstreamHealth(rawAccountId)?.cooldownUntil).toBeUndefined();
+  });
+
+  test("keeps explicit Retry-After account-wide during same-provider combo failover", async () => {
+    const rawAccountId = "combo-retry-after-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.4" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "combo-retry-after@example.test",
+      isMain: false,
+      logLabel: "pretry01",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "combo-retry-after-access",
+      refreshToken: "combo-retry-after-refresh",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-combo-retry-after",
+    });
+    let calls = 0;
+    customTransientResponse = async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json(
+          { error: { message: "retry later", type: "rate_limit_error" } },
+          {
+            status: 429,
+            headers: {
+              "retry-after": "120",
+              "x-codex-primary-reset-at": String(Math.floor(Date.now() / 1000) + 3600),
+            },
+          },
+        )
+        : Response.json(responsesSuccess("must not reach second upstream", "gpt-5.4"));
+    };
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(429);
+    await response.text();
+    expect(calls).toBe(1);
+    expect(getCodexUpstreamHealth(rawAccountId)?.cooldownSource).toBe("retry-after");
+  });
+
+  test("Spark reset cooldown fails over to the shared native quota on the same account (#590)", async () => {
+    const rawAccountId = "spark-scope-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.6-terra" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "pool@example.test",
+      isMain: false,
+      logLabel: "pspark1",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-pool-spark",
+    });
+
+    const resetAt = Math.floor((Date.now() + 4 * 24 * 60 * 60_000) / 1000);
+    let upstreamCalls = 0;
+    customTransientResponse = async () => {
+      upstreamCalls += 1;
+      if (upstreamCalls === 1) {
+        return Response.json({ error: { message: "Spark quota exhausted" } }, {
+          status: 429,
+          headers: { "x-codex-primary-reset-at": String(resetAt) },
+        });
+      }
+      return Response.json(responsesSuccess("Terra fallback", "gpt-5.6-terra"));
+    };
+
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(upstreamCalls).toBe(2);
+    expect(await response.json()).toMatchObject({ model: "gpt-5.6-terra" });
   });
 
   test("keeps a failed estimate on A without overwriting B reported usage", async () => {
@@ -810,6 +1078,42 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(await collectSse(response))).toContain("cursor backup");
     expect(bHits).toBe(1);
+  });
+
+  test("runTurn combo attempts retain requested effort without adapter wire metadata", async () => {
+    customRunTurn = async (parsed, _incoming, emit) => {
+      if (parsed.modelId === "m1") {
+        emit({ type: "error", message: "first target unavailable" });
+        return;
+      }
+      emit({ type: "text_delta", text: "runTurn backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await postLogged(config, {
+      reasoning: { effort: "high" },
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("runTurn backup");
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        attempts: [
+          { ordinal: 1, provider: "a", requestedEffort: "high" },
+          { ordinal: 2, provider: "b", requestedEffort: "high" },
+        ],
+      });
+      for (const attempt of receipt.attempts as Array<Record<string, unknown>>) {
+        expect(attempt).not.toHaveProperty("effectiveEffort");
+        expect(attempt).not.toHaveProperty("reasoningWireField");
+        expect(attempt).not.toHaveProperty("reasoningWireValue");
+      }
+    }
   });
 
   test("hosted web-search eager model failure hops through the loop path", async () => {
@@ -1525,7 +1829,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     expect(seen[1]).toBe(seen[0]);
   });
 
-  test("external-model toolResult continuation rotates and persists the NEW id", async () => {
+  test("external-model toolResult continuation preserves and persists the same id", async () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
@@ -1535,8 +1839,6 @@ describe("cursor conversation continuity across store:false chains", () => {
     const firstJson = await first.json() as { id: string };
     expect(seen).toHaveLength(1);
 
-    // A toolResult-terminated continuation on an external wire model forces a fresh
-    // conversation id (stateless replay; request-builder.ts forceFreshConversation).
     const second = await postCursor(config, {
       model: "cursortest/grok-4.5",
       previous_response_id: firstJson.id,
@@ -1544,11 +1846,70 @@ describe("cursor conversation continuity across store:false chains", () => {
     });
     expect(second.status).toBe(200);
     expect(seen).toHaveLength(2);
-    expect(seen[1]).not.toBe(seen[0]);
+    expect(seen[1]).toBe(seen[0]);
 
-    // The NEW id is what continuation state persists for the next turn.
     const secondJson = await second.json() as { id: string };
     const { previousResponseProviderState } = await import("../src/responses/state");
     expect(previousResponseProviderState(secondJson.id)?.cursor?.conversationId).toBe(seen[1]);
+  });
+
+  test("external store:false full-history turns reuse the client thread identity", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-external",
+      },
+      body: JSON.stringify({
+        model: "cursortest/grok-4.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postThreadTurn("start")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "start" },
+      { role: "assistant", content: "working" },
+      { type: "function_call_output", call_id: "call_x", output: "tool result" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("native composer reuses conversationId across store:false turns via parent thread id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-native",
+      },
+      body: JSON.stringify({
+        model: "cursortest/composer-2.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postThreadTurn("hello")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "cursor ok" },
+      { role: "user", content: "continue" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
   });
 });

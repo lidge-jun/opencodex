@@ -161,7 +161,7 @@ describe("runCursorTurnWithRetry — transport close ordering (WP180)", () => {
     };
   }
 
-  test("a failed attempt closes (even a slow close) before the next transport is constructed", async () => {
+  test("retry does not open the next transport until asynchronous close cleanup settles", async () => {
     const log: string[] = [];
     let calls = 0;
     await runCursorTurnWithRetry(

@@ -1,18 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { atomicWriteFile } from "../config";
+import type { OcxClaudeDesktopProfile } from "../types";
+import { claudeDesktopConfigLibraryDir, resolveConfigLibraryDir } from "./desktop-3p-paths";
+import {
+  reconcileDesktopProfile,
+  renderDesktopProfile,
+  type DesktopProfileModel,
+} from "./desktop-profile";
+import { nativeOpenAiContextWindow } from "../codex/catalog";
+import { assertDesktop3pModelsValid } from "./desktop-3p-guard";
 
 export interface Desktop3pModelEntry {
   name: string;
   labelOverride: string;
-  anthropicFamilyTier: "opus";
+  anthropicFamilyTier: "opus" | "fable" | "sonnet" | "haiku";
   isFamilyDefault?: boolean;
   /**
    * Desktop's documented 1M-context capability assertion. Set ONLY from an
    * authoritative routed contextWindow >= 1M — never guessed (devlog 136 B5).
    */
   supports1m?: true;
+  /** When true, Desktop selects the 1M variant by default (official schema, Luna research 260722). */
+  prefer1m?: true;
 }
 
 /**
@@ -30,7 +42,40 @@ export interface Desktop3pRoutedModel {
   contextWindow?: number;
 }
 
-const SUPPORTS_1M_THRESHOLD = 1_000_000;
+/**
+ * 1M-context eligibility, shared with the Desktop DTO so the dashboard's 1M chip can
+ * never disagree with what the writer emits. The DTO imports this from here — keeping
+ * the constant in this module avoids a cycle, since shared.ts already reads
+ * claude/desktop-profile.
+ */
+export const DESKTOP_SUPPORTS_1M_THRESHOLD = 1_000_000;
+
+export interface Desktop3pConfigLibraryOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+}
+
+/**
+ * Resolve the config library from the same user-data root Claude Desktop uses. Keeping this in one
+ * helper prevents the writer and dashboard status probe from agreeing on a path Desktop never reads.
+ *
+ * The resolution itself lives in `./desktop-3p-paths`, which ports Claude Desktop's own `GE()`
+ * branch for branch — including the `-3p` suffix the app appends to its userData root. Dropping
+ * that suffix points us at a directory Desktop never reads (GitHub #539).
+ */
+export function resolveDesktop3pConfigLibraryPath(
+  options: Desktop3pConfigLibraryOptions = {},
+): string {
+  if (options.env === undefined && options.platform === undefined && options.homeDir === undefined) {
+    return claudeDesktopConfigLibraryDir();
+  }
+  return resolveConfigLibraryDir({
+    env: options.env ?? process.env,
+    platform: options.platform ?? process.platform,
+    home: options.homeDir ?? homedir(),
+  });
+}
 
 /** CLI arg parsing for `ocx claude desktop` mode flags (mutually exclusive). */
 export function parseDesktop3pModeArgs(flags: string[]): { mode: Desktop3pConfigMode } | { error: string } {
@@ -59,6 +104,7 @@ interface Desktop3pMetadata {
 }
 
 let desktop3pRegistry = new Map<string, string>();
+let desktop3pAliasesByRoute = new Map<string, string>();
 
 /** Derive a stable letter-first, three-character base36 code from a route key. */
 export function deriveDesktop3pCode(route: string): string {
@@ -89,11 +135,14 @@ export function legacyDesktop3pAlias(provider: string, modelId: string): string 
 
 function displayModelId(modelId: string): string {
   return modelId
+    // Capability markers like [1m] are not name text: strip the brackets so the label
+    // reads "K3 1M", never "K3[1m]".
+    .replace(/\[([^\]]+)\]/g, "-$1")
     .split(/[-_]+/)
     .filter(Boolean)
     .map(part => {
       const lower = part.toLowerCase();
-      if (lower === "gpt" || lower === "glm" || lower === "ai") return lower.toUpperCase();
+      if (lower === "gpt" || lower === "glm" || lower === "ai" || lower === "1m") return lower.toUpperCase();
       return part.charAt(0).toUpperCase() + part.slice(1);
     })
     .join(" ");
@@ -102,18 +151,64 @@ function displayModelId(modelId: string): string {
 function collectDesktop3pModels(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
 ): { models: Desktop3pModelEntry[]; registry: Map<string, string> } {
   const registry = new Map<string, string>();
   const models: Desktop3pModelEntry[] = [];
   const candidates: Desktop3pRoutedModel[] = [
-    ...nativeSlugs.map(id => ({ provider: "native", id })),
+    // Native candidates carry their real context window from the same accessor the
+    // Desktop DTO uses, so a native 1M/372k model resolves identically in the written
+    // config and on the dashboard.
+    ...nativeSlugs.map(id => {
+      const contextWindow = nativeOpenAiContextWindow(id);
+      return { provider: "native", id, ...(contextWindow !== undefined ? { contextWindow } : {}) };
+    }),
     ...routedModels,
   ];
+
+  if (profile) {
+    const profileModels = candidates.map(({ provider, id, contextWindow }) => ({
+      route: `${provider}/${id}`,
+      label: `${displayModelId(id)} (${provider})`,
+      ...(typeof contextWindow === "number" ? { contextWindow } : {}),
+    } satisfies DesktopProfileModel));
+    const reconciled = reconcileDesktopProfile(profile, profileModels);
+    const rendered = renderDesktopProfile(reconciled, profileModels);
+    const aliasesByRoute = new Map<string, string>();
+    for (const model of rendered) {
+      aliasesByRoute.set(model.route, model.name);
+      if (!model.route.startsWith("anthropic/claude-")) registry.set(model.name, model.route);
+      models.push({
+        name: model.name,
+        labelOverride: model.label,
+        anthropicFamilyTier: model.family,
+        ...(model.isFamilyDefault ? { isFamilyDefault: true } : {}),
+        ...(model.supports1m ? { supports1m: true, prefer1m: true } : {}),
+      });
+    }
+    // Legacy hashes are compatibility-only and can collide. Bind them in stable route order so
+    // changing a family default or rendered ordering can never silently rebind an old Desktop id.
+    for (const model of [...rendered].sort((a, b) => a.route.localeCompare(b.route))) {
+      if (model.route.startsWith("anthropic/claude-")) continue;
+      const providerEnd = model.route.indexOf("/");
+      const provider = model.route.slice(0, providerEnd);
+      const id = model.route.slice(providerEnd + 1);
+      const legacy = legacyDesktop3pAlias(provider, id);
+      const existing = registry.get(legacy);
+      if (existing && existing !== model.route) {
+        console.warn(`[opencodex] Claude Desktop legacy alias collision: ${legacy} stays bound to ${existing}; ignoring ${model.route}`);
+        continue;
+      }
+      registry.set(legacy, model.route);
+    }
+    desktop3pAliasesByRoute = aliasesByRoute;
+    return { models, registry };
+  }
 
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
     const alias = desktop3pAlias(provider, id);
-    const supports1m = typeof contextWindow === "number" && contextWindow >= SUPPORTS_1M_THRESHOLD
+    const supports1m = typeof contextWindow === "number" && contextWindow >= DESKTOP_SUPPORTS_1M_THRESHOLD
       ? { supports1m: true as const }
       : {};
     if (alias === id) {
@@ -125,6 +220,7 @@ function collectDesktop3pModels(
         labelOverride: `${displayModelId(id)} (${provider})`,
         anthropicFamilyTier: "opus",
         ...supports1m,
+      ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
       });
       continue;
     }
@@ -143,10 +239,12 @@ function collectDesktop3pModels(
       labelOverride: `${displayModelId(id)} (${provider})`,
       anthropicFamilyTier: "opus",
       ...supports1m,
+      ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
     });
   }
 
   if (models[0]) models[0].isFamilyDefault = true;
+  desktop3pAliasesByRoute = new Map(candidates.map(({ provider, id }) => [`${provider}/${id}`, desktop3pAlias(provider, id)]));
   return { models, registry };
 }
 
@@ -154,8 +252,9 @@ function collectDesktop3pModels(
 export function buildDesktop3pRegistry(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
 ): Map<string, string> {
-  const { registry } = collectDesktop3pModels(nativeSlugs, routedModels);
+  const { registry } = collectDesktop3pModels(nativeSlugs, routedModels, profile);
   desktop3pRegistry = registry;
   return registry;
 }
@@ -164,8 +263,9 @@ export function buildDesktop3pRegistry(
 export function generateDesktop3pModels(
   nativeSlugs: string[],
   routedModels: Array<Desktop3pRoutedModel>,
+  profile?: OcxClaudeDesktopProfile,
 ): Desktop3pModelEntry[] {
-  const { models, registry } = collectDesktop3pModels(nativeSlugs, routedModels);
+  const { models, registry } = collectDesktop3pModels(nativeSlugs, routedModels, profile);
   desktop3pRegistry = registry;
   return models;
 }
@@ -173,6 +273,11 @@ export function generateDesktop3pModels(
 /** Resolve an alias using the most recently generated Desktop model registry. */
 export function resolveDesktop3pAlias(alias: string): string | null {
   return desktop3pRegistry.get(alias) ?? null;
+}
+
+/** Alias selected by the installed profile registry, falling back to the legacy hash shape. */
+export function activeDesktop3pAlias(provider: string, modelId: string): string {
+  return desktop3pAliasesByRoute.get(`${provider}/${modelId}`) ?? desktop3pAlias(provider, modelId);
 }
 
 /**
@@ -189,6 +294,7 @@ export function generateDesktop3pConfig(
   routedModels: Array<Desktop3pRoutedModel>,
   apiKey = "ocx",
   mode: Desktop3pConfigMode = "static",
+  profile?: OcxClaudeDesktopProfile,
 ): object {
   const base = {
     inferenceProvider: "gateway",
@@ -198,13 +304,19 @@ export function generateDesktop3pConfig(
   };
   if (mode === "discovery") {
     // Build/refresh the decode registry even though no static list is emitted.
-    buildDesktop3pRegistry(nativeSlugs, routedModels);
+    buildDesktop3pRegistry(nativeSlugs, routedModels, profile);
     return { ...base, modelDiscoveryEnabled: true };
   }
   return {
     ...base,
     modelDiscoveryEnabled: mode === "hybrid",
-    inferenceModels: generateDesktop3pModels(nativeSlugs, routedModels),
+    inferenceModels: (() => {
+      const models = generateDesktop3pModels(nativeSlugs, routedModels, profile);
+      // Fail loud at the write boundary rather than ship a config Desktop rejects:
+      // the output counterpart of the request-path guards.
+      assertDesktop3pModelsValid(models);
+      return models;
+    })(),
   };
 }
 
@@ -222,8 +334,9 @@ export function writeDesktop3pConfig(
   routedModels: Array<Desktop3pRoutedModel>,
   apiKey?: string,
   mode: Desktop3pConfigMode = "static",
-): { written: boolean; path: string; reason?: string } {
-  const libraryPath = join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
+  profile?: OcxClaudeDesktopProfile,
+): { written: boolean; path: string; reason?: string; fingerprint?: string } {
+  const libraryPath = resolveDesktop3pConfigLibraryPath();
   const metadataPath = join(libraryPath, "_meta.json");
   let configPath = libraryPath;
 
@@ -238,17 +351,31 @@ export function writeDesktop3pConfig(
       ? metadata.entries.map(current => current === existing ? entry : current)
       : [...metadata.entries, entry];
 
-    writeFileSync(configPath, JSON.stringify(generateDesktop3pConfig(port, nativeSlugs, routedModels, apiKey, mode), null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    writeFileSync(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    return { written: true, path: configPath };
+    const configJson = JSON.stringify(generateDesktop3pConfig(port, nativeSlugs, routedModels, apiKey, mode, profile), null, 2) + "\n";
+    const fingerprint = createHash("sha256").update(configJson).digest("hex").slice(0, 16);
+    const { backupPath } = atomicReplaceDesktopConfig(configPath, configJson);
+    try {
+      atomicWriteFile(metadataPath, JSON.stringify({ ...metadata, appliedId: id, entries }, null, 2) + "\n");
+    } catch (metaError) {
+      // Rollback: restore the backed-up config if metadata write fails.
+      if (backupPath && existsSync(backupPath)) copyFileSync(backupPath, configPath);
+      throw metaError;
+    }
+    return { written: true, path: configPath, fingerprint };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { written: false, path: configPath, reason };
   }
+}
+
+/** Backup an existing owned config then atomically replace it. Exported for failure-path tests. */
+export function atomicReplaceDesktopConfig(
+  path: string,
+  content: string,
+  writer: (path: string, content: string) => void = atomicWriteFile,
+): { backupPath?: string } {
+  const backupPath = `${path}.bak`;
+  if (existsSync(path)) copyFileSync(path, backupPath);
+  writer(path, content);
+  return existsSync(backupPath) ? { backupPath } : {};
 }

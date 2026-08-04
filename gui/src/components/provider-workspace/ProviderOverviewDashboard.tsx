@@ -4,7 +4,7 @@
  * recently-used ranking, and Edit JSON entry.
  */
 import { useMemo } from "react";
-import { useT, useI18n } from "../../i18n";
+import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconChevron } from "../../icons";
 import type { WorkspaceSections, WorkspaceItem } from "../../provider-workspace/catalog";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
@@ -26,12 +26,16 @@ export default function ProviderOverviewDashboard({
   sections,
   quotaReports,
   usageTotals,
+  usageLoading = false,
+  quotasLoading = false,
   onSelectProvider,
   onEditConfig,
 }: {
   sections: WorkspaceSections;
   quotaReports: Record<string, ProviderQuotaReportView>;
   usageTotals: Record<string, ProviderUsageTotals>;
+  usageLoading?: boolean;
+  quotasLoading?: boolean;
   onSelectProvider: (name: string) => void;
   onEditConfig?: () => void;
 }) {
@@ -47,10 +51,12 @@ export default function ProviderOverviewDashboard({
 
   const attention = useMemo(() => buildAttentionItems(sections, {}), [sections]);
   const attentionCount = attention.length;
-  const reauthCount = useMemo(
-    () => sections.needsSetup.filter(p => p.activeNeedsReauth).length,
+  const readyReauthCount = useMemo(
+    () => sections.ready.filter(p => p.activeNeedsReauth).length,
     [sections],
   );
+  const readyCount = sections.ready.length - readyReauthCount;
+  const needsAttentionCount = sections.needsSetup.length + readyReauthCount;
 
   /* Rate-limit rows: urgency first (highest utilisation), then name */
   const quotaProviders = useMemo(() => {
@@ -96,10 +102,10 @@ export default function ProviderOverviewDashboard({
       </div>
 
       <div className="pws-dashboard-summary">
-        <SummaryCard count={sections.ready.length} label={t("pws.status.ready")} tone="ok" />
+        <SummaryCard count={readyCount} label={t("pws.status.ready")} tone="ok" />
         <SummaryCard
-          count={sections.needsSetup.length}
-          label={reauthCount > 0 ? t("pws.status.needsAttention") : t("pws.status.needsSetup")}
+          count={needsAttentionCount}
+          label={readyReauthCount > 0 ? t("pws.status.needsAttention") : t("pws.status.needsSetup")}
           tone="warn"
         />
         <SummaryCard count={sections.disabled.length} label={t("prov.disabledBadge")} tone="muted" />
@@ -121,7 +127,7 @@ export default function ProviderOverviewDashboard({
               >
                 <ProviderIcon name={item.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
                 <div className="pws-dashboard-row-info">
-                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name)}</span>
+                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name, t)}</span>
                   <span className="pws-dashboard-row-meta muted">{localizeAttentionReason(item.reason)}</span>
                 </div>
                 <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
@@ -132,9 +138,13 @@ export default function ProviderOverviewDashboard({
       )}
 
       <div className="pws-dashboard-columns">
-        {quotaProviders.length > 0 && (
-          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.rateLimits")}>
-            <h3 className="pws-dashboard-section-title">{t("pws.dashboard.rateLimits")}</h3>
+        <section
+          className="pws-dashboard-section pws-dashboard-section--rate-limits"
+          aria-label={t("pws.dashboard.rateLimits")}
+          aria-busy={quotasLoading || undefined}
+        >
+          <h3 className="pws-dashboard-section-title">{t("pws.dashboard.rateLimits")}</h3>
+          {quotaProviders.length > 0 ? (
             <div className="pws-dashboard-rows">
               {quotaProviders.map(({ item, report }) => (
                 <button
@@ -145,7 +155,7 @@ export default function ProviderOverviewDashboard({
                 >
                   <ProviderIcon name={item.name} adapter={item.adapter} baseUrl={item.baseUrl} cls="pws-dashboard-row-icon" />
                   <div className="pws-dashboard-row-info">
-                    <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name)}</span>
+                    <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name, t)}</span>
                     <span className="pws-dashboard-row-meta muted">
                       {t("pws.dashboard.checkedAgo", { time: formatRelativeTime(report.updatedAt, timeLabels) })}
                     </span>
@@ -157,17 +167,39 @@ export default function ProviderOverviewDashboard({
                       threshold={80}
                       t={t}
                       layout="stacked"
+                      pending={quotasLoading && !report.quota}
                     />
                   </div>
                 </button>
               ))}
             </div>
-          </section>
-        )}
+          ) : quotasLoading ? (
+            <div className="pws-dashboard-rows pws-dashboard-rows--pending" aria-hidden="true">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="pws-dashboard-row pws-dashboard-row--skeleton">
+                  <span className="pws-dashboard-row-icon pws-skel" />
+                  <div className="pws-dashboard-row-info">
+                    <span className="pws-skel pws-skel--name" />
+                    <span className="pws-skel pws-skel--meta" />
+                  </div>
+                  <div className="pws-dashboard-row-bars">
+                    <QuotaBars quota={null} threshold={80} t={t} layout="stacked" pending />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted pws-dashboard-empty">{t("pws.dashboard.noRateLimits")}</p>
+          )}
+        </section>
 
-        {mostUsed.length > 0 ? (
-          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.recentlyUsed")}>
-            <h3 className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</h3>
+        <section
+          className="pws-dashboard-section pws-dashboard-section--recent"
+          aria-label={t("pws.dashboard.recentlyUsed")}
+          aria-busy={usageLoading || undefined}
+        >
+          <h3 className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</h3>
+          {mostUsed.length > 0 ? (
             <div className="pws-dashboard-rows">
               {mostUsed.map(provider => (
                 <button
@@ -177,7 +209,7 @@ export default function ProviderOverviewDashboard({
                   onClick={() => onSelectProvider(provider.name)}
                 >
                   <ProviderIcon name={provider.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
-                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(provider.name)}</span>
+                  <span className="pws-dashboard-row-name">{formatProviderDisplayName(provider.name, t)}</span>
                   <span className="pws-dashboard-row-count muted">
                     {t("pws.dashboard.requests", { count: formatRequestCount(provider.requests, locale) })}
                   </span>
@@ -185,13 +217,20 @@ export default function ProviderOverviewDashboard({
                 </button>
               ))}
             </div>
-          </section>
-        ) : (
-          <section className="pws-dashboard-section" aria-label={t("pws.dashboard.recentlyUsed")}>
-            <h3 className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</h3>
-            <p className="muted">{t("pws.dashboard.noUsage")}</p>
-          </section>
-        )}
+          ) : usageLoading ? (
+            <div className="pws-dashboard-rows pws-dashboard-rows--pending" aria-hidden="true">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="pws-dashboard-row pws-dashboard-row--skeleton">
+                  <span className="pws-dashboard-row-icon pws-skel" />
+                  <span className="pws-skel pws-skel--name" />
+                  <span className="pws-skel pws-skel--count" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted pws-dashboard-empty">{t("pws.dashboard.noUsage")}</p>
+          )}
+        </section>
       </div>
     </div>
   );

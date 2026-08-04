@@ -7,17 +7,178 @@
  * it never sets proxy env, relocates state dirs, mutates quota, or changes
  * networking. See devlog/_plan/260630_wsl-account-autoswitch/30_*.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "../config";
+import { dirname, join } from "node:path";
+import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntimePort, resolveEnvValue } from "../config";
+import { findLiveProxy } from "../server/proxy-liveness";
+import { gracefulStopHost } from "../lib/process-control";
+import { maskAccountId } from "../lib/privacy";
+import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
+import { configuredAdminToken } from "../lib/admin-secrets";
 import { readCodexTokens } from "../codex/auth-collision";
-import { resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
+import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
 import { collectStartupHealth, startupHealthSummary } from "../codex/autostart-health";
+import {
+  displayCodexRuntimePath,
+  loadLastEffortClamp,
+  persistCodexRuntime,
+  resolveAndPersistCodexRuntime,
+  resolveCodexRuntime,
+} from "../codex/runtime";
+import { CODEX_REAUTH_ACTION, collectOAuthHealthEntriesForCli, MASKED_ACCOUNT_FALLBACK, type OAuthHealthEntry } from "../oauth/health";
+import { getAuthRefreshIntentLockPath, getAuthStorePath } from "../oauth/store";
 export { resolveCodexHomeDir } from "../codex/home";
+
+export type OAuthDoctorCheck = { level: "OK" | "WARN"; message: string };
+
+function pathIsWritable(path: string): boolean {
+  try {
+    // Directories need execute/search as well as write for create+rename.
+    accessSync(path, constants.W_OK | constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Observe-only: can we atomically replace auth.json (sibling tmp + rename)? */
+function isOAuthCredentialStorageWritable(): boolean {
+  const storePath = getAuthStorePath();
+  const dir = existsSync(storePath) ? dirname(storePath) : getConfigDir();
+  if (existsSync(dir)) return pathIsWritable(dir);
+  // Config dir missing: check nearest existing ancestor (no mkdir — observe-only).
+  let parent = dirname(dir);
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(parent)) return pathIsWritable(parent);
+    const next = dirname(parent);
+    if (next === parent) break;
+    parent = next;
+  }
+  return false;
+}
+
+/** Observe-only: refresh lock paths resolve and their parent dir is writable. */
+function isOAuthRefreshSingleFlightReady(): boolean {
+  try {
+    const sample = getAuthRefreshIntentLockPath("doctor-probe", "probe-account");
+    if (!sample.includes("auth.refresh.")) return false;
+    const dir = getConfigDir();
+    if (existsSync(dir)) return pathIsWritable(dir);
+    return isOAuthCredentialStorageWritable();
+  } catch {
+    return false;
+  }
+}
+
+function actionForDoctorEntry(entry: OAuthHealthEntry): string {
+  if (entry.action) return entry.action;
+  if (entry.provider === "codex") {
+    return CODEX_REAUTH_ACTION;
+  }
+  if (entry.health.status === "warning" && entry.health.reason === "stale_credentials") {
+    return `run \`ocx login ${entry.provider}\``;
+  }
+  if (entry.health.status === "warning" && entry.health.reason === "metadata_mismatch") {
+    return `run \`ocx login ${entry.provider}\` to refresh credentials`;
+  }
+  return `run \`ocx doctor\` again after fixing OAuth state for ${entry.provider}`;
+}
+
+function describeDoctorHealth(entry: OAuthHealthEntry): string {
+  const masked = maskAccountId(entry.accountId) ?? MASKED_ACCOUNT_FALLBACK;
+  const health = entry.health;
+  switch (health.status) {
+    case "reauth_required":
+      return `Account ${masked} requires reauthentication`;
+    case "cooldown":
+      return health.reason === "rate_limit"
+        ? `Account ${masked} is rate limited until ${health.until}`
+        : `Account ${masked} is quota limited until ${health.until}`;
+    case "warning":
+      switch (health.reason) {
+        case "refresh_conflict":
+          return `Account ${masked} has a refresh conflict`;
+        case "metadata_mismatch":
+          return `Account ${masked} has a metadata mismatch`;
+        case "stale_credentials":
+          return `Account ${masked} has incomplete credentials`;
+      }
+    case "healthy":
+      return `Account ${masked} is healthy`;
+  }
+}
+
+/**
+ * OAuth reliability checks for `ocx doctor`. Observe-only: never mutates
+ * credentials, locks, or networking. Every WARN includes a recovery Action.
+ */
+export async function collectOAuthDoctorChecks(
+  now = Date.now(),
+  deps: Parameters<typeof collectOAuthHealthEntriesForCli>[1] = {},
+): Promise<OAuthDoctorCheck[]> {
+  const checks: OAuthDoctorCheck[] = [];
+
+  if (isOAuthCredentialStorageWritable()) {
+    checks.push({ level: "OK", message: "OAuth credential storage directory is writable for atomic auth.json updates." });
+  } else {
+    checks.push({
+      level: "WARN",
+      message:
+        "OAuth credential storage directory is not writable. Action: fix permissions on OPENCODEX_HOME so ocx can create temp files and rename auth.json",
+    });
+  }
+
+  if (isOAuthRefreshSingleFlightReady()) {
+    checks.push({ level: "OK", message: "Token refresh single-flight is active." });
+  } else {
+    checks.push({
+      level: "WARN",
+      message:
+        "Token refresh single-flight is unavailable. Action: fix permissions on OPENCODEX_HOME so ocx can create refresh lock files",
+    });
+  }
+
+  const report = await collectOAuthHealthEntriesForCli(now, deps);
+  if (report.codexHealthSource === "unavailable") {
+    checks.push({
+      level: "WARN",
+      message:
+        "Codex account health unavailable (proxy not running). Action: start the proxy and re-run `ocx doctor` to inspect live cooldown/reauth",
+    });
+  } else if (report.codexHealthSource === "management-auth-failed") {
+    checks.push({
+      level: "WARN",
+      message:
+        "Codex account health unavailable (proxy running; management authentication failed). Action: verify the admin token configuration, restart the proxy, and re-run `ocx doctor`",
+    });
+  } else if (report.codexHealthSource === "management-api-unavailable") {
+    checks.push({
+      level: "WARN",
+      message:
+        "Codex account health unavailable (proxy running; management API response failed). Action: inspect the proxy service log, restart the proxy if needed, and re-run `ocx doctor`",
+    });
+  }
+  for (const entry of report.entries) {
+    if (entry.health.status === "healthy") continue;
+    const action = actionForDoctorEntry(entry);
+    checks.push({
+      level: "WARN",
+      message: `${describeDoctorHealth(entry)}. Action: ${action}`,
+    });
+  }
+
+  // Build-time / architecture note — not a runtime fabrication scanner.
+  checks.push({
+    level: "OK",
+    message: "Codex forward path uses pass-through client metadata (build-time invariant; not a runtime scan).",
+  });
+
+  return checks;
+}
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const PROBE_TIMEOUT_MS = 8000;
@@ -138,17 +299,15 @@ export function collectWslDualInstall(deps: WslDualInstallDeps = {}): WslDualIns
   };
 }
 
-const PROXY_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] as const;
-
 export type ProxyEnvRow = { key: string; present: boolean };
 export type EnvMap = Record<string, string | undefined>;
 
 /** Report only presence/absence of proxy env vars - never the value (it may
  * embed credentials). Checks both upper- and lower-case forms. */
 export function collectProxyEnv(env: EnvMap = process.env): ProxyEnvRow[] {
-  return PROXY_KEYS.map(key => ({
+  return PROXY_ENV_KEYS.map(key => ({
     key,
-    present: !!(env[key]?.trim() || env[key.toLowerCase()]?.trim()),
+    present: proxyEnvPresent(key, env),
   }));
 }
 
@@ -160,11 +319,45 @@ export type ConfiguredProxyDiagnostic = {
   detail: string;
 };
 
-function envReferenceName(value: string): string | null {
+export function envReferenceName(value: string): string | null {
   const braced = value.match(/^\$\{(\w+)\}$/);
   if (braced) return braced[1]!;
   const bare = value.match(/^\$(\w+)$/);
   return bare ? bare[1]! : null;
+}
+
+export type ProviderApiKeyDiagnostic = {
+  provider: string;
+  envName: string;
+  detail: string;
+};
+
+/** Warn when a key-auth provider's apiKey env reference resolves empty in this process. */
+export function collectProviderApiKeyDiagnostics(
+  providers: Record<string, { authMode?: string; apiKey?: string }> = readConfigDiagnostics().config.providers ?? {},
+  env: EnvMap = process.env,
+): ProviderApiKeyDiagnostic[] {
+  const resolveInEnv = (value: string): string | undefined => {
+    const name = envReferenceName(value);
+    if (!name) return value;
+    return env[name];
+  };
+  const rows: ProviderApiKeyDiagnostic[] = [];
+  for (const [provider, config] of Object.entries(providers)) {
+    if (config.authMode !== "key") continue;
+    const raw = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
+    if (!raw) continue;
+    const envName = envReferenceName(raw);
+    if (!envName) continue;
+    const resolved = resolveInEnv(raw);
+    if (resolved?.trim()) continue;
+    rows.push({
+      provider,
+      envName,
+      detail: `provider ${provider}: env reference ${envName} is unset or empty in this process`,
+    });
+  }
+  return rows;
 }
 
 export function collectConfiguredProxy(): ConfiguredProxyDiagnostic {
@@ -319,8 +512,202 @@ export async function probeWham(fetchImpl: typeof fetch = fetch): Promise<WhamPr
   }
 }
 
-export async function runDoctor(): Promise<void> {
+/**
+ * Service-process memory/runtime introspection (#314 WP4).
+ *
+ * Doctor runs in its OWN Bun process; the only honest source for the SERVICE
+ * process identity (Bun version, RSS, stream-mode gate decision) is the
+ * authed management endpoint added in WP3. Observe-only: failures render as
+ * honest status lines, never as fake data, and never fail the command.
+ */
+export type ServiceMemoryData = {
+  pid: number;
+  bunVersion: string;
+  platform: string;
+  rss: number;
+  heapUsed: number;
+  external: number;
+  arrayBuffers: number;
+  observedBytes?: number;
+  observedMetric?: MemoryMetric;
+  jscHeap: { heapSize: number } | null;
+  streamMode: string;
+  eagerRelay: { useEagerRelay: boolean; reason: string } | null;
+  watchdog: { warnThresholdBytes: number; lastWarnAt: number | null; observedBytes?: number; observedMetric?: MemoryMetric } | null;
+};
+
+export type ServiceMemoryReport =
+  | { status: "ok"; data: ServiceMemoryData }
+  | { status: "unauthorized" }
+  | { status: "unreachable"; error: string };
+
+const SERVICE_MEMORY_TIMEOUT_MS = 2000;
+const DEFAULT_MEMORY_THRESHOLD_BYTES = 4 * 1024 ** 3;
+type MemoryMetric = "rss" | "external" | "arrayBuffers";
+
+function observedMemory(data: { rss: number; external?: number; arrayBuffers?: number }): {
+  bytes: number;
+  metric: MemoryMetric;
+} {
+  const values: Array<{ metric: MemoryMetric; bytes: number }> = [
+    { metric: "rss", bytes: data.rss },
+    { metric: "external", bytes: data.external ?? 0 },
+    { metric: "arrayBuffers", bytes: data.arrayBuffers ?? 0 },
+  ];
+  return values.reduce((best, next) => next.bytes > best.bytes ? next : best, values[0]);
+}
+
+export async function fetchServiceMemory(
+  host: string,
+  port: number,
+  token: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ServiceMemoryReport> {
+  try {
+    const res = await fetchImpl(`http://${host}:${port}/api/system/memory`, {
+      headers: token ? { "x-opencodex-api-key": token } : {},
+      signal: AbortSignal.timeout(SERVICE_MEMORY_TIMEOUT_MS),
+    });
+    if (res.status === 401 || res.status === 403) return { status: "unauthorized" };
+    if (!res.ok) return { status: "unreachable", error: `http ${res.status}` };
+    const body = await res.json() as Partial<ServiceMemoryData>;
+    if (typeof body.pid !== "number" || typeof body.bunVersion !== "string" || typeof body.rss !== "number") {
+      return { status: "unreachable", error: "malformed response" };
+    }
+    return {
+      status: "ok",
+      data: {
+        pid: body.pid,
+        bunVersion: body.bunVersion,
+        platform: typeof body.platform === "string" ? body.platform : "unknown",
+        rss: body.rss,
+        heapUsed: typeof body.heapUsed === "number" ? body.heapUsed : 0,
+        external: typeof body.external === "number" ? body.external : 0,
+        arrayBuffers: typeof body.arrayBuffers === "number" ? body.arrayBuffers : 0,
+        observedBytes: typeof body.observedBytes === "number" ? body.observedBytes : undefined,
+        observedMetric: body.observedMetric === "rss" || body.observedMetric === "external" || body.observedMetric === "arrayBuffers"
+          ? body.observedMetric
+          : undefined,
+        jscHeap: body.jscHeap && typeof body.jscHeap.heapSize === "number" ? { heapSize: body.jscHeap.heapSize } : null,
+        streamMode: typeof body.streamMode === "string" ? body.streamMode : "auto",
+        eagerRelay: body.eagerRelay && typeof body.eagerRelay.reason === "string"
+          ? { useEagerRelay: body.eagerRelay.useEagerRelay === true, reason: body.eagerRelay.reason }
+          : null,
+        watchdog: body.watchdog && typeof body.watchdog.warnThresholdBytes === "number"
+          ? {
+            warnThresholdBytes: body.watchdog.warnThresholdBytes,
+            lastWarnAt: body.watchdog.lastWarnAt ?? null,
+            observedBytes: typeof body.watchdog.observedBytes === "number" ? body.watchdog.observedBytes : undefined,
+            observedMetric: body.watchdog.observedMetric === "rss" || body.watchdog.observedMetric === "external" || body.watchdog.observedMetric === "arrayBuffers"
+              ? body.watchdog.observedMetric
+              : undefined,
+          }
+          : null,
+      },
+    };
+  } catch (err) {
+    return { status: "unreachable", error: err instanceof Error ? err.name : "fetch failed" };
+  }
+}
+
+const mb = (bytes: number): string => `${Math.round(bytes / (1024 * 1024))}MB`;
+
+/** Render the doctor "Memory / runtime" section lines (testable without console capture). */
+export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] {
+  const lines: string[] = [];
+  lines.push(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
+  if (report.status === "unauthorized") {
+    lines.push("  --     proxy reachable but rejected the request — set OPENCODEX_ADMIN_AUTH_TOKEN to match the service");
+    return lines;
+  }
+  if (report.status === "unreachable") {
+    lines.push(`  --     proxy not reachable (not running?) [${report.error}]`);
+    return lines;
+  }
+  const d = report.data;
+  lines.push(`  ok     service pid ${d.pid}: Bun ${d.bunVersion} on ${d.platform}`);
+  const observed = observedMemory(d);
+  const observedBytes = d.observedBytes ?? d.watchdog?.observedBytes ?? observed.bytes;
+  const observedMetric = d.observedMetric ?? d.watchdog?.observedMetric ?? observed.metric;
+  lines.push(`         rss=${mb(d.rss)}, external=${mb(d.external)}, arrayBuffers=${mb(d.arrayBuffers)}, heapUsed=${mb(d.heapUsed)}${d.jscHeap ? `, jscHeap=${mb(d.jscHeap.heapSize)}` : ""}`);
+  lines.push(`         observed=${mb(observedBytes)} (${observedMetric})`);
+  lines.push(`         streamMode=${d.streamMode}${d.eagerRelay ? ` (eager relay: ${d.eagerRelay.useEagerRelay ? "on" : "off"}, ${d.eagerRelay.reason})` : ""}`);
+  if (d.watchdog) {
+    lines.push(`         watchdog threshold=${mb(d.watchdog.warnThresholdBytes)}${d.watchdog.lastWarnAt ? `, last warn ${new Date(d.watchdog.lastWarnAt).toISOString()}` : ", no warnings"}`);
+  }
+  // Interpretation rule: reuse the watchdog threshold and the same max-of
+  // observed memory counters, so doctor and watchdog never disagree about
+  // "high". RSS/working-set can under-report committed retention on Windows, and
+  // Bun 1.3.14 heap counters are not standalone leak proof.
+  const threshold = d.watchdog?.warnThresholdBytes ?? DEFAULT_MEMORY_THRESHOLD_BYTES;
+  const jsShare = d.rss > 0 ? Math.max(d.heapUsed, d.jscHeap?.heapSize ?? 0) / d.rss : 0;
+  if (observedBytes < threshold) {
+    lines.push("         memory usage looks normal");
+  } else if (observedMetric !== "rss") {
+    lines.push(`  !!     high observed memory via ${observedMetric}; Windows RSS/working-set counters may be blind. See docs: troubleshooting/windows-memory`);
+  } else if (jsShare < 0.25) {
+    lines.push("  !!     high RSS with a small JS heap — native-side growth (Bun runtime buffers/handles). See docs: troubleshooting/windows-memory");
+  } else if (jsShare >= 0.5) {
+    lines.push("  !!     high RSS with large JS/JSC counters — possible JS-side retention; compare responseState/external samples before filing an app leak");
+  } else {
+    lines.push("  !!     high RSS, indeterminate split — capture two doctor runs over time to see the trend");
+  }
+  // Version-claiming (never binary-claiming): the endpoint cannot distinguish
+  // the bundled binary from an OPENCODEX_BUN_PATH override of the same version.
+  if (d.platform === "win32" && d.eagerRelay?.reason === "auto-known-bad") {
+    lines.push(`         service is running Bun ${d.bunVersion} on Windows — a version affected by the upstream Bun memory issue.`);
+    lines.push("         Options: wait for a bundled runtime update, or set OPENCODEX_BUN_PATH to a runtime you trust (unvalidated — own risk),");
+    lines.push("         or opt into streamMode \"eager-relay\" via PUT /api/settings (crash risk on this runtime; see docs).");
+  }
+  return lines;
+}
+
+/**
+ * Actionable hint for the most common confusion: Codex/Claude clients fail with raw
+ * connection errors (e.g. "error sending request for url (http://127.0.0.1:10100/...)")
+ * when the proxy is simply not running. Returns null when a live proxy was found.
+ */
+export function proxyDownRestartHint(input: {
+  proxyRunning: boolean;
+  port: number;
+  serviceViable: boolean;
+}): string | null {
+  if (input.proxyRunning) return null;
+  const restart = input.serviceViable
+    ? "Restart it with 'ocx service start' (service installed) or 'ocx start'."
+    : "Restart it with 'ocx start', or install the persistent service: 'ocx service install'.";
+  return `The ocx proxy is not running. Codex/Claude clients pinned to 127.0.0.1:${input.port} fail with errors like "error sending request for url (http://127.0.0.1:${input.port}/v1/responses)". ${restart}`;
+}
+
+export async function runDoctor(args: string[] = []): Promise<void> {
+  if (args.includes("--fix-codex-runtime")) {
+    const resolved = resolveCodexRuntime();
+    if (!resolved.newerAvailable) {
+      console.log("No newer Codex runtime found; keeping current selection.");
+      const current = resolveAndPersistCodexRuntime();
+      console.log(`Selected: ${displayCodexRuntimePath(current.runtime.command)} (${current.runtime.version ?? "unknown"})`);
+      return;
+    }
+    if (resolved.runtime.source === "environment") {
+      console.log("CODEX_CLI_PATH currently overrides configured runtimes.");
+      console.log(`Unset or update CODEX_CLI_PATH to use ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"}).`);
+      console.log("Then run ocx sync.");
+      return;
+    }
+    persistCodexRuntime({
+      command: resolved.newerAvailable.command,
+      version: resolved.newerAvailable.version,
+      source: "configured",
+    });
+    console.log(`Updated Codex runtime to ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"}).`);
+    console.log("Run ocx sync to refresh the catalog against this runtime.");
+    return;
+  }
+
   console.log("opencodex doctor\n");
+
+  // Ordering note: the memory/runtime section renders after "Running proxy
+  // process proxy env" below; helpers live above runDoctor for testability.
 
   const paths = collectPaths();
   const mounts = readMounts();
@@ -332,14 +719,66 @@ export async function runDoctor(): Promise<void> {
     console.log(`  ${row.exists ? "ok " : "-- "} ${row.label}: ${row.path}${flags ? `  (${flags})` : ""}`);
   }
 
-  const startup = collectStartupHealth(readConfigDiagnostics().config);
+  const orcaHome = collectOrcaCodexHomeDiagnostic();
+  console.log("\nCodex app home targeting");
+  console.log(`  ${orcaHome.mismatch ? "!! " : "ok "} Effective Codex home: ${orcaHome.effectiveCodexHome}`);
+  if (orcaHome.mismatch) {
+    console.log(`  !!  ${orcaHome.warning}`);
+    console.log(`      Action: ${orcaHome.action}`);
+  } else {
+    console.log("      No Orca-owned CODEX_HOME mismatch detected.");
+  }
+
+  const doctorConfig = readConfigDiagnostics().config;
+  const startup = collectStartupHealth(doctorConfig);
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       routing=${startup.routingKind}, service=${startup.serviceViable ? "viable" : startup.serviceInstalled ? "installed-but-unhealthy" : "absent"}, shim=${startup.shimHealthy ? "healthy" : startup.shimInstalled ? "stale" : "absent"}`);
 
+  console.log("\nCodex runtime selection");
+  {
+    const resolved = resolveCodexRuntime();
+    const selected = resolved.runtime;
+    console.log(`  ok  Selected runtime: ${displayCodexRuntimePath(selected.command)} (${selected.version ?? "unknown"}, source=${selected.source})`);
+    const envFailures = resolved.failures.filter(item => item.source === "environment");
+    for (const failure of envFailures) {
+      console.log(`  !!  Invalid CODEX_CLI_PATH: ${failure.reason}`);
+    }
+    const shimFailures = resolved.failures.filter(item => item.source === "shim");
+    if (shimFailures.length > 0) {
+      console.log(`  !!  Stale shim target rejected (${shimFailures.length})`);
+    }
+    if (resolved.replacedConfigured) {
+      console.log(`  !!  Preferred runtime unavailable; fell back to ${displayCodexRuntimePath(selected.command)}`);
+    }
+    if (resolved.newerAvailable) {
+      console.log(`  !!  Multiple Codex installations found.`);
+      console.log(`  ok  Newer usable runtime found: ${displayCodexRuntimePath(resolved.newerAvailable.command)} (${resolved.newerAvailable.version ?? "unknown"})`);
+      console.log("       Suggested: set CODEX_CLI_PATH to the desired binary and run ocx sync.");
+      console.log("       Optional: ocx doctor --fix-codex-runtime");
+    }
+    const lastClamp = loadLastEffortClamp();
+    if (lastClamp && lastClamp.removedEfforts.length > 0) {
+      console.log(`  !!  ${lastClamp.removedEfforts.join(" and ")} were removed during catalog sync.`);
+      console.log("       Suggested: set CODEX_CLI_PATH to a newer Codex binary and run ocx sync.");
+    }
+  }
+
+  // #618: identity-verified liveness first so pid-file absence does not hide a live service.
+  // Reuse the diagnostics config already loaded above so doctor stays read-only on malformed JSON.
+  const live = await findLiveProxy({
+    configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
+  });
+  const livePid = live ? live.pid : readPid();
+  const liveRuntime = live
+    ? { pid: live.pid ?? 0, port: live.port, hostname: live.hostname }
+    : (livePid ? readRuntimePort(livePid) : null);
+
   const currentProxyEnv = collectProxyEnv();
   const configuredProxy = collectConfiguredProxy();
-  const runningProxyEnv = collectRunningProxyEnv();
+  const runningProxyEnv = collectRunningProxyEnv({
+    readPidFn: () => (live ? live.pid : readPid()),
+  });
 
   console.log("\nCurrent doctor process proxy env (presence only)");
   for (const row of currentProxyEnv) {
@@ -348,6 +787,16 @@ export async function runDoctor(): Promise<void> {
 
   console.log("\nConfigured proxy (value hidden)");
   console.log(`  ${configuredProxy.present ? "set    " : "unset  "} ${configuredProxy.key} (${configuredProxy.source}; ${configuredProxy.detail})`);
+
+  const providerApiKeys = collectProviderApiKeyDiagnostics(doctorConfig.providers);
+  console.log("\nProvider API keys (value hidden)");
+  if (providerApiKeys.length === 0) {
+    console.log("  ok     no empty env-referenced provider keys detected in this process");
+  } else {
+    for (const row of providerApiKeys) {
+      console.log(`  !!     ${row.detail}`);
+    }
+  }
 
   console.log("\nRunning proxy process proxy env (presence only)");
   if (runningProxyEnv.status === "not_running") {
@@ -358,6 +807,19 @@ export async function runDoctor(): Promise<void> {
     console.log(`  ok     pid ${runningProxyEnv.pid}`);
     for (const row of runningProxyEnv.rows) {
       console.log(`  ${row.present ? "set    " : "unset  "} ${row.key}`);
+    }
+  }
+
+  console.log("\nMemory / runtime");
+  {
+    const runtime = liveRuntime;
+    if (!runtime || !live) {
+      console.log(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
+      console.log("  --     no running ocx proxy found (no live pid/runtime record)");
+    } else {
+      const token = configuredAdminToken();
+      const report = await fetchServiceMemory(gracefulStopHost(runtime.hostname), runtime.port, token);
+      for (const line of formatServiceMemoryLines(report)) console.log(line);
     }
   }
 
@@ -405,8 +867,35 @@ export async function runDoctor(): Promise<void> {
     }
   }
 
+  // OAuth reliability: observe-only (no mutations / auto-repair).
+  console.log("\nOAuth reliability");
+  for (const check of await collectOAuthDoctorChecks()) {
+    console.log(`  [${check.level}] ${check.message}`);
+  }
+
+  // #857: a running Codex app-server can keep an older in-memory catalog than
+  // the one on disk — surface it outside sync time.
+  const { collectCodexAppServerCatalogState } = await import("../codex/app-server-processes");
+  const catalogState = collectCodexAppServerCatalogState();
+  if (catalogState.state === "stale") {
+    console.log(`  [WARN] Codex app-server (PID(s): ${catalogState.processes.map(p => p.pid).join(", ")}) started before the on-disk catalog changed; its in-memory model list disagrees with ocx. Action: restart Codex (or run \`ocx sync --restart-codex\`)`);
+  } else if (catalogState.state === "unknown") {
+    console.log("  [WARN] Could not verify whether the running Codex app-server's model catalog is current (start time or catalog unreadable). Action: if the model list looks stale, restart Codex");
+  } else if (catalogState.state === "fresh") {
+    console.log("  [OK] Codex app-server model catalog is current with the on-disk catalog.");
+  }
+
   // Hints, not fixes.
   const hints: string[] = [];
+  const proxyDown = proxyDownRestartHint({
+    proxyRunning: Boolean(live),
+    port: live?.port ?? doctorConfig.port ?? 10100,
+    serviceViable: startup.serviceViable,
+  });
+  if (proxyDown) hints.push(proxyDown);
+  for (const row of providerApiKeys) {
+    hints.push(`${row.detail}. Set ${row.envName} in the shell that starts the proxy, or store a literal key in config (value hidden here).`);
+  }
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
   const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (!startup.rebootSafe) {

@@ -3,7 +3,7 @@
  * models are no longer v1-pinned by ocx, but legacy/v1-surface requests still need
  * the Proactive delegation prompt when they arrive with the synthetic top tier.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,12 +18,23 @@ import {
 } from "../src/lib/injection-debug-log";
 
 const savedCodexHome = process.env.CODEX_HOME;
+const savedCatalogStateOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+
+// Hermetic default: the host machine may run a real Codex app-server whose
+// process state must not leak into these tests (#857).
+process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
 
 afterEach(() => {
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
+  process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
   clearDebugSettings();
   resetInjectionDebugLogBufferForTests();
+});
+
+afterAll(() => {
+  if (savedCatalogStateOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = savedCatalogStateOverride;
 });
 
 function codexHomeFixture(configToml: string): string {
@@ -50,7 +61,10 @@ function catalogFixture(dir: string, models: CatalogFixtureModel[]): void {
       display_name: model.slug,
       visibility: model.visibility ?? "list",
       priority: model.priority ?? index,
-      multi_agent_version: model.multiAgentVersion === undefined ? "v2" : model.multiAgentVersion,
+      // undefined means the key is ABSENT, matching how routed entries are really
+      // written (normalizeRoutedCatalogEntry deletes it). The production absent-key
+      // path cannot be tested if the fixture rewrites it to "v2".
+      ...(model.multiAgentVersion === undefined ? {} : { multi_agent_version: model.multiAgentVersion }),
       supported_reasoning_levels: (model.efforts ?? [])
         .map(effort => ({ effort, description: effort })),
     })),
@@ -101,6 +115,32 @@ describe("multiAgentGuidanceText", () => {
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "max", tools: [{ name: "shell" }] }))).toBeNull();
   });
 
+  test("v2 guidance suppresses positive model claims while the app-server catalog is stale or unknown (#857)", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const parsed = parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] });
+    const options = { injectionModel: "anthropic/claude-sonnet-5" };
+
+    for (const state of ["stale", "unknown"] as const) {
+      const text = await multiAgentGuidanceText(parsed, options, {
+        collectCatalogState: () => ({ state }),
+      });
+      expect(text).toContain("do not set");
+      expect(text).not.toContain("Preferred sub-agent");
+      expect(text).not.toContain("Available models");
+    }
+
+    for (const state of ["fresh", "not_running"] as const) {
+      const text = await multiAgentGuidanceText(parsed, options, {
+        collectCatalogState: () => ({ state }),
+      });
+      expect(text).toContain("Preferred sub-agent");
+    }
+  });
+
   test("v2 built-in guidance is schema-agnostic and keeps fork rules", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{
@@ -136,10 +176,12 @@ describe("multiAgentGuidanceText", () => {
     const effective = effectiveSubagentRoster(configured, "v2");
     expect(effective.candidates.map(model => model.model)).toEqual([
       "gpt-5.6-sol",
+      "gpt-5.5",
       "gpt-5.6-terra",
     ]);
     expect(effective.advertised.map(model => model.model)).toEqual([
       "gpt-5.6-sol",
+      "gpt-5.5",
       "gpt-5.6-terra",
     ]);
 
@@ -148,8 +190,10 @@ describe("multiAgentGuidanceText", () => {
       { subagentModels: configured },
     );
     expect(text).toContain('"gpt-5.6-sol"');
+    // Option B: an unpinned (null) model is a routed/unpinned-native model and is
+    // now advertised; only a genuine "v1" pin stays excluded.
+    expect(text).toContain('"gpt-5.5"');
     expect(text).toContain('"gpt-5.6-terra"');
-    expect(text).not.toContain('"gpt-5.5"');
     expect(text).not.toContain('"gpt-5.6-luna"');
     for (const advertised of effective.advertised) {
       expect(effective.candidates.map(model => model.model)).toContain(advertised.model);
@@ -219,10 +263,13 @@ describe("multiAgentGuidanceText", () => {
       { slug: "gpt-5.5", efforts: ["high"], priority: 1, multiAgentVersion: null },
     ]);
 
-    expect(await multiAgentGuidanceText(
+    // Option B: the null-pinned model is now an active candidate, so it is a valid
+    // preferred model rather than producing no guidance.
+    const nullPinned = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
       { injectionModel: "gpt-5.5" },
-    )).toBeNull();
+    );
+    expect(nullPinned).toContain('Preferred sub-agent: model "gpt-5.5"');
 
     const eligible = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
@@ -380,6 +427,19 @@ describe("multiAgentGuidanceText", () => {
         + ' Available models (reasoning_effort high/max): "gpt-5.6-terra".</multi_agent_mode>',
     );
     expect(text).not.toContain("gpt-5.6-luna");
+  });
+
+  test("injectionPrompt substitutes fallback guidance via {{fallback}}", async () => {
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionPrompt: "FALLBACK={{fallback}}",
+        subagentModelFallback: ["alibaba-token-plan/qwen3.8-max-preview", "kimi/k3"],
+      },
+    );
+    expect(text).toContain("FALLBACK=");
+    expect(text).toContain("alibaba-token-plan/qwen3.8-max-preview");
+    expect(text).toContain("kimi/k3");
   });
 
   test("v1 ignores injectionPrompt and custom prompt does not fire a bare v2 surface", async () => {
@@ -562,6 +622,23 @@ describe("multiAgentGuidanceText", () => {
 });
 
 describe("injectDeveloperMessage", () => {
+  const guidance = "guidance text";
+  const generatedItem = (text = guidance) => ({
+    type: "message",
+    role: "developer",
+    content: [{ type: "input_text", text }],
+  });
+  const countExact = (input: unknown[], text = guidance): number => input.filter(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const record = item as Record<string, unknown>;
+    if (record.type !== "message" || record.role !== "developer" || !Array.isArray(record.content)) return false;
+    if (record.content.length !== 1) return false;
+    const part = record.content[0];
+    return !!part && typeof part === "object" && !Array.isArray(part)
+      && (part as Record<string, unknown>).type === "input_text"
+      && (part as Record<string, unknown>).text === text;
+  }).length;
+
   test("appends to both the parsed messages and the raw passthrough input", () => {
     const parsed = parsedFixture({ reasoning: "max" });
     injectDeveloperMessage(parsed, "hello there");
@@ -597,9 +674,62 @@ describe("injectDeveloperMessage", () => {
     expect((input[1] as { role: string }).role).toBe("developer");
     expect((input[2] as { type: string }).type).toBe("compaction_trigger");
   });
+
+  test("exact-guidance predicate rejects every near-match replay-prefix shape (#326)", () => {
+    const nearMatches: Array<[string, unknown]> = [
+      ["non-record item", null],
+      ["wrong type", { ...generatedItem(), type: "other" }],
+      ["wrong role", { ...generatedItem(), role: "user" }],
+      ["non-array content", { type: "message", role: "developer", content: "guidance text" }],
+      ["wrong content length", { type: "message", role: "developer", content: [] }],
+      ["non-record part", { type: "message", role: "developer", content: [null] }],
+      ["wrong part type", { type: "message", role: "developer", content: [{ type: "output_text", text: guidance }] }],
+      ["different text", generatedItem("different guidance")],
+      ["extra content part", {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: guidance }, { type: "input_text", text: "extra" }],
+      }],
+    ];
+
+    for (const [label, nearMatch] of nearMatches) {
+      const parsed = parsedFixture({ reasoning: "max", rawInput: [nearMatch] });
+      parsed._replayPrefixLen = 1;
+      injectDeveloperMessage(parsed, guidance);
+      const rawInput = (parsed._rawBody as { input: unknown[] }).input;
+      expect(countExact(rawInput), label).toBe(1);
+      expect(parsed.context.messages.filter(message => message.role === "developer" && message.content === guidance), label)
+        .toHaveLength(1);
+    }
+  });
+
+  test("matching guidance in the current suffix does not suppress replay-prefix injection (#326)", () => {
+    const parsed = parsedFixture({
+      reasoning: "max",
+      rawInput: [
+        { type: "message", role: "user", content: "replayed" },
+        generatedItem(),
+      ],
+    });
+    parsed._replayPrefixLen = 1;
+    injectDeveloperMessage(parsed, guidance);
+
+    const rawInput = (parsed._rawBody as { input: unknown[] }).input;
+    expect(countExact(rawInput)).toBe(2);
+    expect(parsed.context.messages.filter(message => message.role === "developer" && message.content === guidance))
+      .toHaveLength(1);
+  });
 });
 
 describe("sanitizeEncryptedContentInPlace", () => {
+  const fernetFixture = (): string => {
+    const raw = Buffer.alloc(73, 0x5a);
+    raw[0] = 0x80;
+    raw.writeBigUInt64BE(1_720_000_000n, 1);
+    const unpadded = raw.toString("base64url");
+    return `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
+  };
+
   test("plaintext parked in encrypted slots becomes input_text; real blobs survive", () => {
     const blob = "gAAAAAB".padEnd(120, "Qw1_-=");
     const input = [
@@ -628,7 +758,7 @@ describe("sanitizeEncryptedContentInPlace", () => {
   });
 
   test("mixed slot (hook preamble + embedded Fernet task) splits into text + encrypted parts", () => {
-    const fernet = "gAAAA" + "Ab1_-".repeat(20) + "==";
+    const fernet = fernetFixture();
     const input = [
       { type: "message", role: "user", content: [
         { type: "encrypted_content", encrypted_content: `[CXC-LEAF-GUARD] follow the rules.\n\n${fernet}` },
@@ -642,7 +772,7 @@ describe("sanitizeEncryptedContentInPlace", () => {
   });
 
   test("pure Fernet slot stays byte-identical", () => {
-    const fernet = "gAAAA" + "Ab1_-".repeat(20) + "==";
+    const fernet = fernetFixture();
     const input = [
       { type: "message", role: "user", content: [
         { type: "encrypted_content", encrypted_content: fernet },

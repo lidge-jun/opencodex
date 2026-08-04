@@ -1,4 +1,4 @@
-import type { Locale } from "./i18n";
+import type { Locale } from "./i18n/shared";
 
 const UPTIME_UNITS: Record<Locale, { day: string; hour: string; minute: string; second: string }> = {
   en: { day: "d", hour: "h", minute: "m", second: "s" },

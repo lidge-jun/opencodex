@@ -36,6 +36,7 @@ describe("Cursor discovery metadata", () => {
     expect(ids).toContain("gpt-5.5");
     expect(ids).toContain("glm-5.2");
     expect(ids).toContain("kimi-k2.7-code");
+    expect(ids).toContain("kimi-k3");
     expect(ids).toContain("claude-opus-4-7-fast");
     // 260709 refresh: stale ids dropped from the static seed (cursor.com docs); gpt-5.5-extra
     // stays — it survives the live GetUsableModels filter (004_live_snapshot.md).
@@ -62,7 +63,13 @@ describe("Cursor discovery metadata", () => {
 
     // Issue #117: Cursor GetUsableModels may return ids with a `cursor-` wire prefix.
     expect(isCursorModelAvailableForAccount("grok-4.5", ["cursor-grok-4.5-high"])).toBe(true);
+    // Current Grok Fast wire ids put `-fast` after the effort tier.
+    expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-low-fast"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-high-fast"])).toBe(true);
+    // Older snapshots used `{base}-fast-{effort}`; keep discovery compatibility.
     expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-fast-medium"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.5-fast", ["cursor-grok-4.5-high"])).toBe(false);
+    expect(isCursorModelAvailableForAccount("grok-4.5", ["cursor-grok-4.5-high-fast"])).toBe(false);
     expect(isCursorModelAvailableForAccount("gpt-5.4", ["cursor-gpt-5.4-high"])).toBe(true);
     // Prefixed sibling rejection: cursor- prefix must not bypass sibling-model checks.
     expect(isCursorModelAvailableForAccount("gpt-5.5", ["cursor-gpt-5.5-extra-high"])).toBe(false);
@@ -73,6 +80,12 @@ describe("Cursor discovery metadata", () => {
       ["gpt-5.4-high"],
     );
     expect(filtered.map(model => model.id)).toEqual(["gpt-5.4"]);
+
+    const grok = filterCursorConfiguredModelsByLiveDiscovery(
+      [{ id: "grok-4.5" }, { id: "grok-4.5-fast" }],
+      ["cursor-grok-4.5-high", "cursor-grok-4.5-high-fast"],
+    );
+    expect(grok.map(model => model.id)).toEqual(["grok-4.5", "grok-4.5-fast"]);
   });
 
   test("live discovery filter always keeps all router levels when GetUsableModels omits them", () => {

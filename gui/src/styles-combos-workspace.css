@@ -117,7 +117,7 @@
 
 .combos-workspace-rail-row.combos-workspace-rail-row--selected {
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .combos-workspace-rail-row:focus-visible {
@@ -318,13 +318,13 @@
 
 .cwi-target-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1.2fr) 4.5rem auto;
+  grid-template-columns: 28px auto minmax(0, 1fr) minmax(0, 1.2fr) 4.5rem auto;
   gap: 8px;
   align-items: center;
 }
 
 .cwi-target-row--failover {
-  grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  grid-template-columns: 28px auto minmax(0, 1fr) minmax(0, 1.2fr) auto;
 }
 
 .cwi-target-row--dragging {
@@ -358,6 +358,19 @@
 
 .cwi-target-grip:active {
   cursor: grabbing;
+}
+
+.cwi-target-reorder {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.cwi-target-reorder .btn {
+  min-width: 0;
+  padding: 2px 4px;
+  line-height: 1;
 }
 
 .cwi-target-actions {
@@ -466,12 +479,12 @@
 
   .cwi-target-row,
   .cwi-target-row--failover {
-    grid-template-columns: 28px 1fr auto;
+    grid-template-columns: 28px auto 1fr auto;
   }
 
-  .cwi-target-row > .input:nth-child(2),
-  .cwi-target-row > .input:nth-child(3) {
-    grid-column: 2 / -1;
+  .cwi-target-row > .input:nth-child(3),
+  .cwi-target-row > .input:nth-child(4) {
+    grid-column: 3 / -1;
   }
 }
 

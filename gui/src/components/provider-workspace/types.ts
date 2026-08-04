@@ -3,6 +3,7 @@
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
  */
 import type { ProviderSortMode, WorkspaceItem } from "../../provider-workspace/catalog";
+import type { AccountQuota } from "../../codex-quota-utils";
 
 export type { ProviderSortMode, WorkspaceItem };
 
@@ -37,12 +38,21 @@ export interface ProviderModelUsageRow {
 }
 
 // Auth types consumed by ProviderAuthPanel (WP091).
+export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required" | "warning";
+
 export type OAuthAccountRow = {
   id: string;
   alias?: string;
   email?: string;
   active: boolean;
   needsReauth?: boolean;
+  health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
+  healthLabel?: string;
+  healthSummary?: string;
+  healthAction?: string;
+  /** Per-account rate limits, for providers that report usage per credential (anthropic). */
+  quota?: AccountQuota | null;
+  quotaUnavailable?: boolean;
 };
 
 export type ApiKeyRow = {
@@ -76,10 +86,13 @@ export interface ProviderAuthHandlers {
 }
 
 export type ProviderUpdatePatch = {
+  /** A standalone routing change; the management API rejects combinations with edits. */
+  setDefault?: true;
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;
   apiKey?: string;
+  apiKeyTransport?: "x-api-key" | "bearer" | "";
   authMode?: string;
   note?: string;
   disabled?: boolean;

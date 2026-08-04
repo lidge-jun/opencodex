@@ -4,13 +4,15 @@
  * short lists fill horizontal space instead of a tall single-column stack.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
 
 export default function ProviderModels({
   item,
+  apiBase,
   availableModels,
+  hasLiveModels,
   selectedModels,
   modelsLoading = false,
   modelsLoadFailed = false,
@@ -19,8 +21,11 @@ export default function ProviderModels({
   onOpenAccounts,
 }: {
   item: WorkspaceItem;
+  apiBase: string;
   availableModels: string[];
   selectedModels: string[];
+  /** Server-reported: did the last successful discovery return any rows? */
+  hasLiveModels: boolean;
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   /** Active OAuth account needs a fresh login before live discovery works. */
@@ -30,14 +35,69 @@ export default function ProviderModels({
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
+  const [customModelId, setCustomModelId] = useState("");
+  const [customSaving, setCustomSaving] = useState(false);
+  const [customError, setCustomError] = useState("");
+  const [customSuccess, setCustomSuccess] = useState("");
+  const [customModelIds, setCustomModelIds] = useState<string[]>([]);
+  const [customModelsReady, setCustomModelsReady] = useState(false);
+  const [customModelsLoadFailed, setCustomModelsLoadFailed] = useState(false);
+  const [customModelsLoadEpoch, setCustomModelsLoadEpoch] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyResetRef = useRef<number | null>(null);
   const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
   const configuredModels = useMemo(() => item.models ?? [], [item.models]);
+  const trimmedCustomModelId = customModelId.trim();
+  const customModelInvalid = !customModelsReady
+    || !trimmedCustomModelId
+    || trimmedCustomModelId.includes("/")
+    || availableModels.includes(trimmedCustomModelId)
+    || customModelIds.includes(trimmedCustomModelId)
+    || configuredModels.includes(trimmedCustomModelId)
+    || item.defaultModel === trimmedCustomModelId;
   const models = useMemo(
-    () => filterModels(availableModels, item.defaultModel, query, configuredModels),
-    [availableModels, item.defaultModel, query, configuredModels],
+    () => filterModels(availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels),
+    [availableModels, item.defaultModel, query, configuredModels, customModelIds, hasLiveModels],
   );
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/custom-models`);
+        if (!response.ok) throw new Error();
+        const rows: unknown = await response.json();
+        if (!Array.isArray(rows)) throw new Error("Invalid custom model list");
+        if (!active) return;
+        setCustomModelIds(rows.flatMap(row => {
+          if (!row || typeof row !== "object") return [];
+          const model = row as { provider?: unknown; modelId?: unknown };
+          return model.provider === item.name && typeof model.modelId === "string" ? [model.modelId] : [];
+        }));
+        setCustomModelsLoadFailed(false);
+        setCustomError("");
+        setCustomModelsReady(true);
+      } catch {
+        if (!active) return;
+        setCustomModelIds([]);
+        // Without this the component stays permanently unable to add a model: `customModelsReady`
+        // never flips back and the effect has no trigger left, so a single transient GET failure
+        // disabled Add until the whole panel remounted.
+        setCustomModelsReady(false);
+        setCustomModelsLoadFailed(true);
+        setCustomError(t("models.networkError"));
+      }
+    };
+    void load();
+    return () => { active = false; };
+  }, [apiBase, item.name, t, customModelsLoadEpoch]);
+
+  const retryCustomModels = () => {
+    setCustomModelsReady(false);
+    setCustomModelsLoadFailed(false);
+    setCustomError("");
+    setCustomModelsLoadEpoch(epoch => epoch + 1);
+  };
 
   useEffect(() => () => {
     if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
@@ -57,7 +117,36 @@ export default function ProviderModels({
     }
   };
 
-  const emptyBase = availableModels.length === 0 && configuredModels.length === 0 && !item.defaultModel;
+  const addCustomModel = async () => {
+    if (customModelInvalid || customSaving) return;
+    setCustomSaving(true);
+    setCustomError("");
+    setCustomSuccess("");
+    try {
+      const response = await fetch(`${apiBase}/api/custom-models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: item.name, modelId: trimmedCustomModelId }),
+      });
+      if (response.ok) {
+        setCustomModelIds(ids => ids.includes(trimmedCustomModelId) ? ids : [...ids, trimmedCustomModelId]);
+        setCustomModelId("");
+        setCustomSuccess(t("models.customAdded"));
+        onRetryModels?.();
+      } else {
+        setCustomError(t("models.customSaveFailed"));
+      }
+    } catch {
+      setCustomError(t("models.networkError"));
+    } finally {
+      setCustomSaving(false);
+    }
+  };
+
+  const emptyBase = availableModels.length === 0
+    && configuredModels.length === 0
+    && customModelIds.length === 0
+    && !item.defaultModel;
   const showingConfiguredFallback = availableModels.length === 0 && configuredModels.length > 0;
   // Aggregators (OpenRouter etc.) can return thousands of ids; capping the mounted
   // chips keeps the tab responsive. Filtering narrows the list, so the cap only
@@ -87,6 +176,40 @@ export default function ProviderModels({
       {showingConfiguredFallback && !needsReauth && (
         <p className="muted text-label" style={{ marginBottom: 10 }}>{t("pws.modelsConfiguredFallback")}</p>
       )}
+      <label className="text-label pws-custom-model-label" htmlFor={`pws-custom-model-${item.name}`}>
+        {t("models.customAdd")}
+      </label>
+      <div className="row pws-custom-model-row">
+        <input
+          id={`pws-custom-model-${item.name}`}
+          className="input"
+          value={customModelId}
+          onChange={event => setCustomModelId(event.target.value)}
+          onKeyDown={event => { if (event.key === "Enter") void addCustomModel(); }}
+          placeholder={t("models.customFieldModelIdPlaceholder")}
+          aria-label={t("models.customAdd")}
+          disabled={customSaving}
+        />
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={() => { void addCustomModel(); }}
+          disabled={customSaving || customModelInvalid}
+        >
+          {customSaving ? t("models.customSaving") : t("models.customAddBtn")}
+        </button>
+      </div>
+      {customSuccess && <p className="muted text-label" role="status">{customSuccess}</p>}
+      {customError && (
+        <p className="pws-inline-error" role="alert">
+          {customError}
+          {customModelsLoadFailed && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={retryCustomModels} style={{ marginLeft: 8 }}>
+              {t("common.retry")}
+            </button>
+          )}
+        </p>
+      )}
       {!emptyBase && (
         <input
           type="search"
@@ -113,13 +236,13 @@ export default function ProviderModels({
       ) : models.length === 0 ? (
         <p className="muted" role="status">{t("pws.noModelMatch")}</p>
       ) : (
-        <div className="pws-model-list" role="list">
+        <ul className="pws-model-list">
           {visibleModels.map(modelId => {
             const isDefault = modelId === item.defaultModel;
             const isSelected = selectedSet.has(modelId);
             const copied = copiedId === modelId;
             return (
-              <div key={modelId} className="pws-model-chip" role="listitem">
+              <li key={modelId} className="pws-model-chip">
                 <button
                   type="button"
                   className="pws-model-chip-main"
@@ -131,10 +254,10 @@ export default function ProviderModels({
                 </button>
                 {isDefault ? <span className="badge badge-muted pws-model-flag">{t("prov.defaultBadge")}</span> : null}
                 {isSelected ? <span className="badge badge-accent pws-model-flag">{t("pws.selected")}</span> : null}
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
       {capped && (
         <p className="muted text-label" style={{ marginTop: 10 }}>

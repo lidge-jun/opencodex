@@ -124,4 +124,4 @@ stall は全体生成 timeout ではありません。SSE 開始前の失敗は 
 設定ファイルキーは今すぐ使えます。機能をオフにするには `config.json` で該当サイドカーの
 `enabled` を `false` に設定してください。Anthropic OAuth 検索と画像説明は既存の Claude Code OAuth
 fingerprint 先例に従いますが、実際のアカウントと作業量で十分 soak test するのが無難です。全
-フィールドは[設定リファレンス](/opencodex/ja/reference/configuration/#sidecars)を参照してください。
+フィールドは[設定リファレンス](/ja/reference/configuration/#sidecars)を参照してください。

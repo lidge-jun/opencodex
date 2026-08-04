@@ -1,15 +1,22 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { STORE_BUDGET_MS } from "./helpers/test-budget";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendUsageEntry,
+  currentUsageLogRevision,
   readRecentUsageEntries,
   readUsageEntries,
+  readUsageEntriesForManagement,
+  readUsageSnapshotForManagement,
+  resetUsageReadCacheForTests,
   usageForFinalLog,
   usageLogPath,
   usageStatusForFinalLog,
   usageTotalTokens,
+  usageReadCacheStatsForTests,
+  usageLogRevisionKey,
 } from "../src/usage/log";
 
 let testDir = "";
@@ -19,6 +26,7 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   testDir = mkdtempSync(join(tmpdir(), "ocx-usage-"));
   process.env.OPENCODEX_HOME = testDir;
+  resetUsageReadCacheForTests();
 });
 
 afterEach(() => {
@@ -28,6 +36,178 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  const persistedLine = (requestId: string) => JSON.stringify({
+    requestId,
+    timestamp: 1,
+    provider: "openai",
+    model: "gpt-5.5",
+    status: 200,
+    durationMs: 1,
+    usageStatus: "reported",
+    usage: { inputTokens: 1, outputTokens: 1 },
+    totalTokens: 2,
+  });
+
+  test("file revisions change after append and in-place rewrite", () => {
+    writeFileSync(usageLogPath(), `${persistedLine("a")}\n${persistedLine("b")}\n`);
+    const first = usageLogRevisionKey(currentUsageLogRevision());
+    writeFileSync(usageLogPath(), `${persistedLine("new")}\n`);
+    expect(usageLogRevisionKey(currentUsageLogRevision())).not.toBe(first);
+    expect(readUsageEntries().map(entry => entry.requestId)).toEqual(["new"]);
+  });
+
+  test("management full reads yield while parsing a large existing log", async () => {
+    writeFileSync(
+      usageLogPath(),
+      `${Array.from({ length: 2_100 }, (_, index) => persistedLine(`row-${index}`)).join("\n")}\n`,
+    );
+    let timerRan = false;
+    setTimeout(() => { timerRan = true; }, 0);
+    const entries = await readUsageEntriesForManagement();
+    expect(entries).toHaveLength(2_100);
+    expect(timerRan).toBe(true);
+    expect(usageReadCacheStatsForTests()).toEqual({ fullReads: 1, tailReads: 0, parsedLines: 2_100 });
+  });
+
+  test("usage reader never requests more than 64 MiB from an oversized log", async () => {
+    const path = usageLogPath();
+    const fd = openSync(path, "w");
+    try {
+      truncateSync(fd, 64 * 1024 * 1024 + 1024);
+      const tail = Buffer.from(`${persistedLine("tail")}\n`);
+      const tailPosition = 64 * 1024 * 1024 + 1024 - tail.byteLength;
+      writeSync(fd, Buffer.from("\n"), 0, 1, tailPosition - 1);
+      writeSync(fd, tail, 0, tail.byteLength, tailPosition);
+    } finally {
+      closeSync(fd);
+    }
+    const snapshot = await readUsageSnapshotForManagement();
+    expect(snapshot.truncatedPrefixBytes).toBeGreaterThan(0);
+    expect(snapshot.entries.map(entry => entry.requestId)).toEqual(["tail"]);
+  }, STORE_BUDGET_MS); // sparse >64 MiB fixture IO is intrinsic; Windows self-hosted measured 7.193s against Bun's 5s default.
+
+  test("usage tail exact row boundary keeps the complete newest row", async () => {
+    const newest = Buffer.from(`${persistedLine("newest")}\n`);
+    writeFileSync(usageLogPath(), `${persistedLine("older")}\n${newest.toString("utf-8")}`);
+
+    const snapshot = await readUsageSnapshotForManagement(newest.byteLength);
+
+    expect(snapshot.entries.map(entry => entry.requestId)).toEqual(["newest"]);
+  });
+
+  test("usage byte-prefix truncation and entry-count truncation report independent metadata", async () => {
+    writeFileSync(
+      usageLogPath(),
+      `${Array.from({ length: 200_001 }, (_, index) => JSON.stringify({ requestId: String(index) })).join("\n")}\n`,
+    );
+    const snapshot = await readUsageSnapshotForManagement();
+    expect(snapshot.entries).toHaveLength(200_000);
+    expect(snapshot.entries[0]?.requestId).toBe("1");
+    expect(snapshot.entries.at(-1)?.requestId).toBe("200000");
+    expect(snapshot.truncatedPrefixBytes).toBe(0);
+    expect(snapshot.entriesTruncated).toBe(true);
+    expect(snapshot.entriesDropped).toBe(1);
+  }, STORE_BUDGET_MS); // parsing 200,001 rows IS the entry-cap assertion; windows-latest measured ~5.05s against Bun's 5s default.
+
+  test("stale usage-read flight is replaced and old completion cannot clear new owner", async () => {
+    writeFileSync(
+      usageLogPath(),
+      `${Array.from({ length: 5_000 }, (_, index) => persistedLine(`stale-${index}`)).join("\n")}\n`,
+    );
+    const first = readUsageSnapshotForManagement();
+    await Promise.resolve();
+    const originalNow = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(originalNow + 30_001);
+    try {
+      const replacement = readUsageSnapshotForManagement();
+      const joiner = readUsageSnapshotForManagement();
+      await expect(first).rejects.toThrow("management usage read superseded");
+      const [second, third] = await Promise.all([replacement, joiner]);
+      expect(third.entries).toEqual(second.entries);
+      expect(usageReadCacheStatsForTests().fullReads).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a replacement does not join an in-flight read for the previous file revision", async () => {
+    writeFileSync(
+      usageLogPath(),
+      `${Array.from({ length: 2_100 }, (_, index) => persistedLine(`old-${index}`)).join("\n")}\n`,
+    );
+    const oldRead = readUsageSnapshotForManagement();
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    writeFileSync(usageLogPath(), `${persistedLine("replacement")}\n`);
+    const newRead = readUsageSnapshotForManagement();
+    await expect(oldRead).rejects.toThrow("management usage read superseded");
+    const newSnapshot = await newRead;
+    expect(newSnapshot.entries.map(entry => entry.requestId)).toEqual(["replacement"]);
+  });
+
+  test("persists conversationId for Logs session correlation", () => {
+    appendUsageEntry({
+      requestId: "ocx-conversation",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      conversationId: "thread-abc",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      totalTokens: 2,
+    });
+    expect(readUsageEntries()).toEqual([expect.objectContaining({
+      requestId: "ocx-conversation",
+      conversationId: "thread-abc",
+    })]);
+  });
+
+  test("persists an absolute context checkpoint for stateful providers", () => {
+    // Kiro reports per-attempt usage only, so contextTotalTokens is the sole carrier of the
+    // cumulative context figure once the log stores raw adapter usage (usageFromBridge).
+    // Dropping it here erased Kiro context growth from every persisted row.
+    appendUsageEntry({
+      requestId: "ocx-context-checkpoint",
+      timestamp: 1,
+      provider: "kiro",
+      model: "claude-opus-5",
+      status: 200,
+      durationMs: 10,
+      usageStatus: "estimated",
+      usage: { inputTokens: 220, outputTokens: 252, contextTotalTokens: 127_000, estimated: true },
+      totalTokens: 472,
+    });
+    expect(readUsageEntries()).toEqual([expect.objectContaining({
+      requestId: "ocx-context-checkpoint",
+      usage: expect.objectContaining({
+        inputTokens: 220,
+        outputTokens: 252,
+        contextTotalTokens: 127_000,
+        estimated: true,
+      }),
+      // The checkpoint must NOT be folded into the per-request total.
+      totalTokens: 472,
+    })]);
+  });
+
+  test("never invents a context checkpoint when the adapter reported none", () => {
+    appendUsageEntry({
+      requestId: "ocx-no-checkpoint",
+      timestamp: 1,
+      provider: "kiro",
+      model: "claude-opus-5",
+      status: 200,
+      durationMs: 10,
+      usageStatus: "estimated",
+      usage: { inputTokens: 61, outputTokens: 48, estimated: true },
+      totalTokens: 109,
+    });
+    const [entry] = readUsageEntries();
+    expect(entry?.usage).toBeDefined();
+    expect(entry?.usage && "contextTotalTokens" in entry.usage).toBe(false);
+  });
+
   test("persists only canonical ordered attempt fields", () => {
     appendUsageEntry({
       requestId: "ocx-attempts",
@@ -54,6 +234,10 @@ describe("usage log", () => {
         inputTokenEstimate: 5,
         usage: { inputTokens: 5, outputTokens: 0, estimated: true },
         totalTokens: 5,
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
         headers: { authorization: "Bearer attempt-token" },
         body: "attempt body secret",
         messages: ["attempt message secret"],
@@ -86,7 +270,45 @@ describe("usage log", () => {
       inputTokenEstimate: 5,
       usage: { inputTokens: 5, outputTokens: 0, estimated: true },
       totalTokens: 5,
+      requestedEffort: "max",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
     }]);
+  });
+
+  test("omits malformed optional attempt reasoning metadata without dropping the attempt", () => {
+    appendUsageEntry({
+      requestId: "ocx-attempt-reasoning",
+      timestamp: 1,
+      provider: "combo",
+      model: "combo/free",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "unreported",
+      attempts: [{
+        ordinal: 1,
+        provider: "a",
+        model: "m1",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+        requestedEffort: 123,
+        effectiveEffort: null,
+        reasoningWireField: {},
+        reasoningWireValue: -1,
+      } as never],
+    });
+
+    const attempt = readUsageEntries()[0]?.attempts?.[0];
+    expect(attempt?.ordinal).toBe(1);
+    expect(attempt).not.toHaveProperty("requestedEffort");
+    expect(attempt).not.toHaveProperty("effectiveEffort");
+    expect(attempt).not.toHaveProperty("reasoningWireField");
+    expect(attempt).not.toHaveProperty("reasoningWireValue");
   });
 
   test("drops only malformed persisted attempts while preserving valid siblings", () => {
@@ -421,7 +643,10 @@ describe("usage log", () => {
       provider: "openai",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
-      requestedEffort: "high",
+      requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",
@@ -433,7 +658,10 @@ describe("usage log", () => {
     });
     expect(readUsageEntries()[0]).toMatchObject({
       requestId: "ocx-effort",
-      requestedEffort: "high",
+      requestedEffort: "xhigh",
+      effectiveEffort: "high",
+      reasoningWireField: "reasoning_effort",
+      reasoningWireValue: "high",
       requestedServiceTier: "priority",
       requestedSpeedLabel: "fast",
       configuredServiceTier: "auto",

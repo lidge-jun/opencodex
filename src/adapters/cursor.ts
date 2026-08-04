@@ -1,16 +1,20 @@
+import { createHash } from "node:crypto";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
+import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
 import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErrorMessage } from "./cursor/cursor-errors";
 import { isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
-import { createCursorRequest, generatedCursorConversationId } from "./cursor/request-builder";
+import { createCursorRequest } from "./cursor/request-builder";
 import {
   createLiveCursorTransport,
   CursorMissingCredentialError,
   rekeyCursorContextUsage,
+  resolveCursorToken,
 } from "./cursor/live-transport";
+import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import {
   createDisabledCursorTransport,
@@ -75,18 +79,38 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       }
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
-        const kv = deps.kv ?? createCursorKvStore();
+        const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
-        _parsed._cursorConversationId ??= generatedCursorConversationId();
+        // Namespace thread→conversation derivation by the authenticated Cursor credential so
+        // shared-proxy tenants with different Cursor accounts cannot collide on a parent thread id.
+        // Prefer an already-set auth scope (e.g. Codex pool account) when present.
+        if (!_parsed._cursorIdentityScope) {
+          try {
+            const token = resolveCursorToken(provider, incoming.headers);
+            _parsed._cursorIdentityScope = createHash("sha256")
+              .update("ocx:cursor:acct:")
+              .update(token)
+              .digest("hex")
+              .slice(0, 16);
+          } catch {
+            /* Missing credential is handled by the live transport path below. */
+          }
+        }
         const previousConversationId = _parsed._cursorConversationId;
         let request = createCursorRequest(_parsed);
-        // Keep remembered conversation id in sync when the request builder mints a fresh id
-        // for external-model tool-result continuations (stateless replay).
-        if (request.conversationId !== previousConversationId) {
+        // The builder may derive a stable provider id from the client thread when Responses state
+        // is unavailable. Rekey only existing state; there is nothing to migrate on a fresh turn,
+        // and isolated helper/compaction turns must never inherit or donate the parent's usage state.
+        if (
+          previousConversationId
+          && request.conversationId !== previousConversationId
+          && _parsed._cursorIsolateConversation !== true
+        ) {
           rekeyContextUsage(previousConversationId, request.conversationId);
         }
         _parsed._cursorConversationId = request.conversationId;
         let emittedOutput = false;
+        let replayUnsafe = false;
         const lastRawIsToolResult = _parsed.context.messages.at(-1)?.role === "toolResult";
 
         const runOnce = async (activeRequest: ReturnType<typeof createCursorRequest>) => {
@@ -95,6 +119,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             {
               provider,
               headers: incoming.headers,
+              translatorBudget: incoming.translatorBudget,
               requestDeclaresFullAccess: cursorRequestDeclaresFullAccess(activeRequest),
             },
             activeRequest,
@@ -104,6 +129,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 emit({ type: "error", message: "Cursor turn was aborted." });
                 return;
               }
+              if (message.type === "local_side_effect") replayUnsafe = true;
               const events = mapCursorServerMessage(message, {
                 kv,
                 writeClient: clientMessage => {
@@ -121,14 +147,15 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         try {
           await runOnce(request);
         } catch (err) {
-          // One-shot fallback: only for external-model tool-result continuations that fail
-          // with Connect invalid_argument before any non-heartbeat output was forwarded.
-          // Replaying after text/tool events would duplicate output.
+          // One-shot fallback for external-model Connect invalid_argument before any
+          // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
+          // resumes, local exec/MCP side effects, and already-emitted output fail closed.
           if (
             !isCursorInvalidArgumentError(err)
             || !isCursorExternalWireModel(request.modelId)
-            || !lastRawIsToolResult
+            || lastRawIsToolResult
             || emittedOutput
+            || replayUnsafe
             || incoming.abortSignal?.aborted
           ) {
             throw err;
@@ -138,12 +165,31 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           request = createCursorRequest(_parsed, { forceFreshConversation: true });
           rekeyContextUsage(failedConversationId, request.conversationId);
           _parsed._cursorConversationId = request.conversationId;
+          // Persist recovery for store:false clients that only send a parent thread id, so the
+          // next turn does not recompute the stale deterministic thread hash. Isolated helper /
+          // compaction turns must not park their throwaway id under the parent thread key.
+          if (_parsed._clientThreadId && _parsed._cursorIsolateConversation !== true) {
+            rememberCursorThreadConversation(
+              _parsed._clientThreadId,
+              request.conversationId,
+              _parsed._cursorIdentityScope,
+            );
+          }
           await runOnce(request);
         }
       } catch (err) {
         if (isCursorBenignCancelError(err)) return;
         const partialUsage = (err as { partialUsage?: import("../types").OcxUsage }).partialUsage;
-        emit({ type: "error", message: safeCursorTransportError(err), ...(partialUsage ? { usage: partialUsage } : {}) });
+        emit({
+          type: "error",
+          message: isTranslatorBudgetExceededError(err)
+            ? "upstream translation buffer exceeded the safe limit"
+            : safeCursorTransportError(err),
+          ...(isTranslatorBudgetExceededError(err)
+            ? { status: 502, errorType: "upstream_error", code: "translation_buffer_limit" }
+            : {}),
+          ...(partialUsage ? { usage: partialUsage } : {}),
+        });
       }
     },
   };

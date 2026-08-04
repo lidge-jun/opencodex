@@ -2,12 +2,17 @@ import { describe, expect, test } from "bun:test";
 
 describe("Codex auth modal status feedback", () => {
   test("keeps a distinct submitted/waiting state for manual code login", async () => {
-    const source = await Bun.file("gui/src/components/AddCodexAccountModal.tsx").text();
-    expect(source).toContain('useState<"idle" | "submitting" | "waiting">("idle")');
-    expect(source).toContain('setStatusNotice(t("codexAuth.oauthCodeSubmitted"))');
-    expect(source).toContain('setStatusNotice(t("codexAuth.oauthStatusRetrying"))');
-    expect(source).toContain('disabled={manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId}');
-    expect(source).toContain('aria-live="polite"');
+    const [reducer, oauth, waiting] = await Promise.all([
+      Bun.file("gui/src/components/add-codex-account-reducer.ts").text(),
+      Bun.file("gui/src/components/use-add-codex-account-oauth.ts").text(),
+      Bun.file("gui/src/components/add-codex-account-waiting-step.tsx").text(),
+    ]);
+    expect(reducer).toContain('export type ManualCodeState = "idle" | "submitting" | "waiting"');
+    expect(reducer).toContain('manualCodeState: "idle"');
+    expect(oauth).toContain('statusNotice: t("codexAuth.oauthCodeSubmitted")');
+    expect(oauth).toContain('statusNotice: t("codexAuth.oauthStatusRetrying")');
+    expect(waiting).toContain("disabled={manualCodeBusy || manualCodeWaiting || !manualCode.trim() || !flowId}");
+    expect(waiting).toContain('aria-live="polite"');
   });
 
   test("defines the new status copy in every shipped GUI locale", async () => {

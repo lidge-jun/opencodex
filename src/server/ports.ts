@@ -16,6 +16,8 @@ export function isAddrInUse(err: unknown): boolean {
 export async function isPortAvailable(port: number, hostname = "127.0.0.1"): Promise<boolean> {
   return await new Promise(resolve => {
     const server = createServer();
+    // Fail closed: EACCES / EADDRNOTAVAIL / EPERM / unknown listen errors mean the
+    // requested bind is not available. Only the listening event reports free.
     server.once("error", () => resolve(false));
     server.once("listening", () => {
       server.close(() => resolve(true));

@@ -1,0 +1,444 @@
+/* ============================================================================
+   models-workspace layout shell + shared Models controls
+   Namespace: models-workspace- (workspace shell/rail/main)
+   Shared controls: models-control-*, models-shadow-*, models-v2-* (workspace + classic)
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.models-workspace-shell) {
+  max-width: 1200px;
+}
+
+.models-workspace-shell {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: models-workspace;
+}
+
+.models-workspace-root {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  min-height: 480px;
+}
+
+/* ── Rail ─────────────────────────────────────────────── */
+
+.models-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-3);
+  min-width: 0;
+}
+
+.models-workspace-rail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.models-workspace-rail-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.models-workspace-rail-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.models-workspace-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  max-height: 640px;
+  min-height: 0;
+}
+
+.models-workspace-rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  width: 100%;
+  min-height: 46px;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+}
+
+.models-workspace-rail-row:hover {
+  background: var(--surface-2);
+}
+
+.models-workspace-rail-row--selected {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.models-workspace-rail-name {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.models-workspace-rail-meta {
+  font-size: var(--text-caption);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.models-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Controls row: shadow call on the left, sub-agent mode pinned right.
+   Right group does not move when the model name length changes. */
+.models-control-top-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: clamp(var(--space-3), 2vw, var(--space-6));
+  row-gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  min-width: 0;
+}
+
+.models-shadow-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.models-shadow-label {
+  white-space: nowrap;
+}
+
+.models-shadow-warning {
+  white-space: nowrap;
+}
+
+.models-shadow-model-slot {
+  flex: 0 1 auto;
+  min-width: 9.5rem;
+  max-width: 12.5rem;
+}
+
+.models-shadow-model-slot .custom-select {
+  width: auto;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.models-shadow-model-slot .select-trigger {
+  width: auto;
+  min-width: 100%;
+  max-width: 100%;
+  justify-content: space-between;
+}
+
+.models-shadow-model-slot .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-v2-mode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-self: end;
+  /* Keep the Sub-agent chip row on the same cap-height as Shadow Call controls. */
+  min-height: 28px;
+}
+
+.models-v2-detail-row {
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── Provider group header (Classic + Workspace) ─────── */
+
+.models-provider-head {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+  column-gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.models-provider-head > span.text-body,
+.models-provider-toggle > span.text-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.models-provider-toggle {
+  min-width: 0;
+}
+
+.models-provider-actions {
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ── Spacing rhythm (tight within clusters, loose between sections) ──
+   Keep spacing in CSS classes — inline px floods Impeccable’s page scan. */
+
+.models-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-provider-card {
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+.models-provider-body {
+  padding: var(--space-3) var(--space-4);
+}
+
+.models-provider-body > .input {
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+
+.models-provider-hint {
+  margin: 0 0 var(--space-2);
+  max-width: var(--prose-measure);
+}
+
+.models-chip {
+  display: inline-block;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.models-chip--tip {
+  margin-bottom: var(--space-1);
+}
+
+.models-model-row {
+  padding: var(--space-2) 0;
+}
+
+.models-show-more {
+  margin-top: var(--space-2);
+}
+
+/* Match Usage/Dashboard segmented chips + .btn-sm — the old space-1-5 padding made
+   v1/base/v2 taller than the Shadow Call switch/select and shoved the control row. */
+.models-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  padding: 2px;
+  gap: 2px;
+}
+
+.models-segmented .btn {
+  border-radius: var(--radius-pill);
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 12px;
+  border: none;
+  font-size: var(--text-label);
+  line-height: inherit;
+}
+
+.models-cap-row {
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.models-custom-summary {
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.models-order-hint {
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  max-width: var(--prose-measure);
+}
+
+.models-order-hint > svg {
+  flex-shrink: 0;
+  margin-top: var(--space-0-5);
+}
+
+.models-collapse-controls {
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+}
+
+.models-combos-card {
+  margin-bottom: var(--space-3);
+}
+
+.models-combos-empty-head {
+  padding: var(--space-3);
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.models-combos-add {
+  padding: var(--space-2) var(--space-3) var(--space-3) calc(var(--space-8) + var(--space-0-5));
+  gap: var(--space-2);
+  text-decoration: none;
+}
+
+.models-help-link {
+  margin-top: var(--space-3);
+}
+
+.models-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-field-row {
+  gap: var(--space-2);
+}
+
+.models-modality-option {
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+/* Beat .row { gap: 10px } (defined later in styles.css). */
+.row.models-model-row,
+.row.models-cap-row,
+.row.models-custom-summary,
+.row.models-order-hint,
+.row.models-collapse-controls,
+.row.models-combos-empty-head,
+.row.models-combos-add,
+.row.models-field-row,
+.row.models-modality-option {
+  gap: var(--space-2);
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+
+@media (max-width: 1160px) {
+  .models-control-top-row {
+    grid-template-columns: 1fr;
+  }
+
+  .models-shadow-row {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .models-shadow-model-slot {
+    flex: 1 1 12rem;
+    width: auto;
+    min-width: min(100%, 10rem);
+    max-width: 100%;
+  }
+
+  .models-v2-mode-row {
+    flex-wrap: wrap;
+    justify-self: start;
+  }
+}
+
+/*
+  Stack rail above the main pane when the workspace shell is squeezed —
+  typically by the persistent desktop sidebar at ~900–1024px viewports —
+  not only at the mobile drawer breakpoint.
+*/
+@container models-workspace (max-width: 720px) {
+  .models-workspace-root {
+    grid-template-columns: 1fr;
+  }
+
+  .models-workspace-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+  }
+
+  .models-workspace-rail-list {
+    max-height: 240px;
+  }
+
+  .models-provider-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
+
+/* Mobile: sidebar is a drawer; still prefer rail-on-top for touch. */
+@media (max-width: 768px) {
+  .models-workspace-root {
+    grid-template-columns: 1fr;
+  }
+
+  .models-workspace-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: var(--space-3);
+  }
+
+  .models-workspace-rail-list {
+    max-height: 240px;
+  }
+
+  .models-provider-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}

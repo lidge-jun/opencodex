@@ -18,6 +18,11 @@ import { Buffer } from "node:buffer";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readFileSync, existsSync, statSync } from "node:fs";
+import {
+  captureConfigGeneration,
+  sweepExpiredOnWrite,
+  type GenerationContext,
+} from "./state-store-sweeper";
 
 /** Injectable fetch (tests pass a mock); defaults to the global fetch. */
 export type FetchImpl = typeof fetch;
@@ -60,6 +65,33 @@ interface TokenResponse {
 
 const tokenCache = new Map<string, CachedToken>();
 const inflight = new Map<string, Promise<string>>();
+let lastReconciledGeneration = 0;
+let liveSources = new Set<string>();
+
+export function sweepExpiredGcpAdcTokens(now = Date.now()): number {
+  const skew = getRefreshSkewMs();
+  let removed = 0;
+  for (const [source, cached] of tokenCache) {
+    if (cached.expiresAtMs - skew > now) continue;
+    tokenCache.delete(source);
+    removed += 1;
+  }
+  return removed;
+}
+
+export function reconcileGcpAdcTokens(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  const currentSource = currentAdcSourceKey();
+  let removed = 0;
+  for (const source of tokenCache.keys()) {
+    if (source === currentSource) continue;
+    tokenCache.delete(source);
+    removed += 1;
+  }
+  liveSources = new Set([currentSource]);
+  lastReconciledGeneration = context.generation;
+  return removed;
+}
 
 function getRefreshSkewMs(): number {
   const raw = Number(process.env.GOOGLE_VERTEX_REFRESH_SKEW_MS);
@@ -271,6 +303,7 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
   // Only serve a cached token that matches the source the next resolve would actually use; prune
   // expired or now-stale (different-source) entries so a credential-source change is honored.
   const expectedSource = currentAdcSourceKey();
+  const writerGeneration = captureConfigGeneration();
   for (const [source, cached] of tokenCache) {
     if (source === expectedSource && cached.expiresAtMs - skew > now) return cached.token;
     if (cached.expiresAtMs - skew <= now) tokenCache.delete(source);
@@ -286,7 +319,10 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
     try {
       const { source, token } = await resolveAccessTokenUncached(options?.signal, fetchImpl);
       const expiresAtMs = Date.now() + Math.max(0, token.expires_in * 1000);
-      tokenCache.set(source, { token: token.access_token, expiresAtMs });
+      if (writerGeneration >= lastReconciledGeneration || liveSources.has(source)) {
+        tokenCache.set(source, { token: token.access_token, expiresAtMs });
+        sweepExpiredOnWrite(Date.now());
+      }
       return token.access_token;
     } finally {
       inflight.delete(cacheKey);
@@ -296,8 +332,10 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
   return promise;
 }
 
-/** Test seam: clears every cached token + in-flight promise. */
+/** Test seam: restores complete process-local token and reconciliation state. */
 export function __resetVertexTokenCache(): void {
   tokenCache.clear();
   inflight.clear();
+  lastReconciledGeneration = 0;
+  liveSources = new Set();
 }

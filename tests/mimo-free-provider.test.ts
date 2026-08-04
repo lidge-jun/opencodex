@@ -221,6 +221,31 @@ describe("mimo-free JWT cache", () => {
       resetMimoJwtCache();
     }
   });
+
+  test("MiMo accepts exact JWT boundary and rejects one byte over without caching", async () => {
+    const originalFetch = globalThis.fetch;
+    let jwt = "x".repeat(64 * 1024);
+    let fetchCalls = 0;
+    globalThis.fetch = mock(async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ jwt }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      expect(await getMimoJwt()).toBe(jwt);
+      resetMimoJwtCache();
+      jwt = "x".repeat(64 * 1024 + 1);
+      await expect(getMimoJwt()).rejects.toThrow("MiMo bootstrap response too large");
+      jwt = "valid";
+      expect(await getMimoJwt()).toBe("valid");
+      expect(fetchCalls).toBe(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetMimoJwtCache();
+    }
+  });
 });
 
 describe("mimo-free auth retry predicate", () => {
@@ -297,7 +322,9 @@ describe("mimo-free adapter request building", () => {
     try {
       const provider: OcxProviderConfig = providerConfigSeed(PROVIDER_REGISTRY.find(e => e.id === "mimo-free")!);
       const adapter = createMimoFreeAdapter(provider);
-      const req = await adapter.buildRequest(minimalRequest());
+      const parsed = minimalRequest();
+      parsed.options.reasoning = "high";
+      const req = await adapter.buildRequest(parsed);
       const headers = req.headers as Record<string, string>;
 
       expect(req.url).toBe(MIMO_CHAT_URL);
@@ -308,6 +335,11 @@ describe("mimo-free adapter request building", () => {
       const body = JSON.parse(req.body as string) as { messages: { role: string; content: string }[] };
       expect(body.messages[0]?.role).toBe("system");
       expect(body.messages[0]?.content).toBe(MIMO_SYSTEM_MARKER);
+      expect(req.reasoningLog).toEqual({
+        effectiveEffort: "high",
+        wireField: "reasoning_effort",
+        wireValue: "high",
+      });
     } finally {
       globalThis.fetch = originalFetch;
       resetMimoJwtCache();

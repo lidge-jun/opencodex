@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { captureClaudeInbound, clearClaudeInboundDebug, getClaudeInboundDebugEntries } from "../src/claude/inbound-debug";
+import { captureClaudeInbound, claudeInboundDebugMetrics, clearClaudeInboundDebug, evictOldestClaudeInboundForBudget, getClaudeInboundDebugEntries } from "../src/claude/inbound-debug";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 
 afterEach(() => {
@@ -19,6 +19,19 @@ const body = {
 };
 
 describe("claude inbound debug capture (devlog 130 B1)", () => {
+  test("Claude inbound metadata key 65 and aggregate row overflow are visibly capped and wp5 hooks account exact bytes", () => {
+    setDebugSettings({ claude: true });
+    const metadata = Object.fromEntries(Array.from({ length: 65 }, (_, index) => [`${index}-${"한".repeat(3000)}`, true]));
+    captureClaudeInbound("messages", { ...body, metadata }, "x".repeat(20_000), "y".repeat(20_000));
+    const [entry] = getClaudeInboundDebugEntries();
+    expect(entry?.rowTruncated).toBe(true);
+    expect(entry?.metadataKeysDropped).toBeGreaterThanOrEqual(1);
+    expect(Buffer.byteLength(JSON.stringify(entry))).toBeLessThanOrEqual(32 * 1024);
+    const before = claudeInboundDebugMetrics();
+    expect(before.bytes).toBe(Buffer.byteLength(JSON.stringify(entry)));
+    expect(evictOldestClaudeInboundForBudget()).toBe(before.bytes);
+    expect(claudeInboundDebugMetrics()).toMatchObject({ entries: 0, bytes: 0 });
+  });
   test("OFF (default): captures nothing", () => {
     captureClaudeInbound("messages", body);
     expect(getClaudeInboundDebugEntries()).toHaveLength(0);
@@ -80,5 +93,51 @@ describe("claude inbound debug capture (devlog 130 B1)", () => {
     captureClaudeInbound("messages", body, undefined, "context-1m-2025-08-07,effort-2025-11-24");
     const [entry] = getClaudeInboundDebugEntries();
     expect(entry!.anthropicBeta).toBe("context-1m-2025-08-07,effort-2025-11-24");
+  });
+
+  test("same-millisecond captures get unique monotonic ids", () => {
+    setDebugSettings({ claude: true });
+    const now = Date.now();
+    const originalNow = Date.now;
+    Date.now = () => now;
+    try {
+      captureClaudeInbound("messages", body);
+      captureClaudeInbound("messages", body);
+      captureClaudeInbound("messages", body);
+    } finally {
+      Date.now = originalNow;
+    }
+    const entries = getClaudeInboundDebugEntries();
+    expect(entries).toHaveLength(3);
+    expect(entries.every(e => e.at === now)).toBe(true);
+    const ids = entries.map(e => e.id);
+    expect(new Set(ids).size).toBe(3);
+    // Newest-first snapshot; ids remain monotonic in capture order.
+    expect(ids[0]!).toBeGreaterThan(ids[1]!);
+    expect(ids[1]!).toBeGreaterThan(ids[2]!);
+  });
+
+  test("ids stay unique and ordered after the ring buffer wraps", () => {
+    setDebugSettings({ claude: true });
+    const now = Date.now();
+    const originalNow = Date.now;
+    Date.now = () => now;
+    try {
+      // RING_LIMIT is 20; overflow it so eviction is exercised rather than simple appends.
+      for (let i = 0; i < 25; i++) captureClaudeInbound("messages", body);
+    } finally {
+      Date.now = originalNow;
+    }
+
+    const entries = getClaudeInboundDebugEntries();
+    expect(entries).toHaveLength(20);
+
+    const ids = entries.map(e => e.id);
+    // Eviction must not recycle ids: a counter reset would resurrect a discarded id and
+    // reintroduce the duplicate-key collision this field exists to prevent.
+    expect(new Set(ids).size).toBe(20);
+    for (let i = 1; i < ids.length; i++) {
+      expect(ids[i - 1]!).toBeGreaterThan(ids[i]!);
+    }
   });
 });

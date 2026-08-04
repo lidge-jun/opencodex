@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 
 /**
@@ -50,19 +51,24 @@ export function updateTag(current: string): Channel {
   return defaultUpdateTag(current);
 }
 
-/**
- * npm is `npm.cmd` on Windows, and Node/Bun refuse shell-less .cmd spawns
- * (CVE-2024-27980 hardening) — route Windows npm invocations through the shell.
- */
-function npmSpawnTarget(bin: string): { bin: string; shell: boolean } {
-  if (process.platform !== "win32" || bin !== "npm") return { bin, shell: false };
-  return { bin: "npm.cmd", shell: true };
+function npmSpawnTarget(args: readonly string[]): { bin: string; args: string[]; options: { windowsVerbatimArguments?: boolean } } | null {
+  const invocation = npmInvocation(args);
+  if (!invocation) return null;
+  return { bin: invocation.file, args: invocation.args, options: invocation.options };
+}
+
+function updateSpawnTarget(bin: string, args: readonly string[]): { bin: string; args: string[]; options: { windowsVerbatimArguments?: boolean } } | null {
+  if (bin === "npm") return npmSpawnTarget(args);
+  if (process.platform === "win32" && bin === "bun") {
+    return { bin: process.execPath, args: [...args], options: {} };
+  }
+  return { bin, args: [...args], options: {} };
 }
 
 /**
  * The GUI update worker sets OCX_SERVICE=1 and has stdio ignored — inheriting that for
- * `npm.cmd` (shell:true) opens stacked visible consoles on Windows. Pipe instead and
- * relay bounded output after the child exits. (Ported from PR #167.)
+ * Background package-manager children can open stacked visible consoles on Windows.
+ * Pipe instead and relay bounded output after the child exits. (Ported from PR #167.)
  */
 function updateChildStdio(): "inherit" | "pipe" {
   if (process.env.OCX_SERVICE === "1") return "pipe";
@@ -79,8 +85,14 @@ function logSpawnOutput(label: string, result: { stdout?: string | Buffer | null
 
 /** Latest published version from the registry (best-effort; null if npm isn't available). */
 export function latestVersion(tag: string): string | null {
-  const npm = npmSpawnTarget("npm");
-  const r = spawnSync(npm.bin, ["view", `${PKG}@${tag}`, "version"], { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell });
+  const npm = npmSpawnTarget(["view", `${PKG}@${tag}`, "version"]);
+  if (!npm) return null;
+  const r = spawnSync(npm.bin, npm.args, {
+    encoding: "utf8",
+    timeout: 12000,
+    windowsHide: true,
+    ...npm.options,
+  });
   return r.status === 0 ? (r.stdout.trim() || null) : null;
 }
 
@@ -116,11 +128,12 @@ export function checkUpdatePackageIntegrity(
   spawn: typeof spawnSync = spawnSync,
 ): { ok: true; integrity: string } | { ok: false; reason: string } | { ok: "skipped"; reason: string } {
   if (!version) return { ok: "skipped", reason: "no resolved version (registry unavailable)" };
-  const npm = npmSpawnTarget("npm");
+  const npm = npmSpawnTarget(["view", `${PKG}@${version}`, "dist.integrity"]);
+  if (!npm) return { ok: "skipped", reason: "npm executable was not found on a trusted PATH entry" };
   const r = spawn(
     npm.bin,
-    ["view", `${PKG}@${version}`, "dist.integrity"],
-    { encoding: "utf8", timeout: 12000, windowsHide: true, shell: npm.shell },
+    npm.args,
+    { encoding: "utf8", timeout: 12000, windowsHide: true, ...npm.options },
   );
   // status !== 0 covers nonzero exits AND timeouts (status === null).
   if (r.status !== 0) return { ok: "skipped", reason: `registry integrity query failed (status ${r.status ?? "timeout"})` };
@@ -164,6 +177,13 @@ export async function runUpdate(): Promise<void> {
     console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
   }
 
+  const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);
+  const target = updateSpawnTarget(bin, cmdArgs);
+  if (!target) {
+    console.error("⚠️  Could not resolve npm from a trusted absolute PATH entry; aborting before stopping the proxy.");
+    process.exit(1);
+  }
+
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it permanently, so a successful update must reinstall/restart it afterwards.
   let serviceWasInstalled = false;
@@ -204,6 +224,7 @@ export async function runUpdate(): Promise<void> {
   const capturedListen = {
     port: runtimeTrusted ? preUpdateRt.port : configPort,
     hostname: (runtimeTrusted ? preUpdateRt.hostname : undefined) ?? preUpdateConfig.hostname ?? "127.0.0.1",
+    ...(runtimeTrusted && livePid ? { oldPid: livePid } : {}),
   };
 
   // Never replace package files under a live proxy: the running server dynamic-imports
@@ -239,17 +260,15 @@ export async function runUpdate(): Promise<void> {
     }
   }
 
-  const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);
   console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
 
-  const target = npmSpawnTarget(bin);
   const installStdio = updateChildStdio();
-  const r = spawnSync(target.bin, cmdArgs, {
+  const r = spawnSync(target.bin, target.args, {
     stdio: installStdio,
     encoding: installStdio === "pipe" ? "utf8" : undefined,
     timeout: 180000,
     windowsHide: true,
-    shell: target.shell,
+    ...target.options,
   });
   if (installStdio === "pipe") logSpawnOutput("", r);
   if (r.status === 0) {
@@ -281,12 +300,17 @@ export async function runUpdate(): Promise<void> {
     if (serviceWasInstalled) {
       console.log("🔁 Reinstalling the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
-      const { waitForPortAvailable } = await import("../server/ports");
-      const freed = await waitForPortAvailable(capturedListen.port, capturedListen.hostname, {
-        timeoutMs: 5_000,
-        intervalMs: 25,
+      const { reclaimListenPort } = await import("../server/port-reclaim");
+      const freed = await reclaimListenPort(capturedListen.port, capturedListen.hostname, {
+        timeoutMs: 30_000,
+        intervalMs: 100,
+        scanIntervalMs: 500,
+        killOcxHolders: capturedListen.oldPid != null,
+        onlyKillPids: capturedListen.oldPid != null ? [capturedListen.oldPid] : [],
       });
-      if (!freed) console.warn(`⚠️  Port ${capturedListen.port} still busy; reinstalling with pinned --port anyway.`);
+      if (!freed) {
+        console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; reinstalling service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
+      }
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(capturedListen.port);
       try {
@@ -297,30 +321,61 @@ export async function runUpdate(): Promise<void> {
           windowsHide: true,
         });
         if (svcStdio === "pipe") logSpawnOutput("", svc);
-        if (svc.status !== 0) {
+        const serviceRefreshed = svc.status === 0;
+        let serviceViable = serviceRefreshed;
+        if (serviceRefreshed) {
+          try {
+            const { isServiceViable } = await import("../service");
+            serviceViable = isServiceViable();
+          } catch {
+            serviceViable = false;
+          }
+        }
+        if (!serviceRefreshed || !serviceViable) {
           // On Windows, schtasks /create requires elevation. The CLI inherits the
           // user's (non-admin) token, so the service reinstall can fail with access
-          // denied. Fall back to a direct detached proxy start so the update never
-          // leaves the user without a running proxy.
-          console.warn("⚠️  Service refresh failed — starting the proxy directly instead.");
-          console.warn("   Run 'ocx service install' as administrator to refresh the background service.");
-          const env = { ...process.env };
-          delete env.OCX_SERVICE;
-          const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(capturedListen.port)], {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-            env,
-          });
-          child.unref();
-          console.log(`✅ Proxy starting on port ${capturedListen.port}.`);
+          // denied — or exit 0 while leaving stale/missing assets that never start
+          // the proxy. Fall back to a direct detached proxy start so the update
+          // never leaves the user without a running proxy — but only when the port is free.
+          if (!freed) {
+            console.warn(
+              serviceRefreshed
+                ? "⚠️  Service refresh left a non-viable manager and the captured port is still busy; not starting on another port."
+                : "⚠️  Service refresh failed and the captured port is still busy; not starting on another port.",
+            );
+            console.warn(process.platform === "win32"
+              ? `   Run 'ocx service install' as administrator, then 'ocx start --port ${capturedListen.port}'.`
+              : `   Run 'ocx service install' to see the reason, then 'ocx start --port ${capturedListen.port}'.`);
+          } else {
+            console.warn(
+              serviceRefreshed
+                ? "⚠️  Service refresh left a non-viable manager (stale or missing assets) — starting the proxy directly instead."
+                : "⚠️  Service refresh failed — starting the proxy directly instead.",
+            );
+            // Elevation is a Windows-only remedy; elsewhere the refresh fails for
+            // reasons `ocx service install` reports directly (since it now verifies
+            // the service actually serves).
+            console.warn(process.platform === "win32"
+              ? "   Run 'ocx service install' as administrator to refresh the background service."
+              : "   Run 'ocx service install' to refresh the background service and see why it failed.");
+            const env = { ...process.env };
+            delete env.OCX_SERVICE;
+            const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(capturedListen.port)], {
+              detached: true,
+              stdio: "ignore",
+              windowsHide: true,
+              env,
+            });
+            child.unref();
+            console.log(`✅ Proxy starting on port ${capturedListen.port}.`);
+          }
         }
       } finally {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
       }
     } else {
-      console.log("Restart the proxy:  ocx start");
+      console.log(`Restart the proxy:  ocx start --port ${capturedListen.port}`);
     }
   } else {
     if (trayWasRunning) {

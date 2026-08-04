@@ -1,11 +1,13 @@
 import type { OcxProviderConfig } from "../types";
 import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
+import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 
 /**
  * API-key "login" providers: not OAuth — the flow opens the provider's dashboard so the user can
  * create/copy a key, then validates + stores it as the provider's `apiKey` (authMode "key").
  * Most use the OpenAI-compatible chat API (`openai-chat` adapter, `Authorization: Bearer <key>`); a
- * few expose only an Anthropic-compatible endpoint and set `adapter: "anthropic"` (`x-api-key`).
+ * few expose only an Anthropic-compatible endpoint and set `adapter: "anthropic"` (default
+ * `x-api-key`, optional bearer via `apiKeyTransport`).
  */
 export interface KeyLoginProvider extends DerivedKeyLoginProvider {}
 
@@ -29,23 +31,38 @@ export function listKeyLoginProviders(): Array<{ id: string } & KeyLoginProvider
   return Object.entries(KEY_LOGIN_PROVIDERS).map(([id, p]) => ({ id, ...p }));
 }
 
+function anthropicKeyValidationHeaders(provider: Pick<KeyLoginProvider, "apiKeyTransport">, key: string): HeadersInit {
+  return provider.apiKeyTransport === "bearer"
+    ? {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "Authorization": `Bearer ${key}`,
+    }
+    : {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": key,
+    };
+}
+
 /** Best-effort key validation. Returns true/false/unknown; never persists the key itself. */
-export async function validateApiKey(provider: KeyLoginProvider, key: string): Promise<boolean | "unknown"> {
+export async function validateApiKey(
+  providerName: string,
+  provider: KeyLoginProvider,
+  key: string,
+): Promise<boolean | "unknown"> {
   try {
     if (provider.adapter === "anthropic") {
       const base = provider.baseUrl.replace(/\/v1\/?$/, "");
       const res = await fetch(`${base}/v1/messages`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "anthropic-version": "2023-06-01",
-          "x-api-key": key,
-        },
+        headers: anthropicKeyValidationHeaders(provider, key),
         body: JSON.stringify({
           model: provider.defaultModel ?? "claude-haiku-4-5",
           max_tokens: 1,
           messages: [{ role: "user", content: "ping" }],
         }),
+        redirect: "error",
         signal: AbortSignal.timeout(8000),
       });
       if (res.ok) return true;
@@ -58,6 +75,7 @@ export async function validateApiKey(provider: KeyLoginProvider, key: string): P
       // documented x-goog-api-key header instead (pageSize=1 — validation only needs a 200).
       const res = await fetch(`${provider.baseUrl}/v1beta/models?pageSize=1`, {
         headers: { "x-goog-api-key": key },
+        redirect: "error",
         signal: AbortSignal.timeout(8000),
       });
       if (res.ok) return true;
@@ -65,8 +83,20 @@ export async function validateApiKey(provider: KeyLoginProvider, key: string): P
       return "unknown";
     }
 
-    const res = await fetch(`${provider.baseUrl}/models`, {
+    const configuredProvider: OcxProviderConfig = {
+      adapter: provider.adapter,
+      baseUrl: provider.baseUrl,
+      authMode: "key",
+    };
+    const modelsUrl = resolveProviderModelDiscoveryUrl(
+      providerName,
+      configuredProvider,
+      provider.baseUrl,
+      `${provider.baseUrl}/models`,
+    );
+    const res = await fetch(modelsUrl, {
       headers: { Authorization: `Bearer ${key}` },
+      redirect: "error",
       signal: AbortSignal.timeout(8000),
     });
     if (res.ok) return true;

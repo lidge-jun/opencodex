@@ -87,14 +87,36 @@ describe("web-search streamed-body progress collector", () => {
   });
 
   test("raw response bytes keep a generation alive beyond its initial total elapsed time", async () => {
-    // Timing contract: total elapsed (20 chunks x 10ms nominal = 200ms) far exceeds the
-    // 120ms inactivity timeout, proving raw bytes reset the timer — while any SINGLE
-    // inter-chunk gap stays far below 120ms even under Windows CI timer granularity
-    // (a nominal 10ms sleep can stretch to 30ms+ there; the old 15ms-vs-30ms margin flaked).
-    const response = new Response(chunkStream(
-      Array.from({ length: 20 }, (_, i) => ({ after: 10, value: String.fromCharCode(97 + (i % 26)) })),
-    ));
-    const events = await collect(parseStreamWithProgress(response, drainThenDone, { inactivityTimeoutMs: 120 }));
+    // Drive each byte through an explicit gate so suite-load jitter on Windows CI cannot
+    // invent a false stall between sleeps (10ms-vs-120ms flaked on run 30185030821).
+    // Gaps stay a fixed fraction of the inactivity window; total wall time still exceeds it.
+    const inactivityTimeoutMs = 1_000;
+    const gapMs = 80; // 12.5× under the window — tolerates multi-100ms scheduler stalls
+    const target = 16; // ~1.2s total >> 1s
+    let resolveGate!: () => void;
+    let gate = new Promise<void>(resolve => { resolveGate = resolve; });
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent >= target) {
+          controller.close();
+          return;
+        }
+        await gate;
+        gate = new Promise<void>(resolve => { resolveGate = resolve; });
+        controller.enqueue(bytes(String.fromCharCode(97 + (sent++ % 26))));
+      },
+    }, { highWaterMark: 0 });
+
+    const pending = collect(parseStreamWithProgress(new Response(body), drainThenDone, { inactivityTimeoutMs }));
+    const started = Date.now();
+    resolveGate(); // first byte immediately — inactivity is already armed at collector start
+    for (let i = 1; i < target; i++) {
+      await sleep(gapMs);
+      resolveGate();
+    }
+    const events = await pending;
+    expect(Date.now() - started).toBeGreaterThan(inactivityTimeoutMs);
     expect(events.at(-1)).toEqual({ type: "done" });
     expect(events.some(event => event.type === "heartbeat")).toBe(true);
   });

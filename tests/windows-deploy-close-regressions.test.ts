@@ -25,11 +25,29 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
   });
   test("service update restart bakes OCX_BAKE_PORT so wrappers hard-pin the captured port", () => {
     expect(src).toContain("OCX_BAKE_PORT");
-    expect(src).toContain("reinstalling service with pinned --port");
+    // Service reinstall still runs (with bake) even when reclaim warns; direct start refuses to hop.
+    expect(src).toContain("refusing to hop");
     expect(src).toContain("runtimeTrusted");
     expect(read("src/cli/index.ts")).toContain("allowEphemeralFallback: !hardPin");
+    expect(read("src/cli/index.ts")).toContain("preferRetryMs: hardPin ? 5_000 : 750");
     expect(read("src/cli/index.ts")).toContain("Not opening the GUI");
     expect(read("src/server/ports.ts")).toContain("allowEphemeralFallback");
+  });
+  test("Windows GUI update worker is launched without inheriting the proxy LISTEN socket", () => {
+    // Direct spawn() inherits Bun.serve's LISTEN handle → ghost LISTEN with dead parent PID.
+    expect(src).toContain("function spawnGuiUpdateWorker");
+    expect(src).toContain("Start-Process");
+    expect(src).toContain("buildWindowsElevatedArgumentList");
+    expect(src).toContain("resolveTrustedWindowsPowerShellExe");
+    expect(src).toContain("spawnWorkerFn: spawnGuiUpdateWorker");
+    // Foreign listeners must stay fail-closed; npm rename is covered by ocx identity.
+    expect(src).not.toContain("killAnyListenPidOnPort");
+    expect(src).toContain('process.platform === "win32" && process.env.OCX_SERVICE === "1"');
+    // Native WinSW installs must stop via stopWinswService, not Task Scheduler /end only.
+    expect(src).toContain("readServiceBackend");
+    expect(src).toContain("stopWinswService");
+    expect(src).toContain("$_.ProcessId -eq $PID");
+    expect(src).toContain("lastChild?.pid && aliveFn(lastChild.pid)");
   });
 });
 
@@ -49,7 +67,8 @@ describe("systemd detection tolerates a no-DBUS SSH session (F9)", () => {
 describe("server bind canonicalizes explicit localhost but preserves wildcards (F4 symmetry)", () => {
   const src = read("src/server/index.ts");
   test("literal localhost binds to 127.0.0.1; 0.0.0.0/:: exposure is untouched", () => {
-    expect(src).toContain('/^localhost$/i.test(config.hostname ?? "") ? "127.0.0.1"');
+    expect(src).toContain("const configuredHost = config.hostname?.trim();");
+    expect(src).toContain('!configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1"');
     expect(src).toContain("hostname: bindHost,");
     // Must not blanket-rewrite the bind host (that would break intentional 0.0.0.0 exposure).
     expect(src).not.toContain('hostname: "127.0.0.1",');

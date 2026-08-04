@@ -17,6 +17,7 @@ import dashboard from '../assets/dashboard.png';
 import picker from '../assets/codex-app-picker.png';
 import heroFieldLight from '../assets/hero-route-light.png';
 import heroFieldDark from '../assets/hero-route-dark.png';
+import SiteJsonLd from './SiteJsonLd.astro';
 
 interface Props {
 	locale?: 'ko' | 'zh-cn' | 'ru' | 'ja';
@@ -80,6 +81,7 @@ const docsMap = [
 			{ label: t('Installation', '설치', '安装', 'Установка', 'インストール'), href: `${prefix}getting-started/installation/` },
 			{ label: t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт', 'クイックスタート'), href: `${prefix}getting-started/quickstart/` },
 			{ label: t('How It Works', '동작 원리', '工作原理', 'Как это работает', '仕組み'), href: `${prefix}getting-started/how-it-works/` },
+			{ label: t('Agent Quickstart', '에이전트 퀵스타트', 'Agent 快速上手', 'Быстрый старт для агентов', 'エージェント向けクイックスタート'), href: `${prefix}getting-started/for-agents/` },
 		],
 	},
 	{
@@ -88,10 +90,13 @@ const docsMap = [
 		links: [
 			{ label: t('Providers', '프로바이더', '提供商', 'Провайдеры', 'プロバイダー'), href: `${prefix}guides/providers/` },
 			{ label: t('Model Routing', '모델 라우팅', '模型路由', 'Маршрутизация моделей', 'モデルルーティング'), href: `${prefix}guides/model-routing/` },
+			{ label: t('Combos', '콤보', '组合', 'Комбо', 'コンボ'), href: `${prefix}guides/combos/` },
 			{ label: t('Codex Integration', 'Codex 통합', 'Codex 集成', 'Интеграция с Codex', 'Codex 連携'), href: `${prefix}guides/codex-integration/` },
 			{ label: t('Codex App Model Picker', 'Codex App 모델 선택기', 'Codex App 模型选择器', 'Селектор моделей Codex App', 'Codex App モデルピッカー'), href: `${prefix}guides/codex-app-models/` },
 			{ label: 'Claude Code', href: `${prefix}guides/claude-code/` },
 			{ label: t('Sidecars: Search & Vision', '사이드카: 검색 & 비전', '边车：搜索与视觉', 'Сайдкары: поиск и зрение', 'サイドカー: 検索 & ビジョン'), href: `${prefix}guides/sidecars/` },
+			{ label: t('Image Bridge', '이미지 브릿지', '图像桥接', 'Image Bridge', '画像ブリッジ'), href: `${prefix}guides/image-bridge/` },
+			{ label: t('Video Bridge', '비디오 브릿지', '视频桥接', 'Video Bridge', '動画ブリッジ'), href: `${prefix}guides/video-bridge/` },
 			{ label: t('Web Dashboard', '웹 대시보드', '网页控制台', 'Веб-дашборд', 'ウェブダッシュボード'), href: `${prefix}guides/web-dashboard/` },
 			{ label: t('Sub-agent Surface', '서브에이전트 서피스', '子代理界面', 'Интерфейс подагентов', 'サブエージェントサーフェス'), href: `${prefix}guides/sub-agent-surface/` },
 		],
@@ -104,6 +109,8 @@ const docsMap = [
 			{ label: t('Configuration', '설정', '配置', 'Конфигурация', '設定'), href: `${prefix}reference/configuration/` },
 			{ label: t('Adapters', '어댑터', '适配器', 'Адаптеры', 'アダプター'), href: `${prefix}reference/adapters/` },
 			{ label: t('Architecture', '아키텍처', '架构', 'Архитектура', 'アーキテクチャ'), href: `${prefix}reference/architecture/` },
+			{ label: t('Proxy API Formats', '프록시 API 형식', '代理 API 格式', 'Форматы API прокси', 'プロキシAPI形式'), href: `${prefix}reference/proxy-formats/` },
+			{ label: t('Management API', '관리 API', '管理 API', 'API управления', '管理API'), href: `${prefix}reference/management-api/` },
 		],
 	},
 	{
@@ -117,6 +124,10 @@ const docsMap = [
 	},
 ];
 ---
+
+{/* Site-name markup: Landing only renders on the locale home pages, so this is
+    the one place Google should see a WebSite entity. */}
+<SiteJsonLd locale={locale} />
 
 <div class="lp not-content">
 	<!-- scene stack: hero -> quickstart -> horizontal rail. Each wrapper owns a
@@ -236,6 +247,7 @@ const docsMap = [
 			<article class="lp-cell lp-cell-claude">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.terminal} /></svg>Claude Code</h3>
 				<p>{t('ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ocx claude가 같은 포트로 Claude Code를 띄웁니다 — 라우팅된 모든 모델이 /model 선택기에 뜨고, 최대 1M auto-context, 로스터 서브에이전트, claude.ai 로그인은 그대로 유지됩니다.', 'ocx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ocx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ocx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。')}</p>
+				<img src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar', 'opencodex로 라우팅된 모델에서 돌아가는 Claude Code — 상태 표시줄에 gpt-5.6-luna-medium 활성', '通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型', 'Claude Code на маршрутизированной модели через opencodex — gpt-5.6-luna-medium активна в строке состояния', 'opencodex でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示')} loading="lazy" />
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.search} /></svg>{t('Search & vision sidecars', '검색 & 비전 사이드카', '搜索与视觉边车', 'Сайдкары поиска и зрения', '検索 & ビジョンサイドカー')}</h3>

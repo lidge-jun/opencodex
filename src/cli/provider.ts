@@ -8,13 +8,14 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
+import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
+import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 // ---------------------------------------------------------------------------
 // Arg helpers
@@ -124,7 +125,7 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
 
 async function handleAdd(args: string[]): Promise<void> {
   const name = args[0];
@@ -138,19 +139,26 @@ async function handleAdd(args: string[]): Promise<void> {
     process.exit(1);
   }
 
- const restArgs = args.slice(1);
- const force = consumeFlag(restArgs, "--force");
- const setDefault = consumeFlag(restArgs, "--set-default");
- const wantsJson = consumeFlag(restArgs, "--json");
- const wantsSync = consumeFlag(restArgs, "--sync");
+  const restArgs = args.slice(1);
+  const force = consumeFlag(restArgs, "--force");
+  const setDefault = consumeFlag(restArgs, "--set-default");
+  const wantsJson = consumeFlag(restArgs, "--json");
+  const wantsSync = consumeFlag(restArgs, "--sync");
   const allowPrivateNetwork = consumeFlag(restArgs, "--allow-private-network");
- const apiKey = consumeFlagValue(restArgs, "--api-key");
+  const apiKey = consumeFlagValue(restArgs, "--api-key");
+  const apiKeyTransport = consumeFlagValue(restArgs, "--api-key-transport");
   const adapter = consumeFlagValue(restArgs, "--adapter");
   const baseUrl = consumeFlagValue(restArgs, "--base-url");
   const defaultModel = consumeFlagValue(restArgs, "--default-model");
   rejectUnknownArgs(restArgs, ADD_USAGE);
 
   const config = loadConfig();
+
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
+  if (namespaceCollision) {
+    console.error(`Error: ${namespaceCollision}.`);
+    process.exit(1);
+  }
 
   if (hasOwnProvider(config.providers, name) && !force) {
     console.error(`Provider "${name}" already exists. Use --force to overwrite.`);
@@ -188,9 +196,22 @@ async function handleAdd(args: string[]): Promise<void> {
     };
   }
 
- config.providers[name] = provConfig;
+  if (apiKeyTransport !== undefined) {
+    if (apiKeyTransport !== "x-api-key" && apiKeyTransport !== "bearer") {
+      console.error('Error: --api-key-transport must be "x-api-key" or "bearer".');
+      process.exit(1);
+    }
+    const transportError = apiKeyTransportConfigError({ ...provConfig, apiKeyTransport });
+    if (transportError) {
+      console.error(`Error: ${transportError}.`);
+      process.exit(1);
+    }
+    provConfig.apiKeyTransport = apiKeyTransport;
+  }
+
+  config.providers[name] = provConfig;
   if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
- if (setDefault) config.defaultProvider = name;
+  if (setDefault) config.defaultProvider = name;
 
   validateAndSave(config);
 
@@ -262,6 +283,15 @@ function handleRemove(args: string[]): void {
 
   if (Object.keys(config.providers).length <= 1) {
     console.error("Cannot remove the last provider.");
+    process.exit(1);
+  }
+
+  const dependentCombos = Object.entries(config.combos ?? {})
+    .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+    .map(([id]) => id)
+    .sort();
+  if (dependentCombos.length > 0) {
+    console.error(`Cannot remove "${name}" — combo(s) depend on it: ${dependentCombos.join(", ")}`);
     process.exit(1);
   }
 
@@ -374,9 +404,15 @@ const PROVIDER_USAGE = `Usage: ocx provider <subcommand>
 Subcommands:
   list                  List configured and available providers
   add <name>            Add a provider (registry or custom)
+  edit <name>           Edit live provider fields
+  test <name>           Test the provider's upstream model endpoint
   remove <name>         Remove a configured provider
   show <name>           Show provider config details
   set-default <name>    Change the default provider
+  selected <name>       Show or set the provider model allowlist
+  quota                 Show provider quota reports
+  presets               List GUI provider presets
+  account-mode <mode>   Set OpenAI Codex pool/direct mode
 
 Examples:
   ocx provider list
@@ -412,9 +448,16 @@ export async function handleProviderCommand(args: string[]): Promise<void> {
     case "set-default":
       handleSetDefault(subArgs);
       break;
-    default:
+    default: {
+      const { handleProviderRuntimeCommand } = await import("./provider-runtime");
+      const code = await handleProviderRuntimeCommand(sub, subArgs);
+      if (code !== null) {
+        process.exitCode = code;
+        break;
+      }
       console.error(`Unknown provider subcommand: ${sub}`);
       console.error(PROVIDER_USAGE);
       process.exit(1);
+    }
   }
 }

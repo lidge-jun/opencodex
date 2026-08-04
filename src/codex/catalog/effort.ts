@@ -27,7 +27,7 @@ import {
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { redactSecretString } from "../../lib/redact";
+import { redactSecretString, redactUserPath } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
@@ -37,6 +37,14 @@ import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import { loadBundledCodexCatalog } from "./bundled";
 import type { BundledCatalogDeps } from "./bundled";
 import { deriveEntry } from "./sync";
+import {
+  formatClampLogLines,
+  formatRuntimeLogLine,
+  displayCodexRuntimePath,
+  persistEffortClamp,
+  resolveAndPersistCodexRuntime,
+  type EffortClampDiagnostic,
+} from "../runtime";
 
 export function nativeEffortClamp(slug: string, effort: string | undefined): string | null {
   if (!effort || (effort !== "max" && effort !== "ultra")) return null;
@@ -257,7 +265,91 @@ export function clampEntryToCodexSupportedEfforts(entry: RawEntry, supported: Se
 
 export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: BundledCatalogDeps = {}): RawEntry[] {
   const supported = codexSupportedReasoningEfforts(deps);
-  if (!supported) return models;
-  for (const entry of models) clampEntryToCodexSupportedEfforts(entry, supported);
+  if (!supported) {
+    if (!deps.commandCandidates) persistEffortClamp(null, { configDir: deps.configDir });
+    return models;
+  }
+
+  const removed = new Set<string>();
+  const affected: string[] = [];
+  for (const entry of models) {
+    const before = new Set(
+      (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
+        .flatMap(level => typeof (level as { effort?: string })?.effort === "string"
+          ? [(level as { effort: string }).effort]
+          : []),
+    );
+    const beforeDefault = typeof entry.default_reasoning_level === "string"
+      ? entry.default_reasoning_level
+      : null;
+    clampEntryToCodexSupportedEfforts(entry, supported);
+    const after = new Set(
+      (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
+        .flatMap(level => typeof (level as { effort?: string })?.effort === "string"
+          ? [(level as { effort: string }).effort]
+          : []),
+    );
+    const afterDefault = typeof entry.default_reasoning_level === "string"
+      ? entry.default_reasoning_level
+      : null;
+    const lost = [...before].filter(effort => !after.has(effort));
+    const defaultClamped = Boolean(beforeDefault && beforeDefault !== afterDefault);
+    if (lost.length > 0 || defaultClamped) {
+      for (const effort of lost) removed.add(effort);
+      if (defaultClamped && beforeDefault) removed.add(beforeDefault);
+      if (typeof entry.slug === "string") affected.push(entry.slug);
+    }
+  }
+
+  let runtimePath = "codex";
+  let runtimeVersion: string | null = null;
+  if (!deps.commandCandidates) {
+    try {
+      const resolved = resolveAndPersistCodexRuntime({
+        execFileSync: deps.execFileSync,
+        configDir: deps.configDir,
+        env: deps.env,
+        platform: deps.platform,
+        existsSync: deps.existsSync,
+        readFileSync: deps.readFileSync,
+        now: deps.now,
+        discoverAlternatives: deps.discoverAlternatives,
+      });
+      runtimePath = resolved.runtime.command;
+      runtimeVersion = resolved.runtime.version;
+      process.stderr.write(`${formatRuntimeLogLine(resolved.runtime)}\n`);
+      if (resolved.persistError) {
+        console.warn(`[opencodex] Codex runtime selection could not be persisted; a later sync may pick a different binary.`);
+      }
+      if (
+        resolved.replacedConfigured
+        && resolved.replacedConfigured.from.command !== resolved.runtime.command
+      ) {
+        console.warn(`[opencodex] Preferred Codex runtime is unavailable.`);
+        console.warn(
+          `[opencodex] Falling back from ${displayCodexRuntimePath(resolved.replacedConfigured.from.command)} to ${displayCodexRuntimePath(runtimePath)}.`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const redacted = redactUserPath(redactSecretString(message)).slice(0, 200);
+      console.warn(`[opencodex] Codex runtime resolve failed during catalog clamp: ${redacted}`);
+    }
+  }
+
+  if (removed.size > 0) {
+    const diagnostic: EffortClampDiagnostic = {
+      runtimePath,
+      runtimeVersion,
+      removedEfforts: [...removed].sort(),
+      affectedModels: affected,
+    };
+    for (const line of formatClampLogLines(diagnostic)) console.warn(line);
+    if (!deps.commandCandidates) persistEffortClamp(diagnostic, { configDir: deps.configDir });
+    deps.onEffortClamp?.(diagnostic);
+  } else if (!deps.commandCandidates) {
+    persistEffortClamp(null, { configDir: deps.configDir });
+  }
+
   return models;
 }

@@ -5,7 +5,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { durableBunPath } from "../lib/bun-runtime";
-import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_PARENT_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion";
@@ -149,8 +150,16 @@ function quoteRunValue(value: string): string {
   return `\"${value}\"`;
 }
 
-/** Command persisted under HKCU Run. Every value is an owned absolute package/home path. */
-export function buildWindowsTrayRunCommand(entry: WindowsTrayEntry, powershell = windowsPowerShellPath()): string {
+function installedTrayLauncherPath(): string {
+  return join(getConfigDir(), "opencodex-tray.vbs");
+}
+
+function quoteVbsPath(value: string): string {
+  return value.replace(/"/g, '""');
+}
+
+/** Full PowerShell invocation used by the owned VBS launcher (not written to HKCU Run). */
+export function buildWindowsTrayPowerShellCommand(entry: WindowsTrayEntry, powershell = windowsPowerShellPath()): string {
   return [
     quoteRunValue(powershell),
     "-NoLogo",
@@ -166,6 +175,27 @@ export function buildWindowsTrayRunCommand(entry: WindowsTrayEntry, powershell =
     "-OpenCodexHome", quoteRunValue(entry.opencodexHome),
     "-Mode", "Run",
   ].join(" ");
+}
+
+/** Short HKCU Run command (must stay ≤260 chars under long Windows user/npm paths). */
+export function buildWindowsTrayRunCommand(entry: WindowsTrayEntry & { launcherPath: string }): string {
+  const wscript = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
+  return `${quoteRunValue(wscript)} //B //NoLogo ${quoteRunValue(entry.launcherPath)}`;
+}
+
+export function buildWindowsTrayLauncherScript(entry: WindowsTrayEntry, powershell = windowsPowerShellPath()): string {
+  const command = buildWindowsTrayPowerShellCommand(entry, powershell);
+  // VBS CreateObject("WScript.Shell").Run command, 0, False — hidden, non-blocking.
+  return [
+    "' OpenCodex owned tray launcher — do not edit by hand.",
+    `CreateObject("WScript.Shell").Run "${quoteVbsPath(command)}", 0, False`,
+    "",
+  ].join("\r\n");
+}
+
+/** @deprecated Prefer buildWindowsTrayPowerShellCommand; kept for callers that still expect the long form. */
+export function buildWindowsTrayLegacyRunCommand(entry: WindowsTrayEntry, powershell = windowsPowerShellPath()): string {
+  return buildWindowsTrayPowerShellCommand(entry, powershell);
 }
 
 function readState(): WindowsTrayState | null {
@@ -188,24 +218,55 @@ function readState(): WindowsTrayState | null {
   }
 }
 
-function replaceOwnedFile(path: string, contents: string | Buffer): void {
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(temporary, contents, { mode: 0o600 });
-  try {
-    try { chmodSync(temporary, 0o600); } catch { /* best-effort */ }
-    if (process.platform === "win32") {
-      const hardened = hardenSecretPath(temporary, { required: true });
+export interface WindowsTrayOwnedFileIO {
+  write(path: string, contents: string | Buffer): void;
+  harden(path: string): void;
+  rename(source: string, destination: string): void;
+  unlink(path: string): void;
+}
+
+export function replaceWindowsTrayOwnedFile(
+  path: string,
+  contents: string | Buffer,
+  io: WindowsTrayOwnedFileIO = {
+    write: (target, value) => writeFileSync(target, value, { mode: 0o600 }),
+    harden: target => {
+      try { chmodSync(target, 0o600); } catch { /* best-effort */ }
+      if (process.platform !== "win32") return;
+      const hardened = hardenSecretPath(target, { required: true });
       if (!hardened.ok) throw new Error("Windows tray ACL hardening did not complete; refusing to persist executable state.");
-    }
-    renameSync(temporary, path);
+    },
+    rename: renameSync,
+    unlink: unlinkSync,
+  },
+): void {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  io.write(temporary, contents);
+  let renamed = false;
+  try {
+    io.harden(temporary);
+    io.rename(temporary, path);
+    renamed = true;
+    forgetHardenedSecretPath(temporary);
   } finally {
-    try { if (existsSync(temporary)) unlinkSync(temporary); } catch { /* best-effort */ }
+    if (!renamed) {
+      try {
+        io.unlink(temporary);
+        forgetHardenedSecretPath(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") forgetHardenedSecretPath(temporary);
+      }
+    }
   }
 }
 
-function writeState(entry: WindowsTrayEntry, runValue: string, runCommand: string): void {
+function writeState(
+  entry: WindowsTrayEntry & { launcherPath: string },
+  runValue: string,
+  runCommand: string,
+): void {
   const path = trayStatePath();
-  replaceOwnedFile(path, JSON.stringify({ version: TRAY_STATE_VERSION, ...entry, runValue, runCommand }, null, 2) + "\n");
+  replaceWindowsTrayOwnedFile(path, JSON.stringify({ version: TRAY_STATE_VERSION, ...entry, runValue, runCommand }, null, 2) + "\n");
 }
 
 export function parseWindowsTrayRunValue(output: string, runValue: string): string | null {
@@ -375,7 +436,8 @@ function trayStatusFrom(registered: string | null): WindowsTrayStatus {
   const running = heartbeatProcessAlive(heartbeat);
   const registrationOwned = state !== null
     && registered === state.runCommand
-    && [state.bun, state.cli, state.script, ...installedTrayIconPaths()].every(path => existsSync(path));
+    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths()]
+      .every(path => existsSync(path));
   const stale = windowsTrayRegistrationIsStale({
     registered: registered !== null,
     registrationOwned,
@@ -413,17 +475,43 @@ function assertWindows(): void {
   if (process.platform !== "win32") throw new Error(`The opencodex tray is Windows-only (current platform: ${process.platform}).`);
 }
 
-function spawnTray(state: WindowsTrayEntry): void {
-  const child = spawn(state.bun, [state.cli, "__tray-host"], {
-    detached: true,
+const DETACHED_TRAY_HOST_LAUNCHER = [
+  "$startInfo = New-Object System.Diagnostics.ProcessStartInfo",
+  "$startInfo.FileName = $env:OCX_TRAY_HOST_BUN",
+  "$startInfo.Arguments = $env:OCX_TRAY_HOST_ARGS",
+  "$startInfo.UseShellExecute = $true",
+  "$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden",
+  "$child = [System.Diagnostics.Process]::Start($startInfo)",
+  "if ($null -eq $child) { throw 'Windows tray host did not start.' }",
+  "$child.Dispose()",
+].join("; ");
+
+const DETACHED_TRAY_HOST_LAUNCHER_B64 = Buffer.from(DETACHED_TRAY_HOST_LAUNCHER, "utf16le").toString("base64");
+
+export function launchWindowsTrayHost(state: WindowsTrayEntry): void {
+  const bun = safePath(state.bun);
+  const cli = safePath(state.cli);
+  execFileSync(windowsPowerShellPath(), [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    DETACHED_TRAY_HOST_LAUNCHER_B64,
+  ], {
     stdio: "ignore",
     windowsHide: true,
+    timeout: 15_000,
     env: {
       ...process.env,
+      OCX_TRAY_HOST_BUN: bun,
+      OCX_TRAY_HOST_ARGS: `${quoteRunValue(cli)} __tray-host`,
       OCX_TRAY_ENTRY_B64: Buffer.from(JSON.stringify(state), "utf8").toString("base64"),
     },
   });
-  child.unref();
+}
+
+function spawnTray(state: WindowsTrayEntry): void {
+  launchWindowsTrayHost(state);
 }
 
 function parseTrayHostEntry(): WindowsTrayEntry {
@@ -442,6 +530,8 @@ export async function runWindowsTrayHost(): Promise<void> {
   assertWindows();
   const entry = parseTrayHostEntry();
   delete process.env.OCX_TRAY_ENTRY_B64;
+  delete process.env.OCX_TRAY_HOST_BUN;
+  delete process.env.OCX_TRAY_HOST_ARGS;
   const child = spawn(windowsPowerShellPath(), windowsTrayProcessArgs(entry, "Run", process.pid), {
     stdio: "ignore",
     windowsHide: true,
@@ -476,8 +566,14 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   for (const path of [entry.bun, entry.cli, sourceScript, ...iconPairs.map(pair => pair.source)]) {
     if (!existsSync(path)) throw new Error(`Cannot install the tray because a required file is missing: ${path}`);
   }
+  recordOwnedConfigPath(getConfigDir(), trayStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-  const runCommand = buildWindowsTrayRunCommand(entry);
+  const launcherPath = installedTrayLauncherPath();
+  const entryWithLauncher = { ...entry, launcherPath };
+  const runCommand = buildWindowsTrayRunCommand(entryWithLauncher);
+  if (runCommand.length > 260) {
+    throw new Error(`Tray Run command exceeds the Windows 260-character limit (${runCommand.length} chars).`);
+  }
   const runValue = windowsTrayRunValue(entry.opencodexHome);
   const existing = readOwnedRunValue(runValue);
   const state = readState();
@@ -486,6 +582,9 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   }
   if (existsSync(entry.script) && (!state || resolve(state.script) !== resolve(entry.script))) {
     throw new Error(`Refusing to overwrite an unowned tray script at ${entry.script}.`);
+  }
+  if (existsSync(launcherPath) && (!state?.launcherPath || resolve(state.launcherPath) !== resolve(launcherPath))) {
+    throw new Error(`Refusing to overwrite an unowned tray launcher at ${launcherPath}.`);
   }
   if (!state && iconPairs.some(pair => existsSync(pair.installed))) {
     throw new Error("Refusing to overwrite unowned Windows tray icon assets.");
@@ -501,23 +600,28 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
 
   const previousStateBytes = existsSync(trayStatePath()) ? readFileSync(trayStatePath()) : null;
   const previousScriptBytes = existsSync(entry.script) ? readFileSync(entry.script) : null;
+  const previousLauncherBytes = existsSync(launcherPath) ? readFileSync(launcherPath) : null;
   const previousIconBytes = new Map(iconPairs.map(pair => [
     pair.installed,
     existsSync(pair.installed) ? readFileSync(pair.installed) : null,
   ]));
   const restorePreviousInstall = () => {
     try {
-      if (previousScriptBytes) replaceOwnedFile(entry.script, previousScriptBytes);
+      if (previousScriptBytes) replaceWindowsTrayOwnedFile(entry.script, previousScriptBytes);
       else if (existsSync(entry.script)) unlinkSync(entry.script);
+    } catch { /* rollback best-effort */ }
+    try {
+      if (previousLauncherBytes) replaceWindowsTrayOwnedFile(launcherPath, previousLauncherBytes);
+      else if (existsSync(launcherPath)) unlinkSync(launcherPath);
     } catch { /* rollback best-effort */ }
     for (const [path, contents] of previousIconBytes) {
       try {
-        if (contents) replaceOwnedFile(path, contents);
+        if (contents) replaceWindowsTrayOwnedFile(path, contents);
         else if (existsSync(path)) unlinkSync(path);
       } catch { /* rollback best-effort */ }
     }
     try {
-      if (previousStateBytes) replaceOwnedFile(trayStatePath(), previousStateBytes);
+      if (previousStateBytes) replaceWindowsTrayOwnedFile(trayStatePath(), previousStateBytes);
       else if (existsSync(trayStatePath())) unlinkSync(trayStatePath());
     } catch { /* rollback best-effort */ }
     try {
@@ -535,10 +639,11 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   try {
     const hardenedDir = hardenSecretDir(getConfigDir(), { required: true });
     if (!hardenedDir.ok) throw new Error("Windows tray directory ACL hardening did not complete; refusing to install persistence.");
-    replaceOwnedFile(entry.script, readFileSync(sourceScript));
-    for (const pair of iconPairs) replaceOwnedFile(pair.installed, readFileSync(pair.source));
+    replaceWindowsTrayOwnedFile(entry.script, readFileSync(sourceScript));
+    for (const pair of iconPairs) replaceWindowsTrayOwnedFile(pair.installed, readFileSync(pair.source));
+    replaceWindowsTrayOwnedFile(launcherPath, Buffer.from("\uFEFF" + buildWindowsTrayLauncherScript(entry), "utf16le"));
     runRegistry(["add", RUN_KEY, "/v", runValue, "/t", "REG_SZ", "/d", runCommand, "/f", "/reg:64"]);
-    writeState(entry, runValue, runCommand);
+    writeState(entryWithLauncher, runValue, runCommand);
   } catch (error) {
     restorePreviousInstall();
     throw error;
@@ -547,9 +652,6 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   if (startNow && !waitForHeartbeat(true)) {
     restorePreviousInstall();
     throw new Error("The tray startup registration was installed, but the tray process did not become healthy.");
-  }
-  if (state?.launcherPath && existsSync(state.launcherPath)) {
-    try { unlinkSync(state.launcherPath); } catch { /* old owned VBS is inert after a committed Run replacement */ }
   }
   return getWindowsTrayStatus();
 }

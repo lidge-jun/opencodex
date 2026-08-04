@@ -6,14 +6,42 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
       - ".github/scripts/issue-quality.test.cjs"
+      - ".github/scripts/pr-quality.cjs"
+      - ".github/scripts/pr-quality.test.cjs"
+      - ".github/scripts/pr-labeler.cjs"
+      - ".github/scripts/pr-labeler.test.cjs"
+      - ".github/scripts/enforce-pr-target.test.cjs"
+      - ".github/scripts/issue-translation.cjs"
+      - ".github/scripts/issue-translation.test.cjs"
+      - ".github/scripts/issue-triage.cjs"
+      - ".github/scripts/issue-triage.test.cjs"
+      - ".github/scripts/parse-issue-translation-response.cjs"
+      - ".github/scripts/parse-issue-translation-response.test.cjs"
       - ".github/workflows/enforce-issue-quality.yml"
+      - ".github/workflows/enforce-pr-target.yml"
+      - ".github/workflows/pr-labeler.yml"
+      - ".github/workflows/issue-triage.yml"
       - ".github/workflows/issue-quality-tests.yml"
   push:
     paths:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
       - ".github/scripts/issue-quality.test.cjs"
+      - ".github/scripts/pr-quality.cjs"
+      - ".github/scripts/pr-quality.test.cjs"
+      - ".github/scripts/pr-labeler.cjs"
+      - ".github/scripts/pr-labeler.test.cjs"
+      - ".github/scripts/enforce-pr-target.test.cjs"
+      - ".github/scripts/issue-translation.cjs"
+      - ".github/scripts/issue-translation.test.cjs"
+      - ".github/scripts/issue-triage.cjs"
+      - ".github/scripts/issue-triage.test.cjs"
+      - ".github/scripts/parse-issue-translation-response.cjs"
+      - ".github/scripts/parse-issue-translation-response.test.cjs"
       - ".github/workflows/enforce-issue-quality.yml"
+      - ".github/workflows/enforce-pr-target.yml"
+      - ".github/workflows/pr-labeler.yml"
+      - ".github/workflows/issue-triage.yml"
       - ".github/workflows/issue-quality-tests.yml"
 
 permissions:
@@ -30,7 +58,14 @@ jobs:
           persist-credentials: false
 
       - name: Run validator tests
-        run: node --test .github/scripts/issue-quality.test.cjs
+        run: |
+          node --test .github/scripts/issue-quality.test.cjs
+          node --test .github/scripts/pr-quality.test.cjs
+          node --test .github/scripts/pr-labeler.test.cjs
+          node --test .github/scripts/enforce-pr-target.test.cjs
+          node --test .github/scripts/issue-translation.test.cjs
+          node --test .github/scripts/issue-triage.test.cjs
+          node --test .github/scripts/parse-issue-translation-response.test.cjs
 
       - name: Validate issue-form YAML
         run: |

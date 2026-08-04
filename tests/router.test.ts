@@ -39,6 +39,33 @@ describe("routeModel registry effort defaults", () => {
     expect(routeModel(cursorKeyAttempt, "cursor/auto").provider.authMode).toBe("oauth");
   });
 
+  test("falls back to OAuth routing for allowKeyAuthOverride providers when the active key is unresolved", () => {
+    const envName = "OCX_TEST_XAI_ROUTER_ENV";
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: `\${${envName}}`,
+        },
+      },
+    };
+    const previous = process.env[envName];
+    delete process.env[envName];
+    try {
+      const routed = routeModel(config, "xai/grok-4.5").provider;
+      expect(routed.authMode).toBe("oauth");
+      expect(routed.apiKey).toBeUndefined();
+      expect(config.providers.xai!.authMode).toBe("key");
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
+  });
+
   test("routes bare OpenAI/Codex model ids to OpenAI before adopted Cursor model lists", () => {
     const config: OcxConfig = {
       port: 10100,
@@ -112,12 +139,42 @@ describe("routeModel registry effort defaults", () => {
       },
     };
     expect(routeModel(base, "gpt-5.5")).toMatchObject({ providerName: "openai", codexAccountMode: "pool" });
+    expect(routeModel(base, "codex-auto-review")).toMatchObject({
+      providerName: "openai",
+      modelId: "codex-auto-review",
+      codexAccountMode: "pool",
+    });
+    expect(routeModel(base, "codex-third-party-model")).toMatchObject({
+      providerName: "openai-apikey",
+      modelId: "codex-third-party-model",
+    });
+    const withDeepSeekDefault: OcxConfig = {
+      ...base,
+      defaultProvider: "deepseek",
+      providers: {
+        ...base.providers,
+        deepseek: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+          defaultModel: "deepseek-chat",
+        },
+      },
+    };
+    expect(routeModel(withDeepSeekDefault, "codex-auto-review")).toMatchObject({
+      providerName: "openai",
+      modelId: "codex-auto-review",
+    });
+    expect(routeModel(withDeepSeekDefault, "codex-third-party-model")).toMatchObject({
+      providerName: "deepseek",
+      modelId: "codex-third-party-model",
+    });
     expect(routeModel({ ...base, providers: { ...base.providers, openai: { ...forward, codexAccountMode: "direct" } } }, "gpt-5.5"))
       .toMatchObject({ providerName: "openai", codexAccountMode: "direct" });
     expect(() => routeModel({ ...base, providers: { ...base.providers, openai: { ...forward, disabled: true } } }, "gpt-5.5"))
-      .toThrow(NoEnabledOpenAiProviderError);
+      .toThrow(/requires the canonical openai provider/);
     const unavailable = { ...base, providers: { "openai-proxy": base.providers["openai-proxy"] } };
-    expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(NoEnabledOpenAiProviderError);
+    expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(/ocx provider add openai/);
+    expect(() => routeModel(unavailable, "codex-auto-review")).toThrow(NoEnabledOpenAiProviderError);
   });
 
   test("rejects legacy chatgpt namespaces even when configured", () => {

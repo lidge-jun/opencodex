@@ -5,7 +5,7 @@ description: opencodex 内部机制 —— 模块图、请求解析器、Adapter
 
 opencodex 运行在单个 Bun 进程中。请求以 OpenAI Responses 格式进入，规范化为内部模型后完成
 路由，再由 adapter 发送到 provider，最后桥接回 Responses SSE。端到端流程参见
-[工作原理](/opencodex/zh-cn/getting-started/how-it-works/)。
+[工作原理](/zh-cn/getting-started/how-it-works/)。
 
 ## 模块图
 
@@ -47,7 +47,9 @@ src/
 1. `server/index.ts` 应用 CORS 和 API 认证，在 drain 期间拒绝新请求，并记录请求生命周期
    metadata。它提供 `GET /v1/models`、`POST /v1/responses`、
    `POST /v1/responses/compact`、`POST /v1/images/generations` / `POST /v1/images/edits`
-   （供 Codex 内置 `image_gen` 工具使用——由 `server/images.ts` 中继到 OpenAI 系上游），
+   （供 Codex 内置 `image_gen` 工具使用——由 `server/images.ts` 中继到 OpenAI 系上游）、
+   `POST /v1/live` / `POST /v1/realtime/calls`（ChatGPT / Codex App 语音与 OpenAI Realtime
+   建连，由 `server/live.ts` 中继）、`/v1/live/{callId}` 旁路 WebSocket，
    以及 `/v1/responses` 上可选的 WebSocket upgrade。
 2. `server/responses/core.ts` 解压并解析 JSON；如果本地记住了对应输入，则展开
    `previous_response_id`，随后调用 `responses/parser.ts`。
@@ -141,7 +143,7 @@ Codex context compaction 同样适用于路由模型。`server/responses/compact
   与 Codex 自身缓存一致），获取失败时会回退到旧数据。
 - `codex/catalog.ts` facade 导出的 `codex/catalog/sync.ts` 把路由模型作为带命名空间的条目
   合并进 Codex 目录，优先排列精选的
-  [subagent 模型](/opencodex/zh-cn/guides/codex-integration/#subagent-选择器)，过滤
+  [subagent 模型](/zh-cn/guides/codex-integration/#subagent-选择器)，过滤
   `disabledModels`，并可从一次性备份中完整恢复原始目录。
 
 ## Reasoning effort

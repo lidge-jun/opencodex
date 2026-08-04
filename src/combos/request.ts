@@ -2,6 +2,15 @@ import type { OcxComboDefaultEffort, OcxComboTarget, OcxConfig } from "../types"
 import { resolveComboId } from "./types";
 
 const warnedUnsupportedDefaults = new Set<string>();
+let lastWarningReconciledGeneration = 0;
+
+export function reconcileComboWarningMemos(generation: number): number {
+  if (generation <= lastWarningReconciledGeneration) return 0;
+  const removed = warnedUnsupportedDefaults.size;
+  warnedUnsupportedDefaults.clear();
+  lastWarningReconciledGeneration = generation;
+  return removed;
+}
 
 export function resetComboEffortWarningStateForTests(): void {
   warnedUnsupportedDefaults.clear();

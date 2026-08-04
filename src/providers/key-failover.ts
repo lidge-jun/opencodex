@@ -8,9 +8,10 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
-import { saveConfig } from "../config";
+import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { resolveProviderTransport } from "./xai-transport";
+import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
+import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
 
@@ -69,6 +70,11 @@ export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
  *
  * @returns A new OcxProviderConfig with the swapped key (and mutated config on disk),
  *          or `null` when no alternative key is available (all in cooldown or pool < 2).
+ *
+ * The returned object is a snapshot of the PERSISTED config — it carries none of the
+ * registry backfills `routedProviderConfig` merges in at request time. Request paths must
+ * not assign it to an active route wholesale; use `rotateProviderTransportOn429`, which
+ * takes only the swapped key and keeps the routed provider intact.
  */
 export function rotateKeyOn429(
   config: OcxConfig,
@@ -94,6 +100,7 @@ export function rotateKeyOn429(
     keyCooldowns.set(cooldownKey(providerName, currentEntry.id), {
       cooldownUntil: now + cooldownMs,
     });
+    sweepExpiredOnWrite(now);
   }
 
   // Lost the race: someone already rotated away from the failed key. If the live key is healthy,
@@ -112,7 +119,7 @@ export function rotateKeyOn429(
     if (!isKeyInCooldown(providerName, candidate.id, now)) {
       // Swap active key
       provider.apiKey = candidate.key;
-      saveConfig(config);
+      saveConfigPreservingClaudeCode(config);
       console.warn(
         // Log ids only — labels are user-supplied free text and could carry secret material.
         `[key-failover] ${providerName}: 429 on key ${currentEntry?.id ?? "?"}; rotating to key ${candidate.id}`,
@@ -126,6 +133,16 @@ export function rotateKeyOn429(
   return null;
 }
 
+export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, cooldown] of keyCooldowns) {
+    if (cooldown.cooldownUntil > now) continue;
+    keyCooldowns.delete(key);
+    removed += 1;
+  }
+  return removed;
+}
+
 interface RotateProviderTransportOptions {
   retryAfter?: string | null;
   now?: number;
@@ -133,12 +150,23 @@ interface RotateProviderTransportOptions {
   promptCacheKey?: string;
 }
 
-/** Rotate a failed key and re-apply provider-specific transport metadata to the replacement. */
+/**
+ * Rotate a failed key and re-apply provider-specific transport metadata to the replacement.
+ *
+ * `routedProvider` is the request's active provider (the `routedProviderConfig` output the
+ * route was built with). The result inherits it and swaps ONLY the API key: the persisted
+ * config that `rotateKeyOn429` snapshots predates registry backfill, so building the retry
+ * provider from that snapshot would silently drop every field the registry merged in at
+ * routing time (scalar flags like `promptCacheKey`/`parallelToolCalls`, merged model
+ * metadata such as `noTemperatureModels`, a pinned baseUrl). Mirrors the OAuth-401 replay
+ * path in src/server/responses/core.ts, which spreads `route.provider` for the same reason.
+ */
 export function rotateProviderTransportOn429(
   config: OcxConfig,
   providerName: string,
+  routedProvider: OcxProviderTransport,
   options: RotateProviderTransportOptions = {},
-): OcxProviderConfig | null {
+): OcxProviderTransport | null {
   const rotated = rotateKeyOn429(
     config,
     providerName,
@@ -147,7 +175,11 @@ export function rotateProviderTransportOn429(
     options.attemptedKey,
   );
   return rotated
-    ? resolveProviderTransport(providerName, rotated, options.promptCacheKey)
+    ? resolveProviderTransport(
+        providerName,
+        { ...routedProvider, apiKey: rotated.apiKey },
+        options.promptCacheKey,
+      )
     : null;
 }
 

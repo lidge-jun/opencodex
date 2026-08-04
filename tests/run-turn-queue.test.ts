@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createAdapterEventQueue, preflightAdapterEvents } from "../src/adapters/run-turn-queue";
+import { createAdapterEventQueue, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents } from "../src/adapters/run-turn-queue";
 import type { AdapterEvent } from "../src/types";
 
 const text = (value: string): AdapterEvent => ({ type: "text_delta", text: value });
@@ -58,9 +58,61 @@ describe("run-turn adapter event queue", () => {
 
     expect(await queue.collect()).toEqual([]);
   });
+
+  test("Cursor byte backpressure preserves the existing 1024-event queue abort cap", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    for (let i = 0; i <= 1_024; i++) queue.push(text(String(i)));
+    queue.push(text("ignored after overflow"));
+
+    const collected = await queue.collect();
+    expect(backlogExceeded).toBe(1);
+    expect(collected).toHaveLength(1_025);
+    expect(collected.slice(0, 1_024)).toEqual(
+      Array.from({ length: 1_024 }, (_, i) => text(String(i))),
+    );
+    expect(collected.at(-1)).toEqual({
+      type: "error",
+      message: "consumer backlog exceeded — turn aborted",
+    });
+  });
+
+  test("does not count direct handoff to an active consumer toward the backlog cap", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+    const iterator = queue.stream()[Symbol.asyncIterator]();
+    const received: AdapterEvent[] = [];
+
+    for (let i = 0; i < 2_000; i++) {
+      const pending = iterator.next();
+      queue.push(text(String(i)));
+      const result = await pending;
+      expect(result.done).toBe(false);
+      if (!result.done) received.push(result.value);
+    }
+    queue.close();
+
+    expect(backlogExceeded).toBe(0);
+    expect(received).toEqual(Array.from({ length: 2_000 }, (_, i) => text(String(i))));
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+  });
 });
 
 describe("run-turn adapter event preflight", () => {
+  test("10,000 leading heartbeats retain only the bounded tail and still complete", async () => {
+    const values = [...Array.from({ length: 10_000 }, () => heartbeat), done];
+    const preflight = await preflightAdapterEvents(events(values));
+    const replayed = await collect(preflight.stream);
+    expect(replayed).toHaveLength(PREFLIGHT_HEARTBEAT_RETAIN_LIMIT + 1);
+    expect(replayed.slice(0, -1).every(event => event.type === "heartbeat")).toBe(true);
+    expect(replayed.at(-1)).toEqual(done);
+  });
+
   test("heartbeat then error reports pre-commit failure without duplicate replay", async () => {
     const error: AdapterEvent = { type: "error", message: "missing credential" };
     const preflight = await preflightAdapterEvents(events([heartbeat, error]));

@@ -7,6 +7,7 @@ import {
   emptyDraft,
   filterCombos,
   groupCombos,
+  intersectComboEfforts,
   isValidComboId,
   parseComboList,
   toPutBody,
@@ -88,7 +89,7 @@ describe("combo-workspace-data", () => {
         strategy: "failover",
         stickyLimit: 1,
         defaultEffort: null,
-        targets: [{ provider: "a", model: "m1", weight: 1 }],
+        targets: [{ provider: "a", model: "m1", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) }],
       },
       {
         id: "weighted",
@@ -98,11 +99,14 @@ describe("combo-workspace-data", () => {
         stickyLimit: 4,
         defaultEffort: "high",
         targets: [
-          { provider: "a", model: "m1", weight: 3 },
-          { provider: "b", model: "m2", weight: 1 },
+          { provider: "a", model: "m1", weight: 3, clientKey: expect.stringMatching(/^ct-\d+$/) },
+          { provider: "b", model: "m2", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) },
         ],
       },
     ]);
+    // UI-only keys must be unique across the parsed list.
+    const keys = items.flatMap((item) => item.targets.map((t) => t.clientKey));
+    expect(new Set(keys).size).toBe(keys.length);
     expect(parseComboList([])).toEqual([]);
     expect(parseComboList({ combos: "invalid" })).toEqual([]);
   });
@@ -156,6 +160,27 @@ describe("combo-workspace-data", () => {
     expect(filterCombos(items, "gpt-balanced").map((item) => item.id)).toEqual(["balanced"]);
   });
 
+  test("intersectComboEfforts keeps only common advertised efforts (#488)", () => {
+    const map = new Map<string, readonly string[] | undefined>([
+      ["a/m1", ["low", "medium", "high", "ultra"]],
+      ["b/m2", ["medium", "high", "xhigh"]],
+    ]);
+    expect(intersectComboEfforts(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+      map,
+    )).toEqual(["medium", "high"]);
+  });
+
+  test("intersectComboEfforts treats unknown members as having no selectable efforts", () => {
+    const map = new Map<string, readonly string[] | undefined>([
+      ["a/m1", ["low", "medium"]],
+    ]);
+    expect(intersectComboEfforts(
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "unknown" }],
+      map,
+    )).toEqual([]);
+  });
+
   test("attention flags zero-target and one-target defensive rows", () => {
     const attention = buildComboAttention([
       combo({ id: "empty", model: "combo/empty", targets: [] }),
@@ -166,6 +191,21 @@ describe("combo-workspace-data", () => {
     expect(attention).toEqual([
       { id: "empty", model: "combo/empty", reason: "empty-targets" },
       { id: "thin", model: "combo/thin", reason: "few-targets" },
+    ]);
+  });
+
+  test("attention flags combos missing from the live catalog (#484)", () => {
+    const attention = buildComboAttention(
+      [
+        combo({ id: "ok" }),
+        combo({ id: "missing", model: "combo/missing" }),
+        combo({ id: "empty", model: "combo/empty", targets: [] }),
+      ],
+      { cataloguedComboIds: new Set(["ok"]) },
+    );
+    expect(attention).toEqual([
+      { id: "missing", model: "combo/missing", reason: "catalog-omitted" },
+      { id: "empty", model: "combo/empty", reason: "empty-targets" },
     ]);
   });
 
@@ -257,6 +297,14 @@ describe("combo-workspace-data", () => {
     });
     expect("stickyLimit" in failoverBody.combo).toBe(false);
     expect("weight" in failoverBody.combo.targets[0]!).toBe(false);
+    // clientKey is UI-only — never serialize it upstream even when present on the draft.
+    const withClientKeys = toPutBody(combo({
+      targets: [
+        { provider: "a", model: "m1", clientKey: "ct-ui-1" },
+        { provider: "b", model: "m2", clientKey: "ct-ui-2" },
+      ],
+    }));
+    expect(withClientKeys.combo.targets.every((t) => !("clientKey" in t))).toBe(true);
   });
 
   test("preserves an unset effort through parse, draft, and PUT", () => {

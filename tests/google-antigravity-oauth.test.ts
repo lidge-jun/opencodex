@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { discoverAntigravityProject, refreshAntigravityToken } from "../src/oauth/google-antigravity";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -84,10 +84,21 @@ describe("antigravity refresh", () => {
       if (url.includes(":loadCodeAssist")) return new Response(JSON.stringify({ cloudaicompanionProject: "proj-R" }), { status: 200 });
       return new Response("no", { status: 404 });
     });
-    const cred = await refreshAntigravityToken("refresh-tok");
+    const issuedAt = 1_900_000_000_000;
+    const nowSpy = spyOn(Date, "now").mockReturnValue(issuedAt);
+    const cred = await (async () => {
+      try {
+        return await refreshAntigravityToken("refresh-tok");
+      } finally {
+        nowSpy.mockRestore();
+      }
+    })();
     expect(cred.access).toBe("fresh-access");
     expect(cred.refresh).toBe("refresh-tok");
     expect(cred.projectId).toBe("proj-R");
+    // A one-hour Google token must retain roughly 55 minutes after the provider margin. The
+    // previous 50-minute margin stored only ten minutes and caused repeated refreshes in use.
+    expect(cred.expires - issuedAt).toBe(55 * 60 * 1000);
   });
 
   test("refresh failure carries status only, not the response body", async () => {

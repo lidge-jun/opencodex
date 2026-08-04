@@ -1,12 +1,20 @@
 import { fetchMainAccountInfo, listCodexAuthAccounts } from "../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { resolveEnvValue } from "../config";
-import { getValidAccessToken } from "../oauth";
-import { getCredential } from "../oauth/store";
+import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
+import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
+import {
+  captureConfigGeneration,
+  sweepExpiredOnWrite,
+  type GenerationContext,
+} from "../lib/state-store-sweeper";
+
+/** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
+const ACCOUNT_TOKEN_SKEW_MS = 60_000;
 
 const CACHE_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -188,41 +196,294 @@ function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number
   return { percent, resetAt };
 }
 
+/** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
+const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
+
+async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
+  const joinable = anthropicUsageInflight.get(accessToken);
+  if (joinable) return joinable;
+
+  const probe = (async (): Promise<ProviderQuota | null> => {
+    const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "User-Agent": "claude-cli/2.1.63 (external, cli)",
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const body = asRecord(await response.json().catch(() => null));
+    if (!body) return null;
+    const fiveHour = parseClaudeBucket(body.five_hour);
+    const sevenDay = parseClaudeBucket(body.seven_day);
+    const opus = parseClaudeBucket(body.seven_day_opus);
+    const sonnet = parseClaudeBucket(body.seven_day_sonnet);
+    const customWindows: ProviderQuotaWindow[] = [];
+    if (opus?.percent !== undefined) customWindows.push({ label: "Opus", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
+    if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
+    const quota: ProviderQuota = {
+      // Claude's 5-hour window is a first-class rate limit, same as the Codex login 5h/weekly
+      // rows: report it in the canonical fields so the dashboard renders it with the standard
+      // "5-hour limit" label and ordering instead of as a generic extra window.
+      ...(fiveHour?.percent !== undefined ? { fiveHourPercent: fiveHour.percent } : {}),
+      ...(fiveHour?.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
+      ...(sevenDay?.percent !== undefined ? { weeklyPercent: sevenDay.percent } : {}),
+      ...(sevenDay?.resetAt !== undefined ? { weeklyResetAt: sevenDay.resetAt } : {}),
+      ...(customWindows.length > 0 ? { customWindows } : {}),
+      updatedAt: Date.now(),
+    };
+    // Empty / schema-changed payloads must not cache as "success with no bars".
+    return hasQuotaRows(quota) ? quota : null;
+  })().finally(() => {
+    if (anthropicUsageInflight.get(accessToken) === probe) anthropicUsageInflight.delete(accessToken);
+  });
+  anthropicUsageInflight.set(accessToken, probe);
+  return probe;
+}
+
 async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  // Capture the account we intend to probe before awaiting — a mid-flight active
+  // switch must not seed the wrong account's cache with this response.
+  const probedAccountId = getAccountSet("anthropic")?.activeAccountId;
+  const probedAccountKey = probedAccountId ? accountCacheKey("anthropic", probedAccountId) : null;
+  const writerGeneration = captureConfigGeneration();
   let accessToken: string;
   try {
     accessToken = await getValidAccessToken("anthropic");
   } catch {
     return null;
   }
-  const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      "Content-Type": "application/json",
-      "User-Agent": "claude-cli/2.1.63 (external, cli)",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
-  const body = asRecord(await response.json().catch(() => null));
-  if (!body) return null;
-  const fiveHour = parseClaudeBucket(body.five_hour);
-  const sevenDay = parseClaudeBucket(body.seven_day);
-  const opus = parseClaudeBucket(body.seven_day_opus);
-  const sonnet = parseClaudeBucket(body.seven_day_sonnet);
-  const customWindows: ProviderQuotaWindow[] = [];
-  if (fiveHour?.percent !== undefined) customWindows.push({ label: "5h", percent: fiveHour.percent, ...(fiveHour.resetAt !== undefined ? { resetAt: fiveHour.resetAt } : {}) });
-  if (opus?.percent !== undefined) customWindows.push({ label: "Opus", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
-  if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
-  const quota: ProviderQuota = {
-    ...(sevenDay?.percent !== undefined ? { weeklyPercent: sevenDay.percent } : {}),
-    ...(sevenDay?.resetAt !== undefined ? { weeklyResetAt: sevenDay.resetAt } : {}),
-    ...(customWindows.length > 0 ? { customWindows } : {}),
-    updatedAt: Date.now(),
-  };
+  const quota = await fetchAnthropicUsageQuota(accessToken);
+  if (!quota) return null;
+  // Share the active-account probe with the per-account cache so Providers-page
+  // loads do not double-hit Anthropic's rate-limited usage endpoint.
+  if (probedAccountId && probedAccountKey) {
+    const stillOwnsToken = getAccountCredential("anthropic", probedAccountId)?.access === accessToken;
+    if (stillOwnsToken && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    }
+  }
   return report(provider, "anthropic:oauth-usage", quota);
+}
+
+// ---------------------------------------------------------------------------
+// Per-account quota (multiauth)
+// ---------------------------------------------------------------------------
+
+/**
+ * Anthropic reports usage per CREDENTIAL, so every logged-in account can be probed with its
+ * own bearer token — the active-account selection and the local usage log are irrelevant here.
+ * Mirrors the Codex pool behaviour (codex/auth-api.ts:fetchPoolAccountQuota), including a
+ * per-account TTL so N accounts cost at most N upstream calls per window.
+ *
+ * The TTL is deliberately longer than the provider-level one: this path multiplies by account
+ * count, and Anthropic rate-limits the usage endpoint (observed 429 under repeated probing).
+ */
+const ACCOUNT_QUOTA_TTL_MS = 10 * 60_000;
+type AccountQuotaCacheEntry = {
+  ts: number;
+  quota: ProviderQuota | null;
+  /** Last probe failed (429 / network / expired login); still may hold last-good quota. */
+  unavailable?: true;
+};
+const accountQuotaCache = new Map<string, AccountQuotaCacheEntry>();
+const accountQuotaInflight = new Map<string, Promise<AccountQuotaCacheEntry>>();
+let lastReconciledGeneration = 0;
+let liveAccountQuotaKeys = new Set<string>();
+let liveProviderQuotaKeys = new Set<string>();
+
+function mayCommitAccountQuotaKey(key: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration || liveAccountQuotaKeys.has(key);
+}
+
+function mayCommitProviderQuotaKey(key: string, writerGeneration: number): boolean {
+  return writerGeneration >= lastReconciledGeneration || liveProviderQuotaKeys.has(key);
+}
+
+export interface ProviderAccountQuota {
+  accountId: string;
+  quota: ProviderQuota | null;
+  /** Set when the probe could not reach upstream (expired login, 429, network). */
+  unavailable?: true;
+}
+
+/** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
+export function supportsPerAccountQuota(provider: string): boolean {
+  return provider === "anthropic";
+}
+
+function accountCacheKey(provider: string, accountId: string): string {
+  return `${provider}\u0000${accountId}`;
+}
+
+/**
+ * Synchronous last-good per-account quota read for routing. Never probes the network.
+ * Returns null when nothing is cached (or the cached row has no bars).
+ */
+export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  return entry?.quota ?? null;
+}
+
+/** Test-only: seed or clear the per-account quota cache without probing upstream. */
+export function setCachedProviderAccountQuotaForTests(
+  provider: string,
+  accountId: string,
+  quota: ProviderQuota | null,
+): void {
+  const key = accountCacheKey(provider, accountId);
+  if (quota === null) {
+    accountQuotaCache.delete(key);
+    return;
+  }
+  accountQuotaCache.set(key, { ts: Date.now(), quota });
+}
+
+export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, entry] of accountQuotaCache) {
+    if (entry.ts + ACCOUNT_QUOTA_TTL_MS > now) continue;
+    accountQuotaCache.delete(key);
+    removed += 1;
+  }
+  return removed;
+}
+
+export function reconcileProviderAccountQuotaRows(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  let removed = 0;
+  for (const key of accountQuotaCache.keys()) {
+    if (context.oauthAccountKeys.has(key)) continue;
+    accountQuotaCache.delete(key);
+    removed += 1;
+  }
+  if (cache) {
+    const reports = cache.response.reports.filter(report => context.providerNames.has(report.provider));
+    removed += cache.response.reports.length - reports.length;
+    cache = { ...cache, response: { ...cache.response, reports } };
+  }
+  liveAccountQuotaKeys = new Set(context.oauthAccountKeys);
+  liveProviderQuotaKeys = new Set(context.providerNames);
+  lastReconciledGeneration = context.generation;
+  return removed;
+}
+
+/** Drop cached per-account rows (all, or just one provider's). */
+export function clearAccountQuotaCache(provider?: string): void {
+  if (!provider) {
+    accountQuotaCache.clear();
+    accountQuotaInflight.clear();
+    return;
+  }
+  const prefix = `${provider}\u0000`;
+  for (const key of [...accountQuotaCache.keys()]) {
+    if (key.startsWith(prefix)) accountQuotaCache.delete(key);
+  }
+  // Drop in-flight probes too so a late resolve cannot repopulate after logout/remove.
+  for (const key of [...accountQuotaInflight.keys()]) {
+    if (key.startsWith(prefix)) accountQuotaInflight.delete(key);
+  }
+}
+
+/**
+ * Resolve a bearer for quota probing without silently adopting a newer global
+ * Claude CLI credential into a background multiauth slot.
+ *
+ * - Fresh stored access → use as-is (no refresh).
+ * - Active account with expired access → normal refresh path.
+ * - Background `local-cli` with expired access → fail closed (unavailable):
+ *   `getValidAccessTokenForAccount` can persist a mismatched Claude CLI identity.
+ * - Background ordinary OAuth (`source !== "local-cli"`) → safe to refresh;
+ *   Anthropic's lock only adopts disk credentials for `local-cli` rows.
+ */
+async function getTokenForAccountQuotaProbe(provider: string, accountId: string): Promise<string> {
+  const stored = getAccountCredential(provider, accountId);
+  if (!stored) throw new Error("account credential missing");
+  if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
+  const activeId = getAccountSet(provider)?.activeAccountId;
+  if (activeId !== accountId && stored.source === "local-cli") {
+    throw new Error("background local-cli token expired; skip CLI-adopting refresh for quota probe");
+  }
+  return getValidAccessTokenForAccount(provider, accountId);
+}
+
+async function fetchAccountQuota(
+  provider: string,
+  accountId: string,
+  forceRefresh: boolean,
+): Promise<AccountQuotaCacheEntry> {
+  const key = accountCacheKey(provider, accountId);
+  const writerGeneration = captureConfigGeneration();
+  const cached = accountQuotaCache.get(key);
+  if (!forceRefresh && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) return cached;
+  const joinable = accountQuotaInflight.get(key);
+  if (joinable) return joinable;
+
+  const probe = (async (): Promise<AccountQuotaCacheEntry> => {
+    try {
+      const token = await getTokenForAccountQuotaProbe(provider, accountId);
+      const quota = await fetchAnthropicUsageQuota(token);
+      if (!quota) {
+        // Preserve last-good bars and mark unavailable; advance TTL so failures
+        // negative-cache instead of re-probing on every GUI poll.
+        const entry: AccountQuotaCacheEntry = {
+          ts: Date.now(),
+          quota: cached?.quota ?? null,
+          unavailable: true,
+        };
+        if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+          accountQuotaCache.set(key, entry);
+          sweepExpiredOnWrite(entry.ts);
+        }
+        return entry;
+      }
+      const entry: AccountQuotaCacheEntry = { ts: Date.now(), quota };
+      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+        accountQuotaCache.set(key, entry);
+        sweepExpiredOnWrite(entry.ts);
+      }
+      return entry;
+    } catch {
+      const entry: AccountQuotaCacheEntry = {
+        ts: Date.now(),
+        quota: cached?.quota ?? null,
+        unavailable: true,
+      };
+      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+        accountQuotaCache.set(key, entry);
+        sweepExpiredOnWrite(entry.ts);
+      }
+      return entry;
+    }
+  })().finally(() => {
+    if (accountQuotaInflight.get(key) === probe) accountQuotaInflight.delete(key);
+  });
+  accountQuotaInflight.set(key, probe);
+  return probe;
+}
+
+/**
+ * Per-account quota rows for a provider's logged-in accounts. Probes run in parallel; a
+ * single failing account never blocks the others.
+ */
+export async function fetchProviderAccountQuotas(
+  provider: string,
+  forceRefresh = false,
+): Promise<ProviderAccountQuota[]> {
+  if (!supportsPerAccountQuota(provider)) return [];
+  const set = getAccountSet(provider);
+  if (!set) return [];
+  return await Promise.all(set.accounts.map(async account => {
+    const entry = await fetchAccountQuota(provider, account.id, forceRefresh);
+    return {
+      accountId: account.id,
+      quota: entry.quota,
+      ...(entry.unavailable ? { unavailable: true as const } : {}),
+    };
+  }));
 }
 
 function normalizedBaseUrl(value: string): string | null {
@@ -657,6 +918,7 @@ async function maybeFetchProviderQuota(
 
 export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh = false): Promise<ProviderQuotaResponse> {
   const key = cacheKey(config);
+  const writerGeneration = captureConfigGeneration();
   const now = Date.now();
   // The cache fast path must not extend a preserved last-good row past its 30-minute bound:
   // a row preserved at age 29:59 plus a full 5-minute TTL would otherwise serve until ~35min.
@@ -689,7 +951,10 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
 
     const response = { generatedAt: Date.now(), reports: [...byProvider.values()] };
     // Commit only when this probe still holds authority (no clear/force superseded it).
-    if (epoch === invalidationEpoch) cache = { key, ts: Date.now(), response };
+    if (epoch === invalidationEpoch) {
+      const reports = response.reports.filter(item => mayCommitProviderQuotaKey(item.provider, writerGeneration));
+      cache = { key, ts: Date.now(), response: { ...response, reports } };
+    }
     return response;
   })();
 

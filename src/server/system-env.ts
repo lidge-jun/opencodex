@@ -1,9 +1,27 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
+import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens } from "../claude/auth-detect";
+import { resolveClaudeAuthMode } from "../claude/auth-mode";
 import type { OcxConfig } from "../types";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
+
+/**
+ * Does the opencodex dummy marker belong in the system environment?
+ *
+ * Keyed on the SAME resolver `ocx claude` uses, so an auto config with no Claude auth
+ * also reaches plain `claude` launches — before this, auto-absent users got nothing
+ * from auto-connect and the feature looked broken for exactly the people it helps
+ * (devlog 260726_claude_auth_auto/035).
+ *
+ * NOTE this is a SNAPSHOT: the file only changes when this runs (proxy start, `ocx
+ * ensure`, or a settings save). `ocx claude` re-resolves live on every launch.
+ */
+function systemEnvMarkerMode(config: OcxConfig): "proxy" | "subscription" {
+  return resolveClaudeAuthMode(config, detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config)))).markerMode;
+}
 
 // ---------------------------------------------------------------------------
 // Shell-hook env file: written on inject, sourced by the shell hook in .zshrc.
@@ -31,8 +49,8 @@ function writeShellEnvFile(port: number, config: OcxConfig, modelEnv: Record<str
     `[ -z "\${${name}+x}" ] && export ${name}=${shellValue(value)}`;
   if (config.apiKeys?.length) {
     lines.push(`export ANTHROPIC_AUTH_TOKEN=${shellValue(config.apiKeys[0].key)}`);
-  } else if (config.claudeCode?.authMode === "proxy") {
-    lines.push(conditional("ANTHROPIC_AUTH_TOKEN", "opencodex-proxy"));
+  } else if (systemEnvMarkerMode(config) === "proxy") {
+    lines.push(conditional("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER));
   }
   // Model slots (default + tiers + legacy small-fast) with [1m] applied (devlog 260712 B2).
   if (modelEnv.ANTHROPIC_MODEL) {
@@ -55,8 +73,10 @@ function writeShellEnvFile(port: number, config: OcxConfig, modelEnv: Record<str
   if (config.claudeCode?.alwaysEnableEffort === true) {
     lines.push(conditional("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1"));
   }
+  const shellEnvPath = getShellEnvFilePath();
+  recordOwnedConfigPath(getConfigDir(), shellEnvPath);
   mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-  writeFileSync(getShellEnvFilePath(), lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(shellEnvPath, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
 function removeShellEnvFile(): void {
@@ -111,6 +131,19 @@ const SYSTEM_ENV_NAMES = [
   "ANTHROPIC_AUTH_TOKEN",
 ] as const;
 
+const MANAGED_SYSTEM_ENV_NAMES = new Set<string>([
+  ...SYSTEM_ENV_NAMES,
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+  "DISABLE_COMPACT",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+]);
+
 interface SystemEnvTracking {
   pid: number;
   port: number;
@@ -130,7 +163,7 @@ export function getSystemEnvTrackingPath(): string {
 export function launchctlGetenv(name: string): string | undefined {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return undefined;
   try {
-    const value = execSync(`launchctl getenv ${name}`, { encoding: "utf8" }).trim();
+    const value = execFileSync("/bin/launchctl", ["getenv", name], { encoding: "utf8" }).trim();
     return value || undefined;
   } catch {
     return undefined;
@@ -143,22 +176,23 @@ function readTracking(): SystemEnvTracking | undefined {
     if (!Number.isInteger(tracking.port) || typeof tracking.pid !== "number" || typeof tracking.injectedAt !== "string") {
       return undefined;
     }
-    return tracking as SystemEnvTracking;
+    const injectedKeys = Array.isArray(tracking.injectedKeys)
+      ? [...new Set(tracking.injectedKeys.filter(
+        (name): name is string => typeof name === "string" && MANAGED_SYSTEM_ENV_NAMES.has(name),
+      ))]
+      : undefined;
+    return { ...tracking, injectedKeys } as SystemEnvTracking;
   } catch {
     return undefined;
   }
 }
 
-function shellArg(value: string): string {
-  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 function setLaunchctlEnv(name: string, value: string): void {
-  execSync(`launchctl setenv ${name} ${shellArg(value)}`);
+  execFileSync("/bin/launchctl", ["setenv", name, value]);
 }
 
 function unsetLaunchctlEnv(name: string): void {
-  execSync(`launchctl unsetenv ${name}`);
+  execFileSync("/bin/launchctl", ["unsetenv", name]);
 }
 
 function ownedBaseUrl(port: number): string {
@@ -166,6 +200,7 @@ function ownedBaseUrl(port: number): string {
 }
 
 function writeTracking(port: number, injectedKeys: string[]): void {
+  recordOwnedConfigPath(getConfigDir(), getSystemEnvTrackingPath());
   mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
   writeFileSync(getSystemEnvTrackingPath(), JSON.stringify({
     pid: process.pid,
@@ -201,7 +236,14 @@ async function computeEffectiveModelEnv(config: OcxConfig, auto?: AutoContextMod
   const { boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv } = await import("../claude/context-windows");
   const windows = await boundedContextWindows(async () => {
     const { gatherRoutedModels, visibleNativeSlugs } = await import("../codex/catalog");
-    return buildClaudeContextWindows([...visibleNativeSlugs(config)], await gatherRoutedModels(config));
+    try {
+      return buildClaudeContextWindows([...visibleNativeSlugs(config)], await gatherRoutedModels(config));
+    } catch (error) {
+      if (error && typeof error === "object" && (error as { code?: unknown }).code === "catalog_busy") {
+        return buildClaudeContextWindows([...visibleNativeSlugs(config)], []);
+      }
+      throw error;
+    }
   });
   return { modelEnv: effectiveModelEnv(config.claudeCode, windows ?? {}, auto), windows: windows ?? {} };
 }
@@ -240,11 +282,11 @@ export async function injectSystemEnv(port: number, config: OcxConfig): Promise<
     inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
     if (config.apiKeys?.length) {
       inject("ANTHROPIC_AUTH_TOKEN", config.apiKeys[0].key);
-    } else if (config.claudeCode?.authMode === "proxy" && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
-      inject("ANTHROPIC_AUTH_TOKEN", "opencodex-proxy");
-    } else if (config.claudeCode?.authMode !== "proxy"
+    } else if (systemEnvMarkerMode(config) === "proxy" && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
+      inject("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER);
+    } else if (systemEnvMarkerMode(config) !== "proxy"
       && injectedKeys.includes("ANTHROPIC_AUTH_TOKEN")
-      && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === "opencodex-proxy") {
+      && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === PROXY_MARKER) {
       // Subscription switch-back (devlog 260720_claude_authmode_persist): remove ONLY
       // the opencodex-owned dummy token so a launchd-started Claude regains its own
       // claude.ai OAuth. User-set tokens (not tracked in injectedKeys, or carrying a

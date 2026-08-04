@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { createGoogleAdapter } from "../src/adapters/google";
+import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
+  withTestTranslatorBudget(createGoogleAdapterProduction(...args));
 
 function parsed(stream = false): OcxParsedRequest {
   return {
@@ -36,6 +42,15 @@ function antigravityProvider(overrides: Partial<OcxProviderConfig> = {}): OcxPro
 function sseResponse(chunks: unknown[]): Response {
   const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n`).join("\n") + "\n";
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function byteStreamResponse(chunks: Uint8Array[]): Response {
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  }), { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 async function collect(events: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[]> {
@@ -86,6 +101,135 @@ describe("google provider hardening", () => {
     expect(responseEvents).toEqual(expected);
   });
 
+  test("truncated final JSON is a terminal stream error", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response('data: {"candidates":[{"finishReason":"STOP"}', {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    ));
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "malformed upstream SSE data frame",
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("EOF residual data frame without a trailing newline is parsed", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response('data:{"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}', {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    ));
+
+    expect(events).toContainEqual({ type: "text_delta", text: "final" });
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("comment and blank keepalives emit at most one heartbeat per read batch", async () => {
+    const encoder = new TextEncoder();
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      byteStreamResponse([
+        encoder.encode(": keepalive\n\n"),
+        encoder.encode("\n"),
+      ]),
+    ));
+
+    expect(events.filter(event => event.type === "heartbeat")).toEqual([
+      { type: "heartbeat" },
+      { type: "heartbeat" },
+    ]);
+  });
+
+  test("keepalives do not add a heartbeat to a batch that emitted content", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response([
+        ": keepalive",
+        'data: {"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}',
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+    ));
+
+    expect(events.filter(event => event.type === "heartbeat")).toEqual([]);
+    expect(events).toContainEqual({ type: "text_delta", text: "final" });
+  });
+
+  test("garbage stays debug-dropped while comment keepalives are excluded", async () => {
+    resetDebugLogBufferForTests();
+    setDebugSettings({ debug: true });
+    try {
+      const events = await collect(createGoogleAdapter(provider()).parseStream(
+        new Response([
+          ": keepalive",
+          "garbage",
+          'data: {"candidates":[{"finishReason":"STOP"}]}',
+          "",
+          "",
+        ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+      ));
+
+      expect(events).toContainEqual({ type: "heartbeat" });
+      const dropped = getDebugLogEntries().filter(entry => entry.line.includes("[ocx:frame-drop] google"));
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]?.line).toContain("bytes=7");
+    } finally {
+      resetDebugSettingsForTests();
+      resetDebugLogBufferForTests();
+    }
+  });
+
+  test("EOF comment residual is liveness instead of a truncation error", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response([
+        'data: {"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}',
+        "",
+        ": trailing keepalive",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+    ));
+
+    expect(events).toContainEqual({ type: "heartbeat" });
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("EOF after content without a terminal signal fails closed", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response('data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    ));
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "upstream stream ended without a terminal signal — possible truncation",
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("partial UTF-8 bytes after a valid STOP terminal fail closed", async () => {
+    const encoder = new TextEncoder();
+    const terminal = encoder.encode('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      byteStreamResponse([terminal, new Uint8Array([0xe2, 0x82])]),
+    ));
+
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("non-frame garbage after a valid STOP terminal fails closed", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      new Response('data: {"candidates":[{"finishReason":"STOP"}]}\n\ngarbage', {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    ));
+
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
   test("non-streaming responses surface the upstream error message", async () => {
     const adapter = createGoogleAdapter(provider());
     const response = new Response(
@@ -109,6 +253,32 @@ describe("google provider hardening", () => {
         { type: "error", message: "google response contained no candidates" },
       ]);
     }
+  });
+
+  test("non-streaming responses reject oversized Content-Length before buffering", async () => {
+    const adapter = createGoogleAdapter(provider());
+    const oversized = new Response("{}", {
+      status: 200,
+      headers: { "content-length": String(101 * 1024 * 1024) },
+    });
+
+    const events = await adapter.parseResponse!(oversized);
+
+    expect(events).toEqual([{ type: "error", message: expect.stringContaining("google response too large") }]);
+    expect(events[0].type).toBe("error");
+  });
+
+  test("non-streaming responses accept Content-Length under the cap", async () => {
+    const adapter = createGoogleAdapter(provider());
+    const body = { candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }] };
+    const response = new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-length": String(JSON.stringify(body).length) },
+    });
+
+    const events = await adapter.parseResponse!(response);
+    expect(events.some(e => e.type === "done")).toBe(true);
+    expect(events.some(e => e.type === "error")).toBe(false);
   });
 
   test("sends Gemini Flash thinkingLevel only for direct AI Studio requests", async () => {

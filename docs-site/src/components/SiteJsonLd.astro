@@ -1,0 +1,81 @@
+---
+// Site-name markup for Google, emitted ONLY from a locale home page.
+//
+// Google's site-names rules (developers.google.com/search/docs/appearance/site-names):
+//   - put the WebSite entity on the home page only, never site-wide;
+//   - one WebSite object per page — duplicate/conflicting entities are ignored;
+//   - for multilingual sites, emit a separate WebSite per localized home page,
+//     each with a single `inLanguage` value and its own `url`/`@id`.
+// Emitting one shared entity across every page and locale is what made Google
+// fall back to the bare domain, so this component is home-page scoped by design.
+const SITE_URL = 'https://opencodex.me';
+
+interface Props {
+	locale?: 'ko' | 'zh-cn' | 'ru' | 'ja';
+}
+const { locale } = Astro.props;
+
+// Locale path segment (root/English has none) mapped to its BCP-47 tag.
+const langs = { ko: 'ko', 'zh-cn': 'zh-CN', ru: 'ru', ja: 'ja' } as const;
+
+const homeUrl = locale ? `${SITE_URL}/${locale}/` : `${SITE_URL}/`;
+const inLanguage = locale ? langs[locale] : 'en';
+
+const descriptions = {
+	en: 'Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.',
+	ko: 'OpenAI Codex & Claude Code를 위한 범용 프로바이더 프록시 — Codex CLI, App, SDK와 Claude Code에서 어떤 LLM이든 사용하세요.',
+	'zh-CN': '面向 OpenAI Codex 与 Claude Code 的通用 provider 代理 —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。',
+	ru: 'Универсальный прокси провайдеров для OpenAI Codex и Claude Code — используйте любую LLM с Codex CLI, App, SDK и Claude Code.',
+	ja: 'OpenAI Codex & Claude Code 向けの汎用プロバイダープロキシ — Codex CLI、App、SDK と Claude Code で任意の LLM を使えます。',
+} as const;
+
+type GraphNode = Record<string, unknown>;
+
+const graph: GraphNode[] = [
+	{
+		'@type': 'WebSite',
+		// Per-locale @id: the English root and each translated home page describe
+		// distinct localized entities instead of redeclaring one shared object.
+		'@id': `${homeUrl}#website`,
+		url: homeUrl,
+		// `name` matches the visible site name (header wordmark + <title> prefix),
+		// which is what Google requires before it will adopt it over the domain.
+		name: 'opencodex',
+		alternateName: 'ocx',
+		description: descriptions[inLanguage],
+		inLanguage,
+	},
+];
+
+// The software entity is site-wide truth, so it stays anchored to the English
+// root and is emitted exactly once, from the English home page.
+if (!locale) {
+	graph.push({
+		'@type': 'SoftwareApplication',
+		'@id': `${SITE_URL}/#software`,
+		name: 'opencodex',
+		alternateName: 'ocx',
+		description:
+			'Local LLM proxy that lets OpenAI Codex (CLI, App, SDK) and Claude Code run on any model — Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, Ollama, OpenRouter, and more — with streaming, tool calls, reasoning tokens, and images working in both directions.',
+		keywords:
+			'codex, claude code, openai codex proxy, claude code proxy, llm proxy, ai gateway, anthropic, gemini, grok, deepseek, ollama, openrouter, responses api, codex cli',
+		featureList: [
+			'Run Codex CLI/App/SDK on any LLM provider',
+			'Run Claude Code on any LLM via the Anthropic Messages API',
+			'ChatGPT account pool with quota-aware routing',
+			'Streaming, tool calls, reasoning tokens, and vision in both directions',
+			'Web dashboard on localhost:10100',
+		],
+		applicationCategory: 'DeveloperApplication',
+		operatingSystem: 'macOS, Linux, Windows',
+		offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+		softwareHelp: { '@type': 'CreativeWork', url: `${SITE_URL}/` },
+		downloadUrl: 'https://www.npmjs.com/package/@bitkyc08/opencodex',
+		url: 'https://github.com/lidge-jun/opencodex',
+	});
+}
+
+const jsonLd = JSON.stringify({ '@context': 'https://schema.org', '@graph': graph });
+---
+
+<script type="application/ld+json" is:inline set:html={jsonLd} />

@@ -20,7 +20,7 @@ interface ProviderAdapter {
 `buildRequest` 把 `OcxParsedRequest` 转成上游 HTTP 请求；`parseStream` / `parseResponse` 把 provider
 回复转回内部 `AdapterEvent`。`fetchResponse` 允许 adapter 自己负责重试和 timeout；`runTurn` 支持
 无法表示成一次 HTTP fetch 加一条响应流的 transport。随后
-[`bridge.ts`](/opencodex/zh-cn/reference/architecture/#桥接器) 把 event 转成 Responses SSE。
+[`bridge.ts`](/zh-cn/reference/architecture/#桥接器) 把 event 转成 Responses SSE。
 
 ## `openai-chat`
 
@@ -47,12 +47,12 @@ interface ProviderAdapter {
 - `key` provider 可设置经过验证的相对 `responsesPath`；adapter 会移除 `baseUrl` 末尾的一个 `/`，并向 `{trimmedBaseUrl}{responsesPath}` 发送请求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
 - `forward` 模式只会转发安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT
   account id 和 OpenAI beta/originator/session header。这条 ChatGPT 登录路径也为
-  [sidecar](/opencodex/zh-cn/guides/sidecars/) 提供支持。
+  [sidecar](/zh-cn/guides/sidecars/) 提供支持。
 
 ## `anthropic`
 
 **目标：** Anthropic **Messages**（`/v1/messages`）。
-**认证：** `key`（`x-api-key`）或 `oauth`（Bearer + `anthropic-beta`，用于 Claude Pro/Max）。
+**认证：** `key`（默认 `x-api-key`，或设置 `apiKeyTransport: "bearer"` 后使用 `Authorization: Bearer`）或 `oauth`（Bearer + `anthropic-beta`，用于 Claude Pro/Max）。
 
 - 把消息转换成 Anthropic content block（text、base64 image、`tool_use`、`thinking`）。
 - **Extended thinking 计算：** Anthropic 要求 `max_tokens > thinking.budget_tokens`。adapter 把
@@ -84,6 +84,27 @@ token。
   JSON。上游不返回 token 数量，因此 usage 采用估算值。
 - 经 `fetchResponse` 负责有界重试和分类/脱敏后的错误；非流式 parser 会排空同一 event stream，
   供 web-search loop 使用。
+### 完成与原生 stop reason
+
+Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 `metadataEvent` 可能带有原生 `stopReason`。
+`END_TURN` 和 `STOP_SEQUENCE` 只能证明本次推理已停止；Kiro 也可能给进展文本加上该标记。因此在启用工具的
+回合中，普通文本仍作为 commentary，并通过私有完成工具做一次校验。
+
+`END_TURN`、`STOP_SEQUENCE` 或缺失 stop reason 时可以走一次完成兼容路径。其他显式原因已在上游终止本次推理，因此适配器直接报告而不是
+再发一次请求：输出 token 上限表现为可继续的 incomplete，上下文窗口耗尽表现为不可重试的 context-length
+错误，内容过滤或 guardrail 停止表现为 filtered incomplete。没有真实工具调用却出现的 `TOOL_USE` 被视为
+矛盾而非进展。
+
+启用工具时，opencodex 会添加私有 `codex_kiro_final_answer`。重试不会制造空的 assistant/user 回合，
+而会保留原始 user/tool-result，并在发送前校验角色交替、非空结构消息以及 tool use/result 配对。
+完成工具的回答即使与先前 commentary 完全相同，也会作为 `final_answer` 发出。
+
+### Reasoning effort
+
+`gpt-5.6-sol` 和 `claude-opus-5` 支持原生 effort，且请求字段名不同。`low` / `medium` / `high` /
+`xhigh` / `max` 分别通过 `additionalModelRequestFields.reasoning.effort` 和
+`output_config.effort` 发送。
+
 
 ## `cursor`
 

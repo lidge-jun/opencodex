@@ -1,6 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import {
+  applyAccountQuotaFromUpstreamHeaders,
   parseUsageQuota,
+  setAccountQuotaFromParsed,
   updateAccountQuota,
   getAccountQuota,
   clearAccountQuota,
@@ -235,11 +237,15 @@ describe("rate-limit reset credits", () => {
     });
 
     it("does not exclude team or workspace plans from ticket badges", async () => {
-      const source = await Bun.file("gui/src/components/CodexAccountPool.tsx").text();
+      const [pool, helpers] = await Promise.all([
+        Bun.file("gui/src/components/CodexAccountPool.tsx").text(),
+        Bun.file("gui/src/components/codex-account-pool-helpers.tsx").text(),
+      ]);
+      const source = `${pool}\n${helpers}`;
       expect(source).not.toContain("isWorkspaceAccount");
       expect(source).not.toContain("Not available for workspace accounts");
-      expect(source).toContain("if (credits === undefined) return null;");
-      expect(source).toContain("className={`badge ${hasCredits ? \"badge-amber\" : \"badge-muted\"} badge-clickable`}");
+      expect(helpers).toContain("if (credits === undefined) return null;");
+      expect(helpers).toContain("className={`badge ${hasCredits ? \"badge-amber\" : \"badge-muted\"} badge-clickable`}");
     });
 
     it("keeps clickable ticket badges from overriding visual badge colors", async () => {
@@ -252,12 +258,12 @@ describe("rate-limit reset credits", () => {
     });
 
     it("renders reset tickets beside next-session badges instead of replacing them", async () => {
-      const source = await Bun.file("gui/src/components/CodexAccountPool.tsx").text();
+      const source = await Bun.file("gui/src/components/codex-account-pool-cards.tsx").text();
       expect(source).toContain("className=\"card-badges\"");
-      expect(source).toContain("<TicketBadge t={t} account={a} onClick={() => openResetPopup(a)} />");
-      // Since the pool/direct mode split, the next-session badge is conditional on the
-      // account mode (poolPrepared in direct mode) but still renders BESIDE the ticket.
-      expect(source).toContain("{isNext(a.id) && !a.needsReauth && (");
+      expect(source).toContain("<CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />");
+      // Next-session still renders BESIDE the ticket; health projection also suppresses
+      // it for projected reauth/cooldown (not only the legacy needsReauth flag).
+      expect(source).toContain("{isNext(a) && !showReauth && !inCooldown && (");
       expect(source).toContain("{t(accountModeState === \"direct\" ? \"codexAuth.poolPrepared\" : \"codexAuth.nextSession\")}");
       const styles = await Bun.file("gui/src/styles.css").text();
       expect(styles).toContain(".card-badges { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }");
@@ -290,6 +296,145 @@ describe("rate-limit reset credits", () => {
       updateAccountQuota("test-3", 50, undefined, undefined, undefined, 1);
       const q = getAccountQuota("test-3");
       expect(q!.resetCredits).toBe(1);
+    });
+  });
+
+  describe("quota snapshot replacement (issue #382)", () => {
+    it("clears stale weekly when a monthly-only WHAM snapshot is applied", () => {
+      clearAccountQuota();
+      updateAccountQuota("monthly-A", 100, 1787401330);
+      const quota = parseUsageQuota({
+        plan_type: "team",
+        rate_limit: {
+          primary_window: { used_percent: 100, reset_at: 1787401330, limit_window_seconds: 2628000 },
+          secondary_window: null,
+        },
+      });
+      expect(quota).toEqual({ monthlyPercent: 100, monthlyResetAt: 1787401330 });
+      setAccountQuotaFromParsed("monthly-A", quota!);
+      expect(getAccountQuota("monthly-A")).toEqual({
+        monthlyPercent: 100,
+        monthlyResetAt: 1787401330,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("classifies a ~30d primary header as monthly and clears stale weekly", () => {
+      clearAccountQuota();
+      updateAccountQuota("monthly-A", 100, 1787401330);
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "100",
+        "x-codex-primary-window-minutes": "43800",
+        "x-codex-primary-reset-at": "1787401330",
+      });
+      applyAccountQuotaFromUpstreamHeaders("monthly-A", headers);
+      expect(getAccountQuota("monthly-A")).toEqual({
+        monthlyPercent: 100,
+        monthlyResetAt: 1787401330,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("keeps weekly primary headers weekly", () => {
+      clearAccountQuota();
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "80",
+        "x-codex-primary-window-minutes": "10080",
+        "x-codex-primary-reset-at": "1787000000",
+      });
+      applyAccountQuotaFromUpstreamHeaders("weekly-A", headers);
+      expect(getAccountQuota("weekly-A")).toEqual({
+        weeklyPercent: 80,
+        weeklyResetAt: 1787000000,
+        updatedAt: expect.any(Number),
+      });
+    });
+    it("preserves resetCredits when applying header quota snapshots", () => {
+      clearAccountQuota();
+      updateAccountQuota("credits-A", 10, 111, 20, 222, 3);
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "80",
+        "x-codex-primary-window-minutes": "10080",
+        "x-codex-primary-reset-at": "1787000000",
+      });
+      applyAccountQuotaFromUpstreamHeaders("credits-A", headers);
+      expect(getAccountQuota("credits-A")).toEqual({
+        weeklyPercent: 80,
+        weeklyResetAt: 1787000000,
+        monthlyPercent: 20,
+        monthlyResetAt: 222,
+        resetCredits: 3,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("keeps tertiary from overriding explicit monthly primary headers", () => {
+      clearAccountQuota();
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "39",
+        "x-codex-primary-window-minutes": "43800",
+        "x-codex-primary-reset-at": "1787401330",
+        "x-codex-tertiary-used-percent": "50",
+        "x-codex-tertiary-reset-at": "1788000000",
+      });
+      applyAccountQuotaFromUpstreamHeaders("team-tertiary", headers);
+      expect(getAccountQuota("team-tertiary")).toEqual({
+        monthlyPercent: 39,
+        monthlyResetAt: 1787401330,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("preserves usage on credits-only WHAM refreshes", () => {
+      clearAccountQuota();
+      updateAccountQuota("credits-only", 10, 111, 20, 222, 1);
+      const quota = parseUsageQuota({ rate_limit_reset_credits: { available_count: 2 } });
+      setAccountQuotaFromParsed("credits-only", quota!);
+      expect(getAccountQuota("credits-only")).toEqual({
+        weeklyPercent: 10,
+        weeklyResetAt: 111,
+        monthlyPercent: 20,
+        monthlyResetAt: 222,
+        resetCredits: 2,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("preserves monthly quota when weekly-only headers arrive", () => {
+      clearAccountQuota();
+      updateAccountQuota("weekly-only", 10, 111, 50, 222);
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "80",
+        "x-codex-primary-window-minutes": "10080",
+        "x-codex-primary-reset-at": "1787000000",
+      });
+      applyAccountQuotaFromUpstreamHeaders("weekly-only", headers);
+      expect(getAccountQuota("weekly-only")).toEqual({
+        weeklyPercent: 80,
+        weeklyResetAt: 1787000000,
+        monthlyPercent: 50,
+        monthlyResetAt: 222,
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("maps monthly primary plus secondary weekly headers together", () => {
+      clearAccountQuota();
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "39",
+        "x-codex-primary-window-minutes": "43800",
+        "x-codex-primary-reset-at": "1787401330",
+        "x-codex-secondary-used-percent": "20",
+        "x-codex-secondary-reset-at": "1787000000",
+      });
+      applyAccountQuotaFromUpstreamHeaders("team-A", headers);
+      expect(getAccountQuota("team-A")).toEqual({
+        monthlyPercent: 39,
+        monthlyResetAt: 1787401330,
+        weeklyPercent: 20,
+        weeklyResetAt: 1787000000,
+        updatedAt: expect.any(Number),
+      });
     });
   });
 });

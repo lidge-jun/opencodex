@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
-import { applyProviderConfigHints } from "../src/codex/catalog";
+import { afterEach, describe, expect, test } from "bun:test";
+import { applyProviderConfigHints, gatherRoutedModels } from "../src/codex/catalog";
+import { clearModelCache } from "../src/codex/model-cache";
 import type { OcxProviderConfig } from "../src/types";
+import { deriveComboCatalogModel } from "../src/codex/catalog";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { enrichProviderFromRegistry } from "../src/providers/derive";
+import type { CatalogModel } from "../src/types";
 
 const base: OcxProviderConfig = {
   adapter: "openai-chat",
@@ -38,6 +43,190 @@ describe("vision-sidecar catalog modalities", () => {
   test("explicit modelInputModalities config still wins as the base, plus image", () => {
     const prov: OcxProviderConfig = { ...base, modelInputModalities: { "glm-5.2": ["text"] } };
     const hinted = applyProviderConfigHints("opencode-go", prov, { id: "glm-5.2", provider: "opencode-go" });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+});
+
+describe("vision-sidecar custom-model override (#349/#344)", () => {
+  afterEach(() => clearModelCache("opencode-go"));
+
+  test("a noVisionModels custom row still advertises image input through gatherRoutedModels", async () => {
+    // Regression: customModels used to bypass applyProviderConfigHints, so a noVisionModels-tagged
+    // custom override was re-advertised text-only and the Codex app blocked images before the
+    // vision sidecar could run. The image augmentation must come from the REGISTRY-enriched clone,
+    // so we deliberately do NOT set noVisionModels on the persisted provider — opencode-go's
+    // registry entry classifies glm-5.2 as text-only, and enrichment must supply it.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("fetch should not be called"); }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "opencode-go",
+        providers: {
+          "opencode-go": {
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["baseline-model"],
+          },
+        },
+        customModels: [
+          { id: "cm-1", provider: "opencode-go", modelId: "glm-5.2", displayName: "GLM 5.2", addedAt: "2026-01-01T00:00:00.000Z" },
+        ],
+      });
+      const custom = models.find(m => m.provider === "opencode-go" && m.id === "glm-5.2");
+      expect(custom).toBeDefined();
+      expect(custom?.inputModalities).toEqual(["text", "image"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a custom row NOT in noVisionModels keeps its declared modalities untouched", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("fetch should not be called"); }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "opencode-go",
+        providers: {
+          "opencode-go": {
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["baseline-model"],
+            noVisionModels: ["glm-5.2"],
+          },
+        },
+        customModels: [
+          { id: "cm-2", provider: "opencode-go", modelId: "kimi-text", inputModalities: ["text"], addedAt: "2026-01-01T00:00:00.000Z" },
+        ],
+      });
+      const custom = models.find(m => m.provider === "opencode-go" && m.id === "kimi-text");
+      expect(custom?.inputModalities).toEqual(["text"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("the image augmentation does NOT overwrite a custom row's explicit context/modalities/reasoning", async () => {
+    // The augmentation must be narrow: for a noVisionModels custom row we only ADD image; every
+    // other explicitly configured custom field (contextWindow, extra modalities) stays verbatim,
+    // and no registry reasoning metadata leaks onto the user override.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("fetch should not be called"); }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "opencode-go",
+        providers: {
+          "opencode-go": {
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["baseline-model"],
+          },
+        },
+        customModels: [
+          { id: "cm-3", provider: "opencode-go", modelId: "glm-5.2", contextWindow: 2_000_000, inputModalities: ["text", "video"], addedAt: "2026-01-01T00:00:00.000Z" },
+        ],
+      });
+      const custom = models.find(m => m.provider === "opencode-go" && m.id === "glm-5.2");
+      // image is appended to the user's declared modalities (not replaced), context is preserved,
+      // and no registry reasoning fields were injected onto the custom override.
+      expect(custom?.inputModalities).toEqual(["text", "video", "image"]);
+      expect(custom?.contextWindow).toBe(2_000_000);
+      expect(custom?.reasoningEfforts).toBeUndefined();
+      expect(custom?.defaultReasoningEffort).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("vision-capable provider models feed combo modalities", () => {
+  // Regression: xAI declared no modelInputModalities, so xai/grok-4.5 reached
+  // deriveComboCatalogModel with inputModalities undefined. The combo aggregator
+  // defaults an undefined member to ["text"], so every combo containing an xAI
+  // target was advertised to Codex as text-only and the app refused image
+  // attachments client-side before any request was made.
+  test("xAI grok chat models declare image input in the registry", () => {
+    const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
+    for (const model of [
+      "grok-4.5",
+      "grok-4.3",
+      "grok-4.20-0309-reasoning",
+      "grok-4.20-0309-non-reasoning",
+    ]) {
+      expect(xai?.modelInputModalities?.[model]).toEqual(["text", "image"]);
+    }
+    // Text-only members stay out of the vision map (they are already in noVisionModels).
+    for (const model of ["grok-build-0.1", "grok-composer-2.5-fast"]) {
+      expect(xai?.modelInputModalities?.[model]).toBeUndefined();
+      expect(xai?.noVisionModels).toContain(model);
+    }
+  });
+
+  test("a combo of two vision-capable members still advertises image", () => {
+    const member = (provider: string, contextWindow: number): CatalogModel => ({
+      provider,
+      id: "grok-4.5",
+      contextWindow,
+      inputModalities: ["text", "image"],
+    } as CatalogModel);
+    const derived = deriveComboCatalogModel(
+      "xai_grok_fallback",
+      {
+        targets: [
+          { provider: "xai", model: "grok-4.5" },
+          { provider: "cursor", model: "grok-4.5" },
+        ],
+        defaultEffort: "high",
+      } as never,
+      [member("xai", 500_000), member("cursor", 200_000)],
+    );
+    expect(derived?.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("a member with unknown modalities still narrows the combo to text", () => {
+    // Intersection semantics are intentional: a member we cannot prove is
+    // vision-capable must not let the combo advertise image input.
+    const derived = deriveComboCatalogModel(
+      "mixed",
+      {
+        targets: [
+          { provider: "xai", model: "grok-4.5" },
+          { provider: "other", model: "text-only" },
+        ],
+        defaultEffort: "high",
+      } as never,
+      [
+        { provider: "xai", id: "grok-4.5", contextWindow: 500_000, inputModalities: ["text", "image"] } as CatalogModel,
+        { provider: "other", id: "text-only", contextWindow: 100_000 } as CatalogModel,
+      ],
+    );
+    expect(derived?.inputModalities).toEqual(["text"]);
+  });
+
+  test("a partial user modality map does not hide registry vision defaults", () => {
+    // Regression: enrichProviderFromRegistry filled modelInputModalities all-or-nothing, so a
+    // single customized model suppressed the registry's knowledge about every other model and
+    // left vision-capable ids advertising no image support (collapsing combos to text-only).
+    // Routing already merged these maps per key; catalog enrichment must match.
+    const prov = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      modelInputModalities: { "grok-4.3": ["text"] },
+    } as OcxProviderConfig;
+    enrichProviderFromRegistry("xai", prov);
+    // The user's explicit narrowing still wins.
+    expect(prov.modelInputModalities?.["grok-4.3"]).toEqual(["text"]);
+    // Registry defaults fill in beneath it instead of being skipped wholesale.
+    expect(prov.modelInputModalities?.["grok-4.5"]).toEqual(["text", "image"]);
+    const hinted = applyProviderConfigHints("xai", prov, { provider: "xai", id: "grok-4.5" });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
 });

@@ -2,7 +2,7 @@
 import { loadConfig } from "../config";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
-import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdRefresh, cmdRemove } from "./account-extended";
+import { cmdAddKey, cmdAlias, cmdAutoSwitch, cmdClearCooldown, cmdRefresh, cmdRemove } from "./account-extended";
 import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
@@ -23,7 +23,12 @@ const ACCOUNT_USAGE = `Usage:
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
   ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
   ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
 
 List and switch provider accounts and API-key pools (masked output only).
 'main' selects the Codex App login for the openai account pool.`;
@@ -56,7 +61,7 @@ function displayId(id: string): string {
 
 function statusText(row: AccountRow): string {
   const parts: string[] = [];
-  if (row.active) parts.push(row.type === "codex" ? "next session" : "active");
+  if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth) parts.push("needs-reauth");
   return parts.join(" ");
 }
@@ -238,11 +243,9 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: c.type, activeId }, null, 2));
   else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
   if (c.type === "codex") {
-    console.error("Applies to new Codex sessions; running threads keep their current account.");
-    const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {
-      console.error(`Note: auto-switch (threshold ${active.json.autoSwitchThreshold}%) may override this pin.`);
-    }
+    console.error("Applies to the next request after clearing existing pool affinity; in-flight requests keep their captured account.");
+    console.error("Note: pool strategy, quota/cooldown/reauthentication state, and failure recovery may later select another eligible account.");
+    console.error("Conversation context is replayed after account changes, but the provider-side prompt cache may be cold.");
   }
   return 0;
 }
@@ -257,7 +260,12 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     if (sub === "auto-switch") return await cmdAutoSwitch(rest, deps);
     if (sub === "alias" || sub === "rename") return await cmdAlias(rest, deps);
     if (sub === "remove") return await cmdRemove(rest, deps);
+    if (sub === "clear-cooldown") return await cmdClearCooldown(rest, deps);
     if (sub === "add-key") return await cmdAddKey(rest, deps);
+    if (["login", "reauth", "code", "cancel", "reset-credits"].includes(sub ?? "")) {
+      const { handleAccountAuthCommand } = await import("./account-auth");
+      return await handleAccountAuthCommand(sub!, rest, deps) ?? 1;
+    }
     console.error(ACCOUNT_USAGE);
     return 1;
   } catch (err) {

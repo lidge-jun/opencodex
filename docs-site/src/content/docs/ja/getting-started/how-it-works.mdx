@@ -61,7 +61,7 @@ Codex は OpenAI **Responses API** を使います。opencodex は HTTP と Serv
 2. **Route** — `router.ts` が固定の優先順位に従って要求されたモデル ID を設定されたプロバイダーに
    マッピングします: 明示的 `provider/model` → プロバイダーの `defaultModel` → 組み込みプレフィックスパターン
    (`claude-`、`gpt-`、`o1-`/`o3-`/`o4-`、`llama-`/`mixtral-`/`gemma-`) → プロバイダーの `models[]` →
-   `defaultProvider` フォールバック。[モデルルーティング](/opencodex/ja/guides/model-routing/)を参照してください。
+   `defaultProvider` フォールバック。[モデルルーティング](/ja/guides/model-routing/)を参照してください。
 
 3. **Authenticate** — `oauth` プロバイダーの場合、opencodex が新しく自動更新された access
    トークンを bearer キーに差し替えるため、既存のアダプターは変更なく認証されます。ChatGPT/Codex プール
@@ -71,7 +71,7 @@ Codex は OpenAI **Responses API** を使います。opencodex は HTTP と Serv
 4. **Vision サイドカー(任意)** — ルーティングされたモデルが `provider.noVisionModels` に列挙されており
    リクエストに画像が含まれる場合、opencodex は設定された ChatGPT vision サイドカーで各画像を説明した
    後テキストに置き換えます。これによりテキスト専用モデルでも該当画像を推論できます。
-   [サイドカー](/opencodex/ja/guides/sidecars/)を参照してください。
+   [サイドカー](/ja/guides/sidecars/)を参照してください。
 
 5. **パススルーの高速経路** — Responses パススルーアダプター(`openai-responses` または
    `azure-openai`)では Responses 本体を維持しつつルーティングと互換性に必要な部分だけ修正します。
@@ -103,5 +103,5 @@ Codex は Responses API をハードコーディングしています。opencode
 Codex **CLI、App、SDK** を変更なくそのままサポートし、Codex の更新の影響を受けず、
 Codex 自体を触らずにリクエストごとにプロバイダーを切り替えられます。この変換は双方向で
 ストリーミングに忠実です: 推論要約、MCP ツール名前空間、自由形式(`apply_patch`)ツール、
-`tool_search` ディスカバリがすべて正確に往復します。イベントごとのマッピングは[アーキテクチャリファレンス](/opencodex/ja/reference/architecture/)を
+`tool_search` ディスカバリがすべて正確に往復します。イベントごとのマッピングは[アーキテクチャリファレンス](/ja/reference/architecture/)を
 参照してください。

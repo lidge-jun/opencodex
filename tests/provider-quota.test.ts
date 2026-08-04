@@ -184,8 +184,11 @@ describe("fetchProviderQuotaReports", () => {
     expect(byProvider.openai?.quota.weeklyPercent).toBe(34);
     expect(byProvider.xai?.quota.monthlyPercent).toBe(25);
     expect(byProvider.anthropic?.quota.weeklyPercent).toBe(72);
+    // Claude's 5-hour window is reported in the canonical fields (like the Codex login rows),
+    // so only the model-specific windows remain as custom entries.
+    expect(byProvider.anthropic?.quota.fiveHourPercent).toBe(41.5);
+    expect(byProvider.anthropic?.quota.fiveHourResetAt).toBe(Date.parse("2026-07-05T12:00:00Z"));
     expect(byProvider.anthropic?.quota.customWindows).toEqual([
-      { label: "5h", percent: 41.5, resetAt: Date.parse("2026-07-05T12:00:00Z") },
       { label: "Opus", percent: 88 },
       { label: "Sonnet", percent: 19 },
     ]);

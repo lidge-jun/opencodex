@@ -18,6 +18,7 @@ import { GetUsableModelsResponseSchema } from "./gen/agent_pb";
 
 const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
 const CURSOR_DISCOVERY_CLIENT_VERSION = "cli-2026.02.13-41ac335";
+const CURSOR_MODEL_DISCOVERY_MAX_BYTES = 4 * 1024 * 1024;
 
 export interface CursorUsableModelsOptions {
   apiKey: string;
@@ -28,7 +29,7 @@ export interface CursorUsableModelsOptions {
 
 export type CursorUsableModelsResult =
   | { ok: true; models: string[] }
-  | { ok: false; error: "auth" | "http" | "transport" | "timeout" | "decode" | "empty"; detail?: string };
+  | { ok: false; error: "auth" | "http" | "transport" | "timeout" | "decode" | "empty" | "too_large"; detail?: string };
 
 const RETRYABLE_DISCOVERY_ERRORS = new Set(["timeout", "transport"]);
 const DISCOVERY_RETRY_TIMEOUT_MS = 3_000;
@@ -97,12 +98,31 @@ async function fetchCursorUsableModelsOnce(opts: CursorUsableModelsOptions): Pro
 
     let status = 0;
     const chunks: Buffer[] = [];
+    let receivedBytes = 0;
+    let bodyRejected = false;
     req.on("response", headers => {
       status = Number(headers[":status"] ?? 0);
+      const contentLength = Number(headers["content-length"] ?? 0);
+      if (Number.isFinite(contentLength) && contentLength > CURSOR_MODEL_DISCOVERY_MAX_BYTES) {
+        bodyRejected = true;
+        req.close(http2.constants.NGHTTP2_CANCEL);
+        close({ ok: false, error: "too_large", detail: "GetUsableModels response exceeds 4 MiB" });
+      }
     });
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("data", (chunk: Buffer) => {
+      if (bodyRejected) return;
+      receivedBytes += chunk.byteLength;
+      if (receivedBytes > CURSOR_MODEL_DISCOVERY_MAX_BYTES) {
+        bodyRejected = true;
+        req.close(http2.constants.NGHTTP2_CANCEL);
+        close({ ok: false, error: "too_large", detail: "GetUsableModels response exceeds 4 MiB" });
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("error", () => close({ ok: false, error: "transport", detail: "HTTP/2 request failed" }));
     req.on("end", () => {
+      if (bodyRejected) return;
       if (status === 401 || status === 403) {
         return close({ ok: false, error: "auth", detail: `HTTP ${status}` });
       }

@@ -22,11 +22,14 @@ import {
   markCodexAccountValidationFailed,
   readCodexAccountRecord,
   TokenRefreshError,
+  CodexCredentialRefreshBusyError,
+  CodexCredentialRefreshStaleError,
 } from "../codex/account-store";
 import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
+import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 
 export interface TokenGuardianHandle {
   stop(): void;
@@ -58,6 +61,8 @@ interface BackoffEntry {
 
 // Module-scoped so backoff survives across sweeps within one process (keyed "oauth:<p>" / "codex:<id>").
 const backoff = new Map<string, BackoffEntry>();
+let lastReconciledGeneration = 0;
+let liveBackoffKeys = new Set<string>();
 
 /** Test hook: clear backoff state between cases. */
 export function __resetGuardianState(): void {
@@ -87,7 +92,15 @@ function inBackoff(key: string, nowMs: number): boolean {
   return entry !== undefined && entry.retryAfterMs > nowMs;
 }
 
-function recordFailure(key: string, nowMs: number, baseSeconds: number, maxSeconds: number, permanent: boolean): void {
+function recordFailure(
+  key: string,
+  nowMs: number,
+  baseSeconds: number,
+  maxSeconds: number,
+  permanent: boolean,
+  writerGeneration = captureConfigGeneration(),
+): void {
+  if (writerGeneration < lastReconciledGeneration && !liveBackoffKeys.has(key)) return;
   const prev = backoff.get(key);
   const attempts = (prev?.attempts ?? 0) + 1;
   // Permanent failures (revoked/expired refresh token) wait the full ceiling — nothing but a
@@ -116,6 +129,7 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
  * ids only, never tokens).
  */
 export async function guardianSweep(nowMs: number = Date.now()): Promise<GuardianSweepResult> {
+  const writerGeneration = captureConfigGeneration();
   const config: OcxConfig = loadConfig();
   const g = config.tokenGuardian;
   const result: GuardianSweepResult = { enabled: !!g?.enabled, refreshed: [], warmed: [], failed: [], skippedBackoff: [] };
@@ -143,7 +157,7 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
           // Terminal grant failures surface as OAuthLoginRequiredError (account marked
           // needsReauth by the resolver) — back off at the ceiling; transient errors backoff exponentially.
           const permanent = err instanceof OAuthLoginRequiredError;
-          recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, permanent);
+          recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, permanent, writerGeneration);
           result.failed.push(key);
         }
       });
@@ -174,7 +188,7 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
             backoff.delete(key);
             result.warmed.push(key);
           } catch (err) {
-            recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, false);
+            recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, false, writerGeneration);
             result.failed.push(key);
           }
         });
@@ -210,11 +224,16 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
           }
           backoff.delete(key);
         } catch (err) {
+          if (err instanceof CodexCredentialRefreshBusyError || err instanceof CodexCredentialRefreshStaleError) {
+            recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, false, writerGeneration);
+            result.skippedBackoff.push(key);
+            return;
+          }
           const permanent = err instanceof TokenRefreshError && (err.reason === "revoked" || err.reason === "expired");
           if (needsWarmup && !(err instanceof TokenRefreshError)) {
             markCodexAccountValidationFailed(id, codexWarmupFailureReason(err));
           }
-          recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, permanent);
+          recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, permanent, writerGeneration);
           result.failed.push(key);
         }
       });
@@ -223,6 +242,26 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
 
   await runWithConcurrency(tasks, opts.concurrency);
   return result;
+}
+
+export function reconcileGuardianBackoff(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  const valid = new Set<string>();
+  for (const id of context.codexAccountIds) valid.add(`codex:${id}`);
+  for (const key of context.oauthAccountKeys) {
+    const separator = key.indexOf("\0");
+    if (separator <= 0) continue;
+    valid.add(`oauth:${key.slice(0, separator)}:${key.slice(separator + 1)}`);
+  }
+  let removed = 0;
+  for (const key of backoff.keys()) {
+    if (valid.has(key)) continue;
+    backoff.delete(key);
+    removed += 1;
+  }
+  liveBackoffKeys = valid;
+  lastReconciledGeneration = context.generation;
+  return removed;
 }
 
 /**

@@ -147,21 +147,38 @@ export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "block
  * FIRST directive wins; the scan is bounded to the system field.
  */
 const OCX_ROUTE_RE = /<!--\s*ocx-route:\s*([^\s]+)\s*-->/;
+const OCX_EFFORT_RE = /<!--\s*ocx-effort:\s*(low|medium|high|xhigh|max)\s*-->/;
 
-export function extractOcxRouteDirective(body: unknown): string | null {
+function systemText(body: unknown): string | null {
   if (!isRec(body)) return null;
   const system = body.system;
-  let text: string | undefined;
-  if (typeof system === "string") text = system;
-  else if (Array.isArray(system)) {
-    text = system
-      .filter((b): b is Rec => isRec(b) && b.type === "text" && typeof b.text === "string")
-      .map(b => b.text as string)
-      .join("\n");
-  }
+  if (typeof system === "string") return system || null;
+  if (!Array.isArray(system)) return null;
+  const text = system
+    .filter((b): b is Rec => isRec(b) && b.type === "text" && typeof b.text === "string")
+    .map(b => b.text as string)
+    .join("\n");
+  return text || null;
+}
+
+export function extractOcxRouteDirective(body: unknown): string | null {
+  const text = systemText(body);
   if (!text) return null;
   const match = OCX_ROUTE_RE.exec(text);
   return match ? match[1]! : null;
+}
+
+/**
+ * Claude Code 2.1.220 collapses custom-agent frontmatter `effort: max` and
+ * `effort: xhigh` into the legacy `thinking.budget_tokens` shape. Preserve the
+ * exact generated-agent setting through the same trusted system-body channel as
+ * ocx-route so the inbound translator can restore `output_config.effort`.
+ */
+export function extractOcxEffortDirective(body: unknown): NonNullable<OcxClaudeCodeConfig["subagentEffort"]> | null {
+  const text = systemText(body);
+  if (!text) return null;
+  const match = OCX_EFFORT_RE.exec(text);
+  return match ? match[1] as NonNullable<OcxClaudeCodeConfig["subagentEffort"]> : null;
 }
 
 /** Injected-skill payloads below this size are never stubbed (not worth it). */

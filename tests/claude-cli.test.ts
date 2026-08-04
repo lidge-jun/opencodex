@@ -13,11 +13,24 @@ function cfg(extra?: Partial<OcxConfig>): OcxConfig {
   } as OcxConfig;
 }
 
+/**
+ * These cases assert SUBSCRIPTION behaviour, so detection must be pinned. Under `auto`
+ * the resolver reads the real machine (files + keychain), and on a developer box with
+ * no Claude auth it would legitimately resolve to proxy and invert every assertion.
+ */
+const AUTH_PRESENT = {
+  authDetect: {
+    readClaudeJson: () => ({ oauthAccount: { emailAddress: "dev@example.com" } }),
+    credentialsFileExists: () => true,
+    keychainProbe: () => "present" as const,
+  },
+};
+
 describe("ocx claude env assembly", () => {
   test("injects base URL, discovery flag and model slots — NO auth token by default (subscription mode)", () => {
     const env = buildClaudeEnv(cfg({
       claudeCode: { model: "claude-ocx-gemini--gemini-3-pro", smallFastModel: "gemini/gemini-3-flash" },
-    }), 10123, {});
+    }), 10123, {}, {}, AUTH_PRESENT);
     expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10123");
     // Setting ANTHROPIC_AUTH_TOKEN disables claude.ai connectors and kills subscription
     // OAuth — the launcher must leave it unset on an open loopback proxy.
@@ -42,7 +55,7 @@ describe("ocx claude env assembly", () => {
   // Host-managed routing guard (devlog 260720_claude_authmode_persist/020):
   // defends the spawn env against leftover cc-switch/CCR settings.json env hijack.
   test("subscription mode leaves the host-managed auth assertion unset", () => {
-    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
+    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {}, {}, AUTH_PRESENT);
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
   });
 
@@ -60,7 +73,7 @@ describe("ocx claude env assembly", () => {
   test("a user pre-export of the host-managed flag wins (opt-out preserved)", () => {
     const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {
       CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "0",
-    });
+    }, {}, AUTH_PRESENT);
     // isEnvTruthy("0") is false inside Claude Code, so "0" disables the strip.
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("0");
   });
@@ -69,11 +82,11 @@ describe("ocx claude env assembly", () => {
     // With no configured model, the flag rides along but no model slots appear —
     // the intentional contract: settings.env slots are stripped by Claude Code,
     // so users migrate to config model or the top-level settings "model" field.
-    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {});
+    const env = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {}, {}, AUTH_PRESENT);
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(env.ANTHROPIC_MODEL).toBeUndefined();
     // And with a configured model both coexist.
-    const withModel = buildClaudeEnv(cfg({ claudeCode: { model: "mock/test-model" } }), 10100, {});
+    const withModel = buildClaudeEnv(cfg({ claudeCode: { model: "mock/test-model" } }), 10100, {}, {}, AUTH_PRESENT);
     expect(withModel.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(withModel.ANTHROPIC_MODEL).toBe("mock/test-model");
   });

@@ -8,25 +8,45 @@ const config = { port: 10100, providers: {}, defaultProvider: "openai", codexAut
 describe("startup install actions", () => {
   test("maps the allowlisted actions to fixed CLI argv", () => {
     expect(startupInstallArgv("install-service")).toEqual(["service", "install"]);
+    expect(startupInstallArgv("install-service", { repair: true })).toEqual(["service", "repair"]);
     expect(startupInstallArgv("install-shim")).toEqual(["codex-shim", "install"]);
+    expect(startupInstallArgv("install-shim", { repair: true })).toEqual(["codex-shim", "install"]);
   });
 
   test("management API dispatches an allowlisted install action", async () => {
-    const calls: StartupInstallAction[] = [];
+    const calls: Array<{ action: StartupInstallAction; repair?: boolean }> = [];
     const url = new URL("http://localhost/api/startup-action");
     const response = await handleManagementAPI(new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "install-service" }),
     }), url, config, {
-      runStartupInstallAction: async action => {
-        calls.push(action);
+      runStartupInstallAction: async (action, options) => {
+        calls.push({ action, repair: options?.repair });
         return { message: "installed" };
       },
     });
     expect(response?.status).toBe(200);
-    expect(await response!.json()).toEqual({ ok: true, action: "install-service", message: "installed" });
-    expect(calls).toEqual(["install-service"]);
+    expect(await response!.json()).toEqual({ ok: true, action: "install-service", repair: false, message: "installed" });
+    expect(calls).toEqual([{ action: "install-service", repair: false }]);
+  });
+
+  test("management API forwards repair mode for service actions", async () => {
+    const calls: Array<{ action: StartupInstallAction; repair?: boolean }> = [];
+    const url = new URL("http://localhost/api/startup-action");
+    const response = await handleManagementAPI(new Request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "install-service", repair: true }),
+    }), url, config, {
+      runStartupInstallAction: async (action, options) => {
+        calls.push({ action, repair: options?.repair });
+        return { message: "repaired" };
+      },
+    });
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toEqual({ ok: true, action: "install-service", repair: true, message: "repaired" });
+    expect(calls).toEqual([{ action: "install-service", repair: true }]);
   });
 
   test("rejects unknown actions before invoking the installer", async () => {
@@ -46,3 +66,4 @@ describe("startup install actions", () => {
     expect(called).toBe(false);
   });
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

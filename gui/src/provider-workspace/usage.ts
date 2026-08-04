@@ -30,6 +30,25 @@ export function parseAvailableModels(data: unknown): ProviderAvailableModels {
   return models;
 }
 
+export type ProviderLiveModelCounts = Record<string, number>;
+
+/**
+ * Live-catalog provenance from `/api/selected-models`. A provider missing from this map has never
+ * completed a discovery, which is different from one that discovered zero models.
+ */
+export function parseLiveModelCounts(data: unknown): ProviderLiveModelCounts {
+  if (!data || typeof data !== "object") return {};
+  const raw = (data as { liveModelCounts?: unknown }).liveModelCounts;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+
+  const counts: ProviderLiveModelCounts = {};
+  for (const [provider, value] of Object.entries(raw)) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) continue;
+    counts[provider] = Math.floor(value);
+  }
+  return counts;
+}
+
 /** Parse `/api/selected-models` selected allowlist map into provider -> model id list. */
 export function parseSelectedModels(data: unknown): ProviderSelectedModels {
   if (!data || typeof data !== "object") return {};
@@ -131,17 +150,24 @@ export interface AttentionItem {
 
 /**
  * Derives the list of providers that require user attention:
- * - needsSetup with activeNeedsReauth → "Active account needs re-authentication"
+ * - any section row with activeNeedsReauth → "Active account needs re-authentication"
  * - other needsSetup providers → "Missing credentials" (or override)
  * - disabled providers that have an explicit override reason in `overrideReasons`
  *
- * Ready providers are never included.
+ * Ready providers without reauth are never included.
  */
 export function buildAttentionItems(
   sections: WorkspaceSections,
   overrideReasons: Record<string, string>,
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
+  for (const p of sections.ready) {
+    if (!p.activeNeedsReauth) continue;
+    items.push({
+      name: p.name,
+      reason: overrideReasons[p.name] ?? "Active account needs re-authentication",
+    });
+  }
   for (const p of sections.needsSetup) {
     const reason = p.activeNeedsReauth
       ? (overrideReasons[p.name] ?? "Active account needs re-authentication")

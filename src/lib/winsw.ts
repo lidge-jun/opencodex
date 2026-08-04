@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
+import { recordOwnedConfigPath } from "./config-ownership";
 import { durableBunPath } from "./bun-runtime";
 import { serviceApiTokenFilePath } from "./service-secrets";
 
@@ -86,12 +87,19 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   })();
   // Services never bake `--port 0` (parsePortOption rejects it); treat as default.
   const safeListenPort = listenPort > 0 && listenPort <= 65535 ? listenPort : 10100;
+  // SCM services do not inherit the interactive user environment (#764). Bake:
+  // - OPENCODEX_HOME so file-backed admin auth (`admin-api-token`) resolves
+  // - OPENCODEX_ACL_TIMEOUT_MS when set (not a secret)
+  // Never embed OPENCODEX_ADMIN_AUTH_TOKEN or OPENCODEX_API_AUTH_TOKEN values in XML —
+  // those stay file-pointer / generated-file only (uninstall retains the XML).
+  const aclTimeout = env.OPENCODEX_ACL_TIMEOUT_MS?.trim();
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
     `  <env name="PATH" value="${xmlEscape(env.PATH ?? "")}"/>`,
     env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
-    env.OPENCODEX_HOME?.trim() ? `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>` : null,
+    `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
+    aclTimeout ? `  <env name="OPENCODEX_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,
   ].filter((line): line is string => Boolean(line));
   return `<?xml version="1.0" encoding="UTF-8"?>
 <service>
@@ -133,6 +141,7 @@ export async function ensureWinswBinary(fetchImpl: typeof fetch = fetch): Promis
     unlinkSync(exe);
     console.warn("⚠️  Existing WinSW binary failed hash verification; re-downloading.");
   }
+  recordOwnedConfigPath(getConfigDir(), winswDir());
   if (!existsSync(winswDir())) mkdirSync(winswDir(), { recursive: true });
   let body: ArrayBuffer;
   try {
@@ -163,6 +172,12 @@ function runWinsw(args: string[]): string {
 
 /** `install /p` prompts for the service-account password on the console — stdin must be inherited. */
 function runWinswInteractive(args: string[]): void {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "WinSW install requires an interactive console to prompt for the service account password. "
+        + "Run `ocx service install --native` from an elevated Command Prompt or PowerShell window, not a hidden or piped session.",
+    );
+  }
   execFileSync(winswExePath(), args, { stdio: "inherit" });
 }
 

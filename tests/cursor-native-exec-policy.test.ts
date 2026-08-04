@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createCursorAdapter } from "../src/adapters/cursor";
 import {
   cursorRequestDeclaresFullAccess,
@@ -11,12 +11,17 @@ import {
 } from "../src/adapters/cursor/exec-policy";
 import {
   AgentClientMessageSchema,
+  BackgroundShellSpawnArgsSchema,
   ExecServerMessageSchema,
   FetchArgsSchema,
   ReadArgsSchema,
   ShellArgsSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import {
+  resetBackgroundShellStateForTests,
+  setBackgroundShellRuntimeForTests,
+} from "../src/adapters/cursor/native-exec-shell";
 import type { CursorTransportFactoryInput } from "../src/adapters/cursor/transport";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -52,6 +57,10 @@ const baseParsed: OcxParsedRequest = {
   stream: false,
   options: {},
 };
+
+afterEach(async () => {
+  await resetBackgroundShellStateForTests();
+});
 
 describe("Cursor native exec sandbox policy", () => {
   describe("full-access declaration detector", () => {
@@ -121,14 +130,35 @@ describe("Cursor native exec sandbox policy", () => {
       value: create(ReadArgsSchema, { path }),
     }), { unsafeAllowNativeLocalExec }))[0]);
     const deniedText = stringify(denied);
-    expect(deniedText).toContain("Cursor native local filesystem execution is not available for this request");
+    expect(deniedText).toContain("shell_command");
+    expect(deniedText).toContain("exec_command");
+    expect(deniedText).toContain("mcp_opencodex-responses_*");
+    expect(deniedText).toContain("cat");
+    expect(deniedText).toContain("apply_patch");
+    expect(deniedText).toContain("silently call");
+    expect(deniedText).toContain("Do not tell the user");
+    expect(deniedText).not.toContain("disabled by OpenCodex policy");
+    expect(deniedText).not.toContain("sandbox denial");
     expect(deniedText).not.toContain(content);
 
     const deniedShell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
       value: create(ShellArgsSchema, { command: "printf SHOULD_NOT_RUN", workingDirectory: dir, hardTimeout: 2000 }),
     }), { unsafeAllowNativeLocalExec }))[0]);
-    expect(stringify(deniedShell)).toContain("Cursor native shell execution is not available for this request");
+    const deniedShellText = stringify(deniedShell);
+    expect(deniedShellText).toContain("silently call");
+    expect(deniedShellText).toContain("shell_command");
+    expect(deniedShellText).toContain("exec_command");
+    expect(deniedShellText).toContain("mcp_opencodex-responses_*");
+    expect(deniedShellText).toContain("Do not tell the user");
+    expect(deniedShellText).not.toContain("with the same command");
+    expect(deniedShellText).toContain("at most one corrected bridge attempt");
+    expect(deniedShellText).toContain("if ($?)");
+    expect(deniedShellText).toContain("`&&`/`||` are unsupported parser errors");
+    expect(deniedShellText).toContain("do not treat `;` as a substitute for `&&`");
+    expect(deniedShellText).toContain("Windows PowerShell 5.1");
+    expect(deniedShellText).not.toContain("disabled by OpenCodex policy");
+    expect(deniedShellText).not.toContain("sandbox denial");
     expect(deniedShell.message.case).toBe("shellResult");
     expect(deniedShell.message.value.result.case).toBe("failure");
     if (deniedShell.message.value.result.case === "failure") {
@@ -147,8 +177,14 @@ describe("Cursor native exec sandbox policy", () => {
       },
     }))[0]);
     expect(fetchCalled).toBe(false);
-    expect(stringify(deniedFetch)).toContain("Cursor native fetch execution is not available for this request");
-    expect(stringify(deniedFetch)).not.toContain("SHOULD_NOT_FETCH");
+    const deniedFetchText = stringify(deniedFetch);
+    expect(deniedFetchText).toContain("silently call");
+    expect(deniedFetchText).toContain("shell_command");
+    expect(deniedFetchText).toContain("curl");
+    expect(deniedFetchText).toContain("wget");
+    expect(deniedFetchText).toContain("mcp_opencodex-responses_shell_command");
+    expect(deniedFetchText).not.toContain("disabled by OpenCodex policy");
+    expect(deniedFetchText).not.toContain("SHOULD_NOT_FETCH");
   }
 
   async function assertNativeSinksAllowed(unsafeAllowNativeLocalExec: boolean) {
@@ -280,6 +316,67 @@ describe("Cursor native exec sandbox policy", () => {
     expect(captured.map(input => input.requestDeclaresFullAccess)).toEqual([true, false]);
   });
 
-  // LiveCursorTransport construction is credential/network-heavy in this suite. The context rule is
-  // covered by the effective-policy truth table and the adapter factory-input capture above.
+  test("default off and explicit off reject background spawn before the spawn spy", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy reached");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const request = execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "must-not-run" }),
+    });
+    for (const provider of [baseProvider, { ...baseProvider, nativeLocalExec: "off" as const }]) {
+      const reply = decode((await handleCursorNativeExec(request, {
+        unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow(provider, true),
+        sessionId: "policy-session",
+      }))[0]);
+      expect(reply.message.case).toBe("backgroundShellSpawnResult");
+      expect(reply.message.value.result.case).toBe("error");
+    }
+    expect(spawnCalls).toBe(0);
+  });
+
+  test("codex-sandbox rejects background spawn before the spawn spy", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy reached");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const reply = decode((await handleCursorNativeExec(execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "must-not-run" }),
+    }), {
+      unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow({ ...baseProvider, nativeLocalExec: "codex-sandbox" }, true),
+      sessionId: "policy-session",
+    }))[0]);
+    expect(reply.message.case).toBe("backgroundShellSpawnResult");
+    expect(reply.message.value.result.case).toBe("error");
+    expect(spawnCalls).toBe(0);
+  });
+
+  test("only explicit nativeLocalExec on reaches bounded shell admission", async () => {
+    let spawnCalls = 0;
+    setBackgroundShellRuntimeForTests({
+      spawn: ((..._args: unknown[]) => {
+        spawnCalls++;
+        throw new Error("spawn spy reached after admission");
+      }) as typeof import("node:child_process").spawn,
+    });
+    const reply = decode((await handleCursorNativeExec(execMessage({
+      case: "backgroundShellSpawnArgs",
+      value: create(BackgroundShellSpawnArgsSchema, { command: "admitted-spawn" }),
+    }), {
+      unsafeAllowNativeLocalExec: effectiveCursorNativeExecAllow({ ...baseProvider, nativeLocalExec: "on" }, false),
+      sessionId: "policy-session",
+    }))[0]);
+    expect(reply.message.case).toBe("backgroundShellSpawnResult");
+    expect(reply.message.value.result.case).toBe("error");
+    expect(spawnCalls).toBe(1);
+  });
+
 });

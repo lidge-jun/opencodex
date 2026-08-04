@@ -254,4 +254,17 @@ describe("scanStorage", () => {
       expect(after.get(path)).toEqual(stat);
     }
   }, 15_000);
+
+  test("skips .trash quarantine directory (not counted in other or totals)", () => {
+    fixtureHome = buildFixtureHome();
+    const withoutTrash = scanStorage(fixtureHome);
+    mkdirSync(join(fixtureHome, ".trash", "123"), { recursive: true });
+    writeFileSync(join(fixtureHome, ".trash", "123", "rollout-quarantined.jsonl"), "q".repeat(5000));
+    const withTrash = scanStorage(fixtureHome);
+    expect(withTrash.total.bytes).toBe(withoutTrash.total.bytes);
+    expect(withTrash.total.fileCount).toBe(withoutTrash.total.fileCount);
+    expect(bucket(withTrash, "other").bytes).toBe(bucket(withoutTrash, "other").bytes);
+    const otherPaths = (bucket(withTrash, "other").largest ?? []).map(e => e.path);
+    expect(otherPaths.some(p => p.includes(".trash"))).toBe(false);
+  }, 15_000);
 });

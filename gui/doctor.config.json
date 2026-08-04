@@ -1,9 +1,25 @@
 {
   "$schema": "https://react.doctor/schema/config.json",
-  "scope": "changed",
-  "base": "origin/main",
-  "blocking": "none",
+  "scope": "full",
+  "blocking": "warning",
   "ignore": {
     "files": ["dist/**", "node_modules/**"]
+  },
+  "rules": {
+    "react-doctor/no-fetch-in-effect": "off",
+    "react-doctor/no-giant-component": "off",
+    "react-doctor/prefer-useReducer": "off",
+    "react-doctor/no-pass-live-state-to-parent": "off",
+    "react-doctor/no-pass-data-to-parent": "off",
+    "react-doctor/no-prop-callback-in-effect": "off",
+    "react-doctor/no-derived-state": "off",
+    "react-doctor/no-derived-state-effect": "off",
+    "react-doctor/only-export-components": "off",
+    "react-doctor/prefer-html-dialog": "off",
+    "react-doctor/js-hoist-intl": "off",
+    "react-doctor/no-loading-flag-reset-outside-finally": "off",
+    "react-doctor/rerender-state-only-in-handlers": "off",
+    "react-doctor/prefer-use-effect-event": "off",
+    "react-doctor/js-combine-iterations": "off"
   }
 }

@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CODEX_GPT5_IDENTITY_LINE, NEUTRAL_IDENTITY_LINE, neutralizeIdentity } from "../src/adapters/identity";
+import {
+  CODEX_GPT5_IDENTITY_LINE,
+  CODEX_GPT5_IDENTITY_LINE_AGENT,
+  NEUTRAL_IDENTITY_LINE,
+  neutralizeIdentity,
+} from "../src/adapters/identity";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { createKiroAdapter } from "../src/adapters/kiro";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
@@ -23,6 +28,12 @@ describe("identity neutralization — central helper", () => {
     expect(neutralizeIdentity(SYS)).toBe(NEUTRAL_IDENTITY_LINE);
   });
 
+  test("replaces the Codex CLI 0.145 'an agent' identity variant (#622)", () => {
+    expect(neutralizeIdentity(CODEX_GPT5_IDENTITY_LINE_AGENT)).toBe(NEUTRAL_IDENTITY_LINE);
+    expect(neutralizeIdentity("You are Codex, an agent based on GPT-5.4.")).toBe(NEUTRAL_IDENTITY_LINE);
+    expect(neutralizeIdentity("You are Codex, an agent based on GPT-5.4.1.")).toBe(NEUTRAL_IDENTITY_LINE);
+  });
+
   test("never emits the opencodex proxy identity", () => {
     const out = neutralizeIdentity(`${SYS}\n\nmore context`);
     expect(out).not.toMatch(/opencodex proxy/i);
@@ -32,6 +43,9 @@ describe("identity neutralization — central helper", () => {
 
   test("leaves text without the GPT-5 line unchanged", () => {
     expect(neutralizeIdentity("plain system text")).toBe("plain system text");
+    expect(neutralizeIdentity("You are Codex, helpful for reviewing PRs.")).toBe(
+      "You are Codex, helpful for reviewing PRs.",
+    );
   });
 
   test("neutral line still forbids GPT-5 / OpenAI self-reporting", () => {

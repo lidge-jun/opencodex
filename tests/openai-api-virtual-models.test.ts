@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { logsFromApiBody } from "./helpers/logs-api";
+import { managementHeaders } from "./helpers/management-auth";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -229,7 +231,9 @@ describe("OpenAI API compact transport", () => {
     };
 
     const server = startServer(0);
-    const readLogs = () => originalFetch(new URL("/api/logs", server.url)).then(response => response.json()) as Promise<Array<Record<string, unknown>>>;
+    const readLogs = () => originalFetch(new URL("/api/logs", server.url), { headers: managementHeaders() })
+      .then(response => response.json())
+      .then(body => logsFromApiBody(body));
     const readUsage = (): Array<Record<string, unknown>> => existsSync(usageLogPath())
       ? readFileSync(usageLogPath(), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
       : [];
@@ -396,7 +400,9 @@ describe("OpenAI API Pro transport identities", () => {
     const readUsage = (): Array<Record<string, unknown>> => existsSync(usageLogPath())
       ? readFileSync(usageLogPath(), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
       : [];
-    const readLogs = () => originalFetch(new URL("/api/logs", server.url)).then(response => response.json()) as Promise<Array<Record<string, unknown>>>;
+    const readLogs = () => originalFetch(new URL("/api/logs", server.url), { headers: managementHeaders() })
+      .then(response => response.json())
+      .then(body => logsFromApiBody(body));
     const expectOnePersisted = async (
       beforeLogs: number,
       beforeUsage: number,

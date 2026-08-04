@@ -1,7 +1,8 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-accounts-test");
 const ACCOUNTS_PATH = join(TEST_DIR, "codex-accounts.json");
@@ -17,12 +18,17 @@ function refreshLockPathForToken(refreshToken: string): string {
 
 describe("codex-account-store CRUD", () => {
   beforeEach(() => {
+    // These exercises cover credential-store contention, not Windows ACL behavior.
+    // Avoid spawning icacls for every fixture write; its lingering handle makes
+    // the fixed fixture directory flaky under `bun test --isolate` on Windows.
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
     process.env.OPENCODEX_HOME = TEST_DIR;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
   });
 
   afterEach(() => {
+    setIcaclsRunnerForTests(null);
     delete process.env.OPENCODEX_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
@@ -303,7 +309,7 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
-  test("duplicate aliases sharing a refresh grant use one in-process refresh", async () => {
+  test("same refresh grant joins a live flight", async () => {
     const {
       getCodexAccountCredential,
       getValidCodexToken,
@@ -333,6 +339,82 @@ describe("codex-account-store CRUD", () => {
       expect(second.accessToken).toBe("shared-new");
       expect(getCodexAccountCredential("alias-a")).toMatchObject({ accessToken: "shared-new", refreshToken: "shared-rotated" });
       expect(getCodexAccountCredential("alias-b")).toMatchObject({ accessToken: "shared-new", refreshToken: "shared-rotated" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("33rd distinct refresh grant is rejected before file lock and fetch", async () => {
+    const {
+      CodexCredentialRefreshBusyError,
+      getValidCodexToken,
+      saveCodexAccountCredential,
+    } = await import("../src/codex/account-store");
+    for (let index = 0; index < 33; index++) {
+      saveCodexAccountCredential(`flight-${index}`, {
+        accessToken: `old-${index}`,
+        refreshToken: `refresh-${index}`,
+        expiresAt: 0,
+        chatgptAccountId: `account-${index}`,
+      });
+    }
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let fetchCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      await gate;
+      return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const admitted = Array.from({ length: 32 }, (_, index) => getValidCodexToken(`flight-${index}`));
+      await Promise.resolve();
+      await expect(getValidCodexToken("flight-32")).rejects.toBeInstanceOf(CodexCredentialRefreshBusyError);
+      expect(fetchCalls).toBe(32);
+      release();
+      await Promise.all(admitted);
+    } finally {
+      release();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("stale refresh flight is aborted and replaced without deleting the replacement", async () => {
+    const {
+      CodexCredentialRefreshStaleError,
+      getValidCodexToken,
+      saveCodexAccountCredential,
+    } = await import("../src/codex/account-store");
+    saveCodexAccountCredential("stale-flight", {
+      accessToken: "old",
+      refreshToken: "stale-refresh",
+      expiresAt: 0,
+      chatgptAccountId: "account",
+    });
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (async (_input, init) => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        });
+      }
+      return new Response(JSON.stringify({ access_token: "replacement", expires_in: 3600 }), { status: 200 });
+    }) as typeof fetch;
+    const first = getValidCodexToken("stale-flight");
+    try {
+      while (fetchCalls === 0) await Promise.resolve();
+      const now = Date.now();
+      const clock = spyOn(Date, "now").mockReturnValue(now + 120_001);
+      try {
+        const replacement = getValidCodexToken("stale-flight");
+        await expect(first).rejects.toBeInstanceOf(CodexCredentialRefreshStaleError);
+        expect((await replacement).accessToken).toBe("replacement");
+      } finally {
+        clock.mockRestore();
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }

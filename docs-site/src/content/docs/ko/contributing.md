@@ -46,7 +46,7 @@ cd docs-site && bun install && bun dev
 
 ## 문서 배포
 
-공개 문서는 GitHub Pages의 <https://lidge-jun.github.io/opencodex/ko/>에 게시됩니다.
+공개 문서는 GitHub Pages의 <https://opencodex.me/ko/>에 게시됩니다.
 `.github/workflows/deploy-docs.yml`은 `main` push에서 `docs-site/**`나 워크플로 자체가 바뀌면
 실행됩니다. `docs-site`를 빌드한 뒤 생성된 사이트를 배포합니다. 문서 변경을 push하기 전에 다음을
 실행하세요.
@@ -77,6 +77,21 @@ bun run release <version>           # 버전 bump를 commit/push, publish workfl
 bun run release <version> --publish # CI-gated dry-run을 확인한 뒤 실제 publish
 bun run release:watch               # 가장 최근 Release workflow run 감시
 ```
+
+## 브랜치
+
+- `dev` — 유일한 통합 대상. 모든 PR을 여기로 올립니다.
+- `main` — 릴리즈 전용. `dev`에서 메인테이너가 승격시킬 때만 움직이며, 기능 PR을 직접
+  올리지 않습니다.
+- `preview` — 프리릴리즈 트레인.
+
+Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 동시에 유지하던 정책도
+함께 끝났습니다. 히스토리는
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)에
+읽기 전용으로 남아 있습니다. 지금은 `dev`의 Bun 네이티브 TypeScript가 단일 런타임입니다.
+
+리베이스 PR은 환영합니다. 오래된 브랜치를 현재 head 위로 리베이스하는 것은 잡음이 아니라
+정상적인 기여입니다. 설명란에 출처 커밋을 적어주세요.
 
 ## 컨벤션
 
@@ -115,7 +130,7 @@ OAuth 설정 seed에 공급합니다. `enrichProviderFromCatalog()`는 모델 �
 
 ## 어댑터 추가하기
 
-`src/adapters/`에 `ProviderAdapter`([어댑터](/opencodex/ko/reference/adapters/) 참조)를 구현하고,
+`src/adapters/`에 `ProviderAdapter`([어댑터](/ko/reference/adapters/) 참조)를 구현하고,
 `src/server/adapter-resolve.ts`에 이름을 등록한 뒤 출력을 내부 `AdapterEvent`로 브리징하세요. 이미지
 처리에는 `image.ts`를 재사용하고, 일반적인 스트리밍/툴 호출은 `openai-chat.ts`를 참고합니다.
 어댑터가 전송 재시도를 직접 맡을 때만 `fetchResponse`를 사용하고, Cursor처럼 실제 양방향 전송에는

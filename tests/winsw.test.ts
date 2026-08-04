@@ -2,11 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { buildWinswXml, ensureWinswBinary, parseWinswStatus, probeScmRegistration, sha256Hex, installWinswService, statusWinswRaw, WINSW_SHA256, WINSW_SERVICE_ID } from "../src/lib/winsw";
 import { parseServiceArgs, serviceReinstallArgs } from "../src/service";
 import { loadServiceTokenFromFile } from "../src/lib/service-secrets";
+import { getConfigDir } from "../src/config";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const entry = { bun: "C:\\OpenCodex\\bun.exe", cli: "C:\\Open Codex\\cli & co\\index.ts" };
+
+function winswEnvValue(xml: string, name: string): string | null {
+  const match = xml.match(new RegExp(`<env name="${name}" value="([^"]*)"/>`));
+  if (!match) return null;
+  return match[1]!
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+}
 
 describe("winsw xml", () => {
   const env = { USERDOMAIN: "WORKGROUP", USERNAME: "jun", PATH: "C:\\bin;C:\\tools & more" } as NodeJS.ProcessEnv;
@@ -30,8 +41,26 @@ describe("winsw xml", () => {
     expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
     expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
-    // The token VALUE never lands in the XML — only the file pointer.
+    expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
+    // Token VALUES never land in the XML — only file pointers / non-secret budgets.
     expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+  });
+
+  test("bakes install-time ACL timeout and never embeds the admin token (#764)", () => {
+    const xml = buildWinswXml(entry, {
+      ...env,
+      OPENCODEX_API_AUTH_TOKEN: "api-secret-value",
+      OPENCODEX_ADMIN_AUTH_TOKEN: "admin-secret & more",
+      OPENCODEX_ACL_TIMEOUT_MS: "10000",
+    });
+
+    expect(xml).toContain('<env name="OPENCODEX_ACL_TIMEOUT_MS" value="10000"/>');
+    expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
+    expect(xml).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+    expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(xml).not.toContain("admin-secret");
+    expect(xml).not.toContain("api-secret-value");
   });
 
   test("escapes executable/arguments and configures restart + graceful stop", () => {
@@ -163,6 +192,13 @@ describe("winsw install flow", () => {
     });
 
     expect(calls).toEqual([["interactive", "install", "/p"], ["verify"], ["run", "start"]]);
+  });
+
+  test("install /p refuses non-interactive stdin instead of hanging", () => {
+    const winsw = readFileSync(new URL("../src/lib/winsw.ts", import.meta.url), "utf8");
+    const fn = winsw.slice(winsw.indexOf("function runWinswInteractive"), winsw.indexOf("function scQc()"));
+    expect(fn).toContain("process.stdin.isTTY");
+    expect(fn).toContain("interactive console");
   });
 
   test("repair over an existing service rewrites assets and restarts without re-prompting", async () => {

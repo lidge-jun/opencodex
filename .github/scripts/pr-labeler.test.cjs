@@ -1,0 +1,179 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { describe, it } = require("node:test");
+const assert = require("node:assert/strict");
+const {
+  detectTypeLabelFromTitle,
+  hasHumanTypeLabelOverride,
+  planTypeLabelSync,
+  TYPE_LABELS,
+} = require("./pr-labeler.cjs");
+
+describe("detectTypeLabelFromTitle", () => {
+  it("maps conventional prefixes to type labels", () => {
+    assert.equal(detectTypeLabelFromTitle("fix(codex): warn after sync"), "bug");
+    assert.equal(detectTypeLabelFromTitle("feat(images): add bridge"), "enhancement");
+    assert.equal(detectTypeLabelFromTitle("docs: update guide"), "documentation");
+    assert.equal(detectTypeLabelFromTitle("chore!: drop legacy"), "chore");
+  });
+
+  it("maps sentence-case prefixes when no conventional colon is present", () => {
+    assert.equal(
+      detectTypeLabelFromTitle("Fix Console Go tool schema sanitization"),
+      "bug",
+    );
+    assert.equal(detectTypeLabelFromTitle("Feat add Grok image bridge"), "enhancement");
+    assert.equal(detectTypeLabelFromTitle("Docs update setup guide"), "documentation");
+  });
+
+  it("returns null without a recognized prefix", () => {
+    assert.equal(detectTypeLabelFromTitle("Warn or restart stale app-server"), null);
+    assert.equal(detectTypeLabelFromTitle(""), null);
+    assert.equal(detectTypeLabelFromTitle("constructor: drop legacy"), null);
+    assert.equal(detectTypeLabelFromTitle("Fixed Console Go tool schema"), null);
+    assert.equal(detectTypeLabelFromTitle("Fix"), null);
+  });
+});
+
+describe("hasHumanTypeLabelOverride", () => {
+  it("is false when only the Actions bot touched type labels", () => {
+    const events = [
+      { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+    ];
+    assert.equal(hasHumanTypeLabelOverride(events), false);
+  });
+
+  it("is true after a human replaces the bot type label (PR #518)", () => {
+    const events = [
+      { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+      { event: "unlabeled", label: { name: "bug" }, actor: { login: "Wibias" } },
+      { event: "labeled", label: { name: "enhancement" }, actor: { login: "Wibias" } },
+    ];
+    assert.equal(hasHumanTypeLabelOverride(events), true);
+  });
+
+  it("stays true even if the bot later reverts the human choice", () => {
+    const events = [
+      { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+      { event: "unlabeled", label: { name: "bug" }, actor: { login: "Wibias" } },
+      { event: "labeled", label: { name: "enhancement" }, actor: { login: "Wibias" } },
+      { event: "unlabeled", label: { name: "enhancement" }, actor: { login: "github-actions[bot]" } },
+      { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+    ];
+    assert.equal(hasHumanTypeLabelOverride(events), true);
+  });
+
+  it("ignores non-type labels from humans", () => {
+    const events = [
+      { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+      { event: "labeled", label: { name: "needs-triage" }, actor: { login: "Wibias" } },
+    ];
+    assert.equal(hasHumanTypeLabelOverride(events), false);
+  });
+});
+
+describe("planTypeLabelSync", () => {
+  it("adds the detected label and removes other type labels when bot-owned", () => {
+    const plan = planTypeLabelSync({
+      title: "fix(codex): warn after sync",
+      currentLabels: ["enhancement", "needs-triage"],
+      events: [
+        { event: "labeled", label: { name: "enhancement" }, actor: { login: "github-actions[bot]" } },
+      ],
+    });
+    assert.deepEqual(plan, {
+      skip: false,
+      detected: "bug",
+      add: "bug",
+      remove: ["enhancement"],
+    });
+    assert.ok(TYPE_LABELS.has("bug"));
+  });
+
+  it("is a no-op add when the detected label is already present", () => {
+    const plan = planTypeLabelSync({
+      title: "fix(codex): warn after sync",
+      currentLabels: ["bug"],
+      events: [
+        { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+      ],
+    });
+    assert.deepEqual(plan, {
+      skip: false,
+      detected: "bug",
+      add: null,
+      remove: [],
+    });
+  });
+
+  it("skips when a human has overridden the type label", () => {
+    const plan = planTypeLabelSync({
+      title: "fix(codex): warn after sync",
+      currentLabels: ["enhancement"],
+      events: [
+        { event: "labeled", label: { name: "bug" }, actor: { login: "github-actions[bot]" } },
+        { event: "unlabeled", label: { name: "bug" }, actor: { login: "Wibias" } },
+        { event: "labeled", label: { name: "enhancement" }, actor: { login: "Wibias" } },
+      ],
+    });
+    assert.deepEqual(plan, { skip: true, reason: "human-override" });
+  });
+
+  it("labels sentence-case bug-fix titles (PR #524)", () => {
+    const plan = planTypeLabelSync({
+      title: "Fix Console Go tool schema sanitization",
+      currentLabels: [],
+      events: [],
+    });
+    assert.deepEqual(plan, {
+      skip: false,
+      detected: "bug",
+      add: "bug",
+      remove: [],
+    });
+  });
+
+  it("skips titles without a recognized prefix", () => {
+    const plan = planTypeLabelSync({
+      title: "Warn or restart stale app-server",
+      currentLabels: [],
+      events: [],
+    });
+    assert.deepEqual(plan, { skip: true, reason: "no-prefix" });
+  });
+});
+
+describe("pr-labeler workflow", () => {
+  const workflowPath = path.join(__dirname, "../workflows/pr-labeler.yml");
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+
+  function pullRequestTargetTypes() {
+    const match = workflow.match(/pull_request_target:\s*\n(?:[ \t].*\n)*?[ \t]+types:\s*\[([^\]]+)\]/);
+    assert.ok(match, "expected pull_request_target types array in pr-labeler.yml");
+    return match[1].split(",").map((type) => type.trim());
+  }
+
+  it("listens for labeled and unlabeled so human overrides cancel stale sync runs", () => {
+    const types = pullRequestTargetTypes();
+    assert.ok(types.includes("labeled"), "missing pull_request_target type: labeled");
+    assert.ok(types.includes("unlabeled"), "missing pull_request_target type: unlabeled");
+    assert.ok(types.includes("synchronize"), "missing pull_request_target type: synchronize");
+  });
+
+  it("keeps trusted default-branch checkout, concurrency cancel, and minimal permissions", () => {
+    assert.match(workflow, /ref:\s*\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}/);
+    assert.match(workflow, /cancel-in-progress:\s*true/);
+    assert.match(workflow, /issues:\s*write/);
+    // The issues label endpoints are shared with pull requests: writing a label
+    // onto a PR number needs pull_requests=write alongside issues=write, which
+    // GitHub reports as `issues=write; pull_requests=write`. Pinning this to
+    // read made the workflow fail closed on the first PR that actually needed a
+    // label applied (#565), so write is the minimum here, not an escalation.
+    assert.match(workflow, /pull-requests:\s*write/);
+    // contents stays read — the labeler never pushes.
+    assert.match(workflow, /contents:\s*read/);
+    assert.doesNotMatch(workflow, /contents:\s*write/);
+  });
+});

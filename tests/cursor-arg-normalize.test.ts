@@ -29,11 +29,30 @@ describe("normalizeArgKeys", () => {
     expect(normalizeArgKeys({ cmd: "ls" }, narrow)).toEqual({ cmd: "ls" });
   });
 
-  test("does not clobber an existing canonical key", () => {
-    // Both `path` (canonical) and `filepath` (alias) present -> keep canonical, keep alias as-is.
-    const result = normalizeArgKeys({ path: "real.txt", filepath: "alias.txt" }, schema);
-    expect(result.path).toBe("real.txt");
-    expect(result.filepath).toBe("alias.txt");
+  test("canonical key wins over alias regardless of property insertion order", () => {
+    expect(normalizeArgKeys({ command: "canonical", cmd: "alias" }, schema)).toEqual({ command: "canonical" });
+    expect(normalizeArgKeys({ cmd: "alias", command: "canonical" }, schema)).toEqual({ command: "canonical" });
+    expect(normalizeArgKeys({ path: "real.txt", filepath: "alias.txt" }, schema)).toEqual({ path: "real.txt" });
+    expect(normalizeArgKeys({ filepath: "alias.txt", path: "real.txt" }, schema)).toEqual({ path: "real.txt" });
+  });
+
+  test("alias-only payloads still rewrite to the canonical key", () => {
+    expect(normalizeArgKeys({ cmd: "alias" }, schema)).toEqual({ command: "alias" });
+    expect(normalizeArgKeys({ filepath: "a.txt" }, schema)).toEqual({ path: "a.txt" });
+  });
+
+  test("identical alias and canonical values keep only the canonical key", () => {
+    expect(normalizeArgKeys({ command: "same", cmd: "same" }, schema)).toEqual({ command: "same" });
+    expect(normalizeArgKeys({ cmd: "same", command: "same" }, schema)).toEqual({ command: "same" });
+  });
+
+  test("conflicting alias and canonical values keep only the canonical key", () => {
+    expect(normalizeArgKeys({ command: "safe command", cmd: "different command" }, schema)).toEqual({
+      command: "safe command",
+    });
+    expect(normalizeArgKeys({ cmd: "different command", command: "safe command" }, schema)).toEqual({
+      command: "safe command",
+    });
   });
 
   test("returns args unchanged when schema has no properties", () => {
@@ -44,5 +63,12 @@ describe("normalizeArgKeys", () => {
 
   test("is case-insensitive on the alias key", () => {
     expect(normalizeArgKeys({ FilePath: "a.txt" }, schema)).toEqual({ path: "a.txt" });
+  });
+
+  test("preserves unrelated unknown keys", () => {
+    expect(normalizeArgKeys({ cmd: "ls", workdir: "C:/repo" }, schema)).toEqual({
+      command: "ls",
+      workdir: "C:/repo",
+    });
   });
 });

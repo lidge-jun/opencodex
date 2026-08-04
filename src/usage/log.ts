@@ -1,6 +1,7 @@
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
 
@@ -11,6 +12,7 @@ export type AttemptRecoveryKind =
   | "connection-reset"
   | "oauth-401"
   | "key-429"
+  | "anthropic-oauth-429"
   | "image-413";
 
 export interface PersistedUsageAttempt {
@@ -29,6 +31,11 @@ export interface PersistedUsageAttempt {
   usage?: OcxUsage;
   totalTokens?: number;
   errorCode?: string;
+  /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
+  requestedEffort?: string;
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
 }
 
 export interface PersistedUsageEntry {
@@ -36,11 +43,23 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
-  surface?: "claude";
+  surface?: "claude" | "claude-desktop" | "grok";
+  /** Matched configured key id; absent for environment/loopback admissions and
+   *  for every row written before attribution existed. */
+  apiKeyId?: string;
+  admissionKind?: "configured" | "environment" | "loopback";
+  /** The inbound wire, not the client product — see `surface`. */
+  inboundProtocol?: "responses" | "chat" | "messages";
+  /** Best-effort chat/session correlation for Logs grouping (#330). */
+  conversationId?: string;
   resolvedModel?: string;
   requestedModel?: string;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
   requestedEffort?: string;
+  /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
+  effectiveEffort?: string;
+  reasoningWireField?: string;
+  reasoningWireValue?: string | number;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -62,6 +81,41 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
+}
+
+const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
+  "claude",
+  "claude-desktop",
+  "grok",
+]);
+
+/**
+ * The serializer guard for `surface`. Two failure modes shaped this: a literal
+ * whitelist ("claude" | "claude-desktop" only) silently dropped every NEW surface at
+ * write time, while a plain truthy spread would persist junk values from hand-edited
+ * logs. Membership in this set is the middle path: adding a surface here is one edit,
+ * and unknown values are still dropped.
+ */
+export function isKnownUsageSurface(value: unknown): value is NonNullable<PersistedUsageEntry["surface"]> {
+  return typeof value === "string" && KNOWN_USAGE_SURFACES.has(value as NonNullable<PersistedUsageEntry["surface"]>);
+}
+
+const KNOWN_ADMISSION_KINDS = new Set<NonNullable<PersistedUsageEntry["admissionKind"]>>([
+  "configured", "environment", "loopback",
+]);
+
+const KNOWN_INBOUND_PROTOCOLS = new Set<NonNullable<PersistedUsageEntry["inboundProtocol"]>>([
+  "responses", "chat", "messages",
+]);
+
+/** Same closed-set discipline as `isKnownUsageSurface`: an old or corrupted row
+ *  carrying an unexpected value drops the field instead of poisoning the enum. */
+export function isKnownAdmissionKind(value: unknown): value is NonNullable<PersistedUsageEntry["admissionKind"]> {
+  return typeof value === "string" && KNOWN_ADMISSION_KINDS.has(value as NonNullable<PersistedUsageEntry["admissionKind"]>);
+}
+
+export function isKnownInboundProtocol(value: unknown): value is NonNullable<PersistedUsageEntry["inboundProtocol"]> {
+  return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
 export function usageLogPath(): string {
@@ -98,6 +152,13 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
   return {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
+    // Absolute active-context checkpoint (types.ts). Stateful providers such as Kiro report
+    // per-attempt usage only, so this field is the ONLY carrier of the cumulative context
+    // figure once the log records raw adapter usage instead of re-parsing the bridged wire
+    // (usageFromBridge, request-log.ts). Omitting it here silently dropped Kiro's context
+    // growth from every persisted row. It is deliberately NOT folded into totalTokens:
+    // a checkpoint is not a per-request total and must never be summed across requests.
+    ...(typeof usage.contextTotalTokens === "number" ? { contextTotalTokens: usage.contextTotalTokens } : {}),
     ...(typeof usage.totalTokens === "number" ? { totalTokens: usage.totalTokens } : {}),
     ...(typeof usage.cachedInputTokens === "number" ? { cachedInputTokens: usage.cachedInputTokens } : {}),
     ...(typeof usage.cacheReadInputTokens === "number" ? { cacheReadInputTokens: usage.cacheReadInputTokens } : {}),
@@ -112,6 +173,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "connection-reset",
   "oauth-401",
   "key-429",
+  "anthropic-oauth-429",
   "image-413",
 ]);
 const USAGE_STATUSES = new Set<UsageStatus>([
@@ -131,6 +193,7 @@ function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
   if (!isNonNegativeFiniteNumber(usage.inputTokens)
     || !isNonNegativeFiniteNumber(usage.outputTokens)) return null;
   for (const key of [
+    "contextTotalTokens",
     "totalTokens",
     "cachedInputTokens",
     "cacheReadInputTokens",
@@ -196,6 +259,20 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       ? { totalTokens: attempt.totalTokens }
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(typeof attempt.requestedEffort === "string" && attempt.requestedEffort
+      ? { requestedEffort: capMetadataString(attempt.requestedEffort) }
+      : {}),
+    ...(typeof attempt.effectiveEffort === "string" && attempt.effectiveEffort
+      ? { effectiveEffort: capMetadataString(attempt.effectiveEffort) }
+      : {}),
+    ...(typeof attempt.reasoningWireField === "string" && attempt.reasoningWireField
+      ? { reasoningWireField: capMetadataString(attempt.reasoningWireField) }
+      : {}),
+    ...(typeof attempt.reasoningWireValue === "string" && attempt.reasoningWireValue
+      ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
+      : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
+        ? { reasoningWireValue: attempt.reasoningWireValue }
+        : {}),
   };
 }
 
@@ -210,6 +287,11 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+/** Test seam: the normalization branch old rows take is worth asserting directly. */
+export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
+  return normalizeUsageEntry(entry);
+}
+
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   return {
@@ -217,12 +299,35 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
-    ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+    ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
+    ...(typeof entry.apiKeyId === "string" && entry.apiKeyId.trim()
+      // Deliberately NOT capped. `capMetadataString` protects free-form metadata
+      // from unbounded growth, but this is a lookup key: truncating it makes the
+      // persisted id stop matching the configured one, and the rollup silently
+      // reports zero for a key that is very much in use.
+      ? { apiKeyId: entry.apiKeyId }
+      : {}),
+    ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
+    ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+    ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
+      ? { conversationId: entry.conversationId.trim().slice(0, 128) }
+      : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
       : {}),
+    ...(typeof entry.effectiveEffort === "string" && entry.effectiveEffort
+      ? { effectiveEffort: capMetadataString(entry.effectiveEffort) }
+      : {}),
+    ...(typeof entry.reasoningWireField === "string" && entry.reasoningWireField
+      ? { reasoningWireField: capMetadataString(entry.reasoningWireField) }
+      : {}),
+    ...(typeof entry.reasoningWireValue === "string" && entry.reasoningWireValue
+      ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
+      : isNonNegativeFiniteNumber(entry.reasoningWireValue)
+        ? { reasoningWireValue: entry.reasoningWireValue }
+        : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
       : {}),
@@ -259,6 +364,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
 
 function ensureUsageLogDir(): void {
   const dir = getConfigDir();
+  recordOwnedConfigPath(dir, usageLogPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
 }
@@ -268,6 +374,205 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
   const path = usageLogPath();
   appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
   try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+}
+
+export type UsageLogRevision = {
+  path: string;
+  dev: number;
+  ino: number;
+  birthtimeMs: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+};
+
+let usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
+const MANAGEMENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
+const MANAGEMENT_USAGE_READ_CHUNK_BYTES = 1024 * 1024;
+const MANAGEMENT_USAGE_MAX_ENTRIES = 200_000;
+const MANAGEMENT_USAGE_FLIGHT_STALE_MS = 30_000;
+export interface ManagementUsageSnapshot {
+  entries: PersistedUsageEntry[];
+  revision: UsageLogRevision;
+  truncatedPrefixBytes: number;
+  entriesTruncated: boolean;
+  entriesDropped: number;
+}
+let managementUsageReadInflight: {
+  key: string;
+  promise: Promise<ManagementUsageSnapshot>;
+  startedAt: number;
+  abort: AbortController;
+} | null = null;
+
+/** Test-only observability for proving that unchanged prefixes are not reparsed. */
+export function usageReadCacheStatsForTests(): Readonly<typeof usageReadCacheStats> {
+  return { ...usageReadCacheStats };
+}
+
+export function resetUsageReadCacheForTests(): void {
+  usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
+  managementUsageReadInflight?.abort.abort();
+  managementUsageReadInflight = null;
+}
+
+function readExactly(fd: number, length: number, position: number): Buffer | null {
+  const output = Buffer.allocUnsafe(length);
+  let offset = 0;
+  while (offset < length) {
+    const read = readSync(fd, output, offset, length - offset, position + offset);
+    if (read === 0) return null;
+    offset += read;
+  }
+  return output;
+}
+
+function usageLogRevision(path: string, stat: ReturnType<typeof fstatSync>): UsageLogRevision {
+  if (!stat.isFile()) throw new Error("usage log is not a regular file");
+  return {
+    path,
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    birthtimeMs: Number(stat.birthtimeMs),
+    size: Number(stat.size),
+    mtimeMs: Number(stat.mtimeMs),
+    ctimeMs: Number(stat.ctimeMs),
+  };
+}
+
+export function usageLogRevisionKey(revision: UsageLogRevision | null): string {
+  if (!revision) return "missing";
+  return [
+    revision.path,
+    revision.dev,
+    revision.ino,
+    revision.birthtimeMs,
+    revision.size,
+    revision.mtimeMs,
+    revision.ctimeMs,
+  ].join("\0");
+}
+
+export function currentUsageLogRevision(): UsageLogRevision | null {
+  const path = usageLogPath();
+  if (!existsSync(path)) return null;
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    return usageLogRevision(path, fstatSync(fd));
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+async function parseUsageTextCooperatively(text: string, signal: AbortSignal): Promise<{
+  entries: PersistedUsageEntry[];
+  entriesDropped: number;
+}> {
+  const lines = text.split(/\r?\n/);
+  usageReadCacheStats.parsedLines += lines.filter(line => line.trim()).length;
+  const entries: PersistedUsageEntry[] = [];
+  const batchSize = 1_000;
+  for (let offset = 0; offset < lines.length; offset += batchSize) {
+    if (signal.aborted) throw signal.reason;
+    entries.push(...parseUsageLines(lines.slice(offset, offset + batchSize)));
+    if (offset + batchSize < lines.length) {
+      // JSON parsing dominates large-log startup. Yield between bounded batches so
+      // Bun can continue serving health and settings requests on the same thread.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+  }
+  if (entries.length <= MANAGEMENT_USAGE_MAX_ENTRIES) return { entries, entriesDropped: 0 };
+  const entriesDropped = entries.length - MANAGEMENT_USAGE_MAX_ENTRIES;
+  return { entries: entries.slice(-MANAGEMENT_USAGE_MAX_ENTRIES), entriesDropped };
+}
+
+async function readUsageEntriesFullCooperatively(
+  path: string,
+  signal: AbortSignal,
+  maxReadBytes: number,
+): Promise<ManagementUsageSnapshot> {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const stat = fstatSync(fd);
+    const size = Number(stat.size);
+    const start = Math.max(0, size - maxReadBytes);
+    const chunks: Buffer[] = [];
+    for (let position = start; position < size;) {
+      if (signal.aborted) throw signal.reason;
+      const length = Math.min(MANAGEMENT_USAGE_READ_CHUNK_BYTES, size - position);
+      const chunk = readExactly(fd, length, position);
+      if (chunk === null) throw new Error("usage log changed while it was being read");
+      chunks.push(chunk);
+      position += length;
+    }
+    let bytes = Buffer.concat(chunks);
+    let truncatedPrefixBytes = start;
+    if (start > 0) {
+      const preceding = readExactly(fd, 1, start - 1);
+      if (preceding === null) throw new Error("usage log changed while it was being read");
+      if (preceding[0] !== 0x0a) {
+        const newline = bytes.indexOf(0x0a);
+        if (newline < 0) {
+          truncatedPrefixBytes += bytes.byteLength;
+          bytes = Buffer.alloc(0);
+        } else {
+          truncatedPrefixBytes += newline + 1;
+          bytes = bytes.subarray(newline + 1);
+        }
+      }
+    }
+    const parsed = await parseUsageTextCooperatively(bytes.toString("utf-8"), signal);
+    usageReadCacheStats.fullReads += 1;
+    return {
+      entries: parsed.entries,
+      revision: usageLogRevision(path, stat),
+      truncatedPrefixBytes,
+      entriesTruncated: parsed.entriesDropped > 0,
+      entriesDropped: parsed.entriesDropped,
+    };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * Management API reader: full parses yield between bounded batches and concurrent
+ * callers share work only when they observed the same exact file revision. Parsed rows
+ * are returned to the request and never retained in module state.
+ */
+export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_USAGE_MAX_READ_BYTES): Promise<{
+  entries: PersistedUsageEntry[];
+  revision: UsageLogRevision | null;
+  truncatedPrefixBytes: number;
+  entriesTruncated: boolean;
+  entriesDropped: number;
+}> {
+  if (!Number.isSafeInteger(maxReadBytes) || maxReadBytes <= 0) throw new RangeError("management usage max read bytes must be positive");
+  const path = usageLogPath();
+  if (!existsSync(path)) return { entries: [], revision: null, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0 };
+  const observed = currentUsageLogRevision();
+  const key = `${usageLogRevisionKey(observed)}\0${maxReadBytes}`;
+  const existing = managementUsageReadInflight;
+  if (existing?.key === key && Date.now() - existing.startedAt <= MANAGEMENT_USAGE_FLIGHT_STALE_MS) {
+    const shared = await existing.promise;
+    return { ...shared, entries: shared.entries.slice() };
+  }
+  existing?.abort.abort(new Error("management usage read superseded"));
+  const abort = new AbortController();
+  const promise = readUsageEntriesFullCooperatively(path, abort.signal, maxReadBytes);
+  managementUsageReadInflight = { key, promise, startedAt: Date.now(), abort };
+  try {
+    const snapshot = await promise;
+    return { ...snapshot, entries: snapshot.entries.slice() };
+  } finally {
+    if (managementUsageReadInflight?.promise === promise) managementUsageReadInflight = null;
+  }
+}
+
+export async function readUsageEntriesForManagement(): Promise<PersistedUsageEntry[]> {
+  return (await readUsageSnapshotForManagement()).entries;
 }
 
 export function readUsageEntries(): PersistedUsageEntry[] {

@@ -1,5 +1,32 @@
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../server/ws-bridge";
+import { createAdmissionGate, type AdmissionMetrics, type AdmissionReservation } from "../lib/admission";
+
+export const MAX_TRACKED_CODEX_WEBSOCKETS = 128;
+const websocketGate = createAdmissionGate("codex_websockets", MAX_TRACKED_CODEX_WEBSOCKETS);
+
+export function tryReserveCodexWebSocket(): AdmissionReservation<ServerWebSocket<WsData>> | null {
+  const gateLease = websocketGate.tryAcquire();
+  if (!gateLease) return null;
+  let socket: ServerWebSocket<WsData> | undefined;
+  let active = true;
+  return {
+    bind(value) {
+      if (!active) return;
+      socket = value;
+    },
+    release() {
+      if (!active) return;
+      active = false;
+      socket = undefined;
+      gateLease.release();
+    },
+  };
+}
+
+export function codexWebSocketAdmissionMetrics(): AdmissionMetrics {
+  return websocketGate.metrics();
+}
 
 const socketsByAccount = new Map<string, Set<ServerWebSocket<WsData>>>();
 

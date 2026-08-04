@@ -17,7 +17,7 @@ interface ProviderAdapter {
 ```
 
 `buildRequest` は `OcxParsedRequest` を上流の HTTP リクエストに落とし、`parseStream` /
-`parseResponse` はプロバイダーのレスポンスを内部 `AdapterEvent` に持ち上げます。`fetchResponse` があると、アダプターがリトライとタイムアウトを直接担います。`runTurn` は 1 回の HTTP fetch とその後のレスポンスストリームでは表現できない伝送方式をサポートします。その後 [`bridge.ts`](/opencodex/ja/reference/architecture/#ブリッジ) がイベントを Responses SSE に変えます。
+`parseResponse` はプロバイダーのレスポンスを内部 `AdapterEvent` に持ち上げます。`fetchResponse` があると、アダプターがリトライとタイムアウトを直接担います。`runTurn` は 1 回の HTTP fetch とその後のレスポンスストリームでは表現できない伝送方式をサポートします。その後 [`bridge.ts`](/ja/reference/architecture/#ブリッジ) がイベントを Responses SSE に変えます。
 
 ## `openai-chat`
 
@@ -40,12 +40,12 @@ interface ProviderAdapter {
 
 - `forward` URL → `{baseUrl}/responses`。`key` provider はデフォルトで従来の `{baseUrl}/v1/responses` 構築を使います。
 - `key` provider は検証済みの相対 `responsesPath` を設定できます。adapter は `baseUrl` 末尾の `/` を 1 つ除き、`{trimmedBaseUrl}{responsesPath}` に送信します。Ark Agent Plan では `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` と `responsesPath: "/responses"` を使います。
-- `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/opencodex/ja/guides/sidecars/) にも使われます。
+- `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/ja/guides/sidecars/) にも使われます。
 
 ## `anthropic`
 
 **対象:** Anthropic **Messages**（`/v1/messages`）。
-**認証:** `key`（`x-api-key`）または `oauth`（Bearer + `anthropic-beta`、Claude Pro/Max 用）。
+**認証:** `key`（デフォルトは `x-api-key`、または `apiKeyTransport: "bearer"` による `Authorization: Bearer`）または `oauth`（Bearer + `anthropic-beta`、Claude Pro/Max 用）。
 
 - メッセージを Anthropic content block（text、base64 image、`tool_use`、`thinking`）に変換します。
 - **Extended thinking の計算:** Anthropic は `max_tokens > thinking.budget_tokens` を要求します。
@@ -73,6 +73,28 @@ interface ProviderAdapter {
   block を送ります。
 - `application/vnd.amazon.eventstream` をデコードして text/thinking/tool イベントを復元し、途切れたツール JSON を検出します。上流がトークン数を返さないため使用量は推定します。
 - `fetchResponse` で限られた回数だけリトライし、エラーを分類/マスクします。非ストリーミングパーサーはウェブ検索ループのために同じイベントストリームを最後まで消費します。
+### 完了とネイティブ stop reason
+
+Kiro のアシスタントテキストには、それ自体で end-turn を示す信頼できる区別がありません。ただし終端の
+`metadataEvent` がネイティブの `stopReason` を運ぶことがあります。`END_TURN` または `STOP_SEQUENCE` は
+終了した推論であることは示しますが、進捗文にも付く場合があるため、ツール有効ターンではそのテキストだけを最終回答にしません。
+通常テキストは commentary のまま、非公開の完了ツールを一度検証します。
+
+`END_TURN`、`STOP_SEQUENCE`、または stop reason が無い場合は一度だけ完了互換パスに入れます。それ以外の明示的な理由はすでに上流で推論を終了させて
+いるため、もう一度モデルに投げ直すのではなくそのまま報告します。出力トークン上限は継続可能な incomplete、
+コンテキストウィンドウの枯渇は再試行不可の context-length エラー、フィルタリングやガードレールによる停止は
+filtered incomplete になります。実際のツール呼び出しを伴わない `TOOL_USE` は進捗ではなく矛盾として扱います。
+
+ツール有効ターンでは非公開の `codex_kiro_final_answer` を追加します。再試行は空の assistant/user ターンを
+生成せず、元の user/tool-result を保持し、送信前にロール交互性、空の構造メッセージ、tool use/result の対応を検証します。
+完了ツールの回答は以前の commentary と同じでも `final_answer` として送出します。
+
+### Reasoning effort
+
+`gpt-5.6-sol` と `claude-opus-5` はネイティブ effort をサポートし、リクエストフィールド名が異なります。
+`low` / `medium` / `high` / `xhigh` / `max` は、前者では
+`additionalModelRequestFields.reasoning.effort`、後者では `output_config.effort` として送信されます。
+
 
 ## `cursor`
 

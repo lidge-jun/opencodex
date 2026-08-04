@@ -2,6 +2,7 @@ name: Provider or API compatibility
 description: Report an incompatible provider, endpoint, request shape, response shape, or client integration.
 labels:
   - provider-compatibility
+  - provider
 body:
   - type: markdown
     attributes:

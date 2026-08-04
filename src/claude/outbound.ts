@@ -10,6 +10,12 @@
  *  - errors: {type:"error", error:{type,message}}; may arrive mid-stream after HTTP 200.
  */
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
+import {
+  isTranslatorBudgetExceededError,
+  TRANSLATOR_MAX_TURN_BYTES,
+  TranslatorBudgetExceededError,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 
 type Rec = Record<string, unknown>;
 
@@ -38,12 +44,12 @@ export function anthropicErrorType(status: number): string {
   }
 }
 
-export function anthropicErrorBody(status: number, message: string, type?: string): Rec {
-  return { type: "error", error: { type: type ?? anthropicErrorType(status), message } };
+export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
+  return { type: "error", error: { type: type ?? anthropicErrorType(status), message, ...(code ? { code } : {}) } };
 }
 
-export function anthropicErrorResponse(status: number, message: string, type?: string): Response {
-  return new Response(JSON.stringify(anthropicErrorBody(status, message, type)), {
+export function anthropicErrorResponse(status: number, message: string, type?: string, code?: string): Response {
+  return new Response(JSON.stringify(anthropicErrorBody(status, message, type, code)), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -76,6 +82,54 @@ function sseFrame(name: string, data: Rec): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: string): number {
+  let nextBytes = previousBytes + Buffer.byteLength(fragment);
+  const previousLast = previous.charCodeAt(previous.length - 1);
+  const fragmentFirst = fragment.charCodeAt(0);
+  if (previousLast >= 0xd800 && previousLast <= 0xdbff
+    && fragmentFirst >= 0xdc00 && fragmentFirst <= 0xdfff) {
+    nextBytes -= 2;
+  }
+  return nextBytes;
+}
+
+/**
+ * Claude Code / Anthropic WebSearch domain filters are optional and mutually exclusive.
+ * Empty arrays are rejected ("ambiguous"); both fields together are rejected. Routed models
+ * often emit both shapes — sanitize before Claude Code sees the tool_use / server_tool_use
+ * input (issue #381).
+ */
+export function isClaudeWebSearchToolName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed === "WebSearch" || /^web_search/i.test(trimmed);
+}
+
+function normalizeWebSearchDomainList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const domains = value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map(entry => entry.trim());
+  return domains.length > 0 ? domains : undefined;
+}
+
+/** Strip empty domain filters; if both remain, keep `allowed_domains` and drop `blocked_domains`. */
+export function sanitizeWebSearchInput(input: unknown): Rec {
+  const src: Rec = isRec(input) ? { ...input } : {};
+  const allowed = normalizeWebSearchDomainList(src.allowed_domains);
+  const blocked = normalizeWebSearchDomainList(src.blocked_domains);
+  delete src.allowed_domains;
+  delete src.blocked_domains;
+  if (allowed && blocked) {
+    // Prefer allow-list (restrict-to) when a routed model sets both non-empty fields.
+    src.allowed_domains = allowed;
+  } else if (allowed) {
+    src.allowed_domains = allowed;
+  } else if (blocked) {
+    src.blocked_domains = blocked;
+  }
+  return src;
+}
+
 /**
  * Map a Responses `web_search_call` item to its Anthropic pair: the server_tool_use
  * input (query/queries) and the web_search_tool_result content (hits, or the error
@@ -87,7 +141,9 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
     : [];
   const query = typeof action.query === "string" ? action.query : "";
-  const input: Rec = queries.length > 1 ? { queries } : { query: queries[0] ?? query };
+  const input = sanitizeWebSearchInput(
+    queries.length > 1 ? { queries } : { query: queries[0] ?? query },
+  );
   const completed = item.status !== "failed";
   let resultContent: unknown;
   if (completed) {
@@ -125,18 +181,26 @@ interface OpenBlock {
   index: number;
   /** Responses item_id (tool calls) so output_item.done can match. */
   itemId?: string;
+  /** Buffer WebSearch args and emit one sanitized input_json_delta on close (#381). */
+  bufferWebSearchArgs?: boolean;
+  argsBuf?: string;
+  argsBufBytes?: number;
+  webSearchArgsEmitted?: boolean;
+  callId?: string;
 }
 
 /** Streaming: Responses SSE bytes -> Anthropic Messages SSE bytes. */
 export function responsesSseToAnthropicSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts?: { pingIntervalMs?: number },
+  opts: { pingIntervalMs?: number; translatorBudget: TranslatorBudget },
 ): ReadableStream<Uint8Array> {
+  const translatorBudget = opts.translatorBudget;
   const pingIntervalMs = opts?.pingIntervalMs ?? 20_000;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+  let bufferBytes = 0;
   let started = false;
   let terminated = false;
   let cancelled = false;
@@ -146,10 +210,32 @@ export function responsesSseToAnthropicSse(
   let webSearchRequests = 0;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const utf8SliceBytes = (value: string, start: number, end: number): number => {
+    let bytes = 0;
+    for (let index = start; index < end; index++) {
+      const codePoint = value.codePointAt(index)!;
+      if (codePoint <= 0x7f) bytes += 1;
+      else if (codePoint <= 0x7ff) bytes += 2;
+      else if (codePoint <= 0xffff) bytes += 3;
+      else { bytes += 4; index += 1; }
+    }
+    return bytes;
+  };
+  const queuedLiveFrameBytes: number[] = [];
+  const releaseDeliveredFrame = () => {
+    const bytes = queuedLiveFrameBytes.shift();
+    if (bytes !== undefined) translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
+  };
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      const emit = (name: string, data: Rec) => controller.enqueue(encoder.encode(sseFrame(name, data)));
+      const emit = (name: string, data: Rec) => {
+        const frame = encoder.encode(sseFrame(name, data));
+        const reservation = translatorBudget.reserveTransient(frame.byteLength, { kind: "live_transient" });
+        controller.enqueue(frame);
+        reservation.commitRetained();
+        queuedLiveFrameBytes.push(frame.byteLength);
+      };
       const ensureStarted = () => {
         if (started) return;
         started = true;
@@ -170,6 +256,19 @@ export function responsesSseToAnthropicSse(
       }
       const closeOpenBlock = () => {
         if (!open) return;
+        if (open.kind === "tool_use" && open.bufferWebSearchArgs && !open.webSearchArgsEmitted) {
+          // Emit sanitized args even if output_item.done never supplied a full arguments field
+          // (finish/fail paths, or deltas-only streams).
+          let parsed: unknown = {};
+          const rawArgs = open.argsBuf ?? "";
+          try { parsed = rawArgs.length > 0 ? JSON.parse(rawArgs) : {}; } catch { parsed = {}; }
+          emit("content_block_delta", {
+            type: "content_block_delta",
+            index: open.index,
+            delta: { type: "input_json_delta", partial_json: JSON.stringify(sanitizeWebSearchInput(parsed)) },
+          });
+          open.webSearchArgsEmitted = true;
+        }
         if (open.kind === "thinking") {
           // Synthetic signature: Claude Code accepts it (003 E6); inbound drops replays anyway.
           emit("content_block_delta", {
@@ -178,6 +277,7 @@ export function responsesSseToAnthropicSse(
           });
         }
         emit("content_block_stop", { type: "content_block_stop", index: open.index });
+        if (open.callId) translatorBudget.closeCall(open.callId);
         open = null;
       };
       const ensureBlock = (kind: "text" | "thinking") => {
@@ -209,13 +309,26 @@ export function responsesSseToAnthropicSse(
       // (devlog/_plan/260716_claudecode_hardening/020). On win32 mid-stream socket
       // resets reach the reader catch (no failed-tail relay) and stay api_error —
       // same as today, deliberate residual.
-      const fail = (status: number, message: string, upstreamDerived = false) => {
+      const fail = (status: number, message: string, upstreamDerived = false, code?: string) => {
         if (terminated) return;
         terminated = true;
+        if (code === "translation_buffer_limit") {
+          if (open?.callId) translatorBudget.closeCall(open.callId);
+          open = null;
+          // No normal close frames are valid after overflow. Emit exactly one bounded
+          // typed terminal without consulting the exhausted budget.
+          controller.enqueue(encoder.encode(sseFrame("error", anthropicErrorBody(
+            413,
+            message,
+            "request_too_large",
+            "translation_buffer_limit",
+          ))));
+          return;
+        }
         ensureStarted();
         closeOpenBlock();
         const type = upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : undefined;
-        emit("error", anthropicErrorBody(status, message, type));
+        emit("error", anthropicErrorBody(status, message, type, code));
       };
 
       const handleFrame = (eventName: string, data: Rec) => {
@@ -253,21 +366,54 @@ export function responsesSseToAnthropicSse(
             closeOpenBlock();
             sawToolUse = true;
             const index = blockIndex++;
+            const name = typeof item.name === "string" ? item.name : "";
+            const bufferWebSearchArgs = isClaudeWebSearchToolName(name);
+            const callId = typeof item.call_id === "string" ? item.call_id : `toolu_${uuid()}`;
             emit("content_block_start", {
               type: "content_block_start", index,
               content_block: {
                 type: "tool_use",
-                id: typeof item.call_id === "string" ? item.call_id : `toolu_${uuid()}`,
-                name: typeof item.name === "string" ? item.name : "",
+                id: callId,
+                name,
                 input: {},
               },
             });
-            open = { kind: "tool_use", index, itemId: typeof item.id === "string" ? item.id : undefined };
+            translatorBudget.openCall(callId);
+            open = {
+              kind: "tool_use",
+              index,
+              callId,
+              itemId: typeof item.id === "string" ? item.id : undefined,
+              bufferWebSearchArgs,
+              argsBuf: "",
+              argsBufBytes: 0,
+              webSearchArgsEmitted: false,
+            };
             break;
           }
           case "response.function_call_arguments.delta": {
             if (typeof data.delta !== "string" || data.delta.length === 0) break;
             if (!open || open.kind !== "tool_use") break;
+            if (open.bufferWebSearchArgs) {
+              const previous = open.argsBuf ?? "";
+              const previousBytes = open.argsBufBytes ?? 0;
+              const nextBytes = appendedUtf8Bytes(previous, previousBytes, data.delta);
+              const scope = {
+                kind: "tool_args",
+                ...(open.callId ? { callId: open.callId } : {}),
+              } as const;
+              const reservation = translatorBudget.reserveTransient(nextBytes, scope);
+              try {
+                open.argsBuf = previous + data.delta;
+                open.argsBufBytes = nextBytes;
+                reservation.commitRetained();
+                translatorBudget.releaseRetained(previousBytes, scope);
+              } catch (error) {
+                reservation.release();
+                throw error;
+              }
+              break;
+            }
             emit("content_block_delta", {
               type: "content_block_delta", index: open.index,
               delta: { type: "input_json_delta", partial_json: data.delta },
@@ -307,7 +453,22 @@ export function responsesSseToAnthropicSse(
             if (!open) break;
             // Close the matching open block (message/reasoning items close implicitly on
             // the next block; function_call items must close here so tool input parses).
-            if (open.kind === "tool_use" && item.type === "function_call") closeOpenBlock();
+            if (open.kind === "tool_use" && item.type === "function_call") {
+              if (open.bufferWebSearchArgs && !open.webSearchArgsEmitted) {
+                const rawArgs = typeof item.arguments === "string" && item.arguments.length > 0
+                  ? item.arguments
+                  : (open.argsBuf ?? "");
+                let parsed: unknown = {};
+                try { parsed = rawArgs.length > 0 ? JSON.parse(rawArgs) : {}; } catch { parsed = {}; }
+                emit("content_block_delta", {
+                  type: "content_block_delta",
+                  index: open.index,
+                  delta: { type: "input_json_delta", partial_json: JSON.stringify(sanitizeWebSearchInput(parsed)) },
+                });
+                open.webSearchArgsEmitted = true;
+              }
+              closeOpenBlock();
+            }
             else if (open.kind === "text" && item.type === "message") closeOpenBlock();
             else if (open.kind === "thinking" && item.type === "reasoning") closeOpenBlock();
             break;
@@ -340,11 +501,21 @@ export function responsesSseToAnthropicSse(
             const response = isRec(data.response) ? data.response : {};
             const error = isRec(response.error) ? response.error : {};
             const message = typeof error.message === "string" ? error.message : "upstream request failed";
-            const status = typeof error.status === "number" ? error.status : 500;
+            const code = typeof error.code === "string" ? error.code : undefined;
+            if (code === "translation_buffer_limit") {
+              throw new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES);
+            }
+            const status = code === "translation_buffer_limit"
+              ? 413
+              : typeof error.status === "number" ? error.status : 500;
             // status-absent response.failed (relaySseWithFailedTail synthetic tail) defaults
             // to 500, which is in the transient set — the mid-stream reset shape maps to
             // overloaded_error by design.
-            fail(status, message, true);
+            fail(
+              status,
+              message,
+              true,
+            );
             break;
           }
           default:
@@ -358,23 +529,103 @@ export function responsesSseToAnthropicSse(
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            let sep: number;
-            while ((sep = buffer.indexOf("\n\n")) !== -1) {
-              const rawFrame = buffer.slice(0, sep);
-              buffer = buffer.slice(sep + 2);
-              let eventName = "";
-              let dataLine = "";
-              for (const line of rawFrame.split("\n")) {
-                if (line.startsWith("event: ")) eventName = line.slice(7).trim();
-                else if (line.startsWith("data: ")) dataLine += line.slice(6);
+            const decodedReservation = translatorBudget.reserveTransient(value.byteLength, { kind: "live_transient" });
+            let decodedCommitted = false;
+            try {
+              const fragment = decoder.decode(value, { stream: true });
+              decodedReservation.commitRetained();
+              decodedCommitted = true;
+              const nextBufferBytes = appendedUtf8Bytes(buffer, bufferBytes, fragment);
+              const appendReservation = translatorBudget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
+              try {
+                buffer += fragment;
+                appendReservation.commitRetained();
+                translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
+                bufferBytes = nextBufferBytes;
+              } catch (error) {
+                appendReservation.release();
+                throw error;
               }
-              if (!eventName || !dataLine) continue;
-              let data: unknown;
-              try { data = JSON.parse(dataLine); } catch { continue; }
-              if (!isRec(data)) continue;
-              if (terminated) continue;
-              handleFrame(eventName, data);
+              let sep: number;
+              while ((sep = buffer.indexOf("\n\n")) !== -1) {
+                const rawFrameBytes = utf8SliceBytes(buffer, 0, sep);
+                const residualBytes = bufferBytes - rawFrameBytes - 2;
+                const rawReservation = translatorBudget.reserveTransient(rawFrameBytes, { kind: "live_transient" });
+                let residualReservation: ReturnType<TranslatorBudget["reserveTransient"]> | undefined;
+                try {
+                  residualReservation = translatorBudget.reserveTransient(residualBytes, { kind: "live_transient" });
+                  const rawFrame = buffer.slice(0, sep);
+                  const residual = buffer.slice(sep + 2);
+                  rawReservation.commitRetained();
+                  residualReservation.commitRetained();
+                  residualReservation = undefined;
+                  buffer = residual;
+                  translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
+                  bufferBytes = residualBytes;
+                  try {
+                    let eventName = "";
+                    let dataLine = "";
+                    let dataLineBytes = 0;
+                    try {
+                      let lineStart = 0;
+                      while (lineStart <= rawFrame.length) {
+                        const newline = rawFrame.indexOf("\n", lineStart);
+                        const lineEnd = newline === -1 ? rawFrame.length : newline;
+                        if (rawFrame.startsWith("event: ", lineStart)) {
+                          eventName = rawFrame.slice(lineStart + 7, lineEnd).trim();
+                        } else if (rawFrame.startsWith("data: ", lineStart)) {
+                          const fragmentStart = lineStart + 6;
+                          const fragmentBytes = utf8SliceBytes(rawFrame, fragmentStart, lineEnd);
+                          const fragmentReservation = translatorBudget.reserveTransient(fragmentBytes, { kind: "live_transient" });
+                          let fragmentCommitted = false;
+                          try {
+                            const fragment = rawFrame.slice(fragmentStart, lineEnd);
+                            fragmentReservation.commitRetained();
+                            fragmentCommitted = true;
+                            const nextDataLineBytes = appendedUtf8Bytes(dataLine, dataLineBytes, fragment);
+                            const dataReservation = translatorBudget.reserveTransient(nextDataLineBytes, { kind: "live_transient" });
+                            try {
+                              dataLine += fragment;
+                              dataReservation.commitRetained();
+                              translatorBudget.releaseRetained(dataLineBytes, { kind: "live_transient" });
+                              dataLineBytes = nextDataLineBytes;
+                            } catch (error) {
+                              dataReservation.release();
+                              throw error;
+                            }
+                          } finally {
+                            if (fragmentCommitted) {
+                              translatorBudget.releaseRetained(fragmentBytes, { kind: "live_transient" });
+                            } else fragmentReservation.release();
+                          }
+                        }
+                        if (newline === -1) break;
+                        lineStart = newline + 1;
+                      }
+                      if (!dataLine) continue;
+                      let data: unknown;
+                      try { data = JSON.parse(dataLine); } catch { continue; }
+                      if (!isRec(data)) continue;
+                      // Responses-compatible gateways may omit the optional SSE event field
+                      // while retaining the event name in the JSON payload's required type.
+                      const resolvedEventName = eventName || (typeof data.type === "string" ? data.type : "");
+                      if (!resolvedEventName || terminated) continue;
+                      handleFrame(resolvedEventName, data);
+                    } finally {
+                      translatorBudget.releaseRetained(dataLineBytes, { kind: "live_transient" });
+                    }
+                  } finally {
+                    translatorBudget.releaseRetained(rawFrameBytes, { kind: "live_transient" });
+                  }
+                } catch (error) {
+                  rawReservation.release();
+                  residualReservation?.release();
+                  throw error;
+                }
+              }
+            } finally {
+              if (decodedCommitted) translatorBudget.releaseRetained(value.byteLength, { kind: "live_transient" });
+              else decodedReservation.release();
             }
           }
           // EOF without a terminal frame is a TRUNCATION, not success (devlog 100:
@@ -383,16 +634,25 @@ export function responsesSseToAnthropicSse(
           // with a mid-stream Anthropic error event so the client can retry.
           if (!cancelled) fail(502, "upstream stream ended before a terminal frame (truncated response)", true);
         } catch (err) {
-          fail(500, err instanceof Error ? err.message : String(err));
+          if (isTranslatorBudgetExceededError(err)) {
+            try { await reader.cancel(err); } catch { /* already closed */ }
+            fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");
+          } else fail(500, err instanceof Error ? err.message : String(err));
         } finally {
+          translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
           if (pingTimer !== undefined) clearInterval(pingTimer);
           reader.releaseLock();
           if (!cancelled) controller.close();
         }
       })();
     },
+    pull() {
+      releaseDeliveredFrame();
+    },
     cancel(reason) {
       cancelled = true;
+      while (queuedLiveFrameBytes.length > 0) releaseDeliveredFrame();
+      if (open?.callId) translatorBudget.closeCall(open.callId);
       if (pingTimer !== undefined) clearInterval(pingTimer);
       return reader?.cancel(reason);
     },
@@ -442,11 +702,12 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string): R
         if (typeof raw.arguments === "string" && raw.arguments.length > 0) {
           try { input = JSON.parse(raw.arguments); } catch { input = {}; }
         }
+        const name = typeof raw.name === "string" ? raw.name : "";
         content.push({
           type: "tool_use",
           id: typeof raw.call_id === "string" ? raw.call_id : `toolu_${uuid()}`,
-          name: typeof raw.name === "string" ? raw.name : "",
-          input,
+          name,
+          input: isClaudeWebSearchToolName(name) ? sanitizeWebSearchInput(input) : input,
         });
         break;
       }
@@ -499,7 +760,11 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string): R
  * (routed adapters do not support non-stream turns), so the translated stream is
  * aggregated here instead of translating a JSON body.
  */
-export async function collectAnthropicMessage(stream: ReadableStream<Uint8Array>, model: string): Promise<Rec> {
+export async function collectAnthropicMessage(
+  stream: ReadableStream<Uint8Array>,
+  model: string,
+  translatorBudget: TranslatorBudget,
+): Promise<Rec> {
   const decoder = new TextDecoder();
   const reader = stream.getReader();
   let buffer = "";
@@ -509,6 +774,12 @@ export async function collectAnthropicMessage(stream: ReadableStream<Uint8Array>
   let stopReason: string | null = "end_turn";
   let usage: Rec = anthropicUsage(undefined);
   let error: Rec | null = null;
+  const replaceRetained = (previous: string, next: string, kind: "live_transient" | "retained_collectors") => {
+    const reservation = translatorBudget.reserveTransient(Buffer.byteLength(next), { kind });
+    reservation.commitRetained();
+    translatorBudget.releaseRetained(Buffer.byteLength(previous), { kind });
+    return next;
+  };
 
   const closeBlock = () => {
     if (!openBlock) return;
@@ -516,6 +787,7 @@ export async function collectAnthropicMessage(stream: ReadableStream<Uint8Array>
     if (openBlock.type === "tool_use" || openBlock.type === "server_tool_use") {
       try { openBlock.input = toolJson.length > 0 ? JSON.parse(toolJson) : {}; } catch { openBlock.input = {}; }
     }
+    translatorBudget.chargeRetained(Buffer.byteLength(JSON.stringify(openBlock)), { kind: "retained_collectors" });
     content.push(openBlock);
     openBlock = null;
     toolJson = "";
@@ -531,13 +803,15 @@ export async function collectAnthropicMessage(stream: ReadableStream<Uint8Array>
         const delta = isRec(data.delta) ? data.delta : {};
         if (!openBlock) break;
         if (delta.type === "text_delta" && typeof delta.text === "string") {
-          openBlock.text = `${openBlock.text ?? ""}${delta.text}`;
+          const previous = typeof openBlock.text === "string" ? openBlock.text : "";
+          openBlock.text = replaceRetained(previous, previous + delta.text, "retained_collectors");
         } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
-          openBlock.thinking = `${openBlock.thinking ?? ""}${delta.thinking}`;
+          const previous = typeof openBlock.thinking === "string" ? openBlock.thinking : "";
+          openBlock.thinking = replaceRetained(previous, previous + delta.thinking, "retained_collectors");
         } else if (delta.type === "signature_delta" && typeof delta.signature === "string") {
           openBlock.signature = delta.signature;
         } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
-          toolJson += delta.partial_json;
+          toolJson = replaceRetained(toolJson, toolJson + delta.partial_json, "retained_collectors");
         }
         break;
       }
@@ -562,11 +836,11 @@ export async function collectAnthropicMessage(stream: ReadableStream<Uint8Array>
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      buffer = replaceRetained(buffer, buffer + decoder.decode(value, { stream: true }), "live_transient");
       let sep: number;
       while ((sep = buffer.indexOf("\n\n")) !== -1) {
         const rawFrame = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
+        buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
         let eventName = "";
         let dataLine = "";
         for (const line of rawFrame.split("\n")) {

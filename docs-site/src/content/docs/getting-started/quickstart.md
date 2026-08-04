@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 50 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 66 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
@@ -26,7 +26,8 @@ ocx init
 The result is saved to `$OPENCODEX_HOME/config.json` (default `~/.opencodex/config.json`).
 
 :::note[GPT-5.6 rollout entries]
-Stable v2.7.1 seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key, OpenRouter, and
+The current stable release seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key,
+OpenRouter, and
 the experimental Cursor adapter. They work only when that upstream account has access. The OpenAI
 API-key and OpenRouter presets advertise a 372,000-token usable context window; Cursor keeps its own
 adapter metadata.
@@ -76,7 +77,8 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 A fresh config features five native models in Codex's sub-agent picker: `gpt-5.5`,
 `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.4-mini`. Open `ocx gui` to replace or
 reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model
-and reasoning effort; opencodex adds that guidance to v1 collaboration requests.
+and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and
+understand when guidance, native defaults, and fallback apply.
 
 ## Logging in instead of pasting a key
 
@@ -88,7 +90,7 @@ ocx logout xai
 ```
 
 OpenAI itself needs **no key** — the default provider forwards your existing `codex login`
-credentials straight through (see [Providers](/opencodex/guides/providers/)).
+credentials straight through (see [Providers](/guides/providers/)).
 
 ## Stopping & restoring
 
@@ -100,6 +102,6 @@ ocx restore back  # route Codex through the still-running proxy again
 
 ## Next
 
-- [How It Works](/opencodex/getting-started/how-it-works/) — what happens to each request.
-- [Providers](/opencodex/guides/providers/) — every way to authenticate.
-- [Configuration](/opencodex/reference/configuration/) — the full `config.json` reference.
+- [How It Works](/getting-started/how-it-works/) — what happens to each request.
+- [Providers](/guides/providers/) — every way to authenticate.
+- [Configuration](/reference/configuration/) — the full `config.json` reference.

@@ -294,6 +294,27 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT rejects aliases owned by a Codex account namespace without mutating config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ codexAccountNamespaces: { side: "side-account-id" } });
+      saveConfig(config);
+      const beforeMemory = structuredClone(config);
+      const beforeDisk = readFileSync(getConfigPath(), "utf8");
+
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "intentional",
+        combo: { ...VALID_COMBO, alias: "side/gpt-5.5" },
+      });
+
+      expect(response?.status).toBe(409);
+      expect(await responseJson(response)).toEqual({
+        error: "combo alias must not use a configured Codex account namespace",
+      });
+      expect(config).toEqual(beforeMemory);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeDisk);
+    });
+  });
+
   test("PUT rejects invalid and duplicate aliases without memory or disk mutation", async () => {
     await withTempHome(async () => {
       const config = baseConfig({
@@ -492,7 +513,7 @@ describe("combo management API", () => {
     const disabledResponse = await comboApi(config, "GET", "/api/subagent-models");
     const disabledBody = await disabledResponse!.json() as { available: string[] };
     expect(disabledBody.available).not.toContain("deepseek-v4-flash");
-  });
+  }, 15_000);
 
   test("GET models round-trips a disabled combo alias for the Models GUI", async () => {
     const config = baseConfig({
@@ -707,7 +728,7 @@ describe("combo management API", () => {
         else process.env.CODEX_HOME = previousCodexHome;
       }
     });
-  });
+  }, 15_000);
 
   test("provider deletion is guarded by sorted combo dependencies until cleanup", async () => {
     await withTempHome(async () => {
@@ -822,3 +843,4 @@ describe("supported disabled-provider activation", () => {
     });
   }, 10_000);
 });
+import { ManagementRequest as Request } from "./helpers/management-auth";

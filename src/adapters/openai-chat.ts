@@ -1,12 +1,21 @@
-import type { ProviderAdapter } from "./base";
+import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { debugProviderDiagnostic } from "../lib/debug";
+import { isDebugEnabled } from "../lib/debug-settings";
+import { isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
 import { neutralizeIdentity } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
+import {
+  isTranslatorBudgetExceededError,
+  retainTranslatedEventBatch,
+  TRANSLATOR_MAX_SSE_EVENT_BYTES,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
 
 // Providers may opt into stripping one trailing "[...]" group from the wire model id.
 // Z.AI needs this because its OpenAI path rejects glm-5.2[1m] with 400 code 1211;
@@ -61,6 +70,13 @@ function extractErrorDetail(parsed: unknown): string | undefined {
   return undefined;
 }
 
+function developerSystemText(message: OcxMessage): string | undefined {
+  if (message.role !== "developer") return undefined;
+  if (typeof message.content === "string") return message.content;
+  if (message.content.some(part => part.type === "image")) return undefined;
+  return message.content.map(part => (part as OcxTextContent).text).join("");
+}
+
 function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] {
   const out: unknown[] = [];
   const { context, options } = parsed;
@@ -112,7 +128,20 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
   const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
     ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
     : undefined;
-  const systemParts = [...(context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
+  // Chat templates used by LM Studio, llama.cpp, and other strict OpenAI-compatible
+  // backends require every system instruction to precede conversation history. Codex can
+  // append developer reminders after user turns, so fold text-only developer messages into
+  // the single leading system message instead of emitting role:"system" in place. Developer
+  // messages with images cannot be represented as system content and remain user-compatible
+  // vision messages at their original position below.
+  const developerSystemParts = context.messages
+    .map(developerSystemText)
+    .filter((part): part is string => part !== undefined && part.length > 0);
+  const systemParts = [
+    ...(context.systemPrompt ?? []),
+    ...developerSystemParts,
+    ...(toolCatalogNudge ? [toolCatalogNudge] : []),
+  ];
   if (systemParts.length > 0) {
     // Codex sends its GPT-5 identity prompt for EVERY model (the per-model catalog
     // base_instructions is ignored at request time). Neutralize that one identity line
@@ -126,18 +155,19 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
     switch (msg.role) {
       case "user":
       case "developer": {
-        const role = msg.role === "developer" ? "system" : "user";
+        const parts = typeof msg.content === "string" ? undefined : msg.content as OcxContentPart[];
+        const hasImages = parts?.some(p => p.type === "image") ?? false;
+        if (msg.role === "developer" && !hasImages) break;
         let chatMsg: Record<string, unknown>;
         if (typeof msg.content === "string") {
-          chatMsg = { role, content: msg.content };
+          chatMsg = { role: "user", content: msg.content };
         } else {
-          const parts = msg.content as OcxContentPart[];
-          if (!parts.some(p => p.type === "image")) {
-            chatMsg = { role, content: parts.map(p => (p as OcxTextContent).text).join("") };
+          if (!hasImages) {
+            chatMsg = { role: "user", content: parts!.map(p => (p as OcxTextContent).text).join("") };
           } else {
             // Vision: chat-completions content-parts array. Images are only valid on the user role,
             // and the data URL goes straight into image_url.url (never the token-exploding text path).
-            const chatParts = parts.map(p => p.type === "image"
+            const chatParts = parts!.map(p => p.type === "image"
               ? { type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } }
               : { type: "text", text: (p as OcxTextContent).text });
             chatMsg = { role: "user", content: chatParts };
@@ -182,10 +212,10 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           }));
           // "" instead of null: strict validators (xAI: "Each message must have at least one
           // content element", langchain#34140) reject content-less assistant history entries.
-          if (!chatMsg.content) chatMsg.content = "";
+          if (!chatMsg.content) chatMsg.content = emptyAssistantContent(provider);
         }
         if (chatMsg.reasoning_content !== undefined && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
-          chatMsg.content = "";
+          chatMsg.content = emptyAssistantContent(provider);
         }
         out.push(chatMsg);
         pendingToolCalls = wireToolCalls.map(({ tc, id }) => ({ id, name: namespacedToolName(tc.namespace, tc.name) }));
@@ -214,7 +244,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           const name = safeToolName(msg.toolName);
           out.push({
             role: "assistant",
-            content: "",
+            content: emptyAssistantContent(provider),
             tool_calls: [{
               id: toolCallId,
               type: "function",
@@ -325,7 +355,9 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
 }
 
 function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
-  return provider.baseUrl.replace(/\/+$/, "") === "https://opencode.ai/zen/v1";
+  const baseUrl = provider.baseUrl.replace(/\/+$/, "");
+  return baseUrl === "https://opencode.ai/zen/v1"
+    || baseUrl === "https://opencode.ai/zen/go/v1";
 }
 
 const XAI_SCHEMA_BASE_URLS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
@@ -344,6 +376,43 @@ function isKimiSchemaTarget(provider: OcxProviderConfig): boolean {
   } catch {
     return false;
   }
+}
+
+// Volcengine Ark regional endpoints. Ark validates an assistant message's text field as a
+// REQUIRED parameter and treats "" as absent, so a tool-call-only assistant in history 400s with
+// `MissingParameter: input.content.text` (#796). Every other OpenAI-compatible provider accepts
+// "", and xAI actively requires it ("Each message must have at least one content element"), so
+// the two contracts are in direct conflict and this cannot be a global change.
+const VOLCENGINE_ARK_HOSTNAMES = new Set([
+  "ark.cn-beijing.volces.com",
+  "ark.ap-southeast.volces.com",
+]);
+
+function isVolcengineArkTarget(provider: OcxProviderConfig): boolean {
+  try {
+    return VOLCENGINE_ARK_HOSTNAMES.has(new URL(provider.baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Placeholder content for an assistant history entry carrying only tool calls or reasoning.
+ *
+ * UNVERIFIED HYPOTHESIS for Ark. The reported error names `input.content.text`, a nested path,
+ * which suggests Ark wants the structured content form `[{type:"text",text:""}]` rather than a
+ * bare string — no string value, `""` or `" "`, exposes a `content.text` path at all. But Ark's
+ * published examples only show array content for MULTIMODAL USER input, never for an assistant
+ * history entry, so this shape is inferred from the error message and not confirmed by the docs
+ * or by a live request. The empty inner text at least adds no tokens either way.
+ *
+ * Confirm against a real Ark endpoint before relying on this; #796 records what is still missing.
+ *
+ * Every other provider keeps the bare `""`, which xAI's validator specifically requires ("Each
+ * message must have at least one content element"), so this cannot be applied globally.
+ */
+function emptyAssistantContent(provider: OcxProviderConfig): string | { type: "text"; text: string }[] {
+  return isVolcengineArkTarget(provider) ? [{ type: "text", text: "" }] : "";
 }
 
 /**
@@ -501,6 +570,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         messages,
         stream: parsed.stream,
       };
+      if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
       const maxTokens = resolveMaxTokens(provider, parsed);
       const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
       if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
@@ -519,18 +589,37 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
       const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+      let reasoningLog: AdapterRequest["reasoningLog"];
       if (reasoningEffort !== undefined) {
         if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
           const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
-          if (budget !== undefined) body.thinking_budget = budget;
+          if (budget !== undefined) {
+            body.thinking_budget = budget;
+            reasoningLog = {
+              effectiveEffort: parsed.options.reasoning === "minimal" ? "minimal" : reasoningEffort,
+              wireField: "thinking_budget",
+              wireValue: budget,
+            };
+          }
         } else if (modelInList(provider.thinkingToggleModels, parsed.modelId)) {
-          // Vendor thinking-toggle wire (MiMo v2.x, GLM 5/5.1): the mapped value is the toggle
-          // state, sent as `thinking: {type}` — these models ignore/reject reasoning_effort.
-          if (reasoningEffort === "enabled" || reasoningEffort === "disabled") {
+          // Vendor thinking-toggle wire: the mapped value is sent as `thinking: {type}` because
+          // these models ignore/reject reasoning_effort. Most use enabled/disabled; MiniMax-M3
+          // uses adaptive/disabled.
+          if (reasoningEffort === "enabled" || reasoningEffort === "disabled" || reasoningEffort === "adaptive") {
             body.thinking = { type: reasoningEffort };
+            reasoningLog = {
+              effectiveEffort: reasoningEffort,
+              wireField: "thinking.type",
+              wireValue: reasoningEffort,
+            };
           }
         } else {
           body.reasoning_effort = reasoningEffort;
+          reasoningLog = {
+            effectiveEffort: reasoningEffort,
+            wireField: "reasoning_effort",
+            wireValue: reasoningEffort,
+          };
         }
       }
       if (parsed.options.presencePenalty !== undefined && !modelInList(provider.noPenaltyModels, parsed.modelId)) {
@@ -567,10 +656,33 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
       if (provider.headers) Object.assign(headers, provider.headers);
 
-      return { url, method: "POST", headers, body: JSON.stringify(body) };
+      const bodyJson = JSON.stringify(body);
+      // Never log pathname/query — tenant-scoped hosts (e.g. Cloudflare
+      // /accounts/<account_id>/ai/v1) would otherwise leak account identifiers (#452).
+      if (isDebugEnabled()) {
+        let host = "upstream";
+        try { host = new URL(url).host; } catch { /* keep fallback */ }
+        debugProviderDiagnostic("openai-chat", "request", {
+          host,
+          model: body.model,
+          stream: parsed.stream,
+          messageCount: Array.isArray(messages) ? messages.length : 0,
+          toolCount: Array.isArray(tools) ? tools.length : 0,
+          hasCredential,
+          bodyBytes: new TextEncoder().encode(bodyJson).length,
+        });
+      }
+
+      return {
+        url,
+        method: "POST",
+        headers,
+        body: bodyJson,
+        ...(reasoningLog ? { reasoningLog } : {}),
+      };
     },
 
-    async *parseStream(response: Response): AsyncGenerator<AdapterEvent> {
+    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
@@ -578,7 +690,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      const budgetEncoder = new TextEncoder();
       let buffer = "";
+      let bufferBytes = 0;
       // Streamed tool calls are BUFFERED until a terminal signal, then flushed as atomic
       // start/delta/end sequences. The bridge treats text/reasoning deltas as barriers that
       // close an open tool-call item (bridge.ts closeCurrentToolCall on text_delta), so
@@ -587,15 +701,18 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // chunks, whole-chunk calls) cannot be represented live without overlapping sequences.
       // Keyed by `index` (OpenAI wire standard), falling back to `id`, falling back to the
       // last-seen call for providers that omit both on continuation chunks.
-      interface PendingToolCall { key: string; id: string; name: string; args: string }
+      interface PendingToolCall { key: string; id: string; name: string; args: string; argsBytes: number }
       const pendingToolCalls: PendingToolCall[] = [];
       let toolCallSeq = 0;
       const flushToolCalls = function* (): Generator<AdapterEvent> {
+        // Do not treat flushed tool calls as user-facing output for the finish-less EOF
+        // fallback — incomplete tool args must stay on the truncation path.
         for (const call of pendingToolCalls) {
           if (!call.id) call.id = `call_${++toolCallSeq}`;
           yield { type: "tool_call_start", id: call.id, name: call.name };
           if (call.args.length > 0) yield { type: "tool_call_delta", arguments: call.args };
           yield { type: "tool_call_end" };
+          budget.closeCall(call.key);
         }
         pendingToolCalls.length = 0;
       };
@@ -604,7 +721,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // being reported as a clean completion (silent truncation). A graceful close is either an
       // explicit `[DONE]` sentinel OR a chunk carrying a non-null `finish_reason` (some
       // OpenAI-compatible providers omit `[DONE]` but do send finish_reason).
-      let sawFinish = false;
+      let finishReason: string | undefined;
+      // Only answer text enables the finish-less EOF fallback. Reasoning-only streams can be
+      // suppressed by hideThinkingSummary and must not complete as empty successful turns.
+      let sawUserFacingOutput = false;
 
       // Single per-line handler shared by the streaming loop and the EOF residual-frame flush, so
       // a final frame is parsed identically wherever it lands (no duplicated, drift-prone parsing).
@@ -615,7 +735,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const payload = line.slice(6).trim();
         if (payload === "[DONE]") {
           yield* flushToolCalls();
-          yield { type: "done", usage: pendingUsage };
+          const stopReason = finishReason === "length"
+            ? "max_tokens"
+            : finishReason === "content_filter"
+              ? "content_filter"
+              : undefined;
+          yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
           return "terminate";
         }
 
@@ -631,9 +756,21 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // instead of a clean [DONE]. Surface it as a terminal error so the bridge emits a
         // classified response.failed (bridge case "error") — never a truncated completion.
         if (chunk.error) {
-          const err = chunk.error as { message?: string } | undefined;
+          const err = chunk.error as { message?: string; code?: string; type?: string; status?: number } | undefined;
+          const message = err?.message ?? "upstream error";
+          debugProviderDiagnostic("openai-chat", "stream-error", { message });
           yield* flushToolCalls();
-          yield { type: "error", message: err?.message ?? "upstream error" };
+          yield {
+            type: "error",
+            message,
+            ...(typeof err?.code === "string" ? { code: err.code } : {}),
+            ...(typeof err?.type === "string" ? { errorType: err.type } : {}),
+            ...(isCyberPolicyCode(err?.code)
+              ? { status: 400 }
+              : typeof err?.status === "number" && Number.isInteger(err.status)
+                ? { status: err.status }
+                : {}),
+          };
           return "terminate";
         }
 
@@ -647,18 +784,18 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const choices = chunk.choices as { delta?: Record<string, unknown>; finish_reason?: string }[] | undefined;
         if (!choices || choices.length === 0) return "continue";
         // Observe the terminator BEFORE the delta guard: a finish-only chunk (finish_reason set,
-        // no delta) is a graceful close and must mark sawFinish even though we skip it below.
+        // no delta) is a graceful close and must record finishReason even though we skip it below.
         if (typeof choices[0].finish_reason === "string" && choices[0].finish_reason) {
-          sawFinish = true;
+          finishReason = choices[0].finish_reason;
         }
         const delta = choices[0].delta;
         if (delta) {
-          if (typeof delta.content === "string" && delta.content.length > 0) {
-            yield { type: "text_delta", text: delta.content };
-          }
-
           if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
             yield { type: "reasoning_raw_delta", text: delta.reasoning_content };
+          }
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            sawUserFacingOutput = true;
+            yield { type: "text_delta", text: delta.content };
           }
 
           const toolCalls = delta.tool_calls as { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] | undefined;
@@ -675,12 +812,27 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               // splitting into two calls that share one call_id downstream.
               if (!call && tc.id) call = pendingToolCalls.find(c => c.id === tc.id);
               if (!call) {
-                call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "" };
+                call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "", argsBytes: 0 };
                 pendingToolCalls.push(call);
+                budget.openCall(call.key);
               }
               if (tc.id && !call.id) call.id = tc.id;
               if (tc.function?.name && !call.name) call.name = tc.function.name;
-              if (tc.function?.arguments) call.args += tc.function.arguments;
+              if (tc.function?.arguments) {
+                const previousBytes = call.argsBytes;
+                const nextBytes = previousBytes + budgetEncoder.encode(tc.function.arguments).byteLength;
+                const scope = { kind: "tool_args" as const, callId: call.key };
+                const reservation = budget.reserveTransient(nextBytes, scope);
+                try {
+                  call.args += tc.function.arguments;
+                  reservation.commitRetained();
+                  budget.releaseRetained(previousBytes, scope);
+                  call.argsBytes = nextBytes;
+                } catch (error) {
+                  reservation.release();
+                  throw error;
+                }
+              }
             }
           }
         }
@@ -697,10 +849,31 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          const decoded = decoder.decode(value, { stream: true });
+          const nextBufferBytes = bufferBytes + budgetEncoder.encode(decoded).byteLength;
+          if (nextBufferBytes > TRANSLATOR_MAX_SSE_EVENT_BYTES) {
+            throw new Error(`translation SSE event exceeded ${TRANSLATOR_MAX_SSE_EVENT_BYTES} bytes`, {
+              cause: { code: "translation_buffer_limit" },
+            });
+          }
+          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
+          try {
+            buffer += decoded;
+            appendReservation.commitRetained();
+            budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          } catch (error) {
+            appendReservation.release();
+            throw error;
+          }
+          bufferBytes = nextBufferBytes;
 
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
+          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
+          residualReservation.commitRetained();
+          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+          bufferBytes = residualBytes;
 
           for (const line of lines) {
             if ((yield* handleDataLine(line)) === "terminate") return;
@@ -715,29 +888,84 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (buffer.length > 0) {
           if ((yield* handleDataLine(buffer)) === "terminate") return;
         }
-        yield* flushToolCalls();
-        // Reader EOF. A graceful close shows at least one terminal signal: `[DONE]` (returns above),
-        // a non-null finish_reason (sawFinish), or a trailing usage chunk (providers emit usage only
-        // at end-of-generation). If NONE of those were seen, the stream was cut mid-flight — fail
-        // closed so the bridge emits a classified response.failed rather than a silent truncation.
-        if (!sawFinish && pendingUsage === undefined) {
+        // Reader EOF. Prefer failing closed before flushing pending tool calls so the bridge
+        // never sees a fabricated tool_call_end on a truncated mid-assembly stream.
+        //
+        // Checked BEFORE flushToolCalls(), because that helper emits tool_call_end and there is no
+        // taking it back: a half-assembled argument string would reach the client as a completed
+        // call. Tool calls are buffered here (unlike the Anthropic adapter, which forwards
+        // fragments live), so this adapter can still decide.
+        const sawFinish = finishReason !== undefined;
+        if (!sawFinish && pendingToolCalls.length > 0) {
+          debugProviderDiagnostic("openai-chat", "stream-truncated", {
+            finishReason: null,
+            hadUsage: pendingUsage !== undefined,
+            pendingToolCalls: pendingToolCalls.length,
+          });
+          yield { type: "error", message: "upstream stream ended mid tool call without a terminal signal — possible truncation" };
+          return;
+        }
+        // Finish-less EOF is only safe when answer text was emitted. Reasoning-only / usage-only
+        // truncations must stay on the error path (hideThinkingSummary can suppress reasoning).
+        // Trailing usage alone is not a terminal signal for this adapter (#735 / restore #773).
+        if (!sawFinish && !sawUserFacingOutput) {
+          debugProviderDiagnostic("openai-chat", "stream-truncated", {
+            finishReason: finishReason ?? null,
+            hadUsage: pendingUsage !== undefined,
+          });
           yield { type: "error", message: "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation" };
           return;
         }
-        // Graceful close that omitted [DONE] but delivered finish_reason and/or final usage.
-        yield { type: "done", usage: pendingUsage };
+        yield* flushToolCalls();
+        // Graceful close that omitted [DONE] but delivered finish_reason and/or answer text.
+        const stopReason = finishReason === "length"
+          ? "max_tokens"
+          : finishReason === "content_filter"
+            ? "content_filter"
+            : undefined;
+        yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
+      } catch (error) {
+        if (isTranslatorBudgetExceededError(error)
+          || (error instanceof Error && (error.cause as { code?: unknown } | undefined)?.code === "translation_buffer_limit")) {
+          yield {
+            type: "error",
+            status: 502,
+            errorType: "upstream_error",
+            code: "translation_buffer_limit",
+            message: "upstream translation buffer exceeded the safe limit",
+          };
+          try { await reader.cancel(error); } catch { /* already closed */ }
+          return;
+        }
+        throw error;
       } finally {
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+        for (const call of pendingToolCalls) budget.closeCall(call.key);
         reader.releaseLock();
       }
     },
 
-    async parseResponse(response: Response): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const json = await response.json() as Record<string, unknown>;
+      const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+      budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
+      try {
       if (json.error) {
-        const upstreamError = json.error as { message?: unknown };
+        const upstreamError = json.error as { message?: unknown; code?: unknown; type?: unknown; status?: unknown };
+        const message = typeof upstreamError.message === "string" ? upstreamError.message : "upstream error";
+        const code = typeof upstreamError.code === "string" ? upstreamError.code : undefined;
+        const errorType = typeof upstreamError.type === "string" ? upstreamError.type : undefined;
+        const status = isCyberPolicyCode(code)
+          ? 400
+          : typeof upstreamError.status === "number" && Number.isInteger(upstreamError.status)
+            ? upstreamError.status
+            : undefined;
         return [{
           type: "error",
-          message: typeof upstreamError.message === "string" ? upstreamError.message : "upstream error",
+          message,
+          ...(code !== undefined ? { code } : {}),
+          ...(errorType !== undefined ? { errorType } : {}),
+          ...(status !== undefined ? { status } : {}),
         }];
       }
 
@@ -748,11 +976,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
 
       const msg = choices[0].message;
-      if (typeof msg.content === "string") {
-        events.push({ type: "text_delta", text: msg.content });
-      }
       if (typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0) {
         events.push({ type: "reasoning_raw_delta", text: msg.reasoning_content });
+      }
+      if (typeof msg.content === "string") {
+        events.push({ type: "text_delta", text: msg.content });
       }
       const toolCalls = msg.tool_calls as { id: string; function: { name: string; arguments: string } }[] | undefined;
       if (toolCalls) {
@@ -767,7 +995,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         type: "done",
         usage: usageFromOpenAIChat(usage),
       });
+      retainTranslatedEventBatch(events, budget);
       return events;
+      } finally {
+        budget.releaseRetained(responseBytes, { kind: "retained_collectors" });
+      }
     },
   };
 }

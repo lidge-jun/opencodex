@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { createAnthropicAdapter } from "../src/adapters/anthropic";
-import { createGoogleAdapter } from "../src/adapters/google";
-import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
+import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
+import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
+  withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
+const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
+  withTestTranslatorBudget(createGoogleAdapterProduction(...args));
+const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
+  withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
 
@@ -18,18 +26,17 @@ describe("adapter reasoning and usage details", () => {
       },
     })));
 
-    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "raw thoughts" });
-    expect(events).toContainEqual({ type: "text_delta", text: "answer" });
-    expect(events?.at(-1)).toEqual({
-      type: "done",
-      usage: { inputTokens: 11, outputTokens: 7, cachedInputTokens: 5, reasoningOutputTokens: 3 },
-    });
+    expect(events).toEqual([
+      { type: "reasoning_raw_delta", text: "raw thoughts" },
+      { type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 11, outputTokens: 7, cachedInputTokens: 5, reasoningOutputTokens: 3 } },
+    ]);
   });
 
   test("OpenAI-compatible streaming maps reasoning_content and usage details", async () => {
     const adapter = createOpenAIChatAdapter(provider);
     const response = new Response([
-      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"raw stream\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"raw stream\",\"content\":\"answer\"}}]}\n\n",
       "data: {\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2},\"completion_tokens_details\":{\"reasoning_tokens\":1}}}\n\n",
       "data: [DONE]\n\n",
     ].join(""));
@@ -37,11 +44,11 @@ describe("adapter reasoning and usage details", () => {
     const events = [];
     for await (const event of adapter.parseStream(response)) events.push(event);
 
-    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "raw stream" });
-    expect(events.at(-1)).toEqual({
-      type: "done",
-      usage: { inputTokens: 9, outputTokens: 4, cachedInputTokens: 2, reasoningOutputTokens: 1 },
-    });
+    expect(events).toEqual([
+      { type: "reasoning_raw_delta", text: "raw stream" },
+      { type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 9, outputTokens: 4, cachedInputTokens: 2, reasoningOutputTokens: 1 } },
+    ]);
   });
 
   test("OpenAI-compatible non-OpenAI providers receive the tool catalog nudge", async () => {
@@ -315,7 +322,7 @@ describe("usage and content retention (F2)", () => {
     });
   });
 
-  test("anthropic stream emits terminal usage on EOF when message_stop is missing", async () => {
+  test("anthropic stream fails closed on EOF when message_stop and stop_reason are missing", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
     const response = new Response([
       'event: message_start\n',
@@ -326,7 +333,11 @@ describe("usage and content retention (F2)", () => {
 
     const events = [];
     for await (const event of adapter.parseStream(response)) events.push(event);
-    expect(events.at(-1)).toEqual({ type: "done", usage: { inputTokens: 7, outputTokens: 1 } });
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "upstream stream ended before message_stop — possible truncation",
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
   });
 
   test("google emits exactly one done carrying usage", async () => {
@@ -485,6 +496,40 @@ describe("anthropic tool result history repair", () => {
         cache_control: { type: "ephemeral" },
       }],
     });
+  });
+
+  test("reorders interleaved text after tool_use so Anthropic pairing stays valid (#620)", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const request = await adapter.buildRequest({
+      modelId: "claude-sonnet",
+      context: {
+        messages: [
+          { role: "user", content: "start", timestamp: 0 },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "before" },
+              { type: "toolCall", id: "call_a", name: "first_tool", arguments: {} },
+              { type: "text", text: "between steps" },
+              { type: "toolCall", id: "call_b", name: "second_tool", arguments: {} },
+            ],
+            model: "claude-sonnet",
+            timestamp: 0,
+          },
+          { role: "toolResult", toolCallId: "call_a", toolName: "first_tool", content: "one", isError: false, timestamp: 0 },
+          { role: "toolResult", toolCallId: "call_b", toolName: "second_tool", content: "two", isError: false, timestamp: 0 },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const wire = JSON.parse(request.body) as { messages: Array<{ role: string; content: any }> };
+    const assistant = wire.messages.find(m => m.role === "assistant" && Array.isArray(m.content) && m.content.some((c: { type?: string }) => c.type === "tool_use"));
+    expect(assistant).toBeDefined();
+    const types = (assistant!.content as { type: string }[]).map(c => c.type);
+    expect(types).toEqual(["text", "text", "tool_use", "tool_use"]);
+    expect(wire.messages[2].role).toBe("user");
+    expect(wire.messages[2].content.map((c: { tool_use_id?: string }) => c.tool_use_id)).toEqual(["call_a", "call_b"]);
   });
 
   test("preserves orphan tool results as text instead of invalid Anthropic tool_result blocks", async () => {

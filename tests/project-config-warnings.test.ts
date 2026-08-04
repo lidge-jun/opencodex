@@ -5,7 +5,6 @@ import { join, posix, win32 } from "node:path";
 import {
   analyzeProjectCodexConfig,
   collectProjectCodexConfigWarnings,
-  getCachedProjectConfigDiagnostics,
   isGlobalOpencodexRoutingActive,
   invalidateProjectConfigDiagnosticsCache,
   parseTrustedProjectPathsFromCodexConfig,
@@ -227,25 +226,29 @@ name = "anthropic"
     expect(collectProjectCodexConfigWarnings()).toEqual([]);
   });
 
-  test("caches diagnostics for repeated API reads", () => {
+  test("uncached collection reflects project config changes", () => {
     const projectDir = join(testDir, "proj");
     const codexConfigPath = join(process.env.CODEX_HOME!, "config.toml");
+    const projectConfigPath = join(projectDir, ".codex", "config.toml");
     writeGlobalRoutingConfig(`
 [projects.'${projectDir}']
 trust_level = "trusted"
 `);
     mkdirSync(join(projectDir, ".codex"), { recursive: true });
-    writeFileSync(join(projectDir, ".codex", "config.toml"), `
+    writeFileSync(projectConfigPath, `
 model_provider = "anthropic"
 [model_providers.anthropic]
 name = "anthropic"
 `);
-    // Use collectProjectCodexConfigWarnings with explicit cwd to avoid real-CWD leakage
-    const first = collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath });
+    // Parent discovery may legitimately find a real user config above the OS temp
+    // directory, so scope this assertion to the fixture project.
+    const first = collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath })
+      .filter(warning => warning.path === projectConfigPath);
     expect(first.length).toBe(1);
-    writeFileSync(join(projectDir, ".codex", "config.toml"), `model_provider = "openai"`);
-    // Stale call still returns old result (no invalidation)
-    const second = collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath });
+    writeFileSync(projectConfigPath, `model_provider = "openai"`);
+    // Direct collection bypasses the diagnostics cache and sees the new file.
+    const second = collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath })
+      .filter(warning => warning.path === projectConfigPath);
     expect(second.length).toBe(0);
   });
 });

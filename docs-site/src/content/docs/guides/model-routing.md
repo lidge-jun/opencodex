@@ -88,4 +88,4 @@ Routing and catalog visibility are separate controls:
 - **Prefix patterns are a convenience**, not a guarantee: they only resolve if a provider with that
   name (e.g. `anthropic`, `openai`, `groq`) is actually configured.
 
-See [Configuration](/opencodex/reference/configuration/) for the provider fields these rules read.
+See [Configuration](/reference/configuration/) for the provider fields these rules read.

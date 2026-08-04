@@ -1,10 +1,15 @@
-import type { OcxParsedRequest } from "../types";
+import type { OcxParsedRequest, OcxTool } from "../types";
 import { namespacedToolName } from "../types";
 import { normalizeKiroModelId } from "../providers/kiro-models";
 import { createKiroToolNameRegistry, type KiroToolNameRegistry } from "./kiro-wire";
 
 const MAX_KIRO_TOOL_DESCRIPTION_UNVERIFIED = 1024;
 const MAX_KIRO_TOOL_DESCRIPTION_GPT_56_SOL = 9_216;
+// Issue #719's successful Kiro probe used 49 outbound tools at about 108 KiB. Leave one of those
+// slots for Kiro's private completion tool and headroom for the enclosing request/message fields.
+export const MAX_KIRO_TOOL_COUNT = 48;
+export const MAX_KIRO_TOOL_CATALOG_BYTES = 96_000;
+const textEncoder = new TextEncoder();
 
 // JSON Schema validation/annotation keywords that Kiro's runtimeservice tool-spec validator
 // rejects ("ValidationException: Invalid tool use format."). Codex's built-in tools omit these,
@@ -147,6 +152,17 @@ function truncateDescription(description: string, limit: number): string {
   return `${description.slice(0, limit - 1)}…`;
 }
 
+function serializedToolCatalogBytes(tools: readonly unknown[]): number {
+  return textEncoder.encode(JSON.stringify(tools)).byteLength;
+}
+
+function omittedToolCatalogNotice(kept: number, omitted: readonly OcxTool[], registry: KiroToolNameRegistry): string {
+  const names = omitted.slice(0, 12).map(tool => registry.alias(namespacedToolName(tool.namespace, tool.name)));
+  const remainder = omitted.length - names.length;
+  const summary = `${names.join(", ")}${remainder > 0 ? `, and ${remainder} more` : ""}`;
+  return `[opencodex] Kiro's outbound catalog budget allows ${kept} of ${kept + omitted.length} client tools this turn. Omitted and unavailable this turn: ${summary}.`;
+}
+
 export function convertKiroToolContext(
   parsed: OcxParsedRequest,
   registry: KiroToolNameRegistry = createKiroToolNameRegistry(),
@@ -156,24 +172,39 @@ export function convertKiroToolContext(
   // Validate every listed name even when tool_choice:none emulates a tool-free turn.
   for (const tool of tools) registry.alias(namespacedToolName(tool.namespace, tool.name));
   const effectiveTools = parsed.options.toolChoice === "none" ? [] : tools;
+  const convertedTools: unknown[] = [];
+  let omittedAt = effectiveTools.length;
+  for (const [index, tool] of effectiveTools.entries()) {
+    const description = tool.description || `Tool: ${tool.name}`;
+    // Send the full namespaced wire name (e.g. mcp__chrome-devtools__navigate_page) so Kiro echoes
+    // it back; the bridge's toolNsMap is keyed by this name and restores the MCP namespace Codex
+    // routes by. Kiro's runtimeservice rejects names with spaces or >64 chars, so normalize to a
+    // safe form and remember the mapping; the response parser restores the original wire name.
+    const wireName = namespacedToolName(tool.namespace, tool.name);
+    const toolName = registry.alias(wireName);
+    const converted = {
+      toolSpecification: {
+        name: toolName,
+        description: truncateDescription(description, descriptionLimit),
+        inputSchema: { json: ensureRootObjectType(sanitizeKiroSchema(tool.parameters ?? {})) },
+      },
+    };
+    // Preserve declaration order and only omit a suffix. Ranking tools would make a catalog change
+    // silently alter which capability disappears; this deterministic policy is paired with a
+    // model-visible omission notice so unavailable tools are explicit rather than assumed absent.
+    if (
+      convertedTools.length >= MAX_KIRO_TOOL_COUNT
+      || serializedToolCatalogBytes([...convertedTools, converted]) > MAX_KIRO_TOOL_CATALOG_BYTES
+    ) {
+      omittedAt = index;
+      break;
+    }
+    convertedTools.push(converted);
+  }
+  const omittedTools = effectiveTools.slice(omittedAt);
   return {
-    tools: effectiveTools.map(t => {
-      const description = t.description || `Tool: ${t.name}`;
-      // Send the full namespaced wire name (e.g. mcp__chrome-devtools__navigate_page) so Kiro echoes
-      // it back; the bridge's toolNsMap is keyed by this name and restores the MCP namespace Codex
-      // routes by. Kiro's runtimeservice rejects names with spaces or >64 chars, so normalize to a
-      // safe form and remember the mapping; the response parser restores the original wire name.
-      const wireName = namespacedToolName(t.namespace, t.name);
-      const toolName = registry.alias(wireName);
-      return {
-        toolSpecification: {
-          name: toolName,
-          description: truncateDescription(description, descriptionLimit),
-          inputSchema: { json: ensureRootObjectType(sanitizeKiroSchema(t.parameters ?? {})) },
-        },
-      };
-    }),
-    systemAdditions: [],
+    tools: convertedTools,
+    systemAdditions: omittedTools.length > 0 ? [omittedToolCatalogNotice(convertedTools.length, omittedTools, registry)] : [],
     nameMap: registry.nameMap,
     registry,
   };

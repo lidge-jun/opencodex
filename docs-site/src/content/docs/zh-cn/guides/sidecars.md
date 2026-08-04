@@ -118,4 +118,4 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
 配置文件字段现在即可使用。如需禁用某个 sidecar，请在 `config.json` 中把对应的 `enabled` 设为
 `false`。Anthropic OAuth 搜索和图像描述沿用现有 Claude Code OAuth fingerprint 先例，但仍应使用
 目标账户和实际负载充分 soak test。所有字段见
-[配置参考](/opencodex/zh-cn/reference/configuration/#sidecars)。
+[配置参考](/zh-cn/reference/configuration/#sidecars)。

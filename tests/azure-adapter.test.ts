@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAzureAdapter } from "../src/adapters/azure";
+import { createAzureAdapter as createAzureAdapterProduction } from "../src/adapters/azure";
 import { getConfigPath, loadConfig, readConfigDiagnostics } from "../src/config";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createAzureAdapter = (...args: Parameters<typeof createAzureAdapterProduction>) =>
+  withTestTranslatorBudget(createAzureAdapterProduction(...args));
 
 const parsed: OcxParsedRequest = {
   modelId: "gpt-5.5",
@@ -31,6 +35,33 @@ describe("Azure OpenAI adapter hardening", () => {
     expect(new URL(request.url).searchParams.has("api-version")).toBe(false);
     expect(request.headers["api-key"]).toBe("azure-key");
     expect(request.headers.Authorization).toBeUndefined();
+  });
+
+  test("lowers the private image_gen namespace on the inherited API-key path", async () => {
+    const request = await createAzureAdapter(provider()).buildRequest({
+      ...parsed,
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [{
+          type: "additional_tools",
+          tools: [{
+            type: "namespace",
+            name: "image_gen",
+            tools: [{ type: "function", name: "imagegen", parameters: {} }],
+          }],
+        }],
+      },
+    });
+    const body = JSON.parse(request.body) as {
+      input: Array<{ tools?: Array<{ type: string; name?: string }> }>;
+    };
+
+    expect(body.input[0]?.tools).toEqual([
+      // parameters gains an object root on the way out (#745): the passthrough normalizer
+      // runs on additional_tools too, so a schema declared as {} ships as {type:"object"}.
+      // What this test is about is the namespace lowering in the name.
+      { type: "function", name: "image_gen__imagegen", parameters: { type: "object" } },
+    ]);
   });
 
   test("rejects missing and blank API keys", async () => {

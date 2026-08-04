@@ -15,6 +15,7 @@ export interface CatalogPreset {
   label: string;
   adapter: string;
   baseUrl: string;
+  responsesPath?: string;
   defaultModel?: string;
   /** "oauth": account login · "forward": ChatGPT passthrough · "key": API key · "local": local scaffold. */
   auth: "oauth" | "forward" | "key" | "local";
@@ -66,10 +67,4 @@ export function filterPresets(presets: CatalogPreset[], query: string): CatalogP
   const q = query.trim().toLowerCase();
   if (!q) return presets;
   return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
-}
-
-/** Deterministic catalog order: label A→Z (case-insensitive), id as tiebreak. */
-export function sortPresets(presets: CatalogPreset[]): CatalogPreset[] {
-  return [...presets].sort((a, b) =>
-    a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id));
 }

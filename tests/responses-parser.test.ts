@@ -2,6 +2,54 @@ import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 
 describe("Responses parser", () => {
+  test("normalizes function tool schemas to an object root without corrupting valid schemas (#745)", () => {
+    const validParameters = {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    const parsed = parseRequest({
+      model: "test-model",
+      input: "test",
+      tools: [
+        { type: "function", name: "missing_parameters" },
+        { type: "function", name: "missing_root_type", parameters: { properties: { query: { type: "string" } } } },
+        { type: "function", name: "valid_schema", parameters: validParameters },
+      ],
+    });
+
+    expect(parsed.context.tools).toEqual([
+      { name: "missing_parameters", description: "", parameters: { type: "object" } },
+      {
+        name: "missing_root_type",
+        description: "",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { name: "valid_schema", description: "", parameters: validParameters },
+    ]);
+  });
+
+  test("describes the exact apply_patch freeform envelope", () => {
+    const parsed = parseRequest({
+      model: "xai/grok-4.5",
+      input: "Update a file",
+      tools: [{ type: "custom", name: "apply_patch", description: "Apply a patch" }],
+    });
+
+    expect(parsed.context.tools?.[0]).toMatchObject({
+      name: "apply_patch",
+      freeform: true,
+      parameters: {
+        properties: {
+          input: {
+            description: expect.stringContaining("begin exactly with `*** Begin Patch`"),
+          },
+        },
+      },
+    });
+  });
+
   test("preserves assistant message phase when replaying Responses output", () => {
     const parsed = parseRequest({
       model: "kiro/gpt-5.6-sol",
@@ -59,6 +107,18 @@ describe("Responses parser", () => {
 
     expect(parsed._webSearch).toEqual({ type: "web_search", search_context_size: "medium" });
     expect(parsed.options.toolChoice).toEqual({ allowedTools: ["web_search"], mode: "required" });
+  });
+
+  test("maps type-only hosted image_generation tool_choice to required image_gen", () => {
+    const parsed = parseRequest({
+      model: "claude-opus-4-6",
+      input: "draw a cat",
+      tools: [{ type: "image_generation" }],
+      tool_choice: { type: "image_generation" },
+    });
+
+    expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
+    expect(parsed.options.toolChoice).toEqual({ name: "image_gen" });
   });
 
   test("preserves requested service_tier for request logging", () => {
@@ -261,6 +321,20 @@ describe("codex-rs compat surface (260707)", () => {
   test("still drops unknown reasoning efforts instead of forwarding them", () => {
     const parsed = parseRequest({ model: "p/m", input: "hi", reasoning: { effort: "banana" } });
     expect(parsed.options.reasoning).toBeUndefined();
+  });
+
+  test("detects image_generation hosted tool arriving via additional_tools (responses_lite WS shape)", () => {
+    // Codex Desktop responses_websockets lite path: NO body.tools; the hosted tool spec rides
+    // inside an input item {type:"additional_tools", tools:[...]}. extractHostedImageGeneration
+    // must still see it so the image bridge activates.
+    const parsed = parseRequest({
+      model: "p/m",
+      input: [
+        { type: "additional_tools", tools: [{ type: "image_generation" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "draw a cat" }] },
+      ],
+    });
+    expect(parsed._imageGeneration?.toolNames.has("image_generation")).toBe(true);
   });
 
   test("current parser ignores null empty and unknown string efforts", () => {

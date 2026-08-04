@@ -27,6 +27,7 @@ export interface ClaudeAgentDef {
   name: string;
   model: string;
   description: string;
+  effort?: NonNullable<OcxConfig["claudeCode"]>["subagentEffort"];
   blockedSkills: readonly string[];
 }
 
@@ -99,6 +100,7 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
       name: `${OWNED_PREFIX}${unique}`,
       model,
       description,
+      effort: config.claudeCode?.subagentEffort,
       blockedSkills: blockedSkillsFor(model),
     });
   };
@@ -124,6 +126,7 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
       name: `${OWNED_PREFIX}self`,
       model: marked,
       description: `Self-clone: delegate to your default main model (${marked}), synced from the /model picker at launch. ${NO_MODEL_ARG}`,
+      effort: config.claudeCode?.subagentEffort,
       blockedSkills: blockedSkillsFor(marked),
     });
   }
@@ -149,6 +152,7 @@ function renderAgentDef(def: ClaudeAgentDef): string {
     `name: ${JSON.stringify(def.name)}`,
     `description: ${JSON.stringify(def.description)}`,
     `model: ${JSON.stringify(def.model)}`,
+    ...(def.effort ? [`effort: ${JSON.stringify(def.effort)}`] : []),
     "---",
     "",
     `<!-- ${GENERATED_MARKER} -->`,
@@ -157,6 +161,7 @@ function renderAgentDef(def: ClaudeAgentDef): string {
     // BODY rides the subagent's system prompt verbatim. The proxy detects this
     // directive and overrides the request model before routing/passthrough.
     `<!-- ocx-route: ${def.model} -->`,
+    ...(def.effort ? [`<!-- ocx-effort: ${def.effort} -->`] : []),
     "",
     `You are a delegated worker running on \`${def.model}\` through the local opencodex proxy.`,
     `IDENTITY: your ACTUAL underlying model is \`${def.model}\` — the opencodex proxy routes this`,

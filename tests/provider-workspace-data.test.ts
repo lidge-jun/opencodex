@@ -6,8 +6,6 @@ import {
   hideRedundantChatGptForwardProviders,
   isAccountProvider,
   isFreeProvider,
-  isPaidProvider,
-  pickCanonicalForwardProvider,
   providerTier,
   sortWorkspaceItems,
   type WorkspaceItem,
@@ -27,16 +25,18 @@ import {
 import {
   formatProviderDisplayName,
   isCatalogProviderId,
-  providerBrandColor,
 } from "../gui/src/provider-icons";
+import { en } from "../gui/src/i18n/en";
+import { interpolate, type TFn } from "../gui/src/i18n/shared";
 import {
   bucketPresets,
   filterPresets,
   presetTier,
-  sortPresets,
   type CatalogPreset,
 } from "../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../gui/src/provider-workspace/kind";
+
+const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 
 /** Base defaults matching a minimal, unconfigured provider value. */
 function prov(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvider {
@@ -59,15 +59,16 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
 }
 
 describe("applyActiveAccountReauth", () => {
-  test("demotes ready provider when active account needs reauth", () => {
+  test("tags ready provider when active account needs reauth without moving sections", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),
       keyed: prov({ authMode: "key", hasApiKey: true }),
     });
     expect(sections.ready.map(p => p.name)).toContain("anthropic");
     const next = applyActiveAccountReauth(sections, { anthropic: true });
-    expect(next.ready.map(p => p.name)).not.toContain("anthropic");
-    expect(next.needsSetup.map(p => p.name)).toContain("anthropic");
+    expect(next.ready.map(p => p.name)).toContain("anthropic");
+    expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
+    expect(next.ready.find(p => p.name === "anthropic")?.activeNeedsReauth).toBe(true);
     expect(next.ready.map(p => p.name)).toContain("keyed");
   });
 
@@ -78,6 +79,7 @@ describe("applyActiveAccountReauth", () => {
     const next = applyActiveAccountReauth(sections, { anthropic: false });
     expect(next.ready.map(p => p.name)).toContain("anthropic");
     expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
+    expect(next.ready.find(p => p.name === "anthropic")?.activeNeedsReauth).toBeUndefined();
   });
 
   test("does not move disabled providers", () => {
@@ -89,14 +91,14 @@ describe("applyActiveAccountReauth", () => {
     expect(next.needsSetup.map(p => p.name)).not.toContain("anthropic");
   });
 
-  test("demoted items carry activeNeedsReauth and binProviderStatus is needs-setup", () => {
+  test("tagged ready items keep section membership; binProviderStatus is needs-setup", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),
     });
     const next = applyActiveAccountReauth(sections, { anthropic: true });
-    const demoted = next.needsSetup.find(p => p.name === "anthropic");
-    expect(demoted?.activeNeedsReauth).toBe(true);
-    expect(binProviderStatus(demoted!)).toBe("needs-setup");
+    const tagged = next.ready.find(p => p.name === "anthropic");
+    expect(tagged?.activeNeedsReauth).toBe(true);
+    expect(binProviderStatus(tagged!)).toBe("needs-setup");
     expect(binProviderStatus(prov({ authMode: "oauth" }))).toBe("ready");
   });
 });
@@ -188,8 +190,6 @@ describe("catalog: three-way tiers", () => {
     expect(isFreeProvider(prov())).toBe(false);
     expect(providerTier("nvidia", prov({ freeTier: true }))).toBe("free");
     expect(providerTier("venice", prov({ authMode: "key", hasApiKey: true }))).toBe("paid");
-    expect(isPaidProvider("venice", prov({ authMode: "key", hasApiKey: true }))).toBe(true);
-    expect(isPaidProvider("nvidia", prov({ freeTier: true }))).toBe(false);
     // Accounts precedence pinned: a canonical provider that ALSO carries freeTier is accounts.
     expect(providerTier("openai", forwardProv({ freeTier: true }))).toBe("accounts");
   });
@@ -251,7 +251,7 @@ describe("catalog: sorting", () => {
   });
 });
 
-describe("catalog: chatgpt hiding + canonical picker", () => {
+describe("catalog: chatgpt hiding", () => {
   test("hides legacy chatgpt only when canonical openai covers the same passthrough", () => {
     const both = { openai: forwardProv(), chatgpt: forwardProv() };
     expect(Object.keys(hideRedundantChatGptForwardProviders(both))).toEqual(["openai"]);
@@ -275,16 +275,6 @@ describe("catalog: chatgpt hiding + canonical picker", () => {
     expect(out).not.toBe(both);
   });
 
-  test("pickCanonicalForwardProvider prefers canonical openai", () => {
-    expect(pickCanonicalForwardProvider({ "openai-multi": forwardProv(), openai: forwardProv() })).toBe("openai");
-    expect(pickCanonicalForwardProvider({ openai: forwardProv() })).toBe("openai");
-    expect(pickCanonicalForwardProvider({ chatgpt: forwardProv() })).toBeNull();
-    expect(pickCanonicalForwardProvider({ venice: prov({ authMode: "key", hasApiKey: true }) })).toBeNull();
-    // Legacy Multi never wins, regardless of shape.
-    expect(pickCanonicalForwardProvider({ "openai-multi": prov({ authMode: "key" }), openai: forwardProv() })).toBe("openai");
-    expect(pickCanonicalForwardProvider({ "my-forward": forwardProv() })).toBeNull();
-    expect(pickCanonicalForwardProvider({ "my-forward": forwardProv(), openai: forwardProv() })).toBe("openai");
-  });
 });
 
 describe("usage: model parsing", () => {
@@ -356,8 +346,8 @@ describe("usage: most-used and attention", () => {
     const sections = applyActiveAccountReauth(base, { anthropic: true });
     const items = buildAttentionItems(sections, {});
     expect(items).toEqual([
-      { name: "missing", reason: "Missing credentials" },
       { name: "anthropic", reason: "Active account needs re-authentication" },
+      { name: "missing", reason: "Missing credentials" },
     ]);
   });
 });
@@ -452,20 +442,17 @@ describe("usage: count formatting", () => {
 
 describe("provider-icons", () => {
   test("single OpenAI provider display names match the registry", () => {
-    expect(formatProviderDisplayName("openai")).toBe("OpenAI (Codex login)");
-    expect(formatProviderDisplayName("openai-apikey")).toBe("OpenAI API");
-    expect(formatProviderDisplayName("chatgpt")).toBe("ChatGPT");
+    expect(formatProviderDisplayName("openai", englishT)).toBe("OpenAI (Codex login)");
+    expect(formatProviderDisplayName("openai-apikey", englishT)).toBe("OpenAI API");
+    expect(formatProviderDisplayName("chatgpt", englishT)).toBe("ChatGPT");
   });
 
   test("unknown simple ids are title-cased; mixedCase custom names pass through", () => {
-    expect(formatProviderDisplayName("my-proxy")).toBe("My Proxy");
-    expect(formatProviderDisplayName("MyProxy")).toBe("MyProxy");
+    expect(formatProviderDisplayName("my-proxy", englishT)).toBe("My Proxy");
+    expect(formatProviderDisplayName("MyProxy", englishT)).toBe("MyProxy");
   });
 
-  test("brand colors and catalog membership", () => {
-    expect(providerBrandColor("nvidia")).toBe("#76B900");
-    expect(providerBrandColor("openai-multi")).toBeUndefined();
-    expect(providerBrandColor("unknown")).toBeUndefined();
+  test("catalog membership excludes legacy Multi and custom ids", () => {
     expect(isCatalogProviderId("openai-multi")).toBe(false);
     expect(isCatalogProviderId("my-proxy")).toBe(false);
   });
@@ -527,16 +514,6 @@ describe("add-provider catalog presets (WP050a)", () => {
     expect(filterPresets(rows, "").map(p => p.id)).toEqual(["nvidia", "groq"]);
   });
 
-  test("sortPresets is deterministic: label case-insensitive, id tiebreak, input not mutated", () => {
-    const rows = [
-      preset({ id: "b-provider", label: "zeta" }),
-      preset({ id: "a-provider", label: "Zeta" }),
-      preset({ id: "c-provider", label: "alpha" }),
-    ];
-    const sorted = sortPresets(rows);
-    expect(sorted.map(p => p.id)).toEqual(["c-provider", "a-provider", "b-provider"]);
-    expect(rows.map(p => p.id)).toEqual(["b-provider", "a-provider", "c-provider"]);
-  });
 });
 
 describe("provider kind classification (WP080a)", () => {

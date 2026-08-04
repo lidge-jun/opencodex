@@ -37,21 +37,21 @@ export function useJsonConfigEditor(deps: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(parsed),
       });
-      if (res.ok) {
-        notify(t("prov.saved"), true);
-        setEditing(false);
-        setJsonEditorOpen(false);
-        jsonEditorOpenRef.current = false;
-        setJsonLeaveOpen(false);
-        setJsonBaseline(JSON.stringify(parsed, null, 2));
-        fetchConfig();
-        fetchProviderQuotas(true);
-        onSaved();
-        return true;
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        notify(data.error || t("prov.saveFailed"), false);
+        return false;
       }
-      const data = await res.json().catch(() => ({})) as { error?: string };
-      notify(data.error || t("prov.saveFailed"), false);
-      return false;
+      notify(t("prov.saved"), true);
+      setEditing(false);
+      setJsonEditorOpen(false);
+      jsonEditorOpenRef.current = false;
+      setJsonLeaveOpen(false);
+      setJsonBaseline(JSON.stringify(parsed, null, 2));
+      fetchConfig();
+      fetchProviderQuotas(true);
+      onSaved();
+      return true;
     } catch {
       notify(t("prov.invalidJson"), false);
       return false;

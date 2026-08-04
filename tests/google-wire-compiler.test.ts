@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createGoogleAdapter } from "../src/adapters/google";
+import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { compileGoogleWireBody, repairGoogleInvalidRequestBody } from "../src/adapters/google-wire-compiler";
 import type { OcxParsedRequest } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
+
+const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
+  withTestTranslatorBudget(createGoogleAdapterProduction(...args));
 
 describe("Google wire compiler", () => {
   test("enforces the conservative wire contract at the final serialization boundary", () => {

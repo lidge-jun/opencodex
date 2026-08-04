@@ -9,7 +9,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
-import { useT } from "../../i18n";
+import { readJsonIfOk } from "../../fetch-json";
+import { useT } from "../../i18n/shared";
 import { IconLock } from "../../icons";
 import { isCatalogProviderId } from "../../provider-icons";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
@@ -17,11 +18,12 @@ import { authModeLabel } from "./ProviderRail";
 import type { WorkspaceItem, ProviderUpdatePatch } from "./types";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
+const EMPTY_MODELS: string[] = [];
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
 
 export default function ProviderSettings({
-  item, availableModels = [], apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
+  item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
 }: {
   item: WorkspaceItem;
   availableModels?: string[];
@@ -38,6 +40,7 @@ export default function ProviderSettings({
   const [baseUrl, setBaseUrl] = useState(item.baseUrl);
   const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
   const [authMode, setAuthMode] = useState(initialAuth);
+  const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(item.liveModels !== false);
@@ -53,12 +56,13 @@ export default function ProviderSettings({
     setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? "");
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
+    setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(item.liveModels !== false);
     setMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.keyOptional, item.note, item.allowPrivateNetwork, item.liveModels, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.liveModels, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -67,9 +71,14 @@ export default function ProviderSettings({
     const providerId = item.name;
     const savedBaseUrl = item.baseUrl;
     fetch(`${apiBase}/api/provider-presets`)
-      .then(r => r.json())
-      .then((d: { providers?: CatalogPreset[] }) => {
+      .then(r => readJsonIfOk<{ providers?: CatalogPreset[] }>(r))
+      .then((d) => {
         if (cancelled) return;
+        if (!d) {
+          setBaseUrlChoices(undefined);
+          setChoicesStatus("error");
+          return;
+        }
         const preset = (d.providers ?? []).find(p => p.id === providerId);
         const choices = preset?.baseUrlChoices;
         setBaseUrlChoices(choices);
@@ -90,6 +99,7 @@ export default function ProviderSettings({
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
+    || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
     || note.trim() !== (item.note ?? "")
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
     || liveModels !== (item.liveModels !== false);
@@ -111,6 +121,7 @@ export default function ProviderSettings({
 
   const isPreset = isCatalogProviderId(item.name);
   const hasEndpointPicker = choicesStatus === "ready" && !!(baseUrlChoices && baseUrlChoices.length > 0);
+  const supportsApiKeyTransport = adapter.trim() === "anthropic" && authMode === "key";
   // Lock plain baseUrl for presets while loading or when there is no picker.
   // On fetch error, keep it editable so allowBaseUrlOverride providers are not trapped.
   const plainBaseUrlLocked = isPreset && choicesStatus !== "error";
@@ -121,12 +132,21 @@ export default function ProviderSettings({
       ? resolvedBaseUrlForChoice(baseUrlChoices, endpointChoice, baseUrl)
       : baseUrl.trim();
     if (!adapter.trim() || !nextBaseUrl) { setMsg({ ok: false, text: t("pws.adapterBaseRequired") }); return false; }
-    setSaving(true); setMsg(null);
-    const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork, liveModels };
-    const res = await onUpdateProvider(item.name, patch);
-    setSaving(false);
-    setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
-    return res.ok;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork };
+      // Keep omitted legacy values omitted unless the user actually changes this toggle.
+      // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
+      if (liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
+      if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
+      else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+      const res = await onUpdateProvider(item.name, patch);
+      setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
+      return res.ok;
+    } finally {
+      setSaving(false);
+    }
   };
 
   const saveRef = useRef(save);
@@ -142,6 +162,7 @@ export default function ProviderSettings({
   const discard = () => {
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
+    setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(item.liveModels !== false); setMsg(null);
     setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
   };
@@ -222,6 +243,15 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
+      {supportsApiKeyTransport && (
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.apiKeyTransport")}</span>
+          <select className="input" value={apiKeyTransport} onChange={e => setApiKeyTransport(e.target.value as "x-api-key" | "bearer")}>
+            <option value="x-api-key">{t("modal.apiKeyTransportNative")}</option>
+            <option value="bearer">{t("modal.apiKeyTransportBearer")}</option>
+          </select>
+        </label>
+      )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.note")}</span>
         <textarea className="input pwi-settings-textarea" value={note} onChange={e => setNote(e.target.value)} rows={2} />

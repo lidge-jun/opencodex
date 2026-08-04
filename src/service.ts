@@ -5,20 +5,38 @@
  * Codex on a service-managed restart (the restarted instance re-injects); explicit stop/uninstall
  * restore it via the command.
  */
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
+import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } from "./config";
+import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
+import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime } from "./codex/home";
 import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
-import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
+import { randomUUID } from "node:crypto";
+import {
+  ELEVATION_REQUEST_TIMEOUT_MS,
+  OCX_ELEVATED_PROTOCOL_FAILED,
+  raceWithTimeout,
+  resolveTrustedWindowsSchtasksExe,
+  startElevatedSchtasksCreateAndRun,
+  runWindowsElevated,
+  toWindowsSchtasksError,
+  WindowsElevationError,
+  type ElevatedSchedulerOutcome,
+  type ElevatedSchtasksCreateAndRunExecution,
+  type ElevatedSchtasksCreateAndRunResult,
+} from "./lib/windows-elevation";
+import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, winswXmlPath, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
+import { recordOwnedConfigPath } from "./lib/config-ownership";
+import { maybeShowStarPrompt } from "./cli/star-prompt";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
@@ -131,6 +149,7 @@ function writeServiceInstallState(backend: ServiceBackend = "scheduler"): void {
   };
   for (const path of serviceStatePaths()) {
     const dir = dirname(path);
+    recordOwnedConfigPath(getConfigDir(), path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(path, JSON.stringify(state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
     try { chmodSync(path, 0o600); } catch { /* best-effort */ }
@@ -160,13 +179,42 @@ export function serviceReinstallArgs(): string[] {
   return readServiceBackend() === "native" ? ["service", "install", "--native"] : ["service", "install"];
 }
 
+/**
+ * The service was installed under a different CODEX_HOME/OPENCODEX_HOME, so this process may not
+ * touch it. Distinct from "stop failed": the manager was never even contacted, which means the
+ * installed service is still live and shared state (native Codex config, the Grok fence) must be
+ * left alone — tearing it down would strip config out from under a running service.
+ */
+export class ServiceOwnershipError extends Error {
+  readonly code = "service-ownership-mismatch" as const;
+}
+
+export function isServiceOwnershipError(err: unknown): err is ServiceOwnershipError {
+  return err instanceof ServiceOwnershipError;
+}
+
+/**
+ * True when no installed service exists, or the installed one belongs to THIS
+ * CODEX_HOME/OPENCODEX_HOME. Callers use it to decide whether they may tear down shared state
+ * (native Codex config, the Grok fence) that a foreign service would still be relying on.
+ */
+export function serviceEnvironmentOwnedHere(): boolean {
+  try {
+    assertServiceEnvironmentMatchesInstall();
+    return true;
+  } catch (err) {
+    if (isServiceOwnershipError(err)) return false;
+    return true; // unrelated failure: fall back to the previous behavior rather than wedging
+  }
+}
+
 export function assertServiceEnvironmentMatchesInstall(): void {
   const state = readServiceInstallState();
   if (!state) return;
   const expected = normalizePathForCompare(state.codexHome);
   const actual = normalizePathForCompare(currentCodexHome());
   if (expected !== actual) {
-    throw new Error(
+    throw new ServiceOwnershipError(
       `Service was installed with CODEX_HOME=${state.codexHome}, but current CODEX_HOME=${currentCodexHome()}. ` +
         "Run the service command from the same Codex home so native Codex restore updates the correct config.",
     );
@@ -174,7 +222,7 @@ export function assertServiceEnvironmentMatchesInstall(): void {
   const expectedOpenCodexHome = normalizePathForCompare(state.opencodexHome);
   const actualOpenCodexHome = normalizePathForCompare(currentOpenCodexHome());
   if (expectedOpenCodexHome !== actualOpenCodexHome) {
-    throw new Error(
+    throw new ServiceOwnershipError(
       `Service was installed with OPENCODEX_HOME=${state.opencodexHome}, but current OPENCODEX_HOME=${currentOpenCodexHome()}. ` +
         "Run the service command from the same OpenCodex home so service state and secrets match.",
     );
@@ -210,6 +258,7 @@ function writeServiceApiTokenFile(): string | null {
   if (!token) return null;
   const path = serviceApiTokenFilePath();
   const dir = getConfigDir();
+  recordOwnedConfigPath(dir, path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") hardenSecretDir(dir, { required: true });
   writeFileSync(path, `${token}\n`, { encoding: "utf8", mode: 0o600 });
@@ -284,6 +333,177 @@ function buildServiceShellCommand(bun: string, cli: string, port = resolveServic
   return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start --port ${port}`;
 }
 
+/**
+ * The `--port <n>` actually baked into the installed launchd plist, or null when it
+ * cannot be read. macOS only — named for launchd rather than "service" so no caller
+ * assumes it covers systemd or the Windows wrapper.
+ *
+ * `start` needs this because it does NOT rewrite the plist: an install made under
+ * OCX_BAKE_PORT, or any later config.port edit, would otherwise leave launchd serving
+ * one port while the confirmation probes another, failing a healthy service.
+ *
+ * Anchored on the closing tag and matched LAST: the command also carries the Bun and
+ * CLI paths, and a path containing the literal `start --port 9999` must not shadow
+ * the real argument. buildPlist emits the command as the final ProgramArguments
+ * string, and buildServiceShellCommand puts the port at the very end of it.
+ */
+export function launchdListenPort(deps: { readPlist?: () => string } = {}): number | null {
+  try {
+    const text = (deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")))();
+    const last = [...text.matchAll(/start --port (\d{1,5})\s*<\/string>/g)].at(-1);
+    if (!last) return null;
+    const n = Number(last[1]);
+    return n > 0 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `--port <n>` baked into the installed systemd user unit. Linux only. */
+export function systemdListenPort(deps: { readUnit?: () => string } = {}): number | null {
+  try {
+    const text = (deps.readUnit ?? (() => readFileSync(unitPath(), "utf8")))();
+    const last = [...text.matchAll(/start --port (\d{1,5})(?:\s|"|$)/gm)].at(-1);
+    if (!last) return null;
+    const n = Number(last[1]);
+    return n > 0 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Shared tail parser for the baked `--port <n>`.
+ *
+ * Terminators cover all three artifact shapes: whitespace (batch wrapper, systemd
+ * unit), `"` (systemd's quoted ExecStart), `<` (WinSW's `</arguments>`), and `&` (an
+ * XML-escaped quote). Matched LAST because every artifact carries the Bun and CLI
+ * paths ahead of the argument, and a path containing the literal must not shadow it.
+ */
+function parseBakedListenPort(read: () => string): number | null {
+  try {
+    const last = [...read().matchAll(/start --port (\d{1,5})(?:\s|"|&|<|$)/gm)].at(-1);
+    if (!last) return null;
+    const n = Number(last[1]);
+    return n > 0 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `--port <n>` baked into the Task Scheduler wrapper. Windows scheduler backend. */
+export function windowsListenPort(deps: { readScript?: () => string } = {}): number | null {
+  return parseBakedListenPort(deps.readScript ?? (() => readFileSync(windowsServiceScriptPath(), "utf8")));
+}
+
+/**
+ * The `--port <n>` baked into the WinSW XML's `<arguments>`. Windows native backend.
+ *
+ * Separate from {@link windowsListenPort} rather than one function branching on
+ * `readServiceBackend()`: the recorded backend can disagree with what is actually on
+ * disk (the `stale` / `backendStateMismatch` cases `deriveWindowsServiceDiagnostic`
+ * exists to catch), and a reader that trusted it would then read the wrong file.
+ * Each returns null when its own artifact is absent, so the chain needs no branch.
+ */
+export function winswListenPort(deps: { readXml?: () => string } = {}): number | null {
+  return parseBakedListenPort(deps.readXml ?? (() => readFileSync(winswXmlPath(), "utf8")));
+}
+
+/**
+ * The listen port of the INSTALLED service artifact, falling back to the configured
+ * one. Each reader returns null off its own platform, so the chain needs no platform
+ * branch — and on Windows both return null, preserving today's behavior.
+ */
+export function installedServiceListenPort(): number {
+  return launchdListenPort()
+    ?? systemdListenPort()
+    ?? windowsListenPort()
+    ?? winswListenPort()
+    ?? resolveServiceListenPort();
+}
+
+export const SERVICE_INSTALL_HEALTH_MS = 20_000;
+
+/**
+ * Whether a proxy actually answers on the port this install/start just produced.
+ *
+ * Registration is not service: `launchctl list` reports a job that never bound, and
+ * `systemctl is-active` reports a process that bound nothing. Probing is the only
+ * thing that answers the question the user is actually asking.
+ *
+ * Probes the BAKED target rather than resolving one. `findLiveProxy` resolves through
+ * pidfile -> runtime-port -> config.port, and a service reinstall has just invalidated
+ * the first two while `resolveServiceListenPort` (OCX_BAKE_PORT precedence, config.port
+ * === 0 normalization) can disagree with the third.
+ *
+ * Soft: returns the outcome, never throws; the caller chooses between a checkmark and
+ * an actionable warning.
+ */
+export async function confirmServiceServing(
+  deps: {
+    port?: number;
+    hostname?: string;
+    probe?: (port: number, hostname: string) => Promise<boolean>;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    timeoutMs?: number;
+  } = {},
+): Promise<{ ok: true; port: number } | { ok: false; port: number }> {
+  const port = deps.port ?? installedServiceListenPort();
+  const hostname = deps.hostname ?? loadConfig().hostname ?? "127.0.0.1";
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const probe = deps.probe ?? (async (p, h) => !!(await proxyIdentityAt(p, { hostname: h })));
+  const deadline = now() + (deps.timeoutMs ?? SERVICE_INSTALL_HEALTH_MS);
+  for (;;) {
+    if (await probe(port, hostname)) return { ok: true, port };
+    if (now() >= deadline) return { ok: false, port };
+    await sleep(500);
+  }
+}
+
+/**
+ * Print the outcome of `install` / `start` / `repair` in terms of what the user cares
+ * about — is it serving? — instead of whether the manager accepted the registration.
+ *
+ * Sets `process.exitCode = 1` when nothing answers. That is deliberate: the GUI update
+ * worker reads the child's exit status, so a registered-but-silent service now makes it
+ * fall back to a direct proxy start rather than reporting a successful update over a
+ * dead port.
+ */
+async function reportServiceServing(
+  verb: "installed" | "started" | "repaired",
+  deps: Parameters<typeof confirmServiceServing>[0] = {},
+): Promise<void> {
+  const serving = await confirmServiceServing(deps);
+  if (serving.ok) {
+    console.log(`✅ opencodex service ${verb} and serving on port ${serving.port}.`);
+    return;
+  }
+  console.error(
+    `⚠️  Service ${verb}, but no proxy answered on port ${serving.port} within `
+    + `${Math.trunc(SERVICE_INSTALL_HEALTH_MS / 1000)}s.\n`
+    + `   The manager registered the job; that is not the same as serving.\n`
+    + `   Log:       ${serviceLogPath()}\n`
+    + `   Meanwhile: ocx start   (serves in the foreground)`,
+  );
+  process.exitCode = 1;
+}
+
+/**
+ * The reinstall command for the CURRENTLY INSTALLED backend.
+ *
+ * Plain `ocx service install` on a native/WinSW install runs installWindows's
+ * transactional backend switch, which tears down WinSW and replaces it with the Task
+ * Scheduler backend. Advising it in a repair hint would silently change the user's
+ * backend, so the hint has to carry `--native` when that is what is installed.
+ */
+function serviceRepairCommand(): string {
+  return process.platform === "win32" && readServiceBackend() === "native"
+    ? "ocx service install --native"
+    : "ocx service install";
+}
+
 function systemdQuote(value: string): string {
   return `"${value
     .replace(/\\/g, "\\\\")
@@ -307,13 +527,111 @@ function sh(cmd: string): string {
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
+/**
+ * Run `launchctl` and report BOTH streams regardless of exit status.
+ *
+ * `launchctl load` writes "Load failed: <n>: <reason>" to stderr and exits 0 for
+ * every already-bootstrapped job. `sh()` above is execSync, which throws only on a
+ * non-zero exit, so install and start both reported success for a load that did
+ * nothing — leaving launchd running the PREVIOUS plist while a freshly written one
+ * sat unused on disk. That is the 2026-08-02 report: `ocx service` prints a
+ * checkmark, `launchctl list` shows the job, and the port answers nothing.
+ *
+ * spawnSync, NOT execFileSync: execFileSync discards stderr when the child exits 0,
+ * which is precisely this case — a runner built on it returns an empty stderr and
+ * the guard below can never fire. Measured on macOS 27.0.
+ */
+export function runLaunchctl(
+  args: string[],
+  deps: { run?: typeof spawnSync } = {},
+): { ok: boolean; stdout: string; stderr: string } {
+  const run = deps.run ?? spawnSync;
+  const result = run("/bin/launchctl", args, { encoding: "utf8", windowsHide: true });
+  // `error` is set when the spawn itself failed (ENOENT off macOS) and `status` is
+  // null for a signalled child; neither may be reported as success.
+  if (result.error) return { ok: false, stdout: "", stderr: String(result.error.message ?? "") };
+  return {
+    ok: result.status === 0,
+    stdout: String(result.stdout ?? "").trim(),
+    stderr: String(result.stderr ?? "").trim(),
+  };
+}
+
+/**
+ * Whether launchctl output indicates the operation did not take. Needed because
+ * `ok` alone is insufficient for the legacy `load`/`unload` subcommands, which
+ * report failure on stderr while exiting 0. `bootstrap` exits 5, so for that path
+ * this is belt-and-braces rather than the only signal.
+ */
+export function launchctlLoadFailed(stderr: string): boolean {
+  return /\b(?:Load|Bootstrap) failed\b/i.test(stderr);
+}
+
+/** launchd domain target for the current user's GUI session. */
+function launchdGuiDomain(): string {
+  return `gui/${process.getuid?.() ?? 0}`;
+}
+
+/**
+ * Whether launchd is running the job from the CURRENT plist. `launchctl list` only
+ * proves domain membership — a job bootstrapped from an older plist stays listed
+ * forever. `launchctl print` exposes the live `arguments`, which is the only way to
+ * catch a load that silently no-op'd.
+ */
+export function launchdJobMatchesPlist(
+  expectedCommand: string,
+  deps: { run?: typeof runLaunchctl } = {},
+): { loaded: boolean; matchesPlist: boolean } {
+  const run = deps.run ?? runLaunchctl;
+  const printed = run(["print", `${launchdGuiDomain()}/${LABEL}`]);
+  if (!printed.ok) return { loaded: false, matchesPlist: false };
+  // `print` writes the arguments block to stdout for a live job. Search both streams
+  // anyway so a future launchctl that moves diagnostics between them cannot turn this
+  // into a false negative — a false "stale" verdict would send users to `bootout` for
+  // nothing.
+  const printedText = `${printed.stdout}\n${printed.stderr}`;
+  return { loaded: true, matchesPlist: printedText.includes(expectedCommand) };
+}
+
+/**
+ * Decode schtasks stdout. `/query /xml` emits UTF-16LE (often with BOM) because the
+ * registered task document is UTF-16; reading that as UTF-8 makes every health check
+ * fail ("registration present but unhealthy") and rolls back a successful elevated create.
+ */
+export function decodeSchtasksOutput(buffer: Buffer): string {
+  if (buffer.length === 0) return "";
+  const bomUtf16Le = buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe;
+  const bomUtf16Be = buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff;
+  const looksUtf16Le = buffer.length >= 4
+    && buffer[1] === 0x00
+    && buffer[3] === 0x00
+    && buffer[0] !== 0x00;
+  if (bomUtf16Le || looksUtf16Le) {
+    return buffer.toString("utf16le").replace(/^\uFEFF/, "").trim();
+  }
+  if (bomUtf16Be) {
+    // Swap pairs then decode as utf16le.
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let i = 2; i + 1 < buffer.length; i += 2) {
+      swapped[i - 2] = buffer[i + 1]!;
+      swapped[i - 1] = buffer[i]!;
+    }
+    return swapped.toString("utf16le").trim();
+  }
+  return buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+}
+
 function runFile(file: string, args: string[]): string {
-  return execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+  const buffer = execFileSync(file, args, {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  }) as Buffer;
+  return decodeSchtasksOutput(buffer);
 }
 
 function windowsSchtasks(): string {
-  const candidate = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "schtasks.exe");
-  return existsSync(candidate) ? candidate : "schtasks.exe";
+  return resolveTrustedWindowsSchtasksExe();
 }
 
 function windowsWscript(): string {
@@ -321,8 +639,579 @@ function windowsWscript(): string {
   return existsSync(candidate) ? candidate : "wscript.exe";
 }
 
-function schtasks(args: string[]): string {
+let querySchtasksForTests: ((args: string[]) => string) | null = null;
+
+function querySchtasks(args: string[]): string {
+  if (querySchtasksForTests) return querySchtasksForTests(args);
   return runFile(windowsSchtasks(), args);
+}
+
+/** Test-only seam for Task Scheduler query used by presence probes. */
+export function setQuerySchtasksForTests(next: ((args: string[]) => string) | null): void {
+  querySchtasksForTests = next;
+}
+
+function schtasks(args: string[]): string {
+  try {
+    return querySchtasks(args);
+  } catch (error) {
+    throw toWindowsSchtasksError(error, args);
+  }
+}
+
+/** Tri-state Task Scheduler presence: never treat a failed query as proven absence. */
+export type WindowsSchedulerTaskProbe =
+  | { status: "present" }
+  | { status: "absent" }
+  | { status: "unknown"; detail: string };
+
+export type WindowsSchedulerProxyProbe =
+  | { status: "running"; port: number }
+  | { status: "not-running" }
+  | { status: "unknown" };
+
+/**
+ * Render Task Scheduler status without exposing localized `schtasks` table output.
+ * The task probe answers installation state; the identity-checked health probe answers
+ * runtime state. Keep probe details out of this user-facing line because they can contain
+ * incorrectly decoded, locale-specific command output.
+ */
+export function formatWindowsSchedulerServiceStatus(
+  task: WindowsSchedulerTaskProbe,
+  proxy: WindowsSchedulerProxyProbe,
+): string {
+  if (task.status === "present") {
+    if (proxy.status === "running") {
+      return `✅ service installed (Task Scheduler); OpenCodex proxy running on port ${proxy.port}.`;
+    }
+    if (proxy.status === "not-running") {
+      return "⚠️  service installed (Task Scheduler); OpenCodex proxy not running.";
+    }
+    return "⚠️  service installed (Task Scheduler); OpenCodex proxy status unknown.";
+  }
+  if (task.status === "absent") {
+    if (proxy.status === "running") {
+      return `❌ service not installed (Task Scheduler); OpenCodex proxy is running independently on port ${proxy.port}.`;
+    }
+    if (proxy.status === "unknown") {
+      return "❌ service not installed (Task Scheduler); OpenCodex proxy status unknown.";
+    }
+    return "❌ service not installed (Task Scheduler).";
+  }
+  if (proxy.status === "running") {
+    return `⚠️  Task Scheduler registration unknown; OpenCodex proxy running on port ${proxy.port}.`;
+  }
+  if (proxy.status === "not-running") {
+    return "⚠️  service status unknown (Task Scheduler query failed); OpenCodex proxy not running.";
+  }
+  return "⚠️  service status unknown (Task Scheduler and proxy checks failed).";
+}
+
+export async function inspectWindowsSchedulerServiceStatus(io: {
+  probeTask?: () => WindowsSchedulerTaskProbe;
+  findProxy?: () => Promise<{ port: number } | null>;
+} = {}): Promise<string> {
+  let task: WindowsSchedulerTaskProbe;
+  try {
+    task = (io.probeTask ?? probeWindowsSchedulerTask)();
+  } catch (error) {
+    task = { status: "unknown", detail: schtasksErrorDetail(error) };
+  }
+
+  let proxy: WindowsSchedulerProxyProbe;
+  try {
+    const live = await (io.findProxy ?? findLiveProxy)();
+    proxy = live ? { status: "running", port: live.port } : { status: "not-running" };
+  } catch {
+    proxy = { status: "unknown" };
+  }
+
+  return formatWindowsSchedulerServiceStatus(task, proxy);
+}
+
+function schtasksErrorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** True when a schtasks CSV listing line refers to the given task name. */
+export function windowsSchedulerCsvIncludesTask(csv: string, taskName: string): boolean {
+  const needle = taskName.toLowerCase();
+  for (const line of csv.split(/\r?\n/)) {
+    const lower = line.toLowerCase();
+    if (!lower.includes(needle)) continue;
+    // Prefer exact CSV field matches ("\TaskName" / "TaskName") before a substring hit.
+    if (
+      lower.includes(`"\\${needle}"`)
+      || lower.includes(`"${needle}"`)
+      || new RegExp(`(^|[,\\\\])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,"]|$)`).test(lower)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Probe whether the OpenCodex Task Scheduler task exists.
+ * Query failures fall back to a CSV listing before concluding absence; if both
+ * fail, returns `unknown` so callers can fail closed instead of releasing locks.
+ */
+export function probeWindowsSchedulerTask(taskName = TASK): WindowsSchedulerTaskProbe {
+  if (process.platform !== "win32") return { status: "absent" };
+
+  let queryFailure: string | null = null;
+  try {
+    const out = querySchtasks(["/query", "/tn", taskName]);
+    if (out.includes(taskName)) return { status: "present" };
+  } catch (error) {
+    queryFailure = schtasksErrorDetail(error);
+  }
+
+  try {
+    const csv = querySchtasks(["/query", "/fo", "CSV"]);
+    if (windowsSchedulerCsvIncludesTask(csv, taskName)) return { status: "present" };
+    return { status: "absent" };
+  } catch (error) {
+    const listDetail = schtasksErrorDetail(error);
+    const detail = queryFailure
+      ? `Specific query failed (${queryFailure}); CSV listing also failed (${listDetail}).`
+      : `Task query did not confirm presence and CSV listing failed (${listDetail}).`;
+    return { status: "unknown", detail };
+  }
+}
+
+/** True when the Task Scheduler registration for the default proxy task is proven present. */
+export function windowsSchedulerTaskInstalled(taskName = TASK): boolean {
+  return probeWindowsSchedulerTask(taskName).status === "present";
+}
+
+export interface WindowsSchedulerInstallVerification {
+  taskInstalled: boolean;
+  registrationHealthy: boolean;
+  assetsHealthy: boolean;
+  nativeServiceAbsent: boolean;
+  /** True when SCM probe failed; not a proven WinSW presence. */
+  nativeStatusUnknown: boolean;
+  conflict: boolean;
+  ok: boolean;
+  detail: string;
+}
+
+/** Pure postcondition evaluation for an elevated scheduler install. */
+export function evaluateWindowsSchedulerInstallVerification(inputs: {
+  taskInstalled: boolean;
+  xml: string;
+  assetsExist: boolean;
+  nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
+  wscript?: string;
+  launcher?: string;
+}): WindowsSchedulerInstallVerification {
+  const registrationHealthy = inputs.xml.length > 0
+    && windowsTaskRegistrationHealthy(inputs.xml, inputs.wscript, inputs.launcher);
+  const assetsHealthy = inputs.assetsExist;
+  const nativeServiceAbsent = inputs.nativeStatus === "nonexistent";
+  const nativeStatusUnknown = inputs.nativeStatus === "unknown";
+  // Only treat proven WinSW presence as a backend conflict — never "unknown".
+  const conflict = inputs.taskInstalled
+    && (inputs.nativeStatus === "started" || inputs.nativeStatus === "stopped");
+  const ok = inputs.taskInstalled && registrationHealthy && assetsHealthy && nativeServiceAbsent && !conflict;
+  const detail = !inputs.taskInstalled
+    ? "Task Scheduler task is not installed."
+    : conflict
+      ? `CONFLICT: Task Scheduler and native WinSW (${WINSW_SERVICE_ID}) are both present.`
+      : !assetsHealthy
+        ? "Required scheduler service assets are missing."
+        : !registrationHealthy
+          ? (inputs.xml.trim()
+            ? "Task Scheduler registration is present but unhealthy."
+            : "Task Scheduler task is present but its XML could not be read.")
+          : nativeStatusUnknown
+            ? "The Task Scheduler task was created, but OpenCodex could not verify that the native WinSW service is absent."
+            : "ok";
+  return {
+    taskInstalled: inputs.taskInstalled,
+    registrationHealthy,
+    assetsHealthy,
+    nativeServiceAbsent,
+    nativeStatusUnknown,
+    conflict,
+    ok,
+    detail,
+  };
+}
+
+/** Conflict-free postcondition check for an elevated scheduler install. */
+export function verifyWindowsSchedulerInstall(taskName = TASK): WindowsSchedulerInstallVerification {
+  const taskInstalled = windowsSchedulerTaskInstalled(taskName);
+  let xml = "";
+  if (taskInstalled) {
+    try { xml = querySchtasks(["/query", "/tn", taskName, "/xml"]); } catch { xml = ""; }
+  }
+  // After elevated create, non-elevated `/query /xml` can fail or return empty while the
+  // task is still listed. Fall back to the on-disk document we registered.
+  if (taskInstalled && !xml.trim()) {
+    const diskPath = windowsTaskXmlPath();
+    if (existsSync(diskPath)) {
+      try { xml = decodeSchtasksOutput(readFileSync(diskPath)); } catch { /* keep empty */ }
+    }
+  }
+  return evaluateWindowsSchedulerInstallVerification({
+    taskInstalled,
+    xml,
+    assetsExist: [windowsServiceScriptPath(), windowsLauncherVbsPath(), windowsTaskXmlPath()].every(existsSync),
+    nativeStatus: statusWinswRaw(),
+  });
+}
+
+async function elevateSchtasks(args: string[]): Promise<void> {
+  const exitCode = await runWindowsElevated(windowsSchtasks(), args);
+  if (exitCode !== 0) {
+    throw new Error(`Background service install failed with exit code ${exitCode}.`);
+  }
+}
+
+async function rollbackElevatedSchedulerTask(taskName = TASK): Promise<string | null> {
+  try {
+    await elevateSchtasks(["/delete", "/tn", taskName, "/f"]);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const probe = resolveWindowsSchedulerTaskProbe(taskName);
+  if (probe.status === "absent") return null;
+  if (probe.status === "unknown") {
+    return `Task Scheduler task ${taskName} presence could not be verified after rollback: ${probe.detail}`;
+  }
+  return `Task Scheduler task ${taskName} is still present after rollback.`;
+}
+
+type ElevateCreateAndRunStart = (
+  schtasksPath: string,
+  createArgs: string[],
+  runArgs: string[],
+  deleteArgs: string[],
+) => ElevatedSchtasksCreateAndRunExecution;
+
+type FinalizeHooks = {
+  startElevateCreateAndRun?: ElevateCreateAndRunStart;
+  /** Legacy sync hook used by older tests — wraps a resolved result as an execution. */
+  elevateCreateAndRun?: (
+    schtasksPath: string,
+    createArgs: string[],
+    runArgs: string[],
+    deleteArgs: string[],
+  ) => Promise<ElevatedSchtasksCreateAndRunResult>;
+  verify?: () => WindowsSchedulerInstallVerification;
+  writeInstallState?: () => void;
+  /** Preferred tri-state probe for security-sensitive reconciliation. */
+  probeTask?: () => WindowsSchedulerTaskProbe;
+  /** Legacy boolean hook; mapped to present/absent when probeTask is unset. */
+  taskInstalled?: () => boolean;
+  /** Defense-in-depth: late reconciliation must still own this attempt. */
+  stillOwnsAttempt?: (attemptId: string) => boolean;
+  requestTimeoutMs?: number;
+};
+
+let finalizeHooks: FinalizeHooks | null = null;
+
+function resolveWindowsSchedulerTaskProbe(taskName = TASK): WindowsSchedulerTaskProbe {
+  if (finalizeHooks?.probeTask) return finalizeHooks.probeTask();
+  if (finalizeHooks?.taskInstalled) {
+    return finalizeHooks.taskInstalled() ? { status: "present" } : { status: "absent" };
+  }
+  return probeWindowsSchedulerTask(taskName);
+}
+
+/** Test-only hooks for elevated create+run finalization. */
+export function setFinalizeWindowsSchedulerHooksForTests(hooks: FinalizeHooks | null): void {
+  finalizeHooks = hooks;
+}
+
+function throwPartialInstall(parts: string[]): never {
+  throw new Error(parts.filter(Boolean).join(" "));
+}
+
+/**
+ * Reconcile an unrecognized elevated exit when we cannot trust the phase code.
+ * Never invent a create-vs-run classification; inspect actual task state first.
+ * An unverifiable probe must fail closed (partial / blocked), never release.
+ */
+async function reconcileUnknownElevatedOutcome(exitCode: number): Promise<void> {
+  const probe = resolveWindowsSchedulerTaskProbe();
+  const parts = [
+    "The elevated Task Scheduler operation returned an unknown result.",
+    `Exit code: ${exitCode}.`,
+    "OpenCodex could not prove whether task creation completed, so installation state was not written.",
+  ];
+  if (probe.status === "unknown") {
+    parts.push(`Task Scheduler presence could not be verified: ${probe.detail}`);
+    parts.push("A partial Task Scheduler backend may remain.");
+    throwPartialInstall(parts);
+  }
+  if (probe.status === "absent") {
+    parts.push("No OpenCodex Task Scheduler task was found after the elevated operation.");
+    throwPartialInstall(parts);
+  }
+  parts.push("A Task Scheduler task is present; attempting cleanup.");
+  const rollbackError = await rollbackElevatedSchedulerTask();
+  if (rollbackError) {
+    parts.push(`Cleanup also failed: ${rollbackError}`);
+    parts.push(`Remove the task manually with 'schtasks /delete /tn ${TASK} /f' if it remains.`);
+  } else {
+    parts.push("The elevated Task Scheduler task was removed.");
+  }
+  throwPartialInstall(parts);
+}
+
+type ApplyElevatedOptions = {
+  attemptId: string;
+  writeOnSuccess: boolean;
+  stillOwnsAttempt?: (attemptId: string) => boolean;
+};
+
+function attemptStillOwned(options: ApplyElevatedOptions): boolean {
+  const check = options.stillOwnsAttempt ?? finalizeHooks?.stillOwnsAttempt;
+  return !check || check(options.attemptId);
+}
+
+async function applyElevatedSchedulerResult(
+  result: ElevatedSchtasksCreateAndRunResult,
+  options: ApplyElevatedOptions,
+): Promise<void> {
+  if (!attemptStillOwned(options)) {
+    return;
+  }
+  const outcome: ElevatedSchedulerOutcome = result.outcome;
+
+  if (outcome === "create-failed") {
+    throw new Error("Elevated schtasks /create failed. The Task Scheduler task was not registered.");
+  }
+  if (outcome === "run-failed-rolled-back") {
+    throw new Error(
+      "Elevated schtasks /run failed after the task was registered. The elevated process rolled the task back. Installation state was not written.",
+    );
+  }
+  if (outcome === "run-failed-rollback-failed") {
+    throwPartialInstall([
+      "Elevated schtasks /run failed after the task was registered, and elevated rollback also failed.",
+      "A partial Task Scheduler backend may remain.",
+      `Remove the task manually with 'schtasks /delete /tn ${TASK} /f' if present.`,
+      "Installation state was not written.",
+    ]);
+  }
+  if (outcome !== "success") {
+    await reconcileUnknownElevatedOutcome(result.exitCode);
+  }
+
+  const verification = (finalizeHooks?.verify ?? verifyWindowsSchedulerInstall)();
+  if (!verification.ok) {
+    // Preserve a healthy elevated task when WinSW absence cannot be proven (unknown SCM status).
+    // Unknown is not a confirmed dual-backend conflict; install state is still withheld.
+    const preserveElevatedTask = verification.taskInstalled
+      && verification.registrationHealthy
+      && verification.assetsHealthy
+      && !verification.conflict
+      && verification.nativeStatusUnknown;
+    if (preserveElevatedTask) {
+      throwPartialInstall([
+        "Elevated Task Scheduler registration did not produce a conflict-free install.",
+        verification.detail,
+        "The elevated Task Scheduler task was left in place because native WinSW status could not be verified.",
+        "Installation state was not written.",
+      ]);
+    }
+    const rollbackError = await rollbackElevatedSchedulerTask();
+    const parts = [
+      "Elevated Task Scheduler registration did not produce a conflict-free install.",
+      verification.detail,
+    ];
+    if (rollbackError) {
+      parts.push(`Rollback also failed: ${rollbackError}`);
+      parts.push(`Remove the task manually with 'schtasks /delete /tn ${TASK} /f' and the native service with 'sc delete ${WINSW_SERVICE_ID}' if present.`);
+    } else {
+      parts.push("The elevated Task Scheduler task was rolled back.");
+    }
+    parts.push("Installation state was not written.");
+    throwPartialInstall(parts);
+  }
+  if (options.writeOnSuccess) {
+    if (!attemptStillOwned(options)) {
+      return;
+    }
+    (finalizeHooks?.writeInstallState ?? (() => writeServiceInstallState("scheduler")))();
+  }
+}
+
+/** Outcome of late reconciliation after a request-level elevation timeout. */
+export type ElevatedReconciliationOutcome =
+  | "released"
+  | "blocked-partial";
+
+export type FinalizeWindowsSchedulerResult =
+  | { kind: "done" }
+  | {
+      kind: "indeterminate";
+      attemptId: string;
+      /** Settles after the elevated transaction finishes and late reconciliation runs. */
+      reconciliation: Promise<ElevatedReconciliationOutcome>;
+    };
+
+export type FinalizeWindowsSchedulerOptions = {
+  attemptId?: string;
+  stillOwnsAttempt?: (attemptId: string) => boolean;
+  requestTimeoutMs?: number;
+};
+
+function startElevateExecution(
+  schtasksPath: string,
+  createArgs: string[],
+  runArgs: string[],
+  deleteArgs: string[],
+): ElevatedSchtasksCreateAndRunExecution {
+  if (finalizeHooks?.startElevateCreateAndRun) {
+    return finalizeHooks.startElevateCreateAndRun(schtasksPath, createArgs, runArgs, deleteArgs);
+  }
+  if (finalizeHooks?.elevateCreateAndRun) {
+    const completion = finalizeHooks.elevateCreateAndRun(schtasksPath, createArgs, runArgs, deleteArgs);
+    return { completion, launcherPid: null };
+  }
+  return startElevatedSchtasksCreateAndRun(schtasksPath, createArgs, runArgs, deleteArgs);
+}
+
+function isPartialInstallError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /partial Task Scheduler/i.test(error.message)
+    || /Cleanup also failed/i.test(error.message)
+    || /left in place because native WinSW status could not be verified/i.test(error.message)
+    || /Task Scheduler presence could not be verified/i.test(error.message);
+}
+
+/**
+ * Re-register the scheduler task with elevation after a non-elevated install wrote assets.
+ *
+ * Request timeout does not kill the elevated launcher. On timeout this returns
+ * `indeterminate` and keeps reconciling the eventual protocol result.
+ */
+export async function finalizeWindowsSchedulerServiceRegistration(
+  script = windowsServiceScriptPath(),
+  options?: FinalizeWindowsSchedulerOptions,
+): Promise<FinalizeWindowsSchedulerResult> {
+  if (process.platform !== "win32") {
+    throw new Error("Windows scheduler registration is only supported on Windows.");
+  }
+  const attemptId = options?.attemptId ?? randomUUID();
+  const stillOwnsAttempt = options?.stillOwnsAttempt ?? finalizeHooks?.stillOwnsAttempt;
+  const createArgs = buildWindowsSchtasksCreateArgs(script);
+  const runArgs = ["/run", "/tn", TASK];
+  const deleteArgs = ["/delete", "/tn", TASK, "/f"];
+  const started = startElevateExecution(windowsSchtasks(), createArgs, runArgs, deleteArgs);
+  const timeoutMs = options?.requestTimeoutMs
+    ?? finalizeHooks?.requestTimeoutMs
+    ?? ELEVATION_REQUEST_TIMEOUT_MS;
+  const applyOpts: ApplyElevatedOptions = { attemptId, writeOnSuccess: true, stillOwnsAttempt };
+
+  let raced: { status: "completed"; value: ElevatedSchtasksCreateAndRunResult } | { status: "timed-out" };
+  try {
+    raced = await raceWithTimeout(started.completion, timeoutMs);
+  } catch (error) {
+    // Cancellation / launch failure / signal before or instead of a protocol result.
+    // Signal after Start-Process may leave an elevated child; reconcile conservatively.
+    if (error instanceof WindowsElevationError && error.reason === "terminated") {
+      try {
+        await reconcileUnknownElevatedOutcome(OCX_ELEVATED_PROTOCOL_FAILED);
+      } catch (reconcileError) {
+        // Prefer the reconciliation detail (partial install / cleanup guidance) over the
+        // generic signal message so callers can block retries when a task remains.
+        throw reconcileError;
+      }
+    }
+    throw error;
+  }
+
+  if (raced.status === "completed") {
+    await applyElevatedSchedulerResult(raced.value, applyOpts);
+    return { kind: "done" };
+  }
+
+  const reconciliation = (async (): Promise<ElevatedReconciliationOutcome> => {
+    try {
+      const result = await started.completion;
+      await applyElevatedSchedulerResult(result, applyOpts);
+      return "released";
+    } catch (error) {
+      if (error instanceof WindowsElevationError && error.reason === "cancelled") {
+        return "released";
+      }
+      if (error instanceof WindowsElevationError && error.reason === "launch-failed") {
+        return "released";
+      }
+      if (error instanceof WindowsElevationError && error.reason === "terminated") {
+        try {
+          await reconcileUnknownElevatedOutcome(OCX_ELEVATED_PROTOCOL_FAILED);
+          return "released";
+        } catch (reconcileError) {
+          return isPartialInstallError(reconcileError) ? "blocked-partial" : "released";
+        }
+      }
+      // applyElevatedSchedulerResult failures are expected (create/run/conflict); swallow for background.
+      if (isPartialInstallError(error)) {
+        return "blocked-partial";
+      }
+      return "released";
+    }
+  })();
+
+  return { kind: "indeterminate", attemptId, reconciliation };
+}
+
+/**
+ * Pure post-restart / pre-install advisory check. Does not mutate state.
+ * A process-local indeterminate lock cannot survive restart — callers must inspect reality.
+ */
+export function evaluateSchedulerInstallRestartReconciliation(inputs: {
+  taskInstalled: boolean;
+  registrationHealthy: boolean;
+  assetsHealthy: boolean;
+  nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
+  installStateBackend: "scheduler" | "native" | null;
+}): {
+  status: "healthy" | "orphan-task" | "stale-install-state" | "conflict" | "unhealthy" | "unverified";
+  detail: string;
+} {
+  const conflict = inputs.taskInstalled
+    && (inputs.nativeStatus === "started" || inputs.nativeStatus === "stopped");
+  if (conflict) {
+    return {
+      status: "conflict",
+      detail: `CONFLICT: Task Scheduler and native WinSW (${WINSW_SERVICE_ID}) are both present.`,
+    };
+  }
+  if (inputs.taskInstalled && inputs.nativeStatus === "unknown") {
+    return {
+      status: "unverified",
+      detail: "The Task Scheduler task exists, but native WinSW status could not be verified.",
+    };
+  }
+  if (inputs.taskInstalled && (!inputs.registrationHealthy || !inputs.assetsHealthy)) {
+    return {
+      status: "unhealthy",
+      detail: !inputs.assetsHealthy
+        ? "Required scheduler service assets are missing."
+        : "Task Scheduler registration is present but unhealthy.",
+    };
+  }
+  if (inputs.taskInstalled && inputs.installStateBackend !== "scheduler") {
+    return {
+      status: "orphan-task",
+      detail: "A Task Scheduler task is present without matching scheduler install state.",
+    };
+  }
+  if (!inputs.taskInstalled && inputs.installStateBackend === "scheduler") {
+    return {
+      status: "stale-install-state",
+      detail: "Scheduler install state is present but the Task Scheduler task is absent.",
+    };
+  }
+  return { status: "healthy", detail: "ok" };
 }
 
 function windowsBatchValue(value: string): string {
@@ -351,6 +1240,22 @@ function taskXmlString(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+/**
+ * RunLevel check. Schema default is LeastPrivilege (omitted on export). Elevated
+ * `schtasks /create` often rewrites the registered task to HighestAvailable even when
+ * the source XML asked for LeastPrivilege — still InteractiveToken / same user.
+ * Keep accepting HighestAvailable here: rejecting it would false-fail healthy elevated
+ * installs, and windowsTaskRegistrationHealthy tests encode that contract.
+ */
+function taskXmlRunLevelAcceptable(principal: string): boolean {
+  if (taskXmlHasPrefixedTag(principal, "RunLevel")) return false;
+  const count = taskXmlElementCount(principal, "RunLevel");
+  if (count === 0) return true;
+  if (count > 1) return false;
+  const value = new RegExp(`<RunLevel(?:\\s[^>]*?)?>\\s*([^<]*?)\\s*<\\/RunLevel>`, "i").exec(principal)?.[1]?.trim().toLowerCase();
+  return value === "leastprivilege" || value === "highestavailable";
 }
 
 export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServiceListenPort()): string {
@@ -472,39 +1377,205 @@ function taskXmlSection(xml: string, tag: string): string {
   return new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i").exec(xml)?.[1] ?? "";
 }
 
+/** Drop comments and CDATA so a commented-out decoy cannot satisfy any check. */
+function taskXmlWithoutCommentsAndCdata(xml: string): string {
+  return xml.replace(/<!--[\s\S]*?-->/g, "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+}
+
+/**
+ * Count occurrences of an unprefixed tag, including the self-closing form. The
+ * element boundary matters: `<EnabledExtra>` must not count as `Enabled`.
+ */
+function taskXmlElementCount(xml: string, tag: string): number {
+  return xml.match(new RegExp(`<${tag}(?:\\s[^>]*?)?\\s*\\/?>`, "gi"))?.length ?? 0;
+}
+
+/**
+ * True when a namespace-prefixed form of the tag appears. A prefixed element bound
+ * to the task namespace carries a real value, but this module parses by regex and
+ * cannot resolve prefixes — so it fails closed instead of reading the element as
+ * absent (which would silently apply the schema default).
+ */
+function taskXmlHasPrefixedTag(xml: string, tag: string): boolean {
+  return new RegExp(`<[A-Za-z_][\\w.-]*:${tag}(?:[\\s/>])`, "i").test(xml);
+}
+
+/**
+ * Compare an element that Task Scheduler may omit when exporting a registered task.
+ * Absence means the documented schema default (#432); a present element must still
+ * match exactly, so a malformed or explicitly unsafe value never reads as healthy.
+ */
+/**
+ * Decode XML's five predefined entities, exactly once.
+ *
+ * Task Scheduler re-encodes element text when it exports a task, so a needle we
+ * escaped ourselves can never match its output (#608). Compare decoded values
+ * instead of encoded ones.
+ *
+ * The single pass is the point: decoding twice would turn `&amp;quot;` into `"`,
+ * letting a doubly-encoded value impersonate the expected launcher path.
+ */
+function taskXmlDecodeEntities(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => (
+    name === "amp" ? "&"
+      : name === "lt" ? "<"
+        : name === "gt" ? ">"
+          : name === "quot" ? "\""
+            : "'"
+  ));
+}
+
+/**
+ * Exactly one unprefixed `<tag>` whose DECODED text equals `expected`.
+ *
+ * Unlike taskXmlOptionalValueEquals(), an absent element is NOT a pass: these
+ * elements name what actually gets executed, so a missing <Command>/<Arguments>
+ * must fail the health check rather than inherit a schema default.
+ */
+function taskXmlDecodedValueEquals(xml: string, tag: string, expected: string): boolean {
+  // Same reasoning as the optional helper: `<t:Arguments>` must not read as absent.
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  if (taskXmlElementCount(xml, tag) !== 1) return false;
+  // `[^<]*` refuses nested markup, so a decoy inside a child element cannot match.
+  const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>([^<]*)<\\/${tag}>`, "i").exec(xml)?.[1];
+  if (value === undefined) return false;
+  return taskXmlDecodeEntities(value).trim().toLowerCase() === expected.trim().toLowerCase();
+}
+
+function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string): boolean {
+  // Check the prefixed form first: treating `<t:Enabled>false</t:Enabled>` as an
+  // omission would turn an explicitly disabled task into a healthy one.
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  const count = taskXmlElementCount(xml, tag);
+  if (count === 0) return true;
+  if (count > 1) return false;
+  const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>\\s*([^<]*?)\\s*<\\/${tag}>`, "i").exec(xml)?.[1];
+  return value?.trim().toLowerCase() === expected.toLowerCase();
+}
+
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
 export function windowsTaskRegistrationHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
 ): boolean {
-  const trigger = taskXmlSection(xml, "LogonTrigger");
-  const principal = taskXmlSection(xml, "Principal");
-  const settings = taskXmlSection(xml, "Settings");
-  const action = taskXmlSection(xml, "Exec");
-  return /<Enabled>\s*true\s*<\/Enabled>/i.test(trigger)
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
+  // Task/Data, so a Data block placed before the real sections could shadow them.
+  // We never emit Data, so its presence alone disqualifies the registration. Both
+  // forms are rejected because taskXmlElementCount() ignores prefixed tags.
+  if (taskXmlElementCount(scrubbed, "Data") > 0 || taskXmlHasPrefixedTag(scrubbed, "Data")) return false;
+  const triggers = taskXmlSection(scrubbed, "Triggers");
+  const trigger = taskXmlSection(triggers, "LogonTrigger");
+  const principal = taskXmlSection(scrubbed, "Principal");
+  const settings = taskXmlSection(scrubbed, "Settings");
+  const action = taskXmlSection(scrubbed, "Exec");
+  // A self-closing <LogonTrigger /> leaves an empty section, so look for the element
+  // itself — scoped to <Triggers> so a decoy elsewhere cannot satisfy it.
+  return taskXmlElementCount(triggers, "LogonTrigger") > 0
+    && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
-    && /<RunLevel>\s*LeastPrivilege\s*<\/RunLevel>/i.test(principal)
-    && /<Enabled>\s*true\s*<\/Enabled>/i.test(settings)
+    && taskXmlRunLevelAcceptable(principal)
+    && taskXmlOptionalValueEquals(settings, "Enabled", "true")
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
-    && action.includes(`<Command>${taskXmlString(wscript)}</Command>`)
-    && action.includes(`<Arguments>${taskXmlString(`/b /nologo "${launcher}"`)}</Arguments>`);
+    // Compare decoded VALUES, not encodings: Task Scheduler canonicalizes the
+    // quotes we wrote as `&quot;` back to literal `"` on export, so an escaped
+    // needle never matched and a healthy task read as permanently stale (#608).
+    // Case-insensitive: elevated `schtasks /create` may rewrite System32 casing.
+    && taskXmlDecodedValueEquals(action, "Command", wscript)
+    && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
+}
+
+export interface WindowsSchedulerXmlState {
+  installed: boolean;
+  enabled: boolean;
+  registrationHealthy: boolean;
+}
+
+/**
+ * Single source of truth for reading a registered task's XML. Both the status
+ * diagnostic and its tests go through here, so a partial fix cannot leave one
+ * caller on an older, stricter reading of the same document (#432).
+ */
+export function readWindowsSchedulerXmlState(
+  xml: string,
+  wscript?: string,
+  launcher?: string,
+): WindowsSchedulerXmlState {
+  const installed = xml.length > 0;
+  if (!installed) return { installed: false, enabled: false, registrationHealthy: false };
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  const hasData = taskXmlElementCount(scrubbed, "Data") > 0 || taskXmlHasPrefixedTag(scrubbed, "Data");
+  const settings = hasData ? "" : taskXmlSection(scrubbed, "Settings");
+  return {
+    installed: true,
+    enabled: !hasData && taskXmlOptionalValueEquals(settings, "Enabled", "true"),
+    registrationHealthy: windowsTaskRegistrationHealthy(xml, wscript, launcher),
+  };
 }
 
 // ── macOS (launchd) ──
 function installLaunchd(): void {
   const dir = join(homedir(), "Library", "LaunchAgents");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   const p = plistPath();
   writeFileSync(p, buildPlist(), "utf8");
-  try { sh(`launchctl unload "${p}" 2>/dev/null`); } catch { /* not loaded */ }
-  sh(`launchctl load -w "${p}"`);
+  // Best-effort: an absent job is fine here, and a failed unload is caught by the
+  // load verification below with a better message than a raw unload error.
+  runLaunchctl(["unload", p]);
+  const loaded = runLaunchctl(["load", "-w", p]);
+  if (!loaded.ok || launchctlLoadFailed(loaded.stderr)) {
+    // Do NOT write install state for a load that did not take: state describing an
+    // unused plist is what made this failure invisible.
+    throw new Error(
+      `launchctl could not load ${p}: ${loaded.stderr || "load reported failure"}\n`
+      + "A previous job may still be bootstrapped. Try:\n"
+      + `  launchctl bootout ${launchdGuiDomain()}/${LABEL}\n`
+      + "then re-run 'ocx service install'.",
+    );
+  }
   writeServiceInstallState();
 }
-function startLaunchd(): void { sh(`launchctl load -w "${plistPath()}"`); }
+/**
+ * Deps are named for the layer they replace, not for the process API: `launchctl`
+ * returns a {@link runLaunchctl} result and `matches` a {@link launchdJobMatchesPlist}
+ * result. Only `runLaunchctl` itself takes a spawnSync mock.
+ *
+ * Exported for the branch tests. Every parameter is optional, so this stays
+ * assignable to `ServiceOps.start` (`() => void`) and `platformOps` wires the same
+ * function the tests exercise.
+ */
+export function startLaunchd(deps: {
+  launchctl?: typeof runLaunchctl;
+  matches?: typeof launchdJobMatchesPlist;
+} = {}): void {
+  const run = deps.launchctl ?? runLaunchctl;
+  const p = plistPath();
+  const loaded = run(["load", "-w", p]);
+  if (loaded.ok && !launchctlLoadFailed(loaded.stderr)) return;
+  // `Load failed` on start is AMBIGUOUS in a way it is not on install: the job may
+  // already be bootstrapped from THIS plist, which is a no-op rather than an error.
+  // `install` can assume a stale job (it just rewrote the plist); `start` cannot, and
+  // throwing here would break `ocx service start` on every healthy service.
+  const entry = cliEntry();
+  const live = (deps.matches ?? launchdJobMatchesPlist)(
+    buildServiceShellCommand(entry.bun, entry.cli),
+  );
+  if (live.loaded && live.matchesPlist) {
+    console.log("ℹ️  service was already loaded from the current plist; nothing to do.");
+    return;
+  }
+  throw new Error(
+    `launchctl could not load ${p}: ${loaded.stderr || "load reported failure"}\n`
+    + (live.loaded
+      ? `launchd is running an OLDER plist. Fix:\n  launchctl bootout ${launchdGuiDomain()}/${LABEL}\n  ocx service install`
+      : "The job is not loaded. Run 'ocx service install' to re-register it."),
+  );
+}
 function stopLaunchd(): void { try { sh(`launchctl unload "${plistPath()}"`); } catch { /* not loaded */ } }
 function statusLaunchd(): string { try { return sh(`launchctl list | grep ${LABEL} || true`); } catch { return ""; } }
 function uninstallLaunchd(): void {
@@ -531,9 +1602,23 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
   }
 }
 
-function installWindows(): void {
+/**
+ * Rewrite on-disk scheduler assets (script/VBS/XML) without re-registering the task.
+ * Used by fresh install (before schtasks /create) and by repair (no elevation).
+ */
+function writeWindowsSchedulerAssets(): void {
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
+  const script = windowsServiceScriptPath();
+  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
+  // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
+  // paths on some WSH/codepage combinations — same contract as the task XML below.
+  writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
+  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
+}
+
+function installWindows(): void {
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   // Transactional backend switch: installing the scheduler backend removes a native
   // service first — two live managers would both respawn the proxy (conflict).
   if (statusWinswRaw() !== "nonexistent") {
@@ -550,15 +1635,76 @@ function installWindows(): void {
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
   try { stopWindows(); } catch { /* not running */ }
-  const script = windowsServiceScriptPath();
-  writeServiceAssetWithRetry(script, buildWindowsServiceScript(), "utf8");
-  // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
-  // paths on some WSH/codepage combinations — same contract as the task XML below.
-  writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
-  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
-  schtasks(buildWindowsSchtasksCreateArgs(script));
+  writeWindowsSchedulerAssets();
+  schtasks(buildWindowsSchtasksCreateArgs(windowsServiceScriptPath()));
   schtasks(["/run", "/tn", TASK]);
   writeServiceInstallState("scheduler");
+}
+
+export interface RepairServiceDeps {
+  diagnose?: () => ServiceDiagnostic;
+  assertEnv?: () => void;
+  assertAuth?: () => void;
+  writeSchedulerAssets?: () => void;
+  stopScheduler?: () => void;
+  startScheduler?: () => void;
+  writeSchedulerState?: () => void;
+  writeNativeState?: () => void;
+  repairNative?: () => void | Promise<void>;
+  repairLaunchd?: () => void;
+  repairSystemd?: () => void;
+  /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Repair an already-installed background service without Task Scheduler re-registration.
+ *
+ * Windows scheduler: rewrite assets + stop/start — no `schtasks /create`, no UAC.
+ * Windows native: WinSW asset rewrite + restart (skips `install /p` when present).
+ * macOS/Linux: re-run the user-level install/reload path.
+ */
+export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const diagnose = deps.diagnose ?? diagnoseService;
+  const platform = deps.platform ?? process.platform;
+  const diag = diagnose();
+  if (!diag.supported) {
+    throw new Error(`Background service is unsupported (${diag.summary}).`);
+  }
+  if (diag.conflict) {
+    throw new Error(
+      "Cannot repair while Task Scheduler and native WinSW are both present. "
+        + "Run 'ocx service uninstall' then reinstall one backend with 'ocx service install'.",
+    );
+  }
+  if (!diag.installed) {
+    throw new Error("Background service is not installed. Run 'ocx service install' first.");
+  }
+
+  (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
+  (deps.assertAuth ?? assertServiceAuthEnvironment)();
+
+  if (platform === "win32") {
+    if (diag.backend === "native") {
+      await (deps.repairNative ?? (() => installWinswService(defaultWinswEntry(import.meta.dir))))();
+      (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
+      return;
+    }
+    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    (deps.startScheduler ?? startWindows)();
+    (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
+    return;
+  }
+  if (platform === "darwin") {
+    (deps.repairLaunchd ?? installLaunchd)();
+    return;
+  }
+  if (platform === "linux") {
+    (deps.repairSystemd ?? installSystemd)();
+    return;
+  }
+  throw new Error(`Background service repair is unsupported on ${platform}.`);
 }
 
 /**
@@ -566,7 +1712,39 @@ function installWindows(): void {
  * scheduler backend first; on failure the machine is left with NO service (explicitly
  * reported) — never a silent fallback to the scheduler.
  */
+/** Refuse WinSW when the interactive user is a Microsoft account (SCM cannot authenticate it). */
+export function assertWindowsNativeServiceAccountSupported(): void {
+  if (process.platform !== "win32") return;
+  const source = readWindowsPrincipalSource();
+  if (source?.toLowerCase() === "microsoftaccount") {
+    throw new Error(
+      "The native (WinSW) service backend cannot run under a Microsoft-account Windows login. "
+        + "Keep the Task Scheduler backend (`ocx service install`) or sign in with a local/domain account before `ocx service install --native`.",
+    );
+  }
+}
+
+function readWindowsPrincipalSource(): string | null {
+  if (process.platform !== "win32") return null;
+  const ps = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!existsSync(ps)) return null;
+  try {
+    const out = execFileSync(ps, [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(Get-LocalUser -Name $env:USERNAME -ErrorAction SilentlyContinue).PrincipalSource",
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 async function installWindowsNative(): Promise<void> {
+  assertWindowsNativeServiceAccountSupported();
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   let hadScheduler = false;
@@ -600,11 +1778,49 @@ async function installWindowsNative(): Promise<void> {
   writeServiceInstallState("native");
 }
 function startWindows(): void { schtasks(["/run", "/tn", TASK]); }
-function stopWindows(): void { try { schtasks(["/end", "/tn", TASK]); } catch { /* not running */ } }
+
+export function isWindowsSchedulerEndBenign(error: unknown): boolean {
+  const detail = schtasksErrorDetail(error).toLowerCase();
+  return detail.includes("no running instance")
+    || detail.includes("not currently running")
+    || detail.includes("0x41330");
+}
+
+/**
+ * End the scheduler task. "Already stopped" is success; other `/end` failures are
+ * swallowed so callers can still run tracked-proxy + live-proxy cleanup.
+ *
+ * Do not key a restart-window wait on `/end` failure: the #764 case is an `/end`
+ * that *succeeds* while the wrapper survives and respawns. That verification lives
+ * on the stop-verification path (poll across the restart window), not here.
+ */
+export function stopWindows(): void {
+  try {
+    schtasks(["/end", "/tn", TASK]);
+  } catch (error) {
+    if (isWindowsSchedulerEndBenign(error)) return;
+  }
+}
 function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]); } catch { return ""; } }
 function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TASK, "/xml"]); } catch { return ""; } }
 function uninstallWindows(): void {
-  try { schtasks(["/delete", "/tn", TASK, "/f"]); } catch { /* absent */ }
+  const probe = probeWindowsSchedulerTask(TASK);
+  if (probe.status === "present") {
+    try {
+      schtasks(["/delete", "/tn", TASK, "/f"]);
+    } catch (error) {
+      throw new Error(`Failed to delete Task Scheduler task ${TASK}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const afterDelete = probeWindowsSchedulerTask(TASK);
+    if (afterDelete.status === "present") {
+      throw new Error(`Task Scheduler task ${TASK} is still present after delete — refusing to remove service assets. Retry from an elevated shell.`);
+    }
+    if (afterDelete.status === "unknown") {
+      throw new Error(`Task Scheduler task ${TASK} presence could not be verified after delete — refusing to remove service assets.`);
+    }
+  } else if (probe.status === "unknown") {
+    throw new Error(`Task Scheduler task ${TASK} presence could not be verified — refusing to remove service assets.`);
+  }
   if (existsSync(windowsServiceScriptPath())) unlinkSync(windowsServiceScriptPath());
   if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());
   if (existsSync(windowsTaskXmlPath())) unlinkSync(windowsTaskXmlPath());
@@ -705,6 +1921,7 @@ function installSystemd(): void {
   ensureUserBusEnv(); // reach the user bus over a bare SSH session (F9)
   const dir = unitDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeServiceApiTokenFile();
   writeFileSync(unitPath(), buildUnit(), "utf8");
@@ -713,12 +1930,47 @@ function installSystemd(): void {
   sh(`systemctl --user restart ${TASK}`);
   writeServiceInstallState();
 }
+/**
+ * Whether systemd's in-memory unit differs from the file on disk.
+ *
+ * The systemd analogue of launchd's stale-plist case: writing
+ * `~/.config/systemd/user/<unit>` does not change the definition systemd has loaded
+ * until `daemon-reload`, so a plain `systemctl start` would run the PREVIOUS
+ * ExecStart. `NeedDaemonReload` is a per-unit property emitted as a bare
+ * `NeedDaemonReload=yes|no` line; pass the unit name or `show` reports the manager's
+ * own property instead, which answers a different question.
+ *
+ * Fail-open: if the query cannot run (no user bus, unit absent) we must not block a
+ * start that would otherwise work.
+ */
+export function systemdNeedsDaemonReload(deps: { show?: () => string } = {}): boolean {
+  try {
+    const out = (deps.show ?? (() => sh(`systemctl --user show -p NeedDaemonReload ${TASK}`)))();
+    return /NeedDaemonReload\s*=\s*yes/i.test(out);
+  } catch {
+    return false;
+  }
+}
+
 function startSystemd(): void {
   ensureUserBusEnv();
   if (!existsSync(unitPath())) {
     console.error(`opencodex service is not installed: ${unitPath()}`);
     console.error("Run `ocx service install` first to create and enable the systemd user unit.");
     process.exit(1);
+  }
+  // The unit on disk may be newer than what systemd loaded; starting now would run
+  // the previous definition.
+  //
+  // `start` alone is not enough after a reload: it is a no-op on an already-active
+  // unit, so the stale process would keep running the old ExecStart. NeedDaemonReload
+  // compares disk against loaded, never loaded against running, so the only way to
+  // make the running process match the file is to restart it.
+  if (systemdNeedsDaemonReload()) {
+    console.log("ℹ️  unit file changed on disk; reloading systemd and restarting the service.");
+    sh("systemctl --user daemon-reload");
+    sh(`systemctl --user restart ${TASK}`);
+    return;
   }
   sh(`systemctl --user start ${TASK}`);
 }
@@ -762,18 +2014,88 @@ function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
 
 type TrackedProxyCleanupResult = "none" | "stale" | "stopped";
 
+function verifiedKillTarget(pid: number | null | undefined): number | null {
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return null;
+  const verified = verifyPidIdentity(pid);
+  return verified === pid ? verified : null;
+}
+
+/**
+ * Whether a proxy is still answering after the service manager claimed to stop it.
+ *
+ * `ops.stop()` reports the outcome of the STOP COMMAND, not of the process. A Windows scheduler
+ * task whose wrapper survives `schtasks /end` respawns its child a few seconds later, so a stop
+ * that returned success can still leave a live proxy — and `ocx service stop` then restored
+ * native Codex on top of a running one (#764). The tracked-pid cleanup does not catch it either:
+ * the respawned child writes a different pid, or none this process knows about.
+ *
+ * Probed rather than assumed, and bounded. The respawn risk is specific to a supervisor that can
+ * restart its child — the Windows scheduler wrapper — so only that case pays the restart window.
+ * Everywhere else a single probe answers the question, because nothing is going to bring the
+ * proxy back after `launchctl unload` or `systemctl stop`. Making every platform wait 7s on a
+ * stop that already succeeded would trade one bug for a worse everyday one.
+ */
+export async function proxyStillLiveAfterStop(deps: {
+  findProxy?: () => Promise<{ port: number } | null>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** Whether the stopped supervisor can respawn its child; only then is polling worth the wait. */
+  canRespawn?: boolean;
+} = {}): Promise<{ port: number } | null> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const now = deps.now ?? Date.now;
+  const canRespawn = deps.canRespawn ?? process.platform === "win32";
+  const deadline = now() + (canRespawn ? 7000 : 0);
+  // Single-shot (non-respawn) still needs one full SERVICE_STOP_LIVENESS budget; respawn
+  // polling shares the outer deadline so multi-candidate discovery cannot overrun it.
+  const findProxy = deps.findProxy ?? (() => {
+    const probeDeadline = canRespawn
+      ? deadline
+      : now() + (SERVICE_STOP_LIVENESS.timeoutMs! * SERVICE_STOP_LIVENESS.attempts! + 250);
+    return findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: probeDeadline, nowFn: now });
+  });
+  for (;;) {
+    try {
+      const live = await findProxy();
+      if (live) return live;
+    } catch {
+      // A probe failure is not proof the proxy is gone; keep polling until the deadline.
+    }
+    if (now() >= deadline) return null;
+    await sleep(1000);
+  }
+}
+
 async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
+  let stopped = false;
   const pid = readPid();
-  if (!pid) return "none";
-  if (!isProcessAlive(pid)) {
+  const trackedKillPid = verifiedKillTarget(pid);
+  if (trackedKillPid !== null && isProcessAlive(trackedKillPid)) {
+    await stopProxy(trackedKillPid);
+    removePid(trackedKillPid);
+    removeRuntimePort(trackedKillPid);
+    stopped = true;
+  } else if (pid) {
     removePid(pid);
     removeRuntimePort(pid);
-    return "stale";
   }
-  await stopProxy(pid);
-  removePid(pid);
-  removeRuntimePort(pid);
-  return "stopped";
+  // Orphan recovery: the pid file can be missing/stale while the service wrapper keeps
+  // a live proxy running — mirror `ocx stop`'s identity-checked findLiveProxy fallback.
+  // Cap multi-candidate discovery so stop cleanup cannot hang for three full retry budgets.
+  const live = await findLiveProxy({
+    ...SERVICE_STOP_LIVENESS,
+    deadlineAt: Date.now() + 7000,
+  });
+  const liveKillPid = verifiedKillTarget(live?.pid);
+  if (liveKillPid !== null) {
+    await stopProxy(liveKillPid);
+    removePid(liveKillPid);
+    removeRuntimePort(liveKillPid);
+    stopped = true;
+  }
+  if (stopped) return "stopped";
+  if (pid) return "stale";
+  return "none";
 }
 
 async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {
@@ -859,6 +2181,15 @@ export function isServiceInstalled(): boolean {
   return diagnoseService().installed;
 }
 
+/**
+ * True when an installed background service can actually supervise the proxy.
+ * Presence alone is not enough: stale/missing assets, conflicts, and disabled
+ * registrations report `installed` but will not bring the proxy back after exit.
+ */
+export function isServiceViable(): boolean {
+  return diagnoseService().viable;
+}
+
 export interface ServiceDiagnostic {
   supported: boolean;
   installed: boolean;
@@ -878,9 +2209,15 @@ export function serviceStartableFromTray(service: ServiceDiagnostic): boolean {
 }
 
 export interface WindowsServiceDiagnosticInputs {
-  schedulerInstalled: boolean;
-  schedulerEnabled: boolean;
-  schedulerAssetsHealthy: boolean;
+  /**
+   * Raw `schtasks /query /xml` output; empty when no task is registered. Passed as
+   * XML rather than pre-computed booleans so every caller reads the document through
+   * readWindowsSchedulerXmlState() — a second, stricter reading elsewhere would
+   * silently reintroduce the stale-status false positive (#432).
+   */
+  schedulerXml: string;
+  /** Whether the on-disk service assets exist. A filesystem concern, not an XML one. */
+  schedulerAssetsPresent: boolean;
   nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
   recordedBackend: ServiceBackend | null;
   staleBakedPaths: boolean;
@@ -889,37 +2226,41 @@ export interface WindowsServiceDiagnosticInputs {
 }
 
 export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticInputs): ServiceDiagnostic {
+  const schedulerState = readWindowsSchedulerXmlState(inputs.schedulerXml);
+  const schedulerInstalled = schedulerState.installed;
+  const schedulerEnabled = schedulerState.enabled;
+  const schedulerAssetsHealthy = inputs.schedulerAssetsPresent && schedulerState.registrationHealthy;
   const nativeInstalled = inputs.nativeStatus !== "nonexistent";
-  const conflict = inputs.schedulerInstalled && nativeInstalled;
-  const backendStateMismatch = inputs.schedulerInstalled
+  const conflict = schedulerInstalled && nativeInstalled;
+  const backendStateMismatch = schedulerInstalled
     ? inputs.recordedBackend !== "scheduler"
     : nativeInstalled && inputs.recordedBackend !== "native";
   const stale = inputs.staleBakedPaths
-    || (inputs.schedulerInstalled && !inputs.schedulerAssetsHealthy)
+    || (schedulerInstalled && !schedulerAssetsHealthy)
     || backendStateMismatch
     || (inputs.nativeStatus === "nonexistent" && inputs.nativeRepairAssetsOnly);
-  const backend = inputs.schedulerInstalled ? "scheduler" : nativeInstalled ? "native" : null;
-  const enabled = inputs.schedulerInstalled ? inputs.schedulerEnabled : inputs.nativeStatus === "started";
-  const running = nativeInstalled ? inputs.nativeStatus === "started" : inputs.schedulerInstalled && inputs.schedulerEnabled;
+  const backend = schedulerInstalled ? "scheduler" : nativeInstalled ? "native" : null;
+  const enabled = schedulerInstalled ? schedulerEnabled : inputs.nativeStatus === "started";
+  const running = nativeInstalled ? inputs.nativeStatus === "started" : schedulerInstalled && schedulerEnabled;
   const viable = !conflict && !stale
-    && (inputs.schedulerInstalled ? inputs.schedulerEnabled && inputs.schedulerAssetsHealthy : inputs.nativeStatus === "started");
+    && (schedulerInstalled ? schedulerEnabled && schedulerAssetsHealthy : inputs.nativeStatus === "started");
   const startable = !conflict && !stale
-    && (inputs.schedulerInstalled
-      ? inputs.schedulerEnabled && inputs.schedulerAssetsHealthy
+    && (schedulerInstalled
+      ? schedulerEnabled && schedulerAssetsHealthy
       : inputs.nativeStatus === "started" || inputs.nativeStatus === "stopped");
   const detail = conflict
     ? "CONFLICT: Task Scheduler and native WinSW are both present — run 'ocx service uninstall' then reinstall one"
     : stale
       ? "stale or missing service assets — run 'ocx service install' to repair"
-      : inputs.schedulerInstalled
-        ? inputs.schedulerEnabled ? "Task Scheduler enabled" : "Task Scheduler disabled"
+      : schedulerInstalled
+        ? schedulerEnabled ? "Task Scheduler enabled" : "Task Scheduler disabled"
         : nativeInstalled
           ? `native (WinSW ${WINSW_VERSION}): ${inputs.nativeStatus}`
           : "not installed";
   const summary = backend ? `installed, ${detail} (${inputs.diagnostics})` : `not installed (${inputs.diagnostics})`;
   return {
     supported: true,
-    installed: inputs.schedulerInstalled || nativeInstalled,
+    installed: schedulerInstalled || nativeInstalled,
     enabled,
     running,
     viable,
@@ -951,20 +2292,16 @@ export function diagnoseService(): ServiceDiagnostic {
   }
   if (process.platform === "win32") {
     const schedulerXml = statusWindowsXml();
-    const schedulerInstalled = schedulerXml.length > 0;
-    const schedulerSettings = taskXmlSection(schedulerXml, "Settings");
-    const schedulerEnabled = schedulerInstalled && /<Enabled>\s*true\s*<\/Enabled>/i.test(schedulerSettings);
-    const schedulerAssets = [windowsServiceScriptPath(), windowsLauncherVbsPath(), windowsTaskXmlPath()].every(existsSync)
-      && windowsTaskRegistrationHealthy(schedulerXml);
+    const schedulerAssetsPresent = [windowsServiceScriptPath(), windowsLauncherVbsPath(), windowsTaskXmlPath()]
+      .every(existsSync);
     const nativeStatus = statusWinswRaw();
     const installState = readServiceInstallState();
     const recordedBackend: ServiceBackend | null = !installState
       ? null
       : installState.backend === "native" ? "native" : "scheduler";
     return deriveWindowsServiceDiagnostic({
-      schedulerInstalled,
-      schedulerEnabled,
-      schedulerAssetsHealthy: schedulerAssets,
+      schedulerXml,
+      schedulerAssetsPresent,
       nativeStatus,
       recordedBackend,
       staleBakedPaths: bakedServicePathsDiagnostic() !== null,
@@ -991,6 +2328,60 @@ export function diagnoseService(): ServiceDiagnostic {
 
 export function serviceStatusSummary(): string {
   return diagnoseService().summary;
+}
+
+/**
+ * Status a human can act on: registration state, whether a proxy actually answers,
+ * and — when it does not — whether launchd is running the plist we have on disk.
+ *
+ * `launchctl list` membership cannot distinguish "serving", "bootstrapped from an
+ * older plist", and "loaded but never bound"; the reported failure was the middle
+ * one presented as the first.
+ *
+ * Resolves the port through `confirmServiceServing`, i.e. the same
+ * `installedServiceListenPort()` path install/start/repair use, so those surfaces can
+ * never disagree about one service. The budget is short (2 probes) because this is a
+ * status read, not a post-install wait.
+ */
+export async function serviceStatusReport(
+  deps: {
+    diagnose?: () => ServiceDiagnostic;
+    serving?: () => Promise<{ ok: boolean; port: number }>;
+    matchesPlist?: () => { loaded: boolean; matchesPlist: boolean };
+  } = {},
+): Promise<string> {
+  const diag = (deps.diagnose ?? diagnoseService)();
+  if (!diag.installed) return `❌ ${diag.summary}`;
+
+  const serving = await (deps.serving ?? (() => confirmServiceServing({ timeoutMs: 1_500 })))();
+  if (serving.ok) return `✅ ${diag.summary}\n   Serving on port ${serving.port}.`;
+
+  // The dep is consulted FIRST; the platform check only guards the default. Wrapping
+  // the whole expression in a darwin check would discard an injected seam on
+  // Linux/Windows and make the stale-plist case untestable there.
+  const stalePlist = deps.matchesPlist?.() ?? (process.platform === "darwin"
+    ? (() => {
+        const entry = cliEntry();
+        // Pass the INSTALLED port explicitly: the default third argument is
+        // resolveServiceListenPort(), which reads OCX_BAKE_PORT/config.port, so after
+        // a config edit the expected string would never match and every run would
+        // print a false "OLDER plist".
+        return launchdJobMatchesPlist(
+          buildServiceShellCommand(entry.bun, entry.cli, installedServiceListenPort()),
+        );
+      })()
+    : null);
+  const staleLine = stalePlist && stalePlist.loaded && !stalePlist.matchesPlist
+    ? "   launchd is running an OLDER plist than the one on disk.\n"
+      + `   Fix:    launchctl bootout gui/$(id -u)/${LABEL} && ocx service install\n`
+    : "";
+
+  return `⚠️  ${diag.summary}\n`
+    + `   Registered, but no proxy is answering on port ${serving.port}.\n`
+    + staleLine
+    + `   Log:    ${serviceLogPath()}\n`
+    + `   Repair: ${serviceRepairCommand()}\n`
+    + "   Meanwhile: ocx start           (serves in the foreground)";
 }
 
 export function normalizeServiceSubcommand(sub?: string): string {
@@ -1042,6 +2433,17 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     console.error("--native (WinSW) is Windows-only.");
     process.exit(1);
   }
+  if (command === "repair") {
+    assertServiceEnvironmentMatchesInstall();
+    assertServiceAuthEnvironment();
+    await repairService();
+    // All three platforms: a repair that reports success while nothing serves is the
+    // defect class this unit exists to close. Windows bakes its port into the
+    // scheduler wrapper or the WinSW XML, both of which installedServiceListenPort()
+    // now reads.
+    await reportServiceServing("repaired");
+    return;
+  }
   // Non-install subcommands follow the backend recorded at install time (state v2).
   const backend: ServiceBackend = parsed.backend ?? (process.platform === "win32" ? readServiceBackend() : "scheduler");
   const ops = platformOps(backend);
@@ -1054,28 +2456,64 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
       await ops.install();
-      console.log(backend === "native"
-        ? "✅ opencodex native service installed + started (windowless, starts at boot, auto-restarts on crash)."
-        : "✅ opencodex service installed + started (auto-starts on login, auto-restarts on crash).");
+      // The wrapper was written moments ago in this process, so the configured port
+      // and the baked one cannot have diverged yet — unlike `start`, which reads the
+      // installed artifact instead.
+      await reportServiceServing("installed", { port: resolveServiceListenPort() });
       if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
+      // Service users never reach the `ocx start` prompt: the proxy they run is the
+      // supervised child, which always carries OCX_SERVICE=1. This command, though, is
+      // hand-typed in a real terminal, so it is the one interactive moment they get.
+      // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
+      await maybeShowStarPrompt();
       break;
     case "start":
       ops.start();
-      console.log("✅ service started.");
+      await reportServiceServing("started");
       break;
-    case "stop":
+    case "stop": {
       assertServiceEnvironmentMatchesInstall();
-      ops.stop();
+      // Only stop what is actually installed. The unguarded call ran a real `launchctl unload`
+      // (and its Windows/Linux twins) even with nothing installed.
+      if (ops.status() !== null || isServiceInstalled()) {
+        ops.stop();
+      }
       await stopTrackedProxyForServiceCommand();
       {
+        // Verify rather than trust the stop command: a surviving wrapper respawns its child
+        // seconds later, and restoring native Codex on top of a live proxy is the failure #764
+        // reports as "stop reports success without stopping the proxy".
+        const survivor = await proxyStillLiveAfterStop();
+        if (survivor) {
+          console.error(
+            `❌ service stop did not take effect: a proxy is still listening on port ${survivor.port}.`
+            + "\nNative Codex was NOT restored, because doing so while the proxy is running leaves"
+            + " both pointing at each other. Check for a second service backend (`ocx service status`)"
+            + " or a manually started proxy, then re-run `ocx service stop`.",
+          );
+          process.exitCode = 1;
+          break;
+        }
         const restore = restoreNativeCodex();
         if (restore.success) console.log("✅ service stopped + native Codex restored.");
         else console.error(`⚠️ service stopped, but native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` (or check $CODEX_HOME/config.toml) before using native Codex.`);
+        // The Grok fence is the other managed config this command owns. Leaving it behind
+        // pointed grok at a dead endpoint while native Codex was already restored.
+        const grok = stripGrokConfig();
+        if (grok.changed) console.log(`↩️  ${grok.message}`);
+        else if (!grok.ok) console.error(`⚠️  ${grok.message}`);
       }
       break;
+    }
     case "status": {
-      const s = ops.status();
-      console.log(s ? `✅ running:\n${s}` : "❌ service not installed/running.");
+      if (process.platform === "win32" && backend === "scheduler") {
+        console.log(await inspectWindowsSchedulerServiceStatus());
+      } else {
+        // Replaces raw `ops.status()` output, which on darwin is a `launchctl list`
+        // line: registration reported as if it were service. serviceStatusReport
+        // subsumes the not-installed case and adds the serving / stale-plist split.
+        console.log(await serviceStatusReport());
+      }
       console.log(`Diagnostics: ${serviceDiagnosticsSummary()}`);
       break;
     }
@@ -1098,14 +2536,18 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         if (!restore.success) {
           console.error(`⚠️ native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` before using native Codex.`);
         }
+        const grok = stripGrokConfig();
+        if (grok.changed) console.log(`↩️  ${grok.message}`);
+        else if (!grok.ok) console.error(`⚠️  ${grok.message}`);
       }
       removeServiceInstallState();
       try { if (existsSync(serviceApiTokenFilePath())) unlinkSync(serviceApiTokenFilePath()); } catch { /* best-effort */ }
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("Usage: ocx service [install|repair|start|stop|status|uninstall|remove] [--native|--scheduler]");
       console.error("       With no subcommand, installs/updates and starts the background service.");
+      console.error("       repair: refresh assets and restart an already-installed service (no admin re-prompt).");
       console.error("       --native (Windows only): register a real SCM service via WinSW instead of Task Scheduler.");
       process.exit(1);
   }

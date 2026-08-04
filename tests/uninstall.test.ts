@@ -15,7 +15,8 @@ describe("full uninstall command", () => {
     expect(cli).toContain("uninstallServiceIfInstalled");
     expect(cli).toContain("uninstallCodexShim");
     expect(cli).toContain("restoreNativeCodex");
-    expect(cli).toContain("rmSync(getConfigDir()");
+    expect(cli).toContain("removeOwnedConfigState(getConfigDir())");
+    expect(cli).not.toContain("rmSync(getConfigDir()");
   });
 
   test("CLI exposes explicit legacy history recovery command", async () => {
