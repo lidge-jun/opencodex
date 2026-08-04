@@ -153,7 +153,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 69 встроенными пресетами: 58 на основе ключей, семь OAuth, три локальных и
+opencodex поставляется с 70 встроенными пресетами: 59 на основе ключей, семь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера, а публичный
 каталог Command Code сообщает ключ как непроверенный. Наиболее заметные записи:
@@ -186,6 +186,7 @@ opencodex поставляется с 69 встроенными пресетам
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Apertis | `https://api.apertis.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |

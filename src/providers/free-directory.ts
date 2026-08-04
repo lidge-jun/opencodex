@@ -1,15 +1,10 @@
 export type ProviderAccessGroup =
-  | "reference-only"
   | "recurring-or-keyless"
   | "recurring-uncapped"
   | "recurring-credit"
   | "signup-credit";
 
 export const FREE_PROVIDER_ACCESS_GROUPS = {
-  // This group intentionally makes no free, credit, endpoint, or integration claim. It is for
-  // provider names that remain useful as reference entries but lack the evidence required for a
-  // canonical runtime preset.
-  "reference-only": ["apertis"],
   "recurring-or-keyless": [
     "agy", "aihorde", "api-airforce", "arcee-ai", "bazaarlink", "blackbox", "bluesminds", "cerebras",
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
@@ -150,7 +145,6 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
 };
 
 const LABELS: Record<string, string> = {
-  apertis: "Apertis",
   agy: "AGY", aihorde: "AI Horde", "api-airforce": "API Airforce", "arcee-ai": "Arcee AI",
   bazaarlink: "BazaarLink", blackbox: "Blackbox", bluesminds: "Bluesminds", "cloudflare-ai": "Cloudflare AI",
   coze: "Coze", "duckduckgo-web": "DuckDuckGo Web", "felo-web": "Felo Web", friendliai: "FriendliAI",

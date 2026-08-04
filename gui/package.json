@@ -9,8 +9,8 @@
     "lint": "bun --bun eslint .",
     "test": "bun test tests",
     "lint:i18n": "bun --bun eslint src/pages src/components src/App.tsx src/ui.tsx",
-    "doctor": "npx --yes react-doctor@0.9.3 --verbose --scope changed --base origin/main --no-telemetry",
-    "doctor:full": "npx --yes react-doctor@0.9.3 --verbose --scope full --no-telemetry",
+    "doctor": "npm exec --yes --package=typescript@6.0.2 --package=react-doctor@0.9.3 -- react-doctor --verbose --scope changed --base origin/main --no-telemetry",
+    "doctor:full": "npm exec --yes --package=typescript@6.0.2 --package=react-doctor@0.9.3 -- react-doctor --verbose --scope full --no-telemetry",
     "preview": "vite preview"
   },
   "dependencies": {

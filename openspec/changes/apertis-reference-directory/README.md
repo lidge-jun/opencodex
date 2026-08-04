@@ -1,3 +1,4 @@
 # apertis-reference-directory
 
-Move Apertis from an unverified canonical key-provider preset to an inert reference-only directory entry.
+Restore Apertis as a canonical OpenAI-compatible API-key provider with authenticated live model
+discovery, while keeping the maintainer evidence and security-review boundary explicit.

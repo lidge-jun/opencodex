@@ -143,7 +143,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 69 個含まれています。キー方式 58、OAuth 7、ローカル 3、
+opencodex には組み込みプリセットが 70 個含まれています。キー方式 59、OAuth 7、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有で、Command Code の公開カタログはキーを
 検証不能として報告します)。主な項目は以下のとおりです:
@@ -176,6 +176,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Apertis | `https://api.apertis.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |

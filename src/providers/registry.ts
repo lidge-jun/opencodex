@@ -1111,6 +1111,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
+  // Public contract verified 2026-08-04 against https://docs.apertis.ai/api/,
+  // https://docs.apertis.ai/api/utilities/models/, https://apertis.ai/terms, and the Apertis
+  // product/legal pages. Private routing/resale authorization remains a maintainer review gate.
+  {
+    id: "apertis",
+    label: "Apertis",
+    baseUrl: "https://api.apertis.ai/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://apertis.ai/setting?tab=keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    note: "OpenAI-compatible multi-provider API; live model access is scoped to the API key's plan.",
+  },
   {
     id: "deepinfra",
     label: "DeepInfra",
