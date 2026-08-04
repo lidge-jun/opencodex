@@ -390,6 +390,7 @@ async function retryCodexPoolOnAlternateAccount(
 
   const prepared = await (async () => {
     let request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>> | undefined;
+    let firstOutcomeSettled = false;
     try {
       const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
       if (outcomeStatus === 429 || outcomeStatus === 402) {
@@ -411,6 +412,7 @@ async function retryCodexPoolOnAlternateAccount(
           // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
           ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
         });
+        firstOutcomeSettled = true;
       }
 
       const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
@@ -441,6 +443,7 @@ async function retryCodexPoolOnAlternateAccount(
       return { fetcher, request, retryHeaders };
     } catch (error) {
       request?.releaseBodyObservation?.();
+      if (!firstOutcomeSettled) releaseCodexAuthContextProbeLease(firstAuthCtx);
       releaseCodexAuthContextProbeLease(retryAuthCtx);
       throw error;
     }

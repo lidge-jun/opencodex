@@ -38,8 +38,9 @@ import {
   safeConfigDTO,
   startServer,
 } from "../src/server";
-import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
+import { clearRequestLogsForTests, getRequestLogEntries, type RequestLogContext } from "../src/server/request-log";
 import { handleManagementAPI } from "../src/server/management-api";
+import { handleResponses } from "../src/server/responses/core";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -2569,6 +2570,66 @@ describe("server local API auth", () => {
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
     } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("alternate preparation failure releases A's recovery probe", async () => {
+    const harness = await startPoolRetryHarness(() => new Response("unused"), {
+      omitCredentialAccountIds: ["pool-b"],
+    });
+    const redirectedFetch = globalThis.fetch;
+    const now = Date.now();
+    recordCodexUpstreamOutcome(harness.config, "pool-a", 429, {
+      now: now - CODEX_QUOTA_PROBE_INTERVAL_MS,
+      resetAt: Math.floor((now + 60 * 60_000) / 1000),
+    });
+    let sends = 0;
+    let headerReads = 0;
+    let observedProbeLeaseId: string | undefined;
+
+    globalThis.fetch = (async (input, init) => {
+      const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+      if (accountId !== "acct-pool-a") return redirectedFetch(input, init);
+      sends += 1;
+      observedProbeLeaseId = getCodexUpstreamHealth("pool-a")?.probeLeaseId;
+      saveCodexAccountCredential("pool-b", {
+        accessToken: "pool-b-token",
+        refreshToken: "pool-b-refresh",
+        expiresAt: Date.now() + 10 * 60_000,
+        chatgptAccountId: "acct-pool-b",
+      });
+      clearAccountNeedsReauth("pool-b");
+      const response = new Response("quota", { status: 429 });
+      return new Proxy(response, {
+        get(target, property) {
+          if (property === "headers") {
+            headerReads += 1;
+            if (headerReads === 5) throw new Error("synthetic alternate preparation failure");
+          }
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fetch;
+
+    try {
+      const request = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+        body: JSON.stringify({ model: POOL_RETRY_MODEL, input: "hello", stream: false }),
+      });
+      const logCtx: RequestLogContext = { model: POOL_RETRY_MODEL, provider: "openai" };
+      await expect(handleResponses(request, harness.config, logCtx)).rejects.toThrow(
+        "synthetic alternate preparation failure",
+      );
+      expect(sends).toBe(1);
+      expect(headerReads).toBe(5);
+      expect(observedProbeLeaseId).toEqual(expect.any(String));
+      expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toEqual(expect.any(Number));
+      expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
+    } finally {
+      globalThis.fetch = redirectedFetch;
       await stopPoolRetryHarness(harness);
     }
   });

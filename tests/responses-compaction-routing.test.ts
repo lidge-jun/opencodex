@@ -1138,6 +1138,57 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
+  test("compact settles A's half-open account probe when response header processing throws", async () => {
+    const originalNow = Date.now;
+    const now = 1_800_000_000_000;
+    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+    const config = nativePoolConfig();
+    const expected = new Error("compact response header processing failed");
+    try {
+      Date.now = () => now;
+      clearCodexUpstreamHealth();
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-access-token",
+        refreshToken: "pool-refresh-token",
+        expiresAt: now + 30 * 60_000,
+        chatgptAccountId: "pool_acc",
+      });
+      recordCodexUpstreamOutcome(config, "pool-a", 429, {
+        now,
+        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+        modelId: "gpt-5.3-codex-spark",
+      });
+      Date.now = () => probeAt;
+      globalThis.fetch = (async () => {
+        const response = Response.json({ error: { message: "A quota" } }, { status: 429 });
+        Object.defineProperty(response, "headers", {
+          configurable: true,
+          get: () => { throw expected; },
+        });
+        return response;
+      }) as typeof fetch;
+
+      await expect(handleResponsesCompact(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
+        config,
+        { model: "", provider: "" },
+      )).rejects.toBe(expected);
+
+      Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      const nextProbe = await resolveCodexAuthContext(
+        new Headers({ authorization: "Bearer main-token" }),
+        config,
+        "pool",
+        { modelId: "gpt-5.3-codex-spark" },
+      );
+      expect(nextProbe).toMatchObject({ accountId: "pool-a", probeQuotaScope: "spark" });
+      releaseCodexAuthContextProbeLease(nextProbe);
+    } finally {
+      Date.now = originalNow;
+      clearCodexUpstreamHealth();
+    }
+  });
+
   test("compact keeps B ownership when header-timeout setup fails before provider execution", async () => {
     await withPoolEnv("ocx-compact-b-pre-executor-", async config => {
       const originalNow = Date.now;

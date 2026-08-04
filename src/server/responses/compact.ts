@@ -544,6 +544,29 @@ export async function handleResponsesCompact(
     // surfaces to the client, which retries the compact task OUTSIDE the logical request
     // — reporting exhausted retries while another pool account sat idle (#913).
     let pendingAlternateAuthCtx: CodexAuthContext | null = null;
+    type PendingPrimaryPoolOutcome = {
+      outcome: CodexUpstreamOutcome;
+      retryAfter?: string | null;
+      resetAt?: unknown | unknown[];
+      promoteAccountId?: string;
+    };
+    let pendingPrimaryPoolOutcome: PendingPrimaryPoolOutcome | null = null;
+    let primaryPoolOutcomeSettled = false;
+    const settlePendingPrimaryPoolOutcome = (): void => {
+      if (!pendingPrimaryPoolOutcome || primaryPoolOutcomeSettled) return;
+      const { outcome, ...meta } = pendingPrimaryPoolOutcome;
+      try {
+        recordCompactPoolOutcome(authCtx, outcome, meta);
+      } catch (error) {
+        // A local post-response failure must not strand a half-open account probe.
+        // Preserve the caller's original error after releasing ownership if the
+        // account recorder itself cannot finish.
+        releaseCodexAuthContextProbeLease(authCtx);
+        primaryPoolOutcomeSettled = true;
+        throw error;
+      }
+      primaryPoolOutcomeSettled = true;
+    };
     try {
       if (
       (upstream.status === 429 || upstream.status === 402)
@@ -552,12 +575,18 @@ export async function handleResponsesCompact(
       && route.codexAccountMode
       && !req.signal.aborted
       ) {
+      const primaryPoolOutcome: PendingPrimaryPoolOutcome = {
+        outcome: upstream.status,
+      };
+      pendingPrimaryPoolOutcome = primaryPoolOutcome;
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [
         upstream.headers.get("x-codex-primary-reset-at"),
         upstream.headers.get("x-codex-secondary-reset-at"),
         upstream.headers.get("x-codex-tertiary-reset-at"),
       ].filter(Boolean);
+      primaryPoolOutcome.retryAfter = firstRetryAfter;
+      primaryPoolOutcome.resetAt = firstResetAt;
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
       const alternate = await resolveAlternateCompactContext({
@@ -593,11 +622,10 @@ export async function handleResponsesCompact(
             authCtx.writerGeneration,
           );
         }
-        recordCompactPoolOutcome(authCtx, upstream.status, {
-          retryAfter: firstRetryAfter,
-          resetAt: firstResetAt,
-          ...(alternate.authCtx.accountId ? { promoteAccountId: alternate.authCtx.accountId } : {}),
-        });
+        if (alternate.authCtx.accountId) {
+          primaryPoolOutcome.promoteAccountId = alternate.authCtx.accountId;
+        }
+        settlePendingPrimaryPoolOutcome();
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         const alternateAttempts: UpstreamAttemptObservation[] = [];
@@ -627,6 +655,11 @@ export async function handleResponsesCompact(
     }
     } catch (error) {
       releaseCodexAuthContextProbeLease(pendingAlternateAuthCtx ?? undefined);
+      try {
+        settlePendingPrimaryPoolOutcome();
+      } catch {
+        // The helper already released A's probe; keep the original local error.
+      }
       settleObservedCompactHostResponse();
       throw error;
     }
