@@ -186,7 +186,7 @@ async function completeMockCodexOAuth(options: {
       const statusResp = await handleCodexAuthAPI(statusReq, new URL(statusReq.url), options.config);
       const state = await statusResp!.json() as { status: string; error?: string; catalogRefreshPending?: boolean };
       if (state.status !== "pending") return { startStatus: resp!.status, state };
-      await new Promise<void>(resolve => queueMicrotask(resolve));
+      await Bun.sleep(5);
     }
     throw new Error(`Timed out waiting for Codex OAuth flow ${started.flowId}`);
   } finally {
@@ -3098,7 +3098,26 @@ describe("codex-auth API", () => {
     expect(isAccountNeedsReauth("pool-delete")).toBe(false);
   });
 
-  test("enabled picker deletion retains its binding and refreshes after durable removal", async () => {
+  test.each([
+    ["enabled matching binding", true, "lifecycle-delete", true],
+    ["disabled matching binding", false, "lifecycle-delete", false],
+    ["enabled orphaned binding", true, "missing-account", false],
+  ] as const)("delete lifecycle reports picker visibility for %s", (_case, enabled, target, expected) => {
+    const accountId = "lifecycle-delete";
+    const config = makeConfig({
+      codexAccounts: [{ id: accountId, isMain: false }],
+      codexAccountNamespaces: { team: target },
+      codexAccountPickerEnabled: enabled,
+    });
+
+    expect(deleteCodexAccount(config, accountId)).toBe(expected);
+    expect(config.codexAccounts).toEqual([]);
+    expect(config.codexAccountNamespaces).toEqual({ team: target });
+  });
+
+  test("enabled picker deletion retains its binding and refreshes after durable removal and re-add", async () => {
+    enableManualImport();
+    mockCodexWarmupSuccess();
     const accountId = "picker-delete";
     const config = makeConfig({
       codexAccounts: [{ id: accountId, email: "delete@example.test", isMain: false }],
@@ -3109,11 +3128,18 @@ describe("codex-auth API", () => {
       accessToken: "delete-access", refreshToken: "delete-refresh",
       expiresAt: Date.now() + 60_000, chatgptAccountId: "delete-chatgpt-id",
     });
+    let refreshes = 0;
     const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog").mockImplementation(async () => {
+      refreshes += 1;
       const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
-      expect(persisted.codexAccounts).toEqual([]);
       expect(persisted.codexAccountNamespaces).toEqual({ team: accountId });
-      expect(getCodexAccountCredential(accountId)).toBeNull();
+      if (refreshes === 1) {
+        expect(persisted.codexAccounts).toEqual([]);
+        expect(getCodexAccountCredential(accountId)).toBeNull();
+      } else {
+        expect(persisted.codexAccounts?.map(account => account.id)).toEqual([accountId]);
+        expect(getCodexAccountCredential(accountId)).not.toBeNull();
+      }
       return {
         added: 0, path: "catalog.json", catalogExists: true, catalogWritten: true,
         cacheSynced: true, comboOmissions: [],
@@ -3125,7 +3151,17 @@ describe("codex-auth API", () => {
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ ok: true, catalogRefreshPending: false });
       expect(config.codexAccountNamespaces).toEqual({ team: accountId });
-      expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+      const addReq = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody({ id: accountId })),
+      });
+      const addResp = await handleCodexAuthAPI(addReq, new URL(addReq.url), config);
+      expect(addResp!.status).toBe(200);
+      expect(await addResp!.json()).toEqual({ ok: true, catalogRefreshPending: false });
+      expect(config.codexAccountNamespaces).toEqual({ team: accountId });
+      expect(refreshSpy).toHaveBeenCalledTimes(2);
     } finally {
       refreshSpy.mockRestore();
     }

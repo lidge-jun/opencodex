@@ -1,18 +1,27 @@
+import { debugProviderDiagnostic } from "../lib/debug";
+
+export type CodexCatalogRefreshCompletion = {
+  catalogExists: boolean;
+  catalogWritten?: boolean;
+  cacheSynced?: boolean;
+};
+
+type CodexCatalogRefreshFailureReason = "missing" | "unwritten" | "cache_unsynced";
+
+class CodexCatalogRefreshIncompleteError extends Error {
+  constructor(readonly reason: CodexCatalogRefreshFailureReason) {
+    super("Codex catalog was not refreshed");
+    this.name = "CodexCatalogRefreshIncompleteError";
+  }
+}
+
 /** Treat an incomplete catalog rewrite or cache invalidation as a refresh failure. */
 export function assertCodexCatalogRefreshComplete(
-  result: void | {
-    catalogExists: boolean;
-    catalogWritten?: boolean;
-    cacheSynced?: boolean;
-  },
+  result: void | CodexCatalogRefreshCompletion,
 ): void {
-  if (
-    result?.catalogExists === false
-    || result?.catalogWritten === false
-    || result?.cacheSynced === false
-  ) {
-    throw new Error("Codex catalog was not refreshed");
-  }
+  if (result?.catalogExists === false) throw new CodexCatalogRefreshIncompleteError("missing");
+  if (result?.catalogWritten === false) throw new CodexCatalogRefreshIncompleteError("unwritten");
+  if (result?.cacheSynced === false) throw new CodexCatalogRefreshIncompleteError("cache_unsynced");
 }
 
 /**
@@ -26,12 +35,17 @@ export async function refreshCodexCatalogWithRetry(
   refresh: () => Promise<void>,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) await Bun.sleep(50);
     try {
       await refresh();
       return false;
-    } catch {
-      // Retry once. Failure details may contain provider or filesystem data, so
-      // the terminal warning below stays generic.
+    } catch (error) {
+      // Log only an internal classification. Raw failures can contain credentials,
+      // account identifiers, provider URLs, or filesystem paths.
+      debugProviderDiagnostic("codex", "catalog-refresh-failed", {
+        attempt: attempt + 1,
+        reason: error instanceof CodexCatalogRefreshIncompleteError ? error.reason : "exception",
+      });
     }
   }
 

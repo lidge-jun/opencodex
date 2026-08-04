@@ -5,15 +5,12 @@ import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
 import type { injectGrokConfig } from "../../grok/inject";
 import type { RuntimePortState } from "../../config";
+import type { CodexCatalogRefreshCompletion } from "../../codex/catalog-refresh-status";
 
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
-  refreshCodexCatalog?: () => Promise<void | {
-    catalogExists: boolean;
-    catalogWritten?: boolean;
-    cacheSynced?: boolean;
-  }>;
+  refreshCodexCatalog?: () => Promise<void | CodexCatalogRefreshCompletion>;
   /**
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config

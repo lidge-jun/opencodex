@@ -201,7 +201,7 @@ Authorization: Bearer <admin-token>
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。add/delete response には `catalogRefreshPending` が含まれます | 400 無効な入力。手動インポートは無効にすることができます。
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。add/delete response には `catalogRefreshPending` が含まれます | 400 無効な入力。手動インポートは無効にできます。 |
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
