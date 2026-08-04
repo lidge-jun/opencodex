@@ -155,8 +155,8 @@ type AlternateCompactResolution =
 
 /**
  * Resolve one eligible pool account other than `excludeAccountId`, and build everything
- * the alternate send needs. Returns null when no alternate exists or construction fails,
- * in which case the caller keeps the first account's rejection intact.
+ * the alternate send needs. Returns a ready, none, or local-failure resolution so the
+ * caller can distinguish an unavailable alternate from local resolver/preparation failure.
  *
  * Mirrors the auth resolution the native compact branch already does for the first
  * account, so the alternate is built the same way rather than through a second,

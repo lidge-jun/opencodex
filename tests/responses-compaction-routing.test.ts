@@ -1451,7 +1451,7 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
-  test("compact releases B recovery ownership when alternate header construction fails", async () => {
+  test("compact preserves A rejection when alternate B auth-header construction fails", async () => {
     await withPoolEnv("ocx-compact-b-header-prep-", async config => {
       const originalNow = Date.now;
       config.accountPoolStrategy = "fill-first";
@@ -1462,6 +1462,7 @@ describe("compact alternate-account attempt (#913)", () => {
         "openai",
         "https://chatgpt.com/backend-api/codex/responses",
       )!;
+      const expectedBody = JSON.stringify({ error: { message: "A quota" } });
       let bHeaderAttempted = false;
       const physicalAccounts: string[] = [];
       class ThrowOnBHeaders extends NativeHeaders {
@@ -1477,7 +1478,10 @@ describe("compact alternate-account attempt (#913)", () => {
       globalThis.Headers = ThrowOnBHeaders as typeof Headers;
       globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
         physicalAccounts.push(new NativeHeaders(init?.headers).get("chatgpt-account-id") ?? "");
-        return Response.json({ error: { message: "A quota" } }, { status: 429 });
+        return new Response(expectedBody, {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "37" },
+        });
       }) as typeof fetch;
       try {
         const response = await handleResponsesCompact(
@@ -1486,6 +1490,8 @@ describe("compact alternate-account attempt (#913)", () => {
           { model: "", provider: "" },
         );
         expect(response.status).toBe(429);
+        expect(response.headers.get("retry-after")).toBe("37");
+        expect(await response.text()).toBe(expectedBody);
         expect(bHeaderAttempted).toBe(true);
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
         expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
