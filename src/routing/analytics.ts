@@ -152,8 +152,19 @@ function cooldownTriggering(entry: PersistedUsageEntry | null, status: number): 
   return attempts.some(attempt => attempt.recoveryKinds.some(kind => COOLDOWN_RECOVERY_KINDS.has(kind)));
 }
 
-function isSuccessStatus(status: number): boolean {
-  return status >= 200 && status < 400;
+function successCostUsd(
+  row: Pick<ScannedRow, "provider" | "model">,
+  entry: PersistedUsageEntry,
+): number | null {
+  if (!entry.usage) return null;
+  const estimate = estimateRequestCost({
+    provider: row.provider,
+    model: row.model,
+    usage: entry.usage,
+    usageStatus: entry.usageStatus,
+    serviceTier: serviceTierContext(entry),
+  });
+  return estimate ? estimate.cost.total : null;
 }
 
 export async function computeRoutingAnalytics(
@@ -227,16 +238,11 @@ export async function computeRoutingAnalytics(
     const entry = kind === "success" || row.status >= 400 ? parseEntry(row.rowJson) : null;
     if (cooldownTriggering(entry, row.status)) cooldownFailures += 1;
 
-    if (kind === "success" && entry?.usage) {
-      const estimate = estimateRequestCost({
-        provider: row.provider,
-        model: row.model,
-        usage: entry.usage,
-        usageStatus: entry.usageStatus,
-        serviceTier: serviceTierContext(entry),
-      });
-      if (estimate) {
-        costTotalUsd += estimate.cost.total;
+    let rowCostUsd: number | null = null;
+    if (kind === "success" && entry) {
+      rowCostUsd = successCostUsd(row, entry);
+      if (rowCostUsd !== null) {
+        costTotalUsd += rowCostUsd;
         costCount += 1;
       }
     }
@@ -265,18 +271,9 @@ export async function computeRoutingAnalytics(
     else if (kind === "failure") bucket.failures += 1;
     else bucket.cancelled += 1;
     bucket.durations.push(row.durationMs);
-    if (kind === "success" && entry?.usage) {
-      const estimate = estimateRequestCost({
-        provider: row.provider,
-        model: row.model,
-        usage: entry.usage,
-        usageStatus: entry.usageStatus,
-        serviceTier: serviceTierContext(entry),
-      });
-      if (estimate) {
-        bucket.costUsdSum += estimate.cost.total;
-        bucket.costRows += 1;
-      }
+    if (rowCostUsd !== null) {
+      bucket.costUsdSum += rowCostUsd;
+      bucket.costRows += 1;
     }
 
     if (row.profileId) {
@@ -307,6 +304,7 @@ export async function computeRoutingAnalytics(
 
   const breakdown: AnalyticsBreakdownRow[] = [...byKey.values()].map(bucket => {
     const sorted = bucket.durations.sort((a, b) => a - b);
+    const p50DurationMs = percentile(sorted, 50);
     return {
       provider: bucket.provider,
       model: bucket.model,
@@ -317,7 +315,7 @@ export async function computeRoutingAnalytics(
       failures: bucket.failures,
       cancelled: bucket.cancelled,
       successRate: bucket.requests > 0 ? bucket.successes / bucket.requests : null,
-      ...(percentile(sorted, 50) !== undefined ? { p50DurationMs: percentile(sorted, 50) } : {}),
+      ...(p50DurationMs !== undefined ? { p50DurationMs } : {}),
       ...(bucket.requests > 0
         ? { estimatedCostUsdPerSuccessfulRequest: bucket.costRows > 0
           ? bucket.costUsdSum / bucket.costRows

@@ -9,18 +9,28 @@ import { computeRoutingAnalytics } from "../../routing/analytics";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
-function parseOptionalInt(raw: string | null): number | undefined {
+function parseQueryInt(raw: string | null): number | undefined | "invalid" {
   if (raw === null) return undefined;
-  const value = Number(raw.trim());
-  return Number.isInteger(value) ? value : undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return "invalid";
+  const value = Number(trimmed);
+  return Number.isInteger(value) ? value : "invalid";
 }
 
 export async function handleRoutingAnalyticsRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { url, req, config } = ctx;
   if (url.pathname !== "/api/routing-analytics" || req.method !== "GET") return null;
 
-  const from = parseOptionalInt(url.searchParams.get("from"));
-  const to = parseOptionalInt(url.searchParams.get("to"));
+  const fromParsed = parseQueryInt(url.searchParams.get("from"));
+  if (fromParsed === "invalid") {
+    return jsonResponse({ error: { code: "invalid_from", message: "from must be an integer timestamp" } }, 400, req, config);
+  }
+  const toParsed = parseQueryInt(url.searchParams.get("to"));
+  if (toParsed === "invalid") {
+    return jsonResponse({ error: { code: "invalid_to", message: "to must be an integer timestamp" } }, 400, req, config);
+  }
+  const from = fromParsed;
+  const to = toParsed;
   if (from !== undefined && to !== undefined && from > to) {
     return jsonResponse({ error: { code: "invalid_range", message: "from must not be after to" } }, 400, req, config);
   }

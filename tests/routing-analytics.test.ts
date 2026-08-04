@@ -114,7 +114,7 @@ describe("routing analytics (RI-03)", () => {
       apiKeyId: "key-a",
       routeDecision: {
         version: 1,
-        decisionId: "d1",
+        decisionId: "a00000000001",
         createdAt: 1,
         requestedModel: "policy/fast",
         routeKind: "policy",
@@ -131,7 +131,7 @@ describe("routing analytics (RI-03)", () => {
       apiKeyId: "key-a",
       routeDecision: {
         version: 1,
-        decisionId: "d2",
+        decisionId: "a00000000002",
         createdAt: 2,
         requestedModel: "policy/fast",
         routeKind: "policy",
