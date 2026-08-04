@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import {
   addRequestLog,
@@ -10,7 +13,24 @@ import type { OcxConfig } from "../src/types";
 
 const config = { providers: [] } as unknown as OcxConfig;
 
-afterEach(() => clearRequestLogsForTests());
+let testDir = "";
+let previousHome: string | undefined;
+
+beforeEach(() => {
+  // addRequestLog persists to usage.jsonl; without a scratch OPENCODEX_HOME a bare
+  // `bun test <file>` run from outside the repo (no bunfig preload) writes these
+  // fixture rows into the real ~/.opencodex log and poisons the GUI Usage page.
+  previousHome = process.env.OPENCODEX_HOME;
+  testDir = mkdtempSync(join(tmpdir(), "ocx-logs-metrics-"));
+  process.env.OPENCODEX_HOME = testDir;
+});
+
+afterEach(() => {
+  clearRequestLogsForTests();
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  if (testDir) rmSync(testDir, { recursive: true, force: true });
+});
 
 async function readLogs(): Promise<Array<Record<string, any>>> {
   const url = new URL("http://localhost/api/logs");
