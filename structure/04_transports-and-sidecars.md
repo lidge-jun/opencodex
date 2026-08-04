@@ -206,10 +206,11 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
-Registry-declared per-model compatibility hints may keep the client-facing WebSocket while asking
-the upstream Responses endpoint for bounded JSON. The bridge reframes that JSON into the same
-Responses event sequence. DeepSeek V4 Flash uses this path because its Codex streaming response can
-deliver output without closing on a terminal event; ordinary HTTP/SSE calls remain streaming.
+Registry-declared per-model compatibility hints may ask the upstream Responses endpoint for bounded
+JSON when that upstream's streaming terminal event is unreliable. The proxy reframes that JSON into
+a complete Responses event sequence for the client (WebSocket frames or HTTP SSE). DeepSeek V4 Flash
+uses this path on both transports because its Codex streaming response can deliver output without
+closing on a terminal event.
 
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a

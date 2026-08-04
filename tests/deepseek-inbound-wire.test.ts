@@ -112,6 +112,34 @@ describe("the inbound scope survives the handleResponses replay", () => {
     return requests[0] ?? { url: "", body: {} };
   }
 
+  async function respondWithUpstreamJson(
+    payload: Record<string, unknown>,
+    options: { clientStream?: boolean; inboundTransport?: "websocket" } = {},
+  ): Promise<Response> {
+    globalThis.fetch = (async () => Response.json(payload, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    return handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: MODEL,
+          input: "ping",
+          stream: options.clientStream ?? true,
+        }),
+      }),
+      config,
+      { model: "", provider: "" },
+      {
+        inboundWire: "responses",
+        ...(options.inboundTransport === undefined ? {} : { inboundTransport: options.inboundTransport }),
+      },
+    );
+  }
+
   test("a native Responses request reaches the documented /responses route", async () => {
     expect((await drive("responses")).url).toBe("https://api.deepseek.com/responses");
   });
@@ -132,8 +160,85 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(request.body.stream).toBe(false);
   });
 
-  test("ordinary HTTP Responses requests keep streaming upstream", async () => {
-    expect((await drive("responses")).body.stream).toBe(true);
+  test("ordinary HTTP Responses turns also force bounded JSON for DeepSeek Flash", async () => {
+    // Codex Desktop defaults to HTTP/SSE while websockets stay opt-in. Flash still
+    // needs the terminal-safe upstream path on that transport.
+    const request = await drive("responses");
+    expect(request.url).toBe("https://api.deepseek.com/responses");
+    expect(request.body.stream).toBe(false);
+  });
+
+  test("HTTP stream clients receive a terminal SSE sequence from bounded JSON", async () => {
+    const response = await respondWithUpstreamJson({
+      id: "resp_deepseek",
+      object: "response",
+      status: "completed",
+      output: [{
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "shell",
+        arguments: "{\"command\":\"pwd\"}",
+        status: "completed",
+      }],
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type") ?? "").toContain("text/event-stream");
+    const body = await response.text();
+    expect(body).toContain("event: response.created");
+    expect(body).toContain("event: response.output_item.done");
+    expect(body).toContain("event: response.completed");
+    expect(body).toContain("function_call");
+  });
+
+  test("HTTP stream clients preserve failed terminal status from bounded JSON", async () => {
+    const response = await respondWithUpstreamJson({
+      id: "resp_failed",
+      object: "response",
+      status: "failed",
+      output: [],
+      error: { code: "server_error", message: "upstream failed" },
+    });
+    const body = await response.text();
+    expect(body).toContain("event: response.failed");
+    expect(body).not.toContain("event: response.completed");
+    expect(body).toContain("upstream failed");
+  });
+
+  test("HTTP stream clients preserve incomplete terminal status from bounded JSON", async () => {
+    const response = await respondWithUpstreamJson({
+      id: "resp_incomplete",
+      object: "response",
+      status: "incomplete",
+      output: [],
+      incomplete_details: { reason: "upstream_stall_timeout" },
+    });
+    const body = await response.text();
+    expect(body).toContain("event: response.incomplete");
+    expect(body).not.toContain("event: response.completed");
+    expect(body).toContain("upstream_stall_timeout");
+  });
+
+  test("non-streaming HTTP clients keep the bounded JSON response", async () => {
+    const response = await respondWithUpstreamJson({
+      id: "resp_json",
+      object: "response",
+      status: "completed",
+      output: [],
+    }, { clientStream: false });
+    expect(response.headers.get("content-type") ?? "").toContain("application/json");
+    expect(await response.json()).toMatchObject({ id: "resp_json", status: "completed" });
+  });
+
+  test("WebSocket turns keep bounded JSON for the existing WS re-framer", async () => {
+    const response = await respondWithUpstreamJson({
+      id: "resp_ws",
+      object: "response",
+      status: "completed",
+      output: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    }, { inboundTransport: "websocket" });
+    expect(response.headers.get("content-type") ?? "").toContain("application/json");
+    expect(await response.json()).toMatchObject({ id: "resp_ws", status: "completed" });
   });
 
   test("an oversized upstream JSON body fails closed instead of buffering without limit", async () => {

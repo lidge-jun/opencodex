@@ -825,6 +825,42 @@ async function resolveResponsesCodexAuth(
  * Apply every route-dependent request mutation against the final selected route.
  * Must run only after subagent fallback has settled the model/provider.
  */
+
+/**
+ * Reframe a completed Responses JSON body into a minimal SSE sequence that always
+ * ends on a terminal event. Used when registry policy forces bounded upstream JSON
+ * while the client still requested stream=true (HTTP/SSE Codex path).
+ */
+function responsesJsonToClientSse(response: Record<string, unknown>): string {
+  const output = Array.isArray(response.output) ? response.output : [];
+  const frames: Array<Record<string, unknown>> = [
+    {
+      type: "response.created",
+      response: { ...response, status: "in_progress", output: [] },
+    },
+  ];
+  output.forEach((item, outputIndex) => {
+    frames.push({
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item,
+    });
+  });
+  const finalStatus = response.status === "failed" || response.status === "incomplete"
+    ? response.status
+    : "completed";
+  frames.push({
+    type: `response.${finalStatus}`,
+    response: { ...response, status: finalStatus },
+  });
+  return frames
+    .map(frame => {
+      const type = typeof frame.type === "string" ? frame.type : "message";
+      return `event: ${type}\ndata: ${JSON.stringify(frame)}\n\n`;
+    })
+    .join("");
+}
+
 async function applyFinalRouteRequestNormalization(args: {
   parsed: OcxParsedRequest;
   route: RouteResult;
@@ -834,7 +870,9 @@ async function applyFinalRouteRequestNormalization(args: {
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
 }): Promise<void> {
-  const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
+  // inboundTransport remains part of the call shape for downstream client framing,
+  // but the upstream registry compatibility policy below is no longer WS-only.
+  const { parsed, route, config, req, logCtx, inboundWire } = args;
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -843,9 +881,20 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
-  const websocketUpstreamStreaming = inboundTransport === "websocket"
-    ? providerModelWebsocketUpstreamStreaming(route.providerName, route.provider, route.modelId)
-    : undefined;
+  // Capture the client-facing stream preference before any registry compatibility
+  // rewrite. HTTP clients still expect SSE even when upstream JSON is forced.
+  if (parsed._clientRequestedStream === undefined) {
+    parsed._clientRequestedStream = parsed.stream;
+  }
+
+  // Some Responses upstreams can emit output without a terminal event. Force a
+  // bounded JSON body for those models on every Responses turn (HTTP or WS), then
+  // reframe the completed payload for the client.
+  const responsesUpstreamStreaming = providerModelWebsocketUpstreamStreaming(
+    route.providerName,
+    route.provider,
+    route.modelId,
+  );
 
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
@@ -854,7 +903,7 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
 
-  if (websocketUpstreamStreaming === false) {
+  if (responsesUpstreamStreaming === false) {
     parsed.stream = false;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       (parsed._rawBody as Record<string, unknown>).stream = false;
@@ -2125,9 +2174,9 @@ async function handleResponsesInner(
       // Bounded whole-body read: a non-streaming upstream JSON body is fully materialized
       // here (and again by the request-log finalizer and the WebSocket bridge's reframing),
       // so an unbounded .text() would let a hostile or stuck upstream grow proxy memory
-      // without limit. This path is no longer rare — WebSocket turns for models whose
-      // streaming terminal event is unreliable are deliberately answered with bounded JSON.
-      // Oversize and stall deadlines both fail closed; a partial body is never parsed.
+      // without limit. This path is no longer rare — models whose streaming terminal event
+      // is unreliable are deliberately answered with bounded JSON, then reframed for the
+      // client. Oversize and stall deadlines both fail closed; a partial body is never parsed.
       const bounded = await readBoundedResponseBody(upstreamResponse, {
         maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
         totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
@@ -2146,7 +2195,27 @@ async function handleResponsesInner(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
+      const restoredText = restoreImageGenCallsInJson(text, imageGenCallAliases);
+      // HTTP/SSE clients requested a stream; synthesize a complete event sequence so
+      // Codex never waits on an upstream that can omit the terminal frame. WebSocket
+      // turns keep the bounded JSON response intact for sendResponsesJsonAsEvents().
+      if (parsed._clientRequestedStream === true && options.inboundTransport !== "websocket") {
+        let responseJson: Record<string, unknown>;
+        try {
+          responseJson = JSON.parse(restoredText) as Record<string, unknown>;
+        } catch {
+          return formatErrorResponse(502, "upstream_error", "upstream returned malformed JSON");
+        }
+        const sseHeaders = new Headers(headers);
+        sseHeaders.set("content-type", "text/event-stream; charset=utf-8");
+        sseHeaders.set("cache-control", "no-cache");
+        return new Response(responsesJsonToClientSse(responseJson), {
+          status: upstreamResponse.status,
+          statusText: upstreamResponse.statusText,
+          headers: sseHeaders,
+        });
+      }
+      return new Response(restoredText, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,

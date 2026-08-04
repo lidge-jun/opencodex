@@ -7,6 +7,11 @@ export interface OcxParsedRequest {
   previousResponseId?: string;
   context: OcxContext;
   stream: boolean;
+  /**
+   * Client-facing stream preference captured before registry compatibility policy
+   * rewrites `stream` for unreliable upstream event streams.
+   */
+  _clientRequestedStream?: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
   /** Number of leading raw input items restored from local previous_response_id state. */
