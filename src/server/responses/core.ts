@@ -1936,14 +1936,27 @@ async function handleResponsesInner(
         },
       );
     } catch (err) {
-      if (!primaryAttemptExecutorStarted && attemptHistory.length === 0 && !options.abortSignal?.aborted) {
+      if (!primaryAttemptExecutorStarted && !options.abortSignal?.aborted) {
+        const lastObservation = attemptHistory.at(-1);
         const observedStatus = lastUpstreamAttemptResponseStatus(attemptHistory);
-        if (observedStatus !== undefined) {
-          recordPoolTransportOutcome(observedStatus);
-          settleObservedHostResponse();
-        } else {
+        if (!lastObservation) {
           releaseCodexAuthContextProbeLease(authCtx);
           releaseCodexUpstreamHostAdmissionLease(hostAdmissionLease);
+          hostAdmissionLease = null;
+        } else if (lastObservation.kind === "response") {
+          recordPoolTransportOutcome(lastObservation.status);
+          settleObservedHostResponse();
+        } else {
+          if (observedStatus !== undefined) {
+            recordPoolTransportOutcome(observedStatus);
+          } else {
+            releaseCodexAuthContextProbeLease(authCtx);
+          }
+          if (hostAdmissionLease) {
+            recordCodexUpstreamHostFailure(hostAdmissionLease, Date.now(), {
+              observedResponse: observedStatus !== undefined,
+            });
+          }
           hostAdmissionLease = null;
         }
         throw err;

@@ -542,14 +542,27 @@ export async function handleResponsesCompact(
         primaryAttemptBoundary,
       );
     } catch (err) {
-      if (!primaryAttemptBoundary.executorStarted && primaryAttempts.length === 0 && !req.signal.aborted) {
+      if (!primaryAttemptBoundary.executorStarted && !req.signal.aborted) {
+        const lastObservation = primaryAttempts.at(-1);
         const observedStatus = lastUpstreamAttemptResponseStatus(primaryAttempts);
-        if (observedStatus !== undefined) {
-          recordCompactPoolOutcome(outcomeCtx, observedStatus);
-          settleObservedCompactHostResponse();
-        } else {
+        if (!lastObservation) {
           releaseCodexAuthContextProbeLease(outcomeCtx);
           releaseCodexUpstreamHostAdmissionLease(compactHostAdmissionLease);
+          compactHostAdmissionLease = null;
+        } else if (lastObservation.kind === "response") {
+          recordCompactPoolOutcome(outcomeCtx, lastObservation.status);
+          settleObservedCompactHostResponse();
+        } else {
+          if (observedStatus !== undefined) {
+            recordCompactPoolOutcome(outcomeCtx, observedStatus);
+          } else {
+            releaseCodexAuthContextProbeLease(outcomeCtx);
+          }
+          if (compactHostAdmissionLease) {
+            recordCodexUpstreamHostFailure(compactHostAdmissionLease, Date.now(), {
+              observedResponse: observedStatus !== undefined,
+            });
+          }
           compactHostAdmissionLease = null;
         }
         throw err;
