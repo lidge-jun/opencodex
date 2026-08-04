@@ -10,7 +10,7 @@ head SHA, PR number/URL, verification result, and review state.
 - Bun: `1.3.14`; package version: `2.10.0`
 - Worktree: `D:\codex-worktrees\ocx-router-intelligence`
 - Push remote: `origin` (Wibias/opencodex); PR target: `lidge-jun/opencodex:dev`
-- All PRs opened as DRAFT; nothing merged by this programme.
+- Programme stack: #1003 (RI-01) and #1004 (RI-02) merged to `dev`; #1005 (RI-03) open.
 
 ## Related in-flight PRs (not superseded by this stack)
 
@@ -40,8 +40,8 @@ other; closing one is a maintainer decision and neither is stale.
 | RI | Branch | Base | Head SHA | PR | URL | Status |
 |---|---|---|---|---|---|---|
 | RI-01 | `feat/ri-01-route-decision-traces` | `e44d234f0` | `b5a8e7c4c` | #1003 | https://github.com/lidge-jun/opencodex/pull/1003 | MERGED |
-| RI-02 | `feat/ri-02-request-history-index` | `dev` (post-#1003 merge) | `03b0eafa7` | #1004 | https://github.com/lidge-jun/opencodex/pull/1004 | OPEN |
-| RI-03 | `feat/ri-03-routing-analytics` | `feat/ri-02` head | pending | pending | pending | queued |
+| RI-02 | `feat/ri-02-request-history-index` | `dev` (post-#1003 merge) | `2a72aa4a9` | #1004 | https://github.com/lidge-jun/opencodex/pull/1004 | MERGED |
+| RI-03 | `feat/ri-03-routing-analytics` | `dev` (post-#1004 merge) | pending | #1005 | https://github.com/lidge-jun/opencodex/pull/1005 | OPEN (resync) |
 | RI-04 | `feat/ri-04-policy-profile-core` | `feat/ri-03` head | pending | pending | pending | queued |
 | RI-05 | `feat/ri-05-capability-aware-routing` | `feat/ri-04` head | pending | pending | pending | queued |
 | RI-06 | `feat/ri-06-health-aware-routing` | `feat/ri-05` head | pending | pending | pending | queued |
@@ -107,7 +107,7 @@ other; closing one is a maintainer decision and neither is stale.
   4. duplicate-replay accounting counted ignored rows in `indexedRows` -
      now counts real `INSERT` changes.
 - Fixes: all four above; tests cover every one.
-- PR: #1004 (OPEN) https://github.com/lidge-jun/opencodex/pull/1004
+- PR: #1004 (MERGED) https://github.com/lidge-jun/opencodex/pull/1004
 - Final commit: recorded after review round (rebase + CodeRabbit/simplify
   fixes; new head pushes to #1004)
 - Verification:
@@ -119,5 +119,27 @@ other; closing one is a maintainer decision and neither is stale.
   - Focused regression suites: 269/269 pass across 8 files (incl. RI-01
     tests, request-log, usage-log, combos, combo-management-api,
     codex-routing, codex-account-namespaces)
+  - `bun run privacy:scan`: passed
+- Remaining Low findings: none
+
+### RI-03 - feat/ri-03-routing-analytics
+
+- Base SHA: `2a72aa4a9b0870c629adf842da659a5c521c6bfa` (`dev` after #1004 squash-merge)
+- Reviewed commit: `e732d02e` (pre–CodeRabbit review round)
+- Findings (self-review): 3 fixed pre-push - (1) `requestHistoryDb` accessor
+  missing from the indexer (analytics needs the handle after open);
+  (2) SQL column names are snake_case - analytics SELECT now aliases to
+  camelCase; (3) cost field is `estimate.cost.total` (CostBreakdown), not
+  `costUsd`; plus the row-cap is injectable for truncation tests.
+- Final commit: `5f464c730` (CodeRabbit: cooldown parse gate, API `limit` default 5k, devlog + tests)
+- PR: #1005 (OPEN) https://github.com/lidge-jun/opencodex/pull/1005
+- Verification:
+  - `bun x tsc --noEmit`: PASSED (0 errors)
+  - `bun run test tests/routing-analytics.test.ts`: 10/10 pass:
+    classification (success/failure/cancel/incomplete), percentiles +
+    coverage, fallback rate, provider/model/account + profile breakdown,
+    unknown-price honesty, filters, truncation flag, API payload,
+    cooldown on failure+attempts, API validation (`invalid_from`/`invalid_to`/`invalid_range`)
+  - Focused regression suites: 144/144 pass across 6 files
   - `bun run privacy:scan`: passed
 - Remaining Low findings: none
