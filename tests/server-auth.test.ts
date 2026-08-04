@@ -15,7 +15,13 @@ import {
   clearThreadAccountMap,
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
+  resolveCodexAccountForThread,
 } from "../src/codex/routing";
+import {
+  canonicalCodexUpstreamHostKey,
+  clearCodexUpstreamHostHealth,
+  getCodexUpstreamHostHealth,
+} from "../src/codex/upstream-host-health";
 import { loadConfig, saveConfig } from "../src/config";
 import { deriveProviderPresets } from "../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
@@ -129,6 +135,7 @@ afterEach(() => {
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   clearCodexUpstreamHealth();
+  clearCodexUpstreamHostHealth();
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
@@ -197,6 +204,7 @@ async function startPoolRetryHarness(
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   clearCodexUpstreamHealth();
+  clearCodexUpstreamHostHealth();
   clearThreadAccountMap();
   clearAccountQuota();
   clearRequestLogsForTests();
@@ -2561,8 +2569,14 @@ describe("server local API auth", () => {
     }
   });
 
-  test("retry-dispatch transport failure records only B and never triple-dispatches", async () => {
+  test("retry-dispatch transport failure is host-only and never triple-dispatches", async () => {
     const harness = await startPoolRetryHarness(() => rejectionResponse(unsupportedModelBody()));
+    const affinityThread = "retry-dispatch-host-only-affinity";
+    const hostKey = canonicalCodexUpstreamHostKey(
+      "openai",
+      "https://chatgpt.com/backend-api/codex/responses",
+    )!;
+    expect(resolveCodexAccountForThread(affinityThread, harness.config)).toBe("pool-a");
     const redirectedFetch = globalThis.fetch;
     globalThis.fetch = (async (input, init) => {
       const accountId = new Headers(init?.headers).get("chatgpt-account-id");
@@ -2575,12 +2589,20 @@ describe("server local API auth", () => {
     try {
       const response = await harness.request();
       expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        error: {
+          message: "Provider unreachable: synthetic retry connect failure",
+          type: "server_error",
+          code: "upstream_server_error",
+        },
+      });
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
-      expect(getCodexUpstreamHealth("pool-b")).toMatchObject({
-        consecutiveFailures: 1,
-        lastFailureStatus: 0,
-      });
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(getCodexUpstreamHostHealth(hostKey)).toMatchObject({ consecutiveFailures: 1 });
+      const persisted = loadConfig();
+      expect(persisted.activeCodexAccountId).toBe("pool-a");
+      expect(resolveCodexAccountForThread(affinityThread, persisted)).toBe("pool-a");
     } finally {
       await stopPoolRetryHarness(harness);
     }
@@ -2634,11 +2656,12 @@ describe("server local API auth", () => {
     }
   }, { timeout: 30_000 });
 
-  test("passthrough connect failure records selected pool account health", async () => {
+  test("passthrough connect failure leaves selected pool account health clear", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     clearCodexUpstreamHealth();
+    clearCodexUpstreamHostHealth();
     clearThreadAccountMap();
     clearAccountNeedsReauth("pool-a");
 
@@ -2665,6 +2688,12 @@ describe("server local API auth", () => {
     // Known low quota keeps "pool-a" the deterministic active (this case tests
     // failure-health recording, not the all-unknown rotation added in Phase 10).
     updateAccountQuota("pool-a", 10, 5);
+    const affinityThread = "passthrough-connect-host-only-affinity";
+    const hostKey = canonicalCodexUpstreamHostKey(
+      "openai",
+      "https://chatgpt.com/backend-api/codex/responses",
+    )!;
+    expect(resolveCodexAccountForThread(affinityThread, loadConfig())).toBe("pool-a");
 
     const server = startServer(0);
     try {
@@ -2678,10 +2707,19 @@ describe("server local API auth", () => {
       });
 
       expect(response.status).toBe(502);
-      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
-        consecutiveFailures: 1,
-        lastFailureStatus: 0,
+      const error = await response.json() as {
+        error: { message: string; type: string; code: string };
+      };
+      expect(error.error).toMatchObject({
+        type: "server_error",
+        code: "upstream_server_error",
       });
+      expect(error.error.message).toMatch(/^Provider unreachable:/);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHostHealth(hostKey)).toMatchObject({ consecutiveFailures: 1 });
+      const persisted = loadConfig();
+      expect(persisted.activeCodexAccountId).toBe("pool-a");
+      expect(resolveCodexAccountForThread(affinityThread, persisted)).toBe("pool-a");
     } finally {
       await server.stop(true);
     }
