@@ -18,7 +18,13 @@ export function installIsolatedCodexHome(prefix = "ocx-codex-home-"): IsolatedCo
     restore() {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(path, { recursive: true, force: true });
+      // Windows can retain short-lived file or ACL handles after a test stops.
+      // node:fs bounds retries for EBUSY, EPERM, and ENOTEMPTY when recursive.
+      if (process.platform === "win32") {
+        rmSync(path, { recursive: true, force: true, maxRetries: 8, retryDelay: 25 });
+      } else {
+        rmSync(path, { recursive: true, force: true });
+      }
     },
   };
 }

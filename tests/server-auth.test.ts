@@ -45,6 +45,7 @@ import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
+import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -125,24 +126,34 @@ function stubModelDiscoveryFor(...origins: string[]): void {
 }
 
 beforeEach(() => {
+  // This suite validates server auth and request routing, not Windows ACLs.
+  // Keep isolated Windows runs from spawning icacls for every config fixture.
+  setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
 });
 
 afterEach(() => {
-  globalThis.fetch = originalGlobalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  clearCodexUpstreamHealth();
-  clearCodexUpstreamHostHealth();
-  clearThreadAccountMap();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountNeedsReauth("pool-b");
-  clearAccountQuota();
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  try {
+    globalThis.fetch = originalGlobalFetch;
+    if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    isolatedCodexHome?.restore();
+  } finally {
+    isolatedCodexHome = null;
+    try {
+      clearCodexUpstreamHealth();
+      clearCodexUpstreamHostHealth();
+      clearThreadAccountMap();
+      clearAccountNeedsReauth("pool-a");
+      clearAccountNeedsReauth("pool-b");
+      clearAccountQuota();
+      if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    } finally {
+      setIcaclsRunnerForTests(null);
+    }
+  }
 });
 
 const POOL_RETRY_MODEL = "gpt-5.6-sol";
@@ -2846,16 +2857,21 @@ describe("server local API auth", () => {
         ? new Response("rate limited", { status: 429 })
         : new Response("ok")
     ));
+    const providerBaseUrl = "https://chatgpt.com/backend-api/codex";
     const upstreamUrl = "https://chatgpt.com/backend-api/codex/responses";
     const redirectedFetch = globalThis.fetch;
     const NativeURL = globalThis.URL;
-    let forcedNullHostKey = false;
+    const uncanonicalizableInputs: string[] = [];
 
     class NullHostKeyURL extends NativeURL {
       constructor(input: string | URL, base?: string | URL) {
         const value = typeof input === "string" ? input : input.toString();
-        if (!forcedNullHostKey && base === undefined && value === upstreamUrl) {
-          forcedNullHostKey = true;
+        if (
+          base === undefined
+          && (value === providerBaseUrl || value === upstreamUrl)
+          && new Error().stack?.includes("canonicalCodexUpstreamHostKey")
+        ) {
+          uncanonicalizableInputs.push(value);
           throw new TypeError("synthetic null canonical host key");
         }
         super(input, base);
@@ -2877,7 +2893,7 @@ describe("server local API auth", () => {
       const response = await harness.request();
 
       expect(response.status).toBe(200);
-      expect(forcedNullHostKey).toBe(true);
+      expect(new Set(uncanonicalizableInputs)).toEqual(new Set([providerBaseUrl, upstreamUrl]));
       expect(harness.dispatches.map(accountId => accountId.replace("acct-", ""))).toEqual(["pool-a", "pool-b"]);
       expect(redirectModes).toEqual([undefined, undefined]);
     } finally {
@@ -2890,18 +2906,24 @@ describe("server local API auth", () => {
   for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
     test(`${path} releases a pool probe after a pre-response transport failure with no host key`, async () => {
       const harness = await startPoolRetryHarness(() => new Response("unused"), { secondAccount: false });
+      const providerBaseUrl = "https://chatgpt.com/backend-api/codex";
       const upstreamUrl = `https://chatgpt.com/backend-api/codex${path.slice(3)}`;
       const redirectedFetch = globalThis.fetch;
       const NativeURL = globalThis.URL;
+      const redirectModes: Array<RequestRedirect | undefined> = [];
       const observedPoolAuth: Array<{ authorization: string | null; accountId: string | null }> = [];
       const observedProbeLeaseIds: Array<string | undefined> = [];
-      let forcedNullHostKey = false;
+      const uncanonicalizableInputs: string[] = [];
 
       class NullHostKeyURL extends NativeURL {
         constructor(input: string | URL, base?: string | URL) {
           const value = typeof input === "string" ? input : input.toString();
-          if (!forcedNullHostKey && base === undefined && value === upstreamUrl) {
-            forcedNullHostKey = true;
+          if (
+            base === undefined
+            && (value === providerBaseUrl || value === upstreamUrl)
+            && new Error().stack?.includes("canonicalCodexUpstreamHostKey")
+          ) {
+            uncanonicalizableInputs.push(value);
             throw new TypeError("synthetic null canonical host key");
           }
           super(input, base);
@@ -2916,6 +2938,7 @@ describe("server local API auth", () => {
             ? input.toString()
             : input.url;
         if (requestUrl === upstreamUrl) {
+          redirectModes.push(init?.redirect);
           const headers = new Headers(init?.headers);
           observedPoolAuth.push({
             authorization: headers.get("authorization"),
@@ -2937,7 +2960,9 @@ describe("server local API auth", () => {
         const response = await harness.request({ path });
 
         expect(response.status).toBe(502);
-        expect(forcedNullHostKey).toBe(true);
+        expect(new Set(uncanonicalizableInputs)).toEqual(new Set([providerBaseUrl, upstreamUrl]));
+        expect(redirectModes.length).toBeGreaterThan(0);
+        expect(redirectModes.every(mode => mode === undefined)).toBe(true);
         expect(observedPoolAuth.length).toBeGreaterThan(0);
         expect(observedPoolAuth).toEqual(observedPoolAuth.map(() => ({
           authorization: "Bearer pool-a-token",
