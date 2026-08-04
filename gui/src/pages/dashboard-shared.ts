@@ -39,7 +39,7 @@ export async function requireJson<T>(res: Response, fallbackMessage?: string): P
 
 export interface HealthData { status: string; version: string; uptime: number }
 export interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
-export interface ModelInfo { id: string; provider: string; owned_by?: string }
+export interface ModelInfo { id: string; provider: string; owned_by?: string; reasoningEfforts?: string[] }
 export interface SettingsData {
   codexAutoStart: boolean;
   port: number;
@@ -154,6 +154,24 @@ export function mergeSidecarSetting(
 }
 
 export const VISION_REASONING_LEVELS: VisionReasoning[] = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Reasoning rungs the selected vision model actually advertises. Unknown/empty metadata keeps
+ * the full ladder so a custom model id or a catalog without effort data is never falsely
+ * restricted. Falls back to the full ladder when the model's ladder has no Codex rungs.
+ */
+export function visionReasoningLadder(models: ModelInfo[], modelId: string): VisionReasoning[] {
+  const model = models.find(m => m.id === modelId);
+  const ladder = model?.reasoningEfforts;
+  if (!ladder || ladder.length === 0) return [...VISION_REASONING_LEVELS];
+  const supported = VISION_REASONING_LEVELS.filter(effort => ladder.includes(effort));
+  return supported.length > 0 ? supported : [...VISION_REASONING_LEVELS];
+}
+
+/** Render the ladder with the persisted value first when the current model no longer supports it. */
+export function visionReasoningOptionsFor(ladder: VisionReasoning[], persisted: VisionReasoning): VisionReasoning[] {
+  return ladder.includes(persisted) ? ladder : [persisted, ...ladder];
+}
 
 export function sidecarModelOptions(models: ModelInfo[]) {
   const out: Array<{ value: string; label: string }> = [];

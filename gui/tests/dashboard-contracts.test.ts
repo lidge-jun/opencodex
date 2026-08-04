@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import { en } from "../src/i18n/en";
 import { normalizeInjectionSelection } from "../src/pages/dashboard-core-poll";
-import { mergeSidecarSetting, VISION_REASONING_LEVELS } from "../src/pages/dashboard-shared";
+import {
+  mergeSidecarSetting,
+  visionReasoningLadder,
+  visionReasoningOptionsFor,
+  VISION_REASONING_LEVELS,
+  type ModelInfo,
+} from "../src/pages/dashboard-shared";
 import { PROJECT_CONFIG_DIAGNOSTICS_POLL_MS, beginPollEpoch, beginPollEpochs } from "../src/startup-health-ui";
 
 test("project-config diagnostics poll cadence is owned by the shared constant", () => {
@@ -14,6 +20,24 @@ test("vision sidecar reasoning exposes the supported ladder and survives optimis
     { model: "gpt-5.6-luna", backend: "openai", reasoning: "high" },
     { model: "gpt-5.6-luna" },
   )).toEqual({ model: "gpt-5.6-luna", backend: "openai", reasoning: "high" });
+});
+
+test("vision reasoning ladder follows the selected model's advertised efforts", () => {
+  const models: ModelInfo[] = [
+    { id: "gpt-5.6-luna", provider: "openai", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    { id: "gpt-5.4-mini", provider: "openai", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    { id: "claude-sonnet-5", provider: "anthropic" },
+  ];
+  expect(visionReasoningLadder(models, "gpt-5.6-luna")).toEqual(VISION_REASONING_LEVELS);
+  expect(visionReasoningLadder(models, "gpt-5.4-mini")).toEqual(["low", "medium", "high", "xhigh"]);
+  // Unknown metadata or unknown model ids must never be falsely restricted.
+  expect(visionReasoningLadder(models, "claude-sonnet-5")).toEqual(VISION_REASONING_LEVELS);
+  expect(visionReasoningLadder(models, "unknown/model")).toEqual(VISION_REASONING_LEVELS);
+  // A persisted value the new model cannot serve stays visible (and the save path clamps it).
+  expect(visionReasoningOptionsFor(["low", "medium", "high", "xhigh"], "max")).toEqual([
+    "max", "low", "medium", "high", "xhigh",
+  ]);
+  expect(visionReasoningOptionsFor(VISION_REASONING_LEVELS, "high")).toEqual(VISION_REASONING_LEVELS);
 });
 
 test("dashboard poll epochs share beginPollEpoch", () => {

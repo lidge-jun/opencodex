@@ -35,6 +35,7 @@ import {
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
+import { VISION_REASONING_EFFORTS, isVisionReasoningEffort, sanitizeVisionReasoning } from "../../reasoning-effort";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -344,11 +345,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         || body.vision.maxDescriptionsPerTurn <= 0)) {
       return jsonResponse({ error: "vision.maxDescriptionsPerTurn must be a positive integer" }, 400);
     }
-    if (body.vision && body.vision.reasoning !== undefined
-      && body.vision.reasoning !== "low" && body.vision.reasoning !== "medium"
-      && body.vision.reasoning !== "high" && body.vision.reasoning !== "xhigh"
-      && body.vision.reasoning !== "max") {
-      return jsonResponse({ error: "vision.reasoning must be low, medium, high, xhigh, or max" }, 400);
+    if (body.vision && body.vision.reasoning !== undefined && !isVisionReasoningEffort(body.vision.reasoning)) {
+      return jsonResponse({ error: `vision.reasoning must be ${VISION_REASONING_EFFORTS.join(", ")}` }, 400);
     }
     if (body.webSearch) {
       config.webSearchSidecar = { ...config.webSearchSidecar };
@@ -375,11 +373,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {
         config.visionSidecar.maxDescriptionsPerTurn = body.vision.maxDescriptionsPerTurn;
       }
-      if (body.vision.reasoning === "low" || body.vision.reasoning === "medium"
-        || body.vision.reasoning === "high" || body.vision.reasoning === "xhigh"
-        || body.vision.reasoning === "max") {
-        config.visionSidecar.reasoning = body.vision.reasoning;
-      }
+      const visionReasoning = sanitizeVisionReasoning(body.vision.reasoning);
+      if (visionReasoning !== undefined) config.visionSidecar.reasoning = visionReasoning;
     }
     saveConfigPreservingClaudeCode(config);
     const ws = config.webSearchSidecar ?? {};

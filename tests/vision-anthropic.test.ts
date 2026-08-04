@@ -221,6 +221,40 @@ describe("Anthropic vision planning and management config", () => {
     expect(planVisionSidecar(config, routed, "blind", request, new Headers({ authorization: "Bearer chatgpt" }))).toBeUndefined();
   });
 
+  test("invalid persisted vision reasoning degrades to the low default in the plan", () => {
+    const routed: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://routed.test/v1",
+      noVisionModels: ["blind"],
+    };
+    const forward: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.test/v1",
+      authMode: "forward",
+    };
+    const openAiSidecar = {
+      providerName: "openai" as const,
+      provider: forward,
+      accountMode: "direct" as const,
+      authContext: { kind: "main" as const, accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    };
+    // Hand-edited config bypasses the management enum check; the plan must never forward it.
+    const config = {
+      port: 10100,
+      defaultProvider: "routed",
+      providers: { routed, forward },
+      visionSidecar: { model: "gpt-5.6-luna", reasoning: "ultra" },
+    } as unknown as OcxConfig;
+    const request = parseRequest({
+      model: "routed/blind",
+      input: [{ type: "message", role: "user", content: [{ type: "input_image", image_url: DATA_IMAGE }] }],
+    });
+    const plan = planVisionSidecar(config, routed, "blind", request, openAiSidecar);
+    expect(plan?.backend).toBe("openai");
+    expect(plan?.settings.reasoning).toBe("low");
+  });
+
   test("GET/PUT persists valid vision backend and cap and rejects invalid values", async () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const isolatedHome = mkdtempSync(join(tmpdir(), "ocx-vision-management-"));

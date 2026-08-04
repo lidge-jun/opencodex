@@ -214,7 +214,7 @@ export const ru: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Перехватывает фоновые служебные вызовы Codex App ({models}: заголовки, сообщения коммитов) и перенаправляет их на выбранную вами модель.",
   "dash.sidecarBackend": "Бэкенд",
   "dash.sidecarModel": "Модель",
-  "dash.visionReasoning": "Уровень рассуждений vision",
+  "dash.visionReasoning": "Уровень рассуждений для изображений",
   "dash.backendAuto": "Авто",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",

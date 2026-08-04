@@ -265,6 +265,13 @@ describe("vision description cache and per-turn cap", () => {
       forwardProvider: undefined,
       anthropicSidecar: { providerName: "anthropic-cache-test", provider: anthropicProvider },
     }), "hello world");
+    // Anthropic never reads settings.reasoning, so an effort-only change stays a cache hit.
+    await run(plan({
+      backend: "anthropic",
+      forwardProvider: undefined,
+      anthropicSidecar: { providerName: "anthropic-cache-test", provider: anthropicProvider },
+      settings: { model: "vision-model-a", reasoning: "high", timeoutMs: 5000 },
+    }), "hello world");
 
     expect(calls).toBe(6);
   });

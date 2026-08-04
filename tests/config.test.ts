@@ -223,6 +223,30 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("config candidates validate visionSidecar.reasoning levels", () => {
+    const base = getDefaultConfig();
+    for (const reasoning of ["low", "medium", "high", "xhigh", "max"]) {
+      expect(validateConfigCandidate({
+        ...base,
+        visionSidecar: { model: "gpt-5.6-luna", reasoning },
+      })).toMatchObject({
+        ok: true,
+        config: expect.objectContaining({
+          visionSidecar: expect.objectContaining({ reasoning }),
+        }),
+      });
+    }
+    for (const reasoning of ["ultra", "banana", 5, null]) {
+      expect(validateConfigCandidate({
+        ...base,
+        visionSidecar: { model: "gpt-5.6-luna", reasoning },
+      })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("visionSidecar.reasoning"),
+      });
+    }
+  });
+
   test("an invalid persisted Claude Code subagent effort is ignored without wiping config or logging its value", () => {
     const invalidEffort = "credential-like-value";
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});

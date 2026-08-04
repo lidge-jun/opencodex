@@ -2,7 +2,7 @@ import { IconAlert, IconInfo, IconRefresh } from "../icons";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
 import { navigateHash } from "../hash-routing";
-import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel, VISION_REASONING_LEVELS } from "./dashboard-shared";
+import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel, visionReasoningLadder, visionReasoningOptionsFor } from "./dashboard-shared";
 import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -217,6 +217,9 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     sidecar, sidecarSaving, sidecarModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
+  const visionModel = sidecar?.vision.model ?? "gpt-5.6-luna";
+  const visionReasoning = sidecar?.vision.reasoning ?? "low";
+  const visionLadder = visionReasoningLadder(models, visionModel);
 
   return (
     <>
@@ -259,16 +262,21 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             <div className="font-semibold">{t("dash.visionSidecar")}</div>
             <div className="dash-delegation-controls">
               <Select
-                value={sidecar?.vision.model ?? "gpt-5.6-luna"}
+                value={visionModel}
                 options={sidecarModels}
-                onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
+                onChange={model => {
+                  const ladder = visionReasoningLadder(models, model);
+                  // Never persist an effort the new model cannot serve: clamp to its highest rung.
+                  const reasoning = ladder.includes(visionReasoning) ? visionReasoning : ladder[ladder.length - 1];
+                  void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model), reasoning } });
+                }}
                 disabled={!sidecar || sidecarSaving}
                 label={t("dash.sidecarModel")}
               />
               <Select
-                value={sidecar?.vision.reasoning ?? "low"}
-                options={VISION_REASONING_LEVELS.map(value => ({ value, label: value }))}
-                onChange={reasoning => { void saveSidecar({ vision: { reasoning: reasoning as typeof VISION_REASONING_LEVELS[number] } }); }}
+                value={visionReasoning}
+                options={visionReasoningOptionsFor(visionLadder, visionReasoning).map(value => ({ value, label: value }))}
+                onChange={reasoning => { void saveSidecar({ vision: { reasoning: reasoning as typeof visionReasoning } }); }}
                 disabled={!sidecar || sidecarSaving}
                 label={t("dash.visionReasoning")}
               />

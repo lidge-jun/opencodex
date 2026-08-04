@@ -44,7 +44,7 @@ import {
 } from "./providers/registry";
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
-import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
+import { VISION_REASONING_EFFORTS, isCodexReasoningEffort, isVisionReasoningEffort, modelRecordValue } from "./reasoning-effort";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
   MAX_APP_OWNED_MEMORY_BUDGET_MB,
@@ -1325,6 +1325,34 @@ function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void 
 }
 
 /**
+ * Load-time degrade for a hand-edited invalid `visionSidecar.reasoning` (for example "ultra").
+ * Same rationale as `streamMode`: a typo must not trip the backup-and-defaults repair path or
+ * reach the wire as an upstream-rejected effort. The management endpoint and the CLI write
+ * boundary reject invalid values, so this only fires for direct file edits.
+ */
+function sanitizeVisionSidecarForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const vision = (parsed as Record<string, unknown>).visionSidecar;
+  if (!vision || typeof vision !== "object" || Array.isArray(vision)) return;
+  const reasoning = (vision as Record<string, unknown>).reasoning;
+  if (reasoning === undefined) return;
+  if (!isVisionReasoningEffort(reasoning)) {
+    delete (vision as Record<string, unknown>).reasoning;
+  }
+}
+
+/** Companion to {@link warnDegradedStreamMode} for an invalid persisted vision reasoning. */
+function warnDegradedVisionReasoning(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const vision = (rawParsed as Record<string, unknown>).visionSidecar;
+  if (!vision || typeof vision !== "object" || Array.isArray(vision)) return;
+  const raw = (vision as Record<string, unknown>).reasoning;
+  if (raw !== undefined && validated.visionSidecar?.reasoning === undefined) {
+    console.warn(`⚠️  config.json visionSidecar.reasoning ${JSON.stringify(raw)} is unsupported — falling back to low`);
+  }
+}
+
+/**
  * Load-time degradation for `retryOn429` (loadConfig only): one hand-edited invalid optional
  * field (e.g. `attempts: 0` or a string) must not trip the whole provider schema and hide every
  * provider/key behind a default config. Invalid fields are dropped with a warning; the management
@@ -1626,10 +1654,12 @@ export function loadConfig(): OcxConfig {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeVisionSidecarForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);
       warnDegradedStreamMode(parsed, config);
+      warnDegradedVisionReasoning(parsed, config);
       warnDegradedHostname(parsed, config);
       warnDegradedApiKeys(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
@@ -1650,6 +1680,7 @@ export function loadConfig(): OcxConfig {
       warnConfigRepaired(configPath, result.error);
       const config = normalizeApiKeyIds(retryResult.data as OcxConfig);
       warnDegradedHostname(parsed, config);
+      warnDegradedVisionReasoning(parsed, config);
       warnDegradedApiKeys(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
@@ -1778,12 +1809,28 @@ function googleAntigravityStaticCatalogVersionError(value: unknown): string | nu
   return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1 or omitted";
 }
 
+/**
+ * Reject an invalid `visionSidecar.reasoning` at the write boundary. Load-time degrades the
+ * same value (see {@link sanitizeVisionSidecarForLoad}) so a hand edit cannot break startup,
+ * but a live caller must be told the value is wrong instead of silently rewritten.
+ */
+function visionSidecarReasoningError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const vision = (value as Record<string, unknown>).visionSidecar;
+  if (!vision || typeof vision !== "object" || Array.isArray(vision)) return null;
+  const reasoning = (vision as Record<string, unknown>).reasoning;
+  if (reasoning === undefined) return null;
+  if (isVisionReasoningEffort(reasoning)) return null;
+  return `schema_invalid: visionSidecar.reasoning: must be one of ${VISION_REASONING_EFFORTS.join(", ")}`;
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
-    ?? googleAntigravityStaticCatalogVersionError(value);
+    ?? googleAntigravityStaticCatalogVersionError(value)
+    ?? visionSidecarReasoningError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) return { ok: true, config: normalizeApiKeyIds(result.data as OcxConfig) };
@@ -1797,6 +1844,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeVisionSidecarForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);

@@ -75,9 +75,10 @@ stall は全体生成 timeout ではありません。SSE 開始前の失敗は 
 
 - 画像はユーザー、developer、ツール結果メッセージから来ます。Codex の `view_image` 結果も
   含まれます。
-- 各画像は選択した OpenAI Responses の `reasoning.effort`（デフォルトは `low`）で設定済みの
-  ネイティブビジョンモデルに渡され、説明が画像部分をインラインに差し替えます。Anthropic vision
-  はこの OpenAI 固有の設定を無視します。
+- OpenAI パス（ChatGPT ログインパススルー）では、各画像は選択した `reasoning.effort`（デフォルト
+  `low`）付きで Responses エンドポイント経由で設定済みのビジョンモデルに送信され、説明が画像部分
+  をインラインで置き換えます。Anthropic パスは Messages エンドポイントを使い、独自の思考予算
+  マッピングで動作し、この OpenAI 固有の設定を無視します。
 - 説明は一度に 3 件並列処理し入力順序を維持します。説明モデルに渡すユーザー文脥は
   800 文字、注入する画像説明は 1 枚あたり 2,000 文字に制限します。ChatGPT バックエンドが拒否する
   `max_output_tokens` は送信しません。

@@ -69,8 +69,9 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
 `visionSidecar.model` 字段完全不存在时，vision 执行路径才会使用代码中的 `gpt-5.4-mini` 回退值。
 
 - 图像可以来自 user、developer 和 tool-result message，也包括 Codex 的 `view_image` 结果。
-- 每张图像会以所选的 OpenAI Responses `reasoning.effort`（默认为 `low`）发送给配置的原生
-  vision 模型，描述结果会就地替换图像部分。Anthropic vision 会忽略这个 OpenAI 专用设置。
+- OpenAI 路径（ChatGPT 登录透传）会通过 Responses 端点把每张图像发送给配置的视觉模型，并携带所选
+  的 `reasoning.effort`（默认为 `low`），描述结果就地替换图像部分。Anthropic 路径走 Messages
+  端点并使用自己的思考预算映射，会忽略这个 OpenAI 专用设置。
 - 描述任务最多同时处理 3 张图像，并保持输入顺序。发送给描述模型的用户上下文最多 800 个字符，
   每张图像注入的描述最多 2,000 个字符。请求不会发送 ChatGPT 后端不支持的
   `max_output_tokens`。

@@ -76,9 +76,10 @@ persisted legacy `gpt-5.4-mini` value to Luna. If the `visionSidecar.model` fiel
 the vision execution path still has a `gpt-5.4-mini` code fallback.
 
 - Images can come from user, developer, and tool-result messages, including Codex's `view_image`.
-- Each image is sent to the configured native vision model with the selected OpenAI Responses
-  `reasoning.effort` (`low` by default); its description replaces the image part inline. Anthropic
-  vision ignores this OpenAI-specific setting.
+- On the OpenAI path (ChatGPT-login passthrough), each image is sent to the configured vision model
+  over the Responses endpoint with the selected `reasoning.effort` (`low` by default), and its
+  description replaces the image part inline. The Anthropic path uses the Messages endpoint with its
+  own thinking-budget mapping and ignores this OpenAI-specific setting.
 - Descriptions run with bounded concurrency (3 at a time, input order preserved). User context sent
   to the describer is capped at 800 characters, and each injected description is capped at 2,000
   characters. The request does not send `max_output_tokens`, which the ChatGPT backend rejects.

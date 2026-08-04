@@ -76,9 +76,10 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
 
 - 이미지는 사용자, developer, 도구 결과 메시지에서 올 수 있습니다. Codex의 `view_image` 결과도
   포함됩니다.
-- 각 이미지는 선택한 OpenAI Responses `reasoning.effort`(기본값 `low`)로 설정된 네이티브 비전
-  모델에 전달되고, 설명이 이미지 부분을 인라인으로 대체합니다. Anthropic vision은 이 OpenAI 전용
-  설정을 무시합니다.
+- OpenAI 경로(ChatGPT 로그인 패스스루)에서는 각 이미지가 선택한 `reasoning.effort`(기본값
+  `low`)와 함께 Responses 엔드포인트로 설정된 비전 모델에 전송되고, 설명이 이미지 부분을 인라인으로
+  대체합니다. Anthropic 경로는 Messages 엔드포인트와 자체 thinking 예산 매핑을 사용하며 이
+  OpenAI 전용 설정을 무시합니다.
 - 설명은 한 번에 3개씩 병렬 처리하며 입력 순서를 유지합니다. 설명 모델에 전달하는 사용자 문맥은
   800자, 주입하는 이미지 설명은 장당 2,000자로 제한합니다. ChatGPT 백엔드가 거부하는
   `max_output_tokens`는 보내지 않습니다.

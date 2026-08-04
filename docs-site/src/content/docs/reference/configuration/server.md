@@ -180,7 +180,8 @@ an inactivity guard, not a total generation deadline.
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
 | `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. |
 
-Vision activates only for images sent to a model in its provider's `noVisionModels`. OpenAI has the
+Supported levels are gated by the upstream provider's capabilities and the selected model's
+advertised reasoning ladder. Vision activates only for images sent to a model in its provider's `noVisionModels`. OpenAI has the
 same login/forward requirements as search; explicitly selected Anthropic fails closed without a usable
 credential. Successful `data:` descriptions use a bounded cache keyed by backend, model, reasoning effort, detail,
 image bytes, and normalized message context. Hits and same-turn duplicates do not consume the limit.

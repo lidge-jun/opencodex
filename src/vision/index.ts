@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OcxConfig, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent } from "../types";
 import { modelInList } from "../types";
+import { sanitizeVisionReasoning, type VisionReasoningEffort } from "../reasoning-effort";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
 import type { CodexAuthContext } from "../codex/auth-context";
@@ -16,7 +17,7 @@ export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-des
 const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
 const DEFAULT_TIMEOUT_MS = 45_000;
-const DEFAULT_REASONING = "low" as const;
+const DEFAULT_REASONING: VisionReasoningEffort = "low";
 const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
 const DESCRIPTION_CACHE_MAX_ENTRIES = 256;
 export const VISION_DESCRIPTION_CACHE_MAX_BYTES = 1024 * 1024;
@@ -248,7 +249,7 @@ export function planVisionSidecar(
       anthropicSidecar,
       settings: {
         model: cfg.model ?? DEFAULT_ANTHROPIC_VISION_MODEL,
-        reasoning: cfg.reasoning ?? DEFAULT_REASONING,
+        reasoning: sanitizeVisionReasoning(cfg.reasoning) ?? DEFAULT_REASONING,
         timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       },
       maxDescriptionsPerTurn,
@@ -261,7 +262,7 @@ export function planVisionSidecar(
     forwardSidecar: openAiSidecar,
     settings: {
       model: resolveOpenAiVisionModel(config),
-      reasoning: cfg.reasoning ?? DEFAULT_REASONING,
+      reasoning: sanitizeVisionReasoning(cfg.reasoning) ?? DEFAULT_REASONING,
       timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     },
     maxDescriptionsPerTurn,
@@ -306,7 +307,9 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
     key: JSON.stringify([
       plan.backend,
       plan.settings.model,
-      plan.settings.reasoning,
+      // Anthropic never reads `settings.reasoning` (its executor sends its own thinking shape),
+      // so a dashboard-only effort change must not evict an otherwise valid cached description.
+      ...(plan.backend === "openai" ? [plan.settings.reasoning] : []),
       job.detail ?? "high",
       imageHash,
       sha256(normalizedContext(job.contextText)),

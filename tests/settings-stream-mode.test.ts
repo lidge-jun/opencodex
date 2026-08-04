@@ -293,6 +293,18 @@ describe("PUT /api/settings", () => {
 });
 
 describe("config.json schema resilience", () => {
+  test("invalid persisted visionSidecar.reasoning degrades to default without nuking the config", () => {
+    const config = { ...baseConfig(), visionSidecar: { model: "gpt-5.6-luna", reasoning: "high" as const } };
+    saveConfig(config);
+    const raw = JSON.parse(readFileSync(getConfigPath(), "utf-8")) as { visionSidecar?: Record<string, unknown> };
+    raw.visionSidecar!.reasoning = "ultra"; // hand-edit typo
+    writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
+    const reloaded = loadConfig();
+    // Degraded, not defaulted: providers must survive.
+    expect(reloaded.visionSidecar?.reasoning).toBeUndefined();
+    expect(reloaded.providers.openai).toBeDefined();
+  });
+
   test("invalid persisted streamMode degrades to auto without nuking the config", () => {
     const config = { ...baseConfig(), streamMode: "eager-relay" as const };
     saveConfig(config);

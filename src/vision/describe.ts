@@ -1,4 +1,5 @@
 import type { OcxProviderConfig } from "../types";
+import type { VisionReasoningEffort } from "../reasoning-effort";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
@@ -9,7 +10,7 @@ import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
 export interface VisionSettings {
   model: string;
-  reasoning: "low" | "medium" | "high" | "xhigh" | "max";
+  reasoning: VisionReasoningEffort;
   timeoutMs: number;
 }
 
