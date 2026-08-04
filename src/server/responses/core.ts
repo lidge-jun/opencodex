@@ -244,10 +244,11 @@ export function usesCodexForwardPoolAuth(
  * the authority-only key is checked against the eventual adapter request URL.
  */
 export function canonicalCodexForwardPoolHostKey(
-  route: Pick<RouteResult, "providerName" | "provider" | "codexAccountMode">,
+  route: Pick<RouteResult, "providerName" | "provider" | "codexAccountMode" | "codexAccountId">,
 ) {
   if (
     route.codexAccountMode !== "pool"
+    || route.codexAccountId !== undefined
     || route.provider.authMode !== "forward"
     || route.provider.adapter !== "openai-responses"
   ) return null;
@@ -1824,7 +1825,7 @@ async function handleResponsesInner(
     const hostKey = tracksCodexPoolHost
       ? canonicalCodexUpstreamHostKey(route.providerName, request.url)
       : null;
-    if ((pendingHostAdmissionLease?.key ?? null) !== hostKey) {
+    if (pendingHostAdmissionLease && pendingHostAdmissionLease.key !== hostKey) {
       releaseCodexAuthContextProbeLease(authCtx);
       throw new Error("Codex upstream host changed after admission");
     }
@@ -1886,6 +1887,19 @@ async function handleResponsesInner(
         releaseCodexUpstreamHostAdmissionLease(hostAdmissionLease);
         hostAdmissionLease = null;
         return clientCancelledResponse();
+      }
+      // Exact account namespaces deliberately preserve the historical ordering:
+      // fixed credential resolution happens before host admission, so a missing
+      // credential remains a 401 and never occupies the half-open host lease.
+      if (!hostAdmissionLease && hostKey) {
+        const hostAdmission = acquireCodexUpstreamHostAdmission(hostKey);
+        if (hostAdmission.kind === "blocked") {
+          releaseCodexAuthContextProbeLease(authCtx);
+          return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
+            retryAfter: String(hostAdmission.retryAfterSeconds),
+          });
+        }
+        hostAdmissionLease = hostAdmission.lease;
       }
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.

@@ -9,11 +9,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
-import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   clearThreadAccountMap,
   clearCodexUpstreamHealth,
+  codexQuotaScopeForModel,
   getEffectiveActiveCodexAccountId,
   getCodexUpstreamHealth,
   peekCodexThreadAffinityAccountId,
@@ -813,7 +814,14 @@ describe("compact alternate-account attempt (#913)", () => {
           clearThreadAccountMap();
           clearPoolRotationState(POOL_KEY_CODEX);
 
-          const expectedNextAccount = previewCodexAccountForRequest(threadId, config);
+          const quotaScope = codexQuotaScopeForModel("gpt-5.6-sol");
+          expect(quotaScope).toBe("shared");
+          const expectedNextAccount = previewCodexAccountForRequest(
+            threadId,
+            config,
+            Date.now(),
+            quotaScope,
+          );
           expect(expectedNextAccount).not.toBeNull();
           const effectiveActiveBefore = getEffectiveActiveCodexAccountId(config);
           const quotaBefore = new Map(["pool-a", "pool-b"].map(id => [id, structuredClone(getAccountQuota(id))]));
@@ -840,8 +848,9 @@ describe("compact alternate-account attempt (#913)", () => {
           expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
           expect(physicalAccounts).toEqual([]);
           expect(peekCodexThreadAffinityAccountId(threadId)).toBeNull();
+          expect(peekCodexThreadAffinityAccountId(threadId, quotaScope)).toBeNull();
           expect(getEffectiveActiveCodexAccountId(config)).toBe(effectiveActiveBefore);
-          expect(previewCodexAccountForRequest(threadId, config)).toBe(expectedNextAccount);
+          expect(previewCodexAccountForRequest(threadId, config, Date.now(), quotaScope)).toBe(expectedNextAccount);
           for (const [id, quota] of quotaBefore) expect(getAccountQuota(id)).toEqual(quota);
 
           clearCodexUpstreamHostHealth();
@@ -850,9 +859,67 @@ describe("compact alternate-account attempt (#913)", () => {
           expect(physicalAccounts).toEqual([
             expectedNextAccount === "pool-a" ? "pool_acc_a" : "pool_acc_b",
           ]);
+          expect(peekCodexThreadAffinityAccountId(threadId, quotaScope)).toBe(expectedNextAccount);
         });
       });
     }
+  }
+
+  for (const endpoint of ["regular", "compact"] as const) {
+    test(`${endpoint} fixed selector keeps missing-credential 401 ahead of an open host circuit`, async () => {
+      await withPoolEnv(`ocx-${endpoint}-fixed-auth-precedence-`, async config => {
+        const threadId = `${endpoint}-fixed-auth-precedence`;
+        const quotaScope = codexQuotaScopeForModel("gpt-5.6-sol");
+        expect(quotaScope).toBe("shared");
+        config.codexAccountNamespaces = { side: "pool-a" };
+        config.accountPoolStrategy = "round-robin";
+        config.accountPoolStickyLimit = 1;
+        config.activeCodexAccountId = "pool-b";
+        removeCodexAccountCredential("pool-a");
+        clearCodexUpstreamHealth();
+        clearThreadAccountMap();
+        clearPoolRotationState(POOL_KEY_CODEX);
+
+        const expectedNextAccount = previewCodexAccountForRequest(
+          threadId,
+          config,
+          Date.now(),
+          quotaScope,
+        );
+        const effectiveActiveBefore = getEffectiveActiveCodexAccountId(config);
+        openCanonicalHostCircuit();
+        const hostKey = canonicalCodexUpstreamHostKey(
+          "openai",
+          "https://chatgpt.com/backend-api/codex",
+        )!;
+        const hostHealthBefore = getCodexUpstreamHostHealth(hostKey);
+        let physicalSends = 0;
+        globalThis.fetch = (async () => {
+          physicalSends += 1;
+          return jsonResponse(completedPayload("must not send"));
+        }) as typeof fetch;
+
+        const request = compactionRequest(
+          endpoint === "regular"
+            ? { ...regularBody(), model: "side/gpt-5.6-sol" }
+            : baseCompactionBody({ model: "side/gpt-5.6-sol" }),
+          undefined,
+          { "x-codex-parent-thread-id": threadId },
+        );
+        const response = endpoint === "regular"
+          ? await handleResponses(request, config, { model: "", provider: "" })
+          : await handleResponsesCompact(request, config, { model: "", provider: "" });
+
+        expect(response.status).toBe(401);
+        expect(physicalSends).toBe(0);
+        expect(getCodexUpstreamHostHealth(hostKey)).toEqual(hostHealthBefore);
+        expect(peekCodexThreadAffinityAccountId(threadId)).toBeNull();
+        expect(peekCodexThreadAffinityAccountId(threadId, quotaScope)).toBeNull();
+        expect(getEffectiveActiveCodexAccountId(config)).toBe(effectiveActiveBefore);
+        expect(previewCodexAccountForRequest(threadId, config, Date.now(), quotaScope))
+          .toBe(expectedNextAccount);
+      });
+    });
   }
 
   type PreExecutorBoundaryState = {

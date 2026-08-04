@@ -325,16 +325,16 @@ export async function handleResponsesCompact(
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
-    const compactHostKey = canonicalCodexForwardPoolHostKey(route);
-    const compactHostAdmission = compactHostKey
-      ? acquireCodexUpstreamHostAdmission(compactHostKey)
+    const preAuthCompactHostKey = canonicalCodexForwardPoolHostKey(route);
+    const preAuthCompactHostAdmission = preAuthCompactHostKey
+      ? acquireCodexUpstreamHostAdmission(preAuthCompactHostKey)
       : null;
-    if (compactHostAdmission?.kind === "blocked") {
+    if (preAuthCompactHostAdmission?.kind === "blocked") {
       return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
-        retryAfter: String(compactHostAdmission.retryAfterSeconds),
+        retryAfter: String(preAuthCompactHostAdmission.retryAfterSeconds),
       });
     }
-    let compactHostAdmissionLease = compactHostAdmission?.lease ?? null;
+    let compactHostAdmissionLease = preAuthCompactHostAdmission?.lease ?? null;
     let compactProvider = route.provider;
     let authCtx: CodexAuthContext = { kind: "main", accountId: null };
     try {
@@ -387,10 +387,10 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
-    const eventualCompactHostKey = usesCodexForwardPoolAuth(authCtx, route.provider)
+    const compactHostKey = usesCodexForwardPoolAuth(authCtx, route.provider)
       ? canonicalCodexUpstreamHostKey(route.providerName, compactUrl)
       : null;
-    if ((compactHostAdmissionLease?.key ?? null) !== eventualCompactHostKey) {
+    if (compactHostAdmissionLease && compactHostAdmissionLease.key !== compactHostKey) {
       throw new Error("Codex compact upstream host changed after admission");
     }
     const settleObservedCompactHostResponse = (): void => {
@@ -515,6 +515,18 @@ export async function handleResponsesCompact(
     if (req.signal.aborted) {
       recordCompactPoolOutcome(authCtx, 499);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    }
+    // Fixed namespaces resolve their credential first, then retain the original
+    // post-auth host admission ordering immediately before the physical send.
+    if (!compactHostAdmissionLease && compactHostKey) {
+      const lateCompactHostAdmission = acquireCodexUpstreamHostAdmission(compactHostKey);
+      if (lateCompactHostAdmission.kind === "blocked") {
+        releaseCodexAuthContextProbeLease(authCtx);
+        return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
+          retryAfter: String(lateCompactHostAdmission.retryAfterSeconds),
+        });
+      }
+      compactHostAdmissionLease = lateCompactHostAdmission.lease;
     }
     const primaryAttempts: UpstreamAttemptObservation[] = [];
     const primaryAttemptBoundary = { executorStarted: false };
