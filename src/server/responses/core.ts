@@ -383,7 +383,9 @@ async function retryCodexPoolOnAlternateAccount(
   if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   const inboundWire = options.inboundWire ?? "responses";
   let retryAuthCtx: CodexAuthContext | undefined;
-  let firstOutcomeSettled = false;
+  let firstOutcomeHealthSettled = false;
+  let firstOutcomeHealthRecordAttempted = false;
+  let firstOutcomeDeferred = false;
   // A's response has already been observed when this helper starts, but B
   // resolution/preparation can still throw. Keep that accounting local so A
   // cannot remain eligible after a local alternate failure.
@@ -394,24 +396,48 @@ async function retryCodexPoolOnAlternateAccount(
     promoteAccountId?: string;
     suppressPromotion?: boolean;
   } = {}): Promise<void> => {
-    if (firstOutcomeSettled) return;
-    // Claim settlement before any await. A recorder failure must not allow a
-    // later cleanup path to record the same upstream response again.
-    firstOutcomeSettled = true;
+    if (firstOutcomeHealthSettled || firstOutcomeHealthRecordAttempted || firstOutcomeDeferred) return;
+    // Header-derived quota telemetry is valuable but not authoritative health
+    // settlement. It must not keep A eligible if a malformed/proxied response
+    // header or telemetry import fails.
+    let quotaMeta: ReturnType<typeof codexQuotaOutcomeMeta> = { retryAfter: null, resetAt: [] };
     try {
-      const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
-      if (outcomeStatus === 429 || outcomeStatus === 402) {
+      quotaMeta = codexQuotaOutcomeMeta(firstResponse);
+    } catch {
+      // Record A's observed outcome without optional quota-header detail.
+    }
+    if (outcomeStatus === 429 || outcomeStatus === 402) {
+      try {
         const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
         applyAccountQuotaFromUpstreamHeaders(
           firstAuthCtx.accountId,
           firstResponse.headers,
           firstAuthCtx.writerGeneration,
         );
+      } catch {
+        // This cache-refresh telemetry is best-effort; the health recorder below
+        // remains the authoritative disposition of A's observed response.
       }
-      if (shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
-        releaseCodexAuthContextProbeLease(firstAuthCtx);
-        return;
-      }
+    }
+    let deferResetDerivedCooldown = false;
+    try {
+      deferResetDerivedCooldown = shouldDeferCodexResetDerivedCooldown(
+        firstResponse,
+        options.deferCodexResetDerivedCooldown,
+      );
+    } catch {
+      // A header accessor failure must not bypass the account health record.
+    }
+    if (deferResetDerivedCooldown) {
+      firstOutcomeDeferred = true;
+      releaseCodexAuthContextProbeLease(firstAuthCtx);
+      return;
+    }
+    // This guard tracks the authoritative recorder attempt separately from a
+    // successful health write. A recorder exception is released, not retried by
+    // cleanup, so an error path cannot produce duplicate A records.
+    firstOutcomeHealthRecordAttempted = true;
+    try {
       recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
         ...quotaMeta,
         threadId: req.headers.get("x-codex-parent-thread-id"),
@@ -422,6 +448,7 @@ async function retryCodexPoolOnAlternateAccount(
         ...(promoteAccountId ? { promoteAccountId } : {}),
         ...(suppressPromotion ? { suppressPromotion: true } : {}),
       });
+      firstOutcomeHealthSettled = true;
     } catch (error) {
       releaseCodexAuthContextProbeLease(firstAuthCtx);
       throw error;
@@ -479,10 +506,6 @@ async function retryCodexPoolOnAlternateAccount(
         translatorBudget: options.translatorBudget,
       });
       recordAdapterReasoning(logCtx, request);
-
-      // Only a fully prepared B may be reused for A's round-robin promotion.
-      await settleFirstOutcome({ promoteAccountId: retryAuthCtx.accountId });
-      await firstResponse.body?.cancel().catch(() => undefined);
       options.onCodexAuthContextResolved?.(retryAuthCtx);
       route.provider = retryProvider;
       logCtx.provider = formatCodexProviderForLog(
@@ -491,6 +514,9 @@ async function retryCodexPoolOnAlternateAccount(
         config,
       );
       const fetcher = providerFetch(route.provider);
+      // Only a fully prepared B may be reused for A's round-robin promotion.
+      await settleFirstOutcome({ promoteAccountId: retryAuthCtx.accountId });
+      await firstResponse.body?.cancel().catch(() => undefined);
       return { fetcher, request, retryHeaders };
     } catch (error) {
       request?.releaseBodyObservation?.();

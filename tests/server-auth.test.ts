@@ -1899,7 +1899,7 @@ describe("server local API auth", () => {
       expect(response.headers.get("x-exact-response")).toBe("original");
       expect(await response.text()).toBe(body);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
-      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
       if (status !== 400) {
         const cooldown = await (await harness.request({ model: `side/${POOL_RETRY_MODEL}`, callerBearer: false })).text();
         expect(cooldown).toContain("selector (side)");
@@ -2574,8 +2574,8 @@ describe("server local API auth", () => {
     }
   });
 
-  test("alternate preparation failure releases A's recovery probe", async () => {
-    const ALTERNATE_PREPARATION_HEADER_READ = 5;
+  test("A quota-header telemetry failure still records its retryable outcome once", async () => {
+    const QUOTA_HEADER_READ_FAILURE = 5;
     const harness = await startPoolRetryHarness(() => new Response("unused"), {
       omitCredentialAccountIds: ["pool-b"],
     });
@@ -2606,7 +2606,7 @@ describe("server local API auth", () => {
         get(target, property) {
           if (property === "headers") {
             headerReads += 1;
-            if (headerReads === ALTERNATE_PREPARATION_HEADER_READ) throw new Error("synthetic alternate preparation failure");
+            if (headerReads === QUOTA_HEADER_READ_FAILURE) throw new Error("synthetic quota header telemetry failure");
           }
           const value = Reflect.get(target, property, target) as unknown;
           return typeof value === "function" ? value.bind(target) : value;
@@ -2621,13 +2621,16 @@ describe("server local API auth", () => {
         body: JSON.stringify({ model: POOL_RETRY_MODEL, input: "hello", stream: false }),
       });
       const logCtx: RequestLogContext = { model: POOL_RETRY_MODEL, provider: "openai" };
-      await expect(handleResponses(request, harness.config, logCtx)).rejects.toThrow(
-        "synthetic alternate preparation failure",
-      );
+      const response = await handleResponses(request, harness.config, logCtx);
+      expect(response.status).toBe(200);
       expect(sends).toBe(1);
-      expect(headerReads).toBe(ALTERNATE_PREPARATION_HEADER_READ);
+      expect(headerReads).toBeGreaterThanOrEqual(QUOTA_HEADER_READ_FAILURE);
       expect(observedProbeLeaseId).toEqual(expect.any(String));
-      expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toEqual(expect.any(Number));
+      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+        cooldownUntil: expect.any(Number),
+        cooldownGeneration: 2,
+        lastFailureStatus: 429,
+      });
       expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
     } finally {
       globalThis.fetch = redirectedFetch;
@@ -2704,13 +2707,47 @@ describe("server local API auth", () => {
       });
       expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
-      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
       expect(getCodexUpstreamHostHealth(canonicalCodexUpstreamHostKey(
         "openai",
         "https://chatgpt.com/backend-api/codex/responses",
       )!)).toBeNull();
     } finally {
       globalThis.fetch = redirectedFetch;
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("alternate hook failure settles A once without promoting an unready B", async () => {
+    const hookError = new Error("synthetic alternate auth hook failure");
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response("rate limited", { status: 429, headers: { "retry-after": "60" } })
+      : new Response("unexpected alternate dispatch"));
+    let hookCalls = 0;
+    try {
+      const request = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+        body: JSON.stringify({ model: POOL_RETRY_MODEL, input: "hello", stream: false }),
+      });
+      const logCtx: RequestLogContext = { model: POOL_RETRY_MODEL, provider: "openai" };
+      await expect(handleResponses(request, harness.config, logCtx, {
+        onCodexAuthContextResolved: ctx => {
+          hookCalls += 1;
+          if (ctx?.accountId === "pool-b") throw hookError;
+        },
+      })).rejects.toBe(hookError);
+      expect(hookCalls).toBe(2);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+        cooldownUntil: expect.any(Number),
+        cooldownGeneration: 1,
+        lastFailureStatus: 429,
+      });
+      expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+    } finally {
       await stopPoolRetryHarness(harness);
     }
   });
