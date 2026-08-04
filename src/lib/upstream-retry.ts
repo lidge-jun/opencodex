@@ -36,7 +36,7 @@ const TRANSIENT_RETRY_SLOW_ATTEMPT_MS = 15_000;
  * but is deliberately excluded (storage-class, not gateway-transient).
  */
 export function isTransientUpstreamStatus(status: number): boolean {
-  return status === 500 || status === 502 || status === 503 || status === 504
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
     || status === 520 || status === 521 || status === 522;
 }
 

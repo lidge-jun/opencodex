@@ -2269,7 +2269,7 @@ async function handleResponsesInner(
         stream: parsed.stream,
       });
     } else {
-      upstreamResponse = await fetchWithResetRetry(
+      upstreamResponse = await fetchWithTransientRetry(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
           return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
@@ -2513,7 +2513,7 @@ async function handleResponsesInner(
               stream: nextParsed.stream,
             });
           } else {
-            response = await fetchWithResetRetry(
+            response = await fetchWithTransientRetry(
               recovery => {
                 noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery);
                 return fetchWithHeaderTimeout(
