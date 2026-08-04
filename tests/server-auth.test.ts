@@ -2634,6 +2634,69 @@ describe("server local API auth", () => {
     }
   });
 
+  test("unexpected alternate resolver failure releases A's recovery probe and preserves the error", async () => {
+    const harness = await startPoolRetryHarness(() => new Response("unused"), {
+      omitCredentialAccountIds: ["pool-b"],
+    });
+    const redirectedFetch = globalThis.fetch;
+    const resolverError = new Error("synthetic unexpected alternate resolver failure");
+    const now = Date.now();
+    recordCodexUpstreamOutcome(harness.config, "pool-a", 429, {
+      now: now - CODEX_QUOTA_PROBE_INTERVAL_MS,
+      resetAt: Math.floor((now + 60 * 60_000) / 1000),
+    });
+    let sends = 0;
+    let selectionCalls = 0;
+    let observedProbeLeaseId: string | undefined;
+    const turnAdmissionLease = {
+      release() {},
+      beginCodexAccountSelection() {
+        selectionCalls += 1;
+        if (selectionCalls === 2) throw resolverError;
+        return {
+          mainProfileDraining: false,
+          claimMainProfile: () => false,
+          release() {},
+        };
+      },
+    };
+
+    globalThis.fetch = (async (input, init) => {
+      const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+      if (accountId !== "acct-pool-a") return redirectedFetch(input, init);
+      sends += 1;
+      observedProbeLeaseId = getCodexUpstreamHealth("pool-a")?.probeLeaseId;
+      saveCodexAccountCredential("pool-b", {
+        accessToken: "pool-b-token",
+        refreshToken: "pool-b-refresh",
+        expiresAt: Date.now() + 10 * 60_000,
+        chatgptAccountId: "acct-pool-b",
+      });
+      clearAccountNeedsReauth("pool-b");
+      return rejectionResponse(unsupportedModelBody());
+    }) as typeof fetch;
+
+    try {
+      const request = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+        body: JSON.stringify({ model: POOL_RETRY_MODEL, input: "hello", stream: false }),
+      });
+      const logCtx: RequestLogContext = { model: POOL_RETRY_MODEL, provider: "openai" };
+      await expect(handleResponses(request, harness.config, logCtx, { turnAdmissionLease })).rejects.toBe(
+        resolverError,
+      );
+      expect(sends).toBe(1);
+      expect(selectionCalls).toBe(2);
+      expect(observedProbeLeaseId).toEqual(expect.any(String));
+      expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toEqual(expect.any(Number));
+      expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
+    } finally {
+      globalThis.fetch = redirectedFetch;
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
   test("retry-dispatch transport failure is host-only and never triple-dispatches", async () => {
     const harness = await startPoolRetryHarness(() => rejectionResponse(unsupportedModelBody()));
     const affinityThread = "retry-dispatch-host-only-affinity";

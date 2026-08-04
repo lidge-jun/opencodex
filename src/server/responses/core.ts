@@ -382,7 +382,10 @@ async function retryCodexPoolOnAlternateAccount(
       && !(error instanceof CodexAuthContextError)
       && !(error instanceof CodexAccountCooldownError)
       && !(error instanceof CodexMainProfileDrainingError)
-    ) throw error;
+    ) {
+      releaseCodexAuthContextProbeLease(firstAuthCtx);
+      throw error;
+    }
   }
   if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
     return { kind: "no-alternate" };
