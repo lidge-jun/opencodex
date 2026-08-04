@@ -10,6 +10,7 @@ import { clearCodexWebSocketRegistry, getTrackedCodexWebSocketCountForAccount } 
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { clearAccountNeedsReauth, clearAccountQuota, getAccountQuota, isAccountNeedsReauth, markAccountNeedsReauth, updateAccountQuota } from "../src/codex/auth-api";
 import {
+  CODEX_QUOTA_PROBE_INTERVAL_MS,
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
@@ -2658,6 +2659,74 @@ describe("server local API auth", () => {
       await stopPoolRetryHarness(harness);
     }
   }, { timeout: 30_000 });
+
+  for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
+    test(`${path} releases a pool probe after a pre-response transport failure with no host key`, async () => {
+      const harness = await startPoolRetryHarness(() => new Response("unused"), { secondAccount: false });
+      const upstreamUrl = `https://chatgpt.com/backend-api/codex${path.slice(3)}`;
+      const redirectedFetch = globalThis.fetch;
+      const NativeURL = globalThis.URL;
+      const observedPoolAuth: Array<{ authorization: string | null; accountId: string | null }> = [];
+      const observedProbeLeaseIds: Array<string | undefined> = [];
+      let forcedNullHostKey = false;
+
+      class NullHostKeyURL extends NativeURL {
+        constructor(input: string | URL, base?: string | URL) {
+          const value = typeof input === "string" ? input : input.toString();
+          if (!forcedNullHostKey && base === undefined && value === upstreamUrl) {
+            forcedNullHostKey = true;
+            throw new TypeError("synthetic null canonical host key");
+          }
+          super(input, base);
+        }
+      }
+
+      globalThis.URL = NullHostKeyURL as typeof URL;
+      globalThis.fetch = (async (input, init) => {
+        const requestUrl = typeof input === "string"
+          ? input
+          : input instanceof NativeURL
+            ? input.toString()
+            : input.url;
+        if (requestUrl === upstreamUrl) {
+          const headers = new Headers(init?.headers);
+          observedPoolAuth.push({
+            authorization: headers.get("authorization"),
+            accountId: headers.get("chatgpt-account-id"),
+          });
+          observedProbeLeaseIds.push(getCodexUpstreamHealth("pool-a")?.probeLeaseId);
+          throw new Error("synthetic null-host transport failure");
+        }
+        return redirectedFetch(input, init);
+      }) as typeof fetch;
+
+      const now = Date.now();
+      recordCodexUpstreamOutcome(harness.config, "pool-a", 429, {
+        now: now - CODEX_QUOTA_PROBE_INTERVAL_MS,
+        resetAt: Math.floor((now + 60 * 60_000) / 1000),
+      });
+
+      try {
+        const response = await harness.request({ path });
+
+        expect(response.status).toBe(502);
+        expect(forcedNullHostKey).toBe(true);
+        expect(observedPoolAuth.length).toBeGreaterThan(0);
+        expect(observedPoolAuth).toEqual(observedPoolAuth.map(() => ({
+          authorization: "Bearer pool-a-token",
+          accountId: "acct-pool-a",
+        })));
+        expect(observedProbeLeaseIds.length).toBeGreaterThan(0);
+        expect(observedProbeLeaseIds.every(Boolean)).toBe(true);
+        expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toEqual(expect.any(Number));
+        expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
+      } finally {
+        globalThis.URL = NativeURL;
+        globalThis.fetch = redirectedFetch;
+        await stopPoolRetryHarness(harness);
+      }
+    });
+  }
 
   test("passthrough connect failure leaves selected pool account health clear", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });

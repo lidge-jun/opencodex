@@ -141,6 +141,9 @@ async function startCredentialDependentReadThenCloseServer(): Promise<{
   const successfulBRequests: string[] = [];
   const server = createServer(socket => {
     trackedSockets.add(socket);
+    socket.on("error", () => {
+      // Expected when this fixture deliberately severs a credential-bearing request.
+    });
     let bytes = Buffer.alloc(0);
     socket.on("data", chunk => {
       bytes = Buffer.concat([bytes, chunk]);

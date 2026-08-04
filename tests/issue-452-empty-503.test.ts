@@ -7,6 +7,7 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth
 import {
   canonicalCodexUpstreamHostKey,
   clearCodexUpstreamHostHealth,
+  CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD,
   getCodexUpstreamHostHealth,
 } from "../src/codex/upstream-host-health";
 import { saveConfig } from "../src/config";
@@ -194,11 +195,11 @@ async function withPoolPassthrough(
 function installCodexTransport(
   send: (init: RequestInit | undefined) => Response | Promise<Response>,
 ): void {
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const value = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(value);
     if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
-      return Promise.resolve(send(init));
+      return send(init);
     }
     return originalGlobalFetch(input, init);
   }) as typeof fetch;
@@ -265,12 +266,12 @@ describe("regular Codex provider-host settlement (#914)", () => {
         sends += 1;
         throw new Error("opaque transport rejection");
       });
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
         expect((await sendRegularPoolRequest(serverUrl)).status).toBe(502);
       }
       const blocked = await sendRegularPoolRequest(serverUrl);
       expect(blocked.status).toBe(502);
-      expect(sends).toBe(3);
+      expect(sends).toBe(CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD);
       expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
     });
   });

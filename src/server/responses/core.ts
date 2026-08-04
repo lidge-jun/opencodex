@@ -1811,7 +1811,7 @@ async function handleResponsesInner(
       }
       if (observedStatus !== undefined) {
         recordPoolTransportOutcome(observedStatus);
-      } else if (hostAdmissionLease) {
+      } else {
         releaseCodexAuthContextProbeLease(authCtx);
       }
       if (hostAdmissionLease) {

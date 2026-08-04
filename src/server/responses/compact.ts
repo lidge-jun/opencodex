@@ -475,7 +475,7 @@ export async function handleResponsesCompact(
       }
       if (observedStatus !== undefined) {
         recordCompactPoolOutcome(ctx, observedStatus);
-      } else if (compactHostAdmissionLease) {
+      } else {
         releaseCodexAuthContextProbeLease(ctx);
       }
       if (compactHostAdmissionLease) {

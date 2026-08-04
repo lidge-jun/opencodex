@@ -9,6 +9,7 @@ import {
   clearCodexUpstreamHostHealth,
   getCodexUpstreamHostCooldownUntil,
   getCodexUpstreamHostHealth,
+  isCodexUpstreamRedirectStatus,
   recordCodexUpstreamHostFailure,
   recordCodexUpstreamHostResponse,
   releaseCodexUpstreamHostAdmissionLease,
@@ -42,6 +43,24 @@ describe("Codex upstream host health (#914)", () => {
     expect(canonical).not.toBe(canonicalCodexUpstreamHostKey("other", "https://chatgpt.com/other"));
     expect(canonical).not.toBe(canonicalCodexUpstreamHostKey("openai", "http://chatgpt.com/other"));
     expect(canonicalCodexUpstreamHostKey("openai", "ftp://chatgpt.com/file")).toBeNull();
+  });
+
+  test("normalizes trailing dots, IPv6 brackets, and the implicit HTTP port", () => {
+    expect(canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com./path"))
+      .toBe(canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com/other"));
+    expect(canonicalCodexUpstreamHostKey(" OpenAI ", "https://[2001:DB8::1]/path"))
+      .toBe("openai\u0000https://[2001:db8::1]:443");
+    expect(canonicalCodexUpstreamHostKey("openai", "http://chatgpt.com/path"))
+      .toBe(canonicalCodexUpstreamHostKey("openai", "http://chatgpt.com:80/other"));
+  });
+
+  test("identifies only supported upstream redirect statuses", () => {
+    for (const status of [300, 301, 302, 303, 307, 308]) {
+      expect(isCodexUpstreamRedirectStatus(status)).toBe(true);
+    }
+    for (const status of [299, 304, 305, 306, 309]) {
+      expect(isCodexUpstreamRedirectStatus(status)).toBe(false);
+    }
   });
 
   test("opens only at its threshold and a half-open HTTP response clears it", () => {
@@ -120,6 +139,23 @@ describe("Codex upstream host health (#914)", () => {
     expect(releaseCodexUpstreamHostAdmissionLease(next, probeAt)).toBe(true);
   });
 
+  test("an observed response preserves a concurrent lease and its later failure", () => {
+    const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
+    const now = 2_750;
+    const observedResponse = admit(key, now);
+    const concurrentFailure = admit(key, now);
+
+    const reset = recordCodexUpstreamHostFailure(observedResponse, now, {
+      observedResponse: true,
+    })!;
+    expect(reset.consecutiveFailures).toBe(1);
+    expect(reset.cooldownUntil).toBeUndefined();
+
+    const afterConcurrentFailure = recordCodexUpstreamHostFailure(concurrentFailure, now + 1);
+    expect(afterConcurrentFailure?.consecutiveFailures).toBe(2);
+    expect(afterConcurrentFailure?.cooldownUntil).toBeUndefined();
+  });
+
   test("caller abort releases a half-open admission without adding evidence", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
     const trippedAt = 3_000;
@@ -182,6 +218,35 @@ describe("Codex upstream host health (#914)", () => {
       retryAfterSeconds: 1,
     });
     expect(recordCodexUpstreamHostResponse(halfOpen, probeAt)).toBe(true);
+  });
+
+  test("capacity pressure evicts a non-cooldown entry before an active cooldown", () => {
+    const cooldownKey = canonicalCodexUpstreamHostKey("openai", "https://cooldown.example")!;
+    const trippedAt = 6_000;
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
+    for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
+      tripped = fail(cooldownKey, trippedAt + attempt);
+    }
+    const cooldownUntil = tripped!.cooldownUntil!;
+    const oldestOrdinaryKey = canonicalCodexUpstreamHostKey(
+      "ordinary-0",
+      "https://ordinary-0.example",
+    )!;
+    for (let index = 0; index < CODEX_UPSTREAM_HOST_MAX_ENTRIES - 1; index++) {
+      const key = canonicalCodexUpstreamHostKey(
+        `ordinary-${index}`,
+        `https://ordinary-${index}.example`,
+      )!;
+      fail(key, trippedAt + 100 + index);
+    }
+
+    const newcomerKey = canonicalCodexUpstreamHostKey("newcomer", "https://newcomer.example")!;
+    const pressureAt = trippedAt + 100 + CODEX_UPSTREAM_HOST_MAX_ENTRIES;
+    fail(newcomerKey, pressureAt);
+
+    expect(getCodexUpstreamHostCooldownUntil(cooldownKey, pressureAt)).toBe(cooldownUntil);
+    expect(getCodexUpstreamHostHealth(oldestOrdinaryKey, pressureAt)).toBeNull();
+    expect(getCodexUpstreamHostHealth(newcomerKey, pressureAt)).not.toBeNull();
   });
 
   test("bounds the process-local map and evicts the oldest non-leased entry", () => {

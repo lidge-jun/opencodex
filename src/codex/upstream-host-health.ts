@@ -87,23 +87,32 @@ function removeExpiredNonLeasedEntries(now: number): void {
   }
 }
 
-function oldestNonLeasedKey(): CodexUpstreamHostKey | undefined {
-  let oldestKey: CodexUpstreamHostKey | undefined;
-  let oldestAt = Number.POSITIVE_INFINITY;
+function oldestNonLeasedKey(now: number): CodexUpstreamHostKey | undefined {
+  let oldestPreferredKey: CodexUpstreamHostKey | undefined;
+  let oldestPreferredAt = Number.POSITIVE_INFINITY;
+  let oldestCooldownKey: CodexUpstreamHostKey | undefined;
+  let oldestCooldownAt = Number.POSITIVE_INFINITY;
   for (const [key, health] of upstreamHostHealth) {
     if (health.activeLeaseIds.size > 0) continue;
-    if (health.lastTouchedAt < oldestAt) {
-      oldestKey = key;
-      oldestAt = health.lastTouchedAt;
+    if (health.cooldownUntil !== undefined && health.cooldownUntil > now) {
+      if (health.lastTouchedAt < oldestCooldownAt) {
+        oldestCooldownKey = key;
+        oldestCooldownAt = health.lastTouchedAt;
+      }
+      continue;
+    }
+    if (health.lastTouchedAt < oldestPreferredAt) {
+      oldestPreferredKey = key;
+      oldestPreferredAt = health.lastTouchedAt;
     }
   }
-  return oldestKey;
+  return oldestPreferredKey ?? oldestCooldownKey;
 }
 
 function makeRoom(now: number): void {
   removeExpiredNonLeasedEntries(now);
   while (upstreamHostHealth.size >= CODEX_UPSTREAM_HOST_MAX_ENTRIES) {
-    const oldestKey = oldestNonLeasedKey();
+    const oldestKey = oldestNonLeasedKey(now);
     if (!oldestKey) return; // Every entry is leased: preserve correctness with temporary overflow.
     upstreamHostHealth.delete(oldestKey);
   }
@@ -112,7 +121,7 @@ function makeRoom(now: number): void {
 function pruneOverflow(now: number): void {
   removeExpiredNonLeasedEntries(now);
   while (upstreamHostHealth.size > CODEX_UPSTREAM_HOST_MAX_ENTRIES) {
-    const oldestKey = oldestNonLeasedKey();
+    const oldestKey = oldestNonLeasedKey(now);
     if (!oldestKey) return;
     upstreamHostHealth.delete(oldestKey);
   }
@@ -243,18 +252,12 @@ export function recordCodexUpstreamHostFailure(
   if (current.halfOpenLeaseId === lease.leaseId) delete current.halfOpenLeaseId;
 
   if (options.observedResponse) {
-    upstreamHostHealth.delete(lease.key);
-    makeRoom(now);
-    const afterResponse: CodexUpstreamHostHealth = {
-      consecutiveFailures: 1,
-      lastFailureAt: now,
-      lastTouchedAt: now,
-      generation: nextGeneration(),
-      activeLeaseIds: new Set(),
-    };
-    upstreamHostHealth.set(lease.key, afterResponse);
+    current.consecutiveFailures = 1;
+    current.lastFailureAt = now;
+    current.lastTouchedAt = now;
+    delete current.cooldownUntil;
     pruneOverflow(now);
-    return snapshot(afterResponse);
+    return snapshot(current);
   }
 
   const reopensCircuit = lease.halfOpen || current.cooldownUntil !== undefined;
