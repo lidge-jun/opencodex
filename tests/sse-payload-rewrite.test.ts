@@ -103,6 +103,24 @@ describe("SSE payload rewrite composition", () => {
     expect(rewrite(payload)).toBe(payload);
   });
 
+  test("GitHub Copilot obfuscation rewrite neutralizes encrypted reasoning items", () => {
+    const rewrite = createGithubCopilotObfuscationRewrite();
+    const added = '{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"cipher-id","content":[],"encrypted_content":"ciphertext"}}';
+    const done = '{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"cipher-id","content":[],"encrypted_content":"ciphertext"}}';
+    const completed = '{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"reasoning","id":"cipher-id","content":[],"encrypted_content":"ciphertext"},{"type":"function_call","id":"fc_1","name":"shell","arguments":"{}"}]}}';
+
+    for (const payload of [added, done, completed]) {
+      const out = JSON.parse(rewrite(payload)!) as { response?: { output?: unknown[] }; item?: Record<string, unknown> };
+      const items = out.response?.output ?? (out.item ? [out.item] : []);
+      for (const item of items as Record<string, unknown>[]) {
+        if (item.type === "reasoning") {
+          expect(item.encrypted_content).toBeUndefined();
+          expect(item.summary).toEqual([{ type: "summary_text", text: "" }]);
+        }
+      }
+    }
+  });
+
   test("applies image-gen restore and item-id repair in one relay pass", async () => {
     const upstream = [
       'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_0","role":"assistant"}}\n\n',

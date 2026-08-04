@@ -13,6 +13,22 @@ function isPayloadRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/**
+ * GitHub Copilot encrypts reasoning summaries (and re-encrypts them per event) with its own
+ * scheme, which Responses clients cannot decrypt; the app then stays stuck on "thinking".
+ * Replace the ciphertext with a canonical empty plaintext summary so the item completes
+ * immediately and the turn moves on to the actual output.
+ */
+function sanitizeGithubCopilotReasoningItem(item: Record<string, unknown>): boolean {
+  if (item.type !== "reasoning" || typeof item.encrypted_content !== "string") return false;
+  delete item.encrypted_content;
+  const summary = Array.isArray(item.summary) ? item.summary : [];
+  summary.push({ type: "summary_text", text: "" });
+  item.summary = summary;
+  if (!Array.isArray(item.content)) item.content = [];
+  return true;
+}
+
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
   const match = buffer.match(/\r?\n\r?\n/);
@@ -88,10 +104,13 @@ export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
       return payload;
     }
     if (!isPayloadRecord(parsed)) return payload;
-    const hadObfuscation = typeof parsed.obfuscation === "string";
-    if (hadObfuscation) delete parsed.obfuscation;
+    let changed = false;
+    if (typeof parsed.obfuscation === "string") {
+      delete parsed.obfuscation;
+      changed = true;
+    }
     const type = parsed.type;
-    if (type === "response.function_call_arguments.delta" && hadObfuscation) {
+    if (type === "response.function_call_arguments.delta" && changed) {
       if (typeof parsed.output_index === "number") obfuscatedCalls.add(parsed.output_index);
       // Ciphertext chunk: emit an empty delta so the client sees a valid event
       // without any unusable bytes; the plaintext arrives with `.done`.
@@ -112,7 +131,23 @@ export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
         return `${JSON.stringify(deltaEvent)}\n\ndata: ${JSON.stringify(parsed)}`;
       }
     }
-    return hadObfuscation ? JSON.stringify(parsed) : payload;
+    if (
+      (type === "response.output_item.added" || type === "response.output_item.done")
+      && isPayloadRecord(parsed.item)
+      && sanitizeGithubCopilotReasoningItem(parsed.item)
+    ) {
+      changed = true;
+    }
+    if (
+      type === "response.completed"
+      && isPayloadRecord(parsed.response)
+      && Array.isArray(parsed.response.output)
+    ) {
+      for (const item of parsed.response.output) {
+        if (isPayloadRecord(item) && sanitizeGithubCopilotReasoningItem(item)) changed = true;
+      }
+    }
+    return changed ? JSON.stringify(parsed) : payload;
   };
 }
 
