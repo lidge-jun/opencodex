@@ -124,22 +124,22 @@ other; closing one is a maintainer decision and neither is stale.
 
 ### RI-03 - feat/ri-03-routing-analytics
 
-- Base SHA: `2a72aa4a9b0870c629adf842da659a5c521c6bfa` (`dev` after #1004 merge;
-  rebased off RI-02 head `7efb6e842` / `2069e724e`)
-- Reviewed commit: same as final (author self-review before push)
+- Base SHA: `2a72aa4a9b0870c629adf842da659a5c521c6bfa` (`dev` after #1004 squash-merge)
+- Reviewed commit: `e732d02e` (pre–CodeRabbit review round)
 - Findings (self-review): 3 fixed pre-push - (1) `requestHistoryDb` accessor
   missing from the indexer (analytics needs the handle after open);
   (2) SQL column names are snake_case - analytics SELECT now aliases to
   camelCase; (3) cost field is `estimate.cost.total` (CostBreakdown), not
   `costUsd`; plus the row-cap is injectable for truncation tests.
-- Final commit: `e732d02e` (post-review fixes on cooldown parsing, API row cap, tests)
+- Final commit: `5f464c730` (CodeRabbit: cooldown parse gate, API `limit` default 5k, devlog + tests)
 - PR: #1005 (OPEN) https://github.com/lidge-jun/opencodex/pull/1005
 - Verification:
   - `bun x tsc --noEmit`: PASSED (0 errors)
-  - `bun run test tests/routing-analytics.test.ts`: 8/8 pass (32 assertions):
+  - `bun run test tests/routing-analytics.test.ts`: 10/10 pass:
     classification (success/failure/cancel/incomplete), percentiles +
     coverage, fallback rate, provider/model/account + profile breakdown,
-    unknown-price honesty, filters, truncation flag, API payload
+    unknown-price honesty, filters, truncation flag, API payload,
+    cooldown on failure+attempts, API validation (`invalid_from`/`invalid_to`/`invalid_range`)
   - Focused regression suites: 144/144 pass across 6 files
   - `bun run privacy:scan`: passed
 - Remaining Low findings: none
