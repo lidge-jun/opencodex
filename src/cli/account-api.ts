@@ -46,6 +46,8 @@ export interface AccountDeps {
   loadConfigImpl?: () => OcxConfig;
   stdinImpl?: AccountStdin;
   stdinTimeoutMs?: number;
+  /** Test injection for synchronous stdout writes (login start URL). */
+  stdoutImpl?: (chunk: string) => void;
   /** Test/platform injection for the official Codex login in a restricted staging home. */
   spawnCodexLoginImpl?: (codexHome: string) => NativeMainLoginChild;
   /** Legacy test seam. Production always uses the spawned child handle above. */

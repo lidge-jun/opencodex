@@ -20,6 +20,11 @@ export interface RuntimeApiDeps {
   /** Test injection for commands that read a secret from stdin instead of argv. */
   stdinImpl?: CliStdin;
   stdinTimeoutMs?: number;
+  /**
+   * Test injection for output that must reach the user before a long-running
+   * command holds the process open (for example, the login start URL).
+   */
+  stdoutImpl?: (chunk: string) => void;
 }
 
 export class CliUsageError extends Error {

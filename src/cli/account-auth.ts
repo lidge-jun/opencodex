@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import {
   CliUsageError,
   printData,
@@ -31,6 +32,30 @@ interface LoginStart {
   flowId?: string;
   instructions?: string;
   deviceCode?: string;
+}
+
+/** Synchronous fallback for `stdoutImpl`; reaches a pipe immediately. */
+function writeSyncStdout(chunk: string): void {
+  writeSync(1, chunk);
+}
+
+/**
+ * Announce the login start before the polling loop holds the process open.
+ *
+ * `console.log` to a non-TTY stdout can stay buffered for minutes on some
+ * platforms, so `ocx account login` piped or redirected to a file appeared to
+ * hang instead of showing the authorization URL (issue #1007). Writing fd 1
+ * synchronously delivers the URL to the user before the first poll.
+ */
+function printLoginStart(start: LoginStart, deps: RuntimeApiDeps): void {
+  const lines: string[] = [];
+  if (start.url) lines.push(`Open this URL to sign in:\n${start.url}`);
+  if (start.instructions) lines.push(start.instructions);
+  if (start.flowId) lines.push(`Flow: ${start.flowId}`);
+  if (start.deviceCode) lines.push(`Device code: ${start.deviceCode}`);
+  if (lines.length === 0) return;
+  const write = deps.stdoutImpl ?? writeSyncStdout;
+  write(`${lines.join("\n")}\n`);
 }
 
 /** `-` means "read it from stdin", the documented way to pass a code silently. */
@@ -81,11 +106,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       method: "POST",
       body: JSON.stringify({ ...(id ? { id } : {}), ...(reauth ? { reauth: true } : {}) }),
     }, deps);
-    if (!wantsJson) {
-      if (start.url) console.log(`Open this URL to sign in:\n${start.url}`);
-      if (start.instructions) console.log(start.instructions);
-      if (start.flowId) console.log(`Flow: ${start.flowId}`);
-    }
+    if (!wantsJson) printLoginStart(start, deps);
     if (code && start.flowId) {
       await runtimeRequest("/api/codex-auth/login/code", {
         method: "POST",
@@ -119,11 +140,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     method: "POST",
     body: JSON.stringify({ provider, addAccount: !reauth, ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
   }, deps);
-  if (!wantsJson) {
-    if (start.url) console.log(`Open this URL to sign in:\n${start.url}`);
-    if (start.instructions) console.log(start.instructions);
-    if (start.deviceCode) console.log(`Device code: ${start.deviceCode}`);
-  }
+  if (!wantsJson) printLoginStart(start, deps);
   if (code) {
     await runtimeRequest("/api/oauth/login/code", {
       method: "POST",

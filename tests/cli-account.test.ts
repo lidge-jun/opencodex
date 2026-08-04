@@ -44,6 +44,7 @@ let codexAccounts: Array<Record<string, unknown>> = [];
 let oauthAccounts: Array<Record<string, unknown>> = [];
 let oauthActiveId: string | null = "acct_1";
 let oauthLoginStatus: Record<string, unknown> = { loggedIn: false };
+let codexLoginStatus: Record<string, unknown> = { status: "pending" };
 let keyEntries: Array<Record<string, unknown>> = [];
 let keyActiveId: string | null = "key_1";
 let logs: string[] = [];
@@ -290,6 +291,10 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json(oauthLoginStatus);
   }
 
+  if (req.method === "GET" && url.pathname === "/api/codex-auth/login-status") {
+    return json(codexLoginStatus);
+  }
+
   return json({ error: `unhandled mock endpoint: ${req.method} ${url.pathname}` }, 404);
 }
 
@@ -354,6 +359,7 @@ beforeEach(() => {
   ];
   oauthActiveId = "acct_1";
   oauthLoginStatus = { loggedIn: false };
+  codexLoginStatus = { status: "pending" };
   keyEntries = [{
     id: "key_1",
     label: "personal",
@@ -1279,6 +1285,58 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(requests.some(request => request.path === "/api/oauth/login/code")).toBe(false);
     });
 
+  });
+
+  describe("login announces the start URL before polling (issue #1007)", () => {
+    test("OAuth login writes the URL synchronously even when stdout is not a TTY", async () => {
+      oauthLoginStatus = { loggedIn: false };
+      const chunks: string[] = [];
+      let seenBeforeFirstPoll = false;
+      let polls = 0;
+      const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {
+        polls += 1;
+        if (polls === 1) seenBeforeFirstPoll = chunks.join("").includes("https://auth.example/authorize");
+      });
+      try {
+        const result = await run(
+          ["login", "anthropic"],
+          { ...defaultDeps(), stdoutImpl: (chunk: string) => chunks.push(chunk) },
+        );
+
+        expect(result.code).toBe(2);
+        expect(result.stderr).toContain("login timed out");
+        expect(seenBeforeFirstPoll).toBe(true);
+        expect(chunks.join("")).toContain("Open this URL to sign in:\nhttps://auth.example/authorize");
+        expect(chunks.join("")).toContain("Sign in, then paste the redirect URL.");
+      } finally {
+        sleepSpy.mockRestore();
+      }
+    });
+
+    test("Codex login writes the URL and flow id before the first poll", async () => {
+      codexLoginStatus = { status: "done", email: "j***@example.com" };
+      const chunks: string[] = [];
+      let seenBeforeFirstPoll = false;
+      let polls = 0;
+      const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {
+        polls += 1;
+        if (polls === 1) seenBeforeFirstPoll = chunks.join("").includes("https://auth.example/authorize");
+      });
+      try {
+        const result = await run(
+          ["login", "openai"],
+          { ...defaultDeps(), stdoutImpl: (chunk: string) => chunks.push(chunk) },
+        );
+
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain("Logged in as j***@example.com.");
+        expect(seenBeforeFirstPoll).toBe(true);
+        expect(chunks.join("")).toContain("Open this URL to sign in:\nhttps://auth.example/authorize");
+        expect(chunks.join("")).toContain("Flow: flow-mock");
+      } finally {
+        sleepSpy.mockRestore();
+      }
+    });
   });
 
   test("39: a login error wins over a retained OAuth credential", async () => {
