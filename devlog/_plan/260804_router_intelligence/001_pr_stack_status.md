@@ -39,8 +39,8 @@ other; closing one is a maintainer decision and neither is stale.
 
 | RI | Branch | Base | Head SHA | PR | URL | Status |
 |---|---|---|---|---|---|---|
-| RI-01 | `feat/ri-01-route-decision-traces` | `e44d234f0` | pending | pending | pending | in progress |
-| RI-02 | `feat/ri-02-request-history-index` | `feat/ri-01` head | pending | pending | pending | queued |
+| RI-01 | `feat/ri-01-route-decision-traces` | `e44d234f0` | `b5a8e7c4c` | #1003 | https://github.com/lidge-jun/opencodex/pull/1003 | MERGED |
+| RI-02 | `feat/ri-02-request-history-index` | `dev` (post-#1003 merge) | `03b0eafa7` | #1004 | https://github.com/lidge-jun/opencodex/pull/1004 | OPEN |
 | RI-03 | `feat/ri-03-routing-analytics` | `feat/ri-02` head | pending | pending | pending | queued |
 | RI-04 | `feat/ri-04-policy-profile-core` | `feat/ri-03` head | pending | pending | pending | queued |
 | RI-05 | `feat/ri-05-capability-aware-routing` | `feat/ri-04` head | pending | pending | pending | queued |
@@ -90,4 +90,34 @@ other; closing one is a maintainer decision and neither is stale.
 
 ### RI-02..RI-10
 
-Appended as each PR is implemented.
+### RI-02 - feat/ri-02-request-history-index
+
+- Base SHA: `34d21b1bc` (`dev` after #1003 merge; rebased from RI-01 head
+  `b5a8e7c4c` when #1003 landed: `7efb6e842` -> `03b0eafa7`)
+- Reviewed commit: same as final (author self-review before push)
+- Findings (self-review): 4 defects caught pre-push -
+  1. `destroyAndRecreate` never reassigned the fresh handle to module `db`
+     (first-open rebuild crashed);
+  2. bun:sqlite named-parameter objects silently failed to bind for
+     `LIMIT $x` and INSERT statements (datatype mismatch / silent no-op) -
+     query and insert paths switched to positional parameters;
+  3. Windows file locking: an unfinalized prepared statement kept the DB
+     locked after close (EBUSY in tests) - insert statement now finalizes;
+     a partially-opened handle on a corrupt file is closed before recreate;
+  4. duplicate-replay accounting counted ignored rows in `indexedRows` -
+     now counts real `INSERT` changes.
+- Fixes: all four above; tests cover every one.
+- PR: #1004 (OPEN) https://github.com/lidge-jun/opencodex/pull/1004
+- Final commit: recorded after review round (rebase + CodeRabbit/simplify
+  fixes; new head pushes to #1004)
+- Verification:
+  - `bun x tsc --noEmit`: PASSED (0 errors)
+  - `bun run test tests/request-history-index.test.ts`: 16/16 pass
+    (1574 assertions) covering the mandatory matrix: empty/missing/corrupt/
+    old-schema/partial-line/replacement/truncation/duplicate-replay/cursor
+    stability/invalid-cursor/page-bounds/rebuild-equivalence/filters/row-by-id
+  - Focused regression suites: 269/269 pass across 8 files (incl. RI-01
+    tests, request-log, usage-log, combos, combo-management-api,
+    codex-routing, codex-account-namespaces)
+  - `bun run privacy:scan`: passed
+- Remaining Low findings: none

@@ -288,6 +288,7 @@ describe("route decision traces (RI-01)", () => {
     expect(serialized).not.toContain("apiKey");
     expect(serialized).not.toContain("baseUrl");
     expect(serialized).not.toContain("https://a.example/v1");
+    expect(serialized).not.toContain("prompt");
   });
 
   test("trace round-trips through usage.jsonl and request-log hydration", () => {
