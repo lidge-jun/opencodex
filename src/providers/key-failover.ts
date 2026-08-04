@@ -28,7 +28,7 @@ function cooldownKey(providerName: string, keyId: string): string {
   return `${providerName}\0${keyId}`;
 }
 
-function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
+export function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
   const text = value?.trim();
   if (!text) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(text)) {

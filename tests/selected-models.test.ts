@@ -47,3 +47,17 @@ describe("filterCatalogVisibleModels — per-provider allowlist", () => {
     expect(out.map(x => x.id).sort()).toEqual(["model-1999", "model-7"]);
   });
 });
+
+describe("getFeaturedModels — favorites priority over subagentModels", () => {
+  const { getFeaturedModels } = require("../src/codex/catalog");
+
+  test("uses subagentModels when favorites is empty or missing", () => {
+    expect(getFeaturedModels({ subagentModels: ["m1", "m2"] })).toEqual(["m1", "m2"]);
+    expect(getFeaturedModels({ favorites: [], subagentModels: ["m1"] })).toEqual(["m1"]);
+  });
+
+  test("prioritizes favorites and appends non-duplicate subagentModels", () => {
+    expect(getFeaturedModels({ favorites: ["fav-1", "fav-2"], subagentModels: ["sub-1", "fav-1", "sub-2"] }))
+      .toEqual(["fav-1", "fav-2", "sub-1", "sub-2"]);
+  });
+});

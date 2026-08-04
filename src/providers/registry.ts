@@ -612,6 +612,31 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   { id: "openrouter", label: "OpenRouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", authKind: "key", featured: true, dashboardUrl: "https://openrouter.ai/keys", jawcodeBundle: "openrouter", models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS], modelContextWindows: { "anthropic/claude-sonnet-5": 1_000_000, ...OPENROUTER_GPT56_CONTEXT_WINDOWS } },
   {
+    // AgentRouter: OpenAI-compatible gateway (agentrouter.org). Official Codex docs
+    // (https://agentrouter.org/docs/codex.html) seed gpt-5.5 / gpt-5.6 / glm-5.2; portal
+    // also lists glm-5.1 / kimi-k2.6 / Claude. Live /v1/models stays enabled when the key
+    // works; the static seed keeps the GUI Models tab populated when discovery 401s.
+    id: "agentrouter",
+    label: "AgentRouter",
+    adapter: "openai-chat",
+    baseUrl: "https://agentrouter.org/v1",
+    authKind: "key",
+    featured: true,
+    dashboardUrl: "https://agentrouter.org/console/token",
+    defaultModel: "gpt-5.5",
+    models: [
+      "gpt-5.5",
+      "gpt-5.6",
+      "glm-5.2",
+      "glm-5.1",
+      "kimi-k2.6",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+    ],
+    liveModels: true,
+    note: "OpenAI-compatible AgentRouter gateway. Paste API key from https://agentrouter.org/console/token. Base URL https://agentrouter.org/v1.",
+  },
+  {
     // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
     // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
     // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also

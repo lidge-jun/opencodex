@@ -1363,25 +1363,38 @@ export async function handleResponses(
         continue recovery;
       }
 
-      // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
-      // SAME request once per remaining key. OAuth/forward providers and single-key pools
-      // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
-      while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
-        const rotated = rotateProviderTransportOn429(config, route.providerName, {
-          retryAfter: upstreamResponse.headers.get("retry-after"),
-          now: Date.now(),
-          attemptedKey: route.provider.apiKey,
-          promptCacheKey: parsed.options.promptCacheKey,
-        });
-        if (!rotated) break;
-        // Release the failed response's socket before retrying; unread bodies otherwise linger
-        // until runtime cleanup (one per rotated key under a rate-limit storm).
+      // 429 rate-limit recovery: multi-key pool rotation when available, followed by
+      // up to 3 transient backoff retries (respecting Retry-After) for single keys/resellers.
+      let transient429Attempts = 0;
+      while (upstreamResponse.status === 429 && !options.abortSignal?.aborted) {
+        if (hasKeyPoolFailover(route.provider)) {
+          const rotated = rotateProviderTransportOn429(config, route.providerName, {
+            retryAfter: upstreamResponse.headers.get("retry-after"),
+            now: Date.now(),
+            attemptedKey: route.provider.apiKey,
+            promptCacheKey: parsed.options.promptCacheKey,
+          });
+          if (rotated) {
+            try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+            route.provider = rotated;
+            activeAdapter = resolveAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
+              config.cacheRetention,
+            );
+            const result = await rebuildAndRefetch("key-429");
+            if ("failed" in result) return result.failed;
+            upstreamResponse = result;
+            continue;
+          }
+        }
+        if (transient429Attempts >= 3) break;
+        transient429Attempts++;
+        const retryAfterHeader = upstreamResponse.headers.get("retry-after");
+        const delayMs = parseRetryAfterMs(retryAfterHeader) ?? Math.min(1000 * Math.pow(2, transient429Attempts - 1), 4000);
+        console.warn(`[opencodex] ${route.providerName}: 429 rate limited; waiting ${delayMs}ms before retry attempt ${transient429Attempts}/3...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        if (options.abortSignal?.aborted) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        route.provider = rotated;
-        activeAdapter = resolveAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider),
-          config.cacheRetention,
-        );
         const result = await rebuildAndRefetch("key-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;

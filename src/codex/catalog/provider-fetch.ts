@@ -381,7 +381,7 @@ export async function fetchProviderModels(name: string, prov: OcxProviderConfig,
   } catch (error) {
     const { models, fallback } = failedDiscoveryFallback();
     console.warn(
-      `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? error.name : "unknown"} [urlClass=${urlClass}, fallback=${fallback}].`,
+      `[opencodex] Provider model discovery for "${name}" threw ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)} [urlClass=${urlClass}, fallback=${fallback}].`,
     );
     return models;
   }

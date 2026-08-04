@@ -64,7 +64,8 @@
     "typescript": "5.9.3"
   },
   "overrides": {
-    "fast-uri": "^3.1.4"
+    "fast-uri": "^3.1.4",
+    "@hono/node-server": "^2.0.5"
   },
   "keywords": [
     "codex",

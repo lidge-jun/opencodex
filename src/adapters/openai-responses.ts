@@ -96,6 +96,27 @@ function stripInvalidItemIds(body: unknown): unknown {
 }
 
 /**
+ * The OpenAI Responses API rejects input items whose `name` field is an empty string
+ * (e.g. `Invalid 'input[N].name': empty string`). This can happen with older Codex SDK
+ * clients or adapters that set `name: ""` on `function_call` / `function_call_output`
+ * items. Removing the field (rather than patching it) is the safe fix — the API only
+ * requires `name` to have minimum length 1 when the field is present.
+ */
+function stripEmptyNameFromInputItems(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || !("name" in item) || item.name !== "") return item;
+    changed = true;
+    const { name: _name, ...rest } = item;
+    return rest;
+  });
+
+  return changed ? { ...body, input } : body;
+}
+
+/**
  * When `store` is false, the upstream API does not persist response items. Any item ID
  * forwarded in `input` is then interpreted as a reference to a stored item that does not
  * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
@@ -523,7 +544,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         method: "POST",
         headers,
         body: JSON.stringify(stripDisabledReasoningSummaries(
-          stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))),
+          stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripEmptyNameFromInputItems(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody)))))))),
           provider,
           parsed.modelId,
         )),

@@ -432,6 +432,7 @@ export interface OcxConfig {
    * Codex's spawn_agent only advertises the first 5 routed models, so this picks which 5 appear.
    */
   subagentModels?: string[];
+  favorites?: string[];
   injectionModel?: string;
   /**
    * Optional reasoning effort the delegation prompt tells the agent to pass in spawn_agent calls

@@ -4,6 +4,8 @@ import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import Combos from "./pages/Combos";
 import Subagents from "./pages/Subagents";
+import Orchestrator from "./pages/Orchestrator";
+import Favorites from "./pages/Favorites";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
@@ -19,10 +21,10 @@ import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "startup" | "providers" | "models" | "combos" | "subagents" | "logs" | "usage" | "storage" | "codex-auth" | "api" | "claude";
+type Page = "dashboard" | "startup" | "providers" | "models" | "combos" | "subagents" | "orchestrator" | "favorites" | "logs" | "usage" | "storage" | "codex-auth" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
 
-const VALID_PAGES = new Set<Page>(["dashboard", "startup", "providers", "models", "combos", "subagents", "logs", "usage", "storage", "codex-auth", "api", "claude"]);
+const VALID_PAGES = new Set<Page>(["dashboard", "startup", "providers", "models", "combos", "subagents", "orchestrator", "favorites", "logs", "usage", "storage", "codex-auth", "api", "claude"]);
 
 const PAGE_TKEY: Record<Page, TKey> = {
   dashboard: "nav.dashboard",
@@ -31,6 +33,10 @@ const PAGE_TKEY: Record<Page, TKey> = {
   models: "nav.models",
   combos: "nav.combos",
   subagents: "nav.subagents",
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  orchestrator: "nav.orchestrator" as any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  favorites: "nav.favorites" as any,
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -83,6 +89,10 @@ const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  { id: "favorites", tkey: "Favoritos" as any, Icon: IconSparkle },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  { id: "orchestrator", tkey: "Orchestrator" as any, Icon: IconSparkle },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
@@ -360,6 +370,8 @@ export default function App() {
             {page === "models" && <Models apiBase={API_BASE} />}
             {page === "combos" && <Combos apiBase={API_BASE} />}
             {page === "subagents" && <Subagents apiBase={API_BASE} />}
+            {page === "favorites" && <Favorites apiBase={API_BASE} />}
+            {page === "orchestrator" && <Orchestrator apiBase={API_BASE} />}
             {page === "logs" && <Logs apiBase={API_BASE} />}
             {page === "usage" && <Usage apiBase={API_BASE} />}
             {page === "storage" && <Storage apiBase={API_BASE} />}

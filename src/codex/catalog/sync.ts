@@ -66,6 +66,15 @@ export interface EffectiveSubagentRoster {
   excluded: SubagentRosterExclusion[];
 }
 
+export function getFeaturedModels(config: { favorites?: string[]; subagentModels?: string[] }): string[] {
+  const favorites = config.favorites ?? [];
+  const subagentModels = config.subagentModels ?? [];
+  if (favorites.length === 0) return subagentModels;
+  const set = new Set(favorites);
+  const remainder = subagentModels.filter(m => !set.has(m));
+  return [...favorites, ...remainder];
+}
+
 export function configuredCatalogEntry(entries: RawEntry[], configured: string): RawEntry | undefined {
   return entries.find(entry => entry.slug === configured)
     ?? entries.find(entry => typeof entry.slug === "string" && slugsEquivalent(configured, entry.slug));
@@ -225,6 +234,14 @@ export function deriveEntry(
   });
 }
 
+export function featuredRankOf(slug: string, featured?: readonly string[]): number | undefined {
+  if (!featured || featured.length === 0) return undefined;
+  for (let i = 0; i < featured.length; i++) {
+    if (slugsEquivalent(slug, featured[i])) return i;
+  }
+  return undefined;
+}
+
 export function buildCatalogEntries(
   template: RawEntry | null,
   gptSlugs: string[],
@@ -238,15 +255,17 @@ export function buildCatalogEntries(
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
   // ARRAY order is discarded — so "featuring" a model = giving it the LOWEST priority (0..N-1) so
   // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
-  const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));
   const out: RawEntry[] = [];
   const collisionSkipped = resolveSlugAliasCollisions(goModels);
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
+  const featuredLen = featured ? featured.length : 0;
   for (const slug of gptSlugs) {
-    const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
-    if (rank.has(slug)) e.priority = rank.get(slug)!;
+    const defaultPriority = featuredLen > 0 ? featuredLen + 100 + 9 : 9;
+    const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", defaultPriority);
+    const hit = featuredRankOf(slug, featured);
+    if (hit !== undefined) e.priority = hit;
     out.push(e);
   }
   for (const m of goModels) {
@@ -258,16 +277,19 @@ export function buildCatalogEntries(
     }
     // Provider rows use the one-slash slug codec; combo aliases intentionally override that
     // public slug and may be bare.
+    const defaultPriority = featuredLen > 0 ? featuredLen + 100 + 5 : 5;
     const e = deriveEntry(
       template,
       slug,
       `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`,
-      5,
+      defaultPriority,
       m,
       exactComboSlugs,
     );
     // Featured picks may be stored raw (legacy) or encoded — honor both.
-    const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
+    const rankHit = featuredRankOf(slug, featured)
+      ?? featuredRankOf(`${m.provider}/${m.id}`, featured)
+      ?? (m.alias ? featuredRankOf(m.alias, featured) : undefined);
     if (rankHit !== undefined) e.priority = rankHit;
     out.push(e);
   }
@@ -283,6 +305,11 @@ export function buildCatalogEntries(
       delete entry.prefer_websockets;
     }
   }
+  out.sort((a, b) => {
+    const pA = typeof a.priority === "number" ? a.priority : Number.MAX_SAFE_INTEGER;
+    const pB = typeof b.priority === "number" ? b.priority : Number.MAX_SAFE_INTEGER;
+    return pA - pB;
+  });
   return applyMultiAgentMode(out, multiAgentMode);
 }
 
@@ -447,6 +474,11 @@ export function mergeCatalogEntriesForSync(
     }
     return e;
   });
+  mergedEntries.sort((a, b) => {
+    const pA = typeof a.priority === "number" ? a.priority : Number.MAX_SAFE_INTEGER;
+    const pB = typeof b.priority === "number" ? b.priority : Number.MAX_SAFE_INTEGER;
+    return pA - pB;
+  });
   // Native enable/disable (single choke point: bare slugs in `disabledModels`). Runs as the
   // LAST pass so the upstream-upgrade branch above can never clobber a hide flag back to list.
   return applyMultiAgentMode(applyNativeVisibility(mergedEntries, disabledNative), multiAgentMode);
@@ -469,7 +501,7 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   // Hide disabled models from Codex, then feature the chosen subagent models (native OR routed)
   // by giving them the lowest priority — see buildCatalogEntries for why priority, not array order.
   const enabledGo = filterCatalogVisibleModels(goModels, config);
-  const featured = config.subagentModels ?? [];
+  const featured = getFeaturedModels(config);
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);

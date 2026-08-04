@@ -258,10 +258,11 @@ export function startServer(port?: number) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
         const goModels = await fetchAllModels(config);
-        const { applyNativeVisibility, buildCatalogEntries, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, nativeOpenAiSlugs, orderForSubagents, filterCatalogVisibleModels, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } = await import("../codex/catalog");
+        const { applyNativeVisibility, buildCatalogEntries, disabledNativeSlugs, exactComboCatalogSlugs, featuredRankOf, getFeaturedModels, loadCatalogTemplate, nativeOpenAiSlugs, orderForSubagents, filterCatalogVisibleModels, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } = await import("../codex/catalog");
         const nativeSlugs = nativeOpenAiSlugs();
         const goEnabled = filterCatalogVisibleModels(goModels, config);
-        const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
+        const featured = getFeaturedModels(config);
+        const goOrdered = orderForSubagents(goEnabled, featured);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
         // Anthropic-style headers; 003 G1-G8 + devlog 131). Entries use the official
         // ModelInfo shape incl. capabilities (effort ladder / thinking) — Desktop 3P can
@@ -301,7 +302,7 @@ export function startServer(port?: number) {
           // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
           // on-disk sync; codex-rs keeps them out of the picker itself).
           const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config));
+          const entries = buildCatalogEntries(loadCatalogTemplate(), nativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config));
           return jsonResponse({ models: applyNativeVisibility(entries, disabledNativeSlugs(config)) }, 200, req, config);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
@@ -310,6 +311,11 @@ export function startServer(port?: number) {
           ...visibleNativeSlugs(config).map(id => ({ id, object: "model", created: 0, owned_by: "openai" })),
           ...uniqueCatalogModelsForRawPublicList(goOrdered).map(m => ({ id: m.alias ?? `${m.provider}/${m.id}`, object: "model", created: 0, owned_by: m.owned_by ?? m.provider })),
         ];
+        data.sort((a, b) => {
+          const rA = featuredRankOf(a.id, featured) ?? Number.MAX_SAFE_INTEGER;
+          const rB = featuredRankOf(b.id, featured) ?? Number.MAX_SAFE_INTEGER;
+          return rA - rB;
+        });
         return jsonResponse({ object: "list", data }, 200, req, config);
       }
 

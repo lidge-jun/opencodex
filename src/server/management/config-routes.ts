@@ -298,5 +298,134 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const sci = config.shadowCallIntercept;
     return jsonResponse({ ok: true, enabled: sci.enabled === true, model: sci.model ?? "" });
   }
+
+  if (url.pathname === "/api/orchestration" && req.method === "GET") {
+    const { homedir } = await import("node:os");
+    const { join } = await import("node:path");
+    const codexConfigPath = join(homedir(), ".codex", "config.toml");
+    let tomlText = "";
+    try {
+      tomlText = readFileSync(codexConfigPath, "utf-8");
+    } catch {}
+
+    let planner = "root";
+    let executor = "github-copilot/gpt-4.1-mini";
+    let judge = "anthropic/claude-opus-5";
+
+    const plannerMatch = tomlText.match(/\[agents\.codex-orchestration-planner\][\s\S]*?model\s*=\s*"([^"]+)"/);
+    const executorMatch = tomlText.match(/\[agents\.codex-orchestration-executor\][\s\S]*?model\s*=\s*"([^"]+)"/);
+    const judgeMatch = tomlText.match(/\[agents\.codex-orchestration-judge\][\s\S]*?model\s*=\s*"([^"]+)"/);
+
+    if (plannerMatch) planner = plannerMatch[1]!;
+    if (executorMatch) executor = executorMatch[1]!;
+    if (judgeMatch) judge = judgeMatch[1]!;
+
+    return jsonResponse({ planner, executor, judge });
+  }
+
+  if (url.pathname === "/api/orchestration" && req.method === "PUT") {
+    let raw: any;
+    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const { planner, executor, judge } = raw;
+
+    const os = await import("node:os");
+    const fs = await import("node:fs");
+    const pathLib = await import("node:path");
+    const homeDir = os.homedir().replace(/\\/g, "/");
+    const pluginsDir = `${homeDir}/.codex/plugins/cache/codex-orchestration/codex-orchestration`;
+    let scriptPath = "";
+    try {
+      const versions = fs.readdirSync(pluginsDir);
+      if (versions.length > 0) {
+        const latestVersion = versions[0];
+        scriptPath = pathLib.join(pluginsDir, latestVersion, "skills/codex-orchestration/scripts/configure_orchestration.py");
+      }
+    } catch {}
+    if (!scriptPath) {
+      scriptPath = `${homeDir}/.codex/plugins/cache/codex-orchestration/codex-orchestration/0.9.3/skills/codex-orchestration/scripts/configure_orchestration.py`;
+    }
+
+    const candidates = ["python", "py", "python3"];
+    if (process.platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? pathLib.join(process.env.USERPROFILE, "AppData", "Local") : null);
+      if (localAppData) {
+        candidates.push(pathLib.join(localAppData, "Python", "bin", "python.exe"));
+        const programsPythonDir = pathLib.join(localAppData, "Programs", "Python");
+        try {
+          if (fs.existsSync(programsPythonDir)) {
+            const pyDirs = fs.readdirSync(programsPythonDir);
+            for (const dir of pyDirs) {
+              candidates.push(pathLib.join(programsPythonDir, dir, "python.exe"));
+            }
+          }
+        } catch {}
+      }
+    }
+
+    let lastError: any = new Error("No python executable found");
+    let spawned = false;
+    let stdout = "";
+    let stderr = "";
+    let exitCode = 0;
+
+    for (const pythonCmd of candidates) {
+      const args = [pythonCmd, scriptPath];
+      args.push("--executor-model", executor || "github-copilot/gpt-4.1-mini");
+      args.push("--executor-effort", "low");
+      if (judge && judge !== "none") {
+        args.push("--advisor-model", judge);
+        args.push("--advisor-effort", "high");
+      } else {
+        args.push("--remove-advisor");
+      }
+      args.push("--confirm-unlisted-models");
+      args.push("--apply");
+
+      try {
+        const proc = (globalThis as any).Bun.spawn(args, {
+          cwd: process.cwd()
+        });
+        stdout = await new Response(proc.stdout).text();
+        stderr = await new Response(proc.stderr).text();
+        exitCode = await proc.exited;
+        spawned = true;
+        break;
+      } catch (e: any) {
+        lastError = e;
+        if (e.code === "ENOENT" || e.message?.includes("ENOENT")) {
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (!spawned) {
+      return jsonResponse({ error: `Failed to execute python: ${lastError.message}` }, 500);
+    }
+    if (exitCode !== 0) {
+      return jsonResponse({ error: `Script exit ${exitCode}: ${stderr || stdout}` }, 500);
+    }
+    return jsonResponse({ ok: true, output: stdout });
+  }
+
+  if (url.pathname === "/api/favorites" && req.method === "GET") {
+    return jsonResponse({
+      models: config.favorites ?? []
+    });
+  }
+
+  if (url.pathname === "/api/favorites" && req.method === "PUT") {
+    let raw: any;
+    try { raw = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const { models } = raw;
+    if (!Array.isArray(models)) {
+      return jsonResponse({ error: "models must be an array of strings" }, 400);
+    }
+    config.favorites = models;
+    saveConfig(config);
+    await refreshCodexCatalogBestEffort();
+    return jsonResponse({ ok: true, models: config.favorites });
+  }
+
   return null;
 }
