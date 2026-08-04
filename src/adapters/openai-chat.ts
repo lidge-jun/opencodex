@@ -818,6 +818,26 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       if (provider.promptCacheKey && parsed.options.promptCacheKey !== undefined) {
         body.prompt_cache_key = parsed.options.promptCacheKey;
       }
+      // Responses `text.format` -> chat `response_format`. json_object maps 1:1; json_schema
+      // re-nests the flattened Responses fields under `json_schema` — the exact inverse of
+      // responseFormatToText in src/chat/inbound.ts. Forwarded unconditionally (like `stop`):
+      // response_format is a first-class Chat Completions field, it is only present when the
+      // caller explicitly asked for structured output, and a backend that rejects it should
+      // fail loud rather than silently return prose the caller will try to JSON.parse.
+      const textFormat = parsed.options.textFormat;
+      if (textFormat?.type === "json_object") {
+        body.response_format = { type: "json_object" };
+      } else if (textFormat?.type === "json_schema" && textFormat.schema !== undefined) {
+        body.response_format = {
+          type: "json_schema",
+          json_schema: {
+            name: textFormat.name ?? "response",
+            ...(textFormat.description !== undefined ? { description: textFormat.description } : {}),
+            schema: textFormat.schema,
+            ...(textFormat.strict !== undefined ? { strict: textFormat.strict } : {}),
+          },
+        };
+      }
 
       if (tools) {
         // Default-ON for chat-completions providers (user decision 260709): the buffered
