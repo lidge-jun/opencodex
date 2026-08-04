@@ -149,6 +149,27 @@ export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
 
 /**
+ * Rejection thrown by {@link fetchWithTransientRetry} when the final attempt
+ * rejects after earlier attempts already returned transient 5xx responses.
+ *
+ * A transient 5xx proves the host and credential path were reached, so the
+ * failure must stay account-attributed even though the terminal promise looks
+ * like a transport rejection (issue #914 review: mixed 5xx -> rejection must
+ * not be downgraded to the account-neutral pre-connection class). The original
+ * rejection is preserved as `cause` so its code and message stay inspectable.
+ */
+export class TransientRetryEvidenceError extends Error {
+  constructor(
+    public readonly transientStatuses: readonly number[],
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`upstream fetch failed after transient 5xx response(s): ${detail}`, { cause });
+    this.name = "TransientRetryEvidenceError";
+  }
+}
+
+/**
  * Opt out of Bun's keep-alive pool after a connection-reset retry.
  *
  * Prefer the Bun fetch extension `keepalive: false` (transport-level) over
@@ -216,6 +237,7 @@ export async function fetchWithTransientRetry(
 ): Promise<Response> {
   const attempts = Math.max(1, opts.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS);
   const slowAttemptMs = opts.slowAttemptMs ?? TRANSIENT_RETRY_SLOW_ATTEMPT_MS;
+  const transientStatuses: number[] = [];
   let attemptStart = Date.now();
   let res = await fetchWithResetRetry(doFetch, opts);
   for (let attempt = 0; attempt < attempts - 1; attempt++) {
@@ -233,7 +255,14 @@ export async function fetchWithTransientRetry(
     cancelResponseBodyBestEffort(res);
     await sleepWithAbort(delay, opts.abortSignal);
     attemptStart = Date.now();
-    res = await fetchWithResetRetry(doFetch, opts, "transient-5xx");
+    transientStatuses.push(res.status);
+    try {
+      res = await fetchWithResetRetry(doFetch, opts, "transient-5xx");
+    } catch (err) {
+      // Keep the prior 5xx evidence attached: the origin already responded, so
+      // this rejection is not pre-connection and must not classify as neutral.
+      throw new TransientRetryEvidenceError(transientStatuses, err);
+    }
   }
   return res;
 }

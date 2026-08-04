@@ -98,6 +98,8 @@ export async function describeImage(
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
+        // #914: never follow a redirect into a dead-host rejection after the credential was seen.
+        redirect: "manual",
       }),
       { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );

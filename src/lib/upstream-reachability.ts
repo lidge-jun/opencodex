@@ -21,6 +21,8 @@
  * MUST stay a leaf module: imports nothing from server.ts or adapters.
  */
 
+import { TransientRetryEvidenceError } from "./upstream-retry";
+
 export const PRE_CONNECT_REACHABILITY_CODES = new Set([
   // Bun: DNS failure and TCP refusal share this class.
   "ConnectionRefused",
@@ -64,8 +66,16 @@ export type TransportFailureKind = "timeout" | "connect_neutral" | "connect_erro
  * account-attributed behavior.
  */
 export function classifyTransportFailureKind(err: unknown): TransportFailureKind {
-  if (err instanceof Error && err.name === "TimeoutError") return "timeout";
-  if (isPreConnectReachabilityError(err)) return "connect_neutral";
+  const evidence = err instanceof TransientRetryEvidenceError ? err : undefined;
+  const rejection = evidence ? evidence.cause : err;
+  if (rejection instanceof Error && rejection.name === "TimeoutError") return "timeout";
+  if (isPreConnectReachabilityError(rejection)) {
+    // A transient upstream response (5xx) before the rejection proves the host
+    // and credential path were reached: the failure is account-attributable,
+    // never the pre-connection neutral class (issue #914 review).
+    if (evidence && evidence.transientStatuses.length > 0) return "connect_error";
+    return "connect_neutral";
+  }
   return "connect_error";
 }
 

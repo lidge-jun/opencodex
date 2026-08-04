@@ -283,4 +283,90 @@ describe("issue #914: pre-connection reachability failures are account-neutral",
       await server.stop(true);
     }
   });
+
+  test("mixed transient 5xx then rejection stays account-attributed (#914 review)", async () => {
+    const config = makePoolConfig();
+    saveConfig(config);
+    let upstreamCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = input instanceof Request
+        ? input.url
+        : input instanceof URL
+          ? input.toString()
+          : String(input);
+      const url = new URL(requestUrl);
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+        upstreamCalls += 1;
+        if (upstreamCalls === 1) {
+          return new Response("Service Unavailable", { status: 503, headers: { "content-type": "text/plain" } });
+        }
+        throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+          code: "ConnectionRefused",
+          errno: 0,
+        });
+      }
+      return ORIGINAL_FETCH(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const res = await responsesRequest(server.url.toString(), "thread-mixed-503");
+      expect(res.status).toBe(502);
+
+      // The upstream already answered 503 before the final rejection, so the
+      // failure is account evidence — the pre-connection ledger must NOT swallow it.
+      expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 0 });
+      expect(isCodexAccountSoftAvoided("a")).toBe(false);
+      expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("pool sends relay 3xx instead of following a redirect into a dead host (#914 review)", async () => {
+    const config = makePoolConfig();
+    saveConfig(config);
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = input instanceof Request
+        ? input.url
+        : input instanceof URL
+          ? input.toString()
+          : String(input);
+      const url = new URL(requestUrl);
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+        if (init?.redirect !== "manual") {
+          // What default-follow fetch would do: chase the 307 into a dead host and
+          // reject with a pre-connection shape AFTER the credential was seen.
+          throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+            code: "ConnectionRefused",
+            errno: 0,
+          });
+        }
+        return new Response(JSON.stringify({ location: "https://dead.invalid/x" }), {
+          status: 307,
+          headers: { "content-type": "application/json", location: "https://dead.invalid/x" },
+        });
+      }
+      return ORIGINAL_FETCH(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      // The relayed 307 carries a Location header, so the test client must not
+      // follow it (default-follow would chase it into the dead host).
+      const res = await ORIGINAL_FETCH(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-codex-parent-thread-id": "thread-redirect" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello", stream: false }),
+        redirect: "manual",
+      });
+      expect(res.status).toBe(307);
+
+      // 3xx is the neutral class: no account evidence, no host evidence.
+      expect(getCodexUpstreamHealth("a")).toBeNull();
+      expect(isCodexAccountSoftAvoided("a")).toBe(false);
+      expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+      expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
 });

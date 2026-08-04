@@ -124,7 +124,7 @@ export async function resolveFirstUsableOpenAiSidecar(
         ...candidate,
         authContext,
         headers: headersForCodexAuthContext(incomingHeaders, authContext),
-        recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(
+        recordOutcome: (outcome: CodexUpstreamOutcome, meta: SidecarOutcomeMeta = {}) => recordCodexUpstreamOutcome(
           config,
           authContext.accountId,
           outcome,
@@ -134,6 +134,11 @@ export async function resolveFirstUsableOpenAiSidecar(
             probeLeaseId: authContext.probeLeaseId,
             probeQuotaScope: authContext.probeQuotaScope,
             writerGeneration: authContext.writerGeneration,
+            // Exact-account sends must feed the (provider, host) ledger exactly
+            // like pool sends do, or fixed-account DNS/TCP failures undercount
+            // hostConnectHealth (Codex review P2).
+            ...(meta.host ? { hostKey: hostConnectHealthKey(candidate.providerName, meta.host) } : {}),
+            ...(meta.lastFailureCode ? { lastFailureCode: meta.lastFailureCode } : {}),
           },
         ),
       };

@@ -561,6 +561,8 @@ export async function handleLive(
       headers,
       body: outboundBody,
       signal: linkedSignal.signal,
+      // #914: never follow a redirect into a dead-host rejection after the credential was seen.
+      redirect: "manual",
     });
     // Record every completed upstream response before body size handling so account health /
     // cooldown still updates when we reject an oversized payload.

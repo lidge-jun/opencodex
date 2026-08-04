@@ -454,6 +454,8 @@ export async function handleImages(
       headers,
       body: JSON.stringify(body),
       signal: linkedSignal.signal,
+      // #914: never follow a redirect into a dead-host rejection after the credential was seen.
+      redirect: "manual",
     });
     // Buffer rather than stream: the payload is one JSON document (base64 image, typically a few
     // MB), and buffering keeps the timeout window covering the whole exchange. Cap the size to

@@ -13,6 +13,8 @@ import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   getCodexUpstreamHealth,
+  getHostConnectHealth,
+  hostConnectHealthKey,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import { loadConfig, saveConfig } from "../src/config";
@@ -349,6 +351,46 @@ test("an exact search account needing reauthentication fails closed with an acti
   } finally {
     await server.stop(true);
     await upstream.stop(true);
+  }
+});
+
+test("an exact-account DNS/TCP failure feeds the (provider, host) ledger (#914 review P2)", async () => {
+  const config = exactSearchConfig();
+  saveConfig(config);
+  saveExactSearchCredentials();
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+        code: "ConnectionRefused",
+        errno: 0,
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "search-session", model: "side/gpt-test" }),
+    });
+    expect(response.status).toBe(502);
+
+    // The fixed account keeps no streak, and the active Pool account is untouched.
+    expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+    expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    // But the (provider, host) ledger must see the failure exactly like pool sends.
+    const hostKey = hostConnectHealthKey("openai", "chatgpt.com");
+    expect(getHostConnectHealth(hostKey)).toMatchObject({
+      consecutiveFailures: 1,
+      lastFailureCode: "ConnectionRefused",
+    });
+  } finally {
+    await server.stop(true);
   }
 });
 

@@ -6,6 +6,7 @@ import {
   transportErrorCode,
   transportFailureHost,
 } from "../src/lib/upstream-reachability";
+import { TransientRetryEvidenceError } from "../src/lib/upstream-retry";
 
 function errorWithCode(code: string | undefined, message: string, cause?: unknown): Error {
   const err = new Error(message) as Error & { code?: string; cause?: unknown };
@@ -95,6 +96,39 @@ describe("classifyTransportFailureKind", () => {
     expect(classifyTransportFailureKind(new Error("getaddrinfo ENOTFOUND"))).toBe("connect_error");
     expect(classifyTransportFailureKind("string rejection")).toBe("connect_error");
     expect(classifyTransportFailureKind(undefined)).toBe("connect_error");
+  });
+
+  test("a rejection after a transient 5xx stays account-attributed, never neutral", () => {
+    // Mixed 5xx -> rejection: the upstream already answered 503 before the final
+    // attempt rejected, so the host and credential path were reached. The
+    // evidence wrapper must keep the failure out of the pre-connect class.
+    const wrapped = new TransientRetryEvidenceError(
+      [503],
+      errorWithCode("ConnectionRefused", "Unable to connect. Is the computer able to access the url?"),
+    );
+    expect(classifyTransportFailureKind(wrapped)).toBe("connect_error");
+  });
+
+  test("a timeout after a transient 5xx keeps the timeout identity", () => {
+    const rejection = Object.assign(new Error("Timeout elapsed"), { name: "TimeoutError" });
+    const wrapped = new TransientRetryEvidenceError([503], rejection);
+    expect(classifyTransportFailureKind(wrapped)).toBe("timeout");
+  });
+
+  test("an evidence wrapper without prior statuses classifies by its cause", () => {
+    const wrapped = new TransientRetryEvidenceError(
+      [],
+      errorWithCode("ConnectionRefused", "Unable to connect. Is the computer able to access the url?"),
+    );
+    expect(classifyTransportFailureKind(wrapped)).toBe("connect_neutral");
+  });
+
+  test("the evidence wrapper preserves the final rejection and its statuses", () => {
+    const rejection = errorWithCode("ConnectionRefused", "Unable to connect");
+    const wrapped = new TransientRetryEvidenceError([503, 502], rejection);
+    expect(wrapped.cause).toBe(rejection);
+    expect(wrapped.transientStatuses).toEqual([503, 502]);
+    expect(transportErrorCode(wrapped)).toBeUndefined();
   });
 });
 

@@ -88,6 +88,8 @@ export async function runWebSearch(
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
+        // #914: never follow a redirect into a dead-host rejection after the credential was seen.
+        redirect: "manual",
       }),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
     );

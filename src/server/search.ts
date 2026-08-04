@@ -154,6 +154,8 @@ export async function handleSearch(
       headers,
       body: JSON.stringify(relayBody),
       signal: linkedSignal.signal,
+      // #914: never follow a redirect into a dead-host rejection after the credential was seen.
+      redirect: "manual",
     });
     const payload = await upstreamResponse.arrayBuffer();
     if (payload.byteLength > SEARCH_RESPONSE_MAX_BYTES) {
