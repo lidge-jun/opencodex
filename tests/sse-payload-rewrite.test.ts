@@ -121,6 +121,28 @@ describe("SSE payload rewrite composition", () => {
     }
   });
 
+  test("GitHub Copilot obfuscation rewrite pins response and item ids to first-seen values", () => {
+    const rewrite = createGithubCopilotObfuscationRewrite();
+    const created = '{"type":"response.created","response":{"id":"resp-A","status":"in_progress"}}';
+    const addedReasoning = '{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs-stream","content":[],"encrypted_content":"ciphertext"}}';
+    const addedCall = '{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc-stream","call_id":"call_1","name":"shell","arguments":""}}';
+    const doneCall = '{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc-done","call_id":"call_1","name":"shell","arguments":"{\\"command\\":\\"ls\\"}"}}';
+    const completed = '{"type":"response.completed","response":{"id":"resp-B","status":"completed","output":[{"type":"reasoning","id":"rs-final","content":[],"encrypted_content":"ciphertext"},{"type":"function_call","id":"fc-final","call_id":"call_1","name":"shell","arguments":"{\\"command\\":\\"ls\\"}"}]}}';
+
+    const createdOut = JSON.parse(rewrite(created)!) as { response: { id: string } };
+    rewrite(addedReasoning);
+    rewrite(addedCall);
+    const doneOut = JSON.parse(rewrite(doneCall)!) as { item: { id: string } };
+    const completedOut = JSON.parse(rewrite(completed)!) as { response: { id: string; output: { id: string; encrypted_content?: string }[] } };
+
+    expect(createdOut.response.id).toBe("resp-A");
+    expect(doneOut.item.id).toBe("fc-stream");
+    expect(completedOut.response.id).toBe("resp-A");
+    expect(completedOut.response.output[0]!.id).toBe("rs-stream");
+    expect(completedOut.response.output[1]!.id).toBe("fc-stream");
+    expect(completedOut.response.output[0]!.encrypted_content).toBeUndefined();
+  });
+
   test("applies image-gen restore and item-id repair in one relay pass", async () => {
     const upstream = [
       'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_0","role":"assistant"}}\n\n',

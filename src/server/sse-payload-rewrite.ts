@@ -96,6 +96,11 @@ export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
   // GitHub re-encrypts `item_id` per event (delta and done carry different ids for the
   // same logical call), so calls are tracked by the stable `output_index` instead.
   const obfuscatedCalls = new Set<number>();
+  // GitHub also re-encrypts the response id and every item id per event (`created`/`done`
+  // and the terminal `completed` payload disagree). Clients reconcile streamed items with
+  // the completed response by id, so pin every entity to its first-seen id.
+  let responseId: string | null = null;
+  const itemIds = new Map<number, string>();
   return (payload: string): string => {
     let parsed: unknown;
     try {
@@ -131,20 +136,47 @@ export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
         return `${JSON.stringify(deltaEvent)}\n\ndata: ${JSON.stringify(parsed)}`;
       }
     }
-    if (
-      (type === "response.output_item.added" || type === "response.output_item.done")
-      && isPayloadRecord(parsed.item)
-      && sanitizeGithubCopilotReasoningItem(parsed.item)
-    ) {
-      changed = true;
+    if (type === "response.created" && isPayloadRecord(parsed.response)) {
+      const id = parsed.response.id;
+      if (typeof id === "string") {
+        if (responseId === null) responseId = id;
+        else if (id !== responseId) {
+          parsed.response.id = responseId;
+          changed = true;
+        }
+      }
     }
-    if (
-      type === "response.completed"
-      && isPayloadRecord(parsed.response)
-      && Array.isArray(parsed.response.output)
-    ) {
-      for (const item of parsed.response.output) {
-        if (isPayloadRecord(item) && sanitizeGithubCopilotReasoningItem(item)) changed = true;
+    if (type === "response.output_item.added" || type === "response.output_item.done") {
+      const outputIndex = parsed.output_index;
+      const item = parsed.item;
+      if (typeof outputIndex === "number" && isPayloadRecord(item) && typeof item.id === "string") {
+        const existing = itemIds.get(outputIndex);
+        if (existing === undefined) itemIds.set(outputIndex, item.id);
+        else if (item.id !== existing) {
+          item.id = existing;
+          changed = true;
+        }
+      }
+      if (isPayloadRecord(item) && sanitizeGithubCopilotReasoningItem(item)) changed = true;
+    }
+    if (type === "response.completed" && isPayloadRecord(parsed.response)) {
+      if (typeof parsed.response.id === "string" && responseId !== null && parsed.response.id !== responseId) {
+        parsed.response.id = responseId;
+        changed = true;
+      }
+      if (Array.isArray(parsed.response.output)) {
+        parsed.response.output.forEach((item, outputIndex) => {
+          if (!isPayloadRecord(item)) return;
+          if (typeof item.id === "string") {
+            const existing = itemIds.get(outputIndex);
+            if (existing === undefined) itemIds.set(outputIndex, item.id);
+            else if (item.id !== existing) {
+              item.id = existing;
+              changed = true;
+            }
+          }
+          if (sanitizeGithubCopilotReasoningItem(item)) changed = true;
+        });
       }
     }
     return changed ? JSON.stringify(parsed) : payload;
