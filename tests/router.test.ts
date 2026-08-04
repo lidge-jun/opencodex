@@ -130,6 +130,14 @@ describe("routeModel registry effort defaults", () => {
     });
     expect(() => routeModel(config, "side/claude-opus-4-6"))
       .toThrow("only supports native OpenAI model ids");
+
+    config.codexAccountPickerEnabled = false;
+    expect(routeModel(config, "side/gpt-5.5")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.5",
+      codexAccountId: "side-account-id",
+      codexAccountNamespace: "side",
+    });
   });
 
   test("requires an enabled canonical OpenAI forward provider before exact credential injection", () => {

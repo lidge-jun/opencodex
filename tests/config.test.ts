@@ -1447,7 +1447,7 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("constructor")).toBe(false);
   });
 
-  test("persists an explicit Codex account selector map without enabling it by default", () => {
+  test("persists an explicit Codex account selector map without adding one to defaults", () => {
     const selectors = {
       desktop: "@main",
       work: "work-account",
@@ -1460,6 +1460,25 @@ describe("opencodex config defaults", () => {
     expect(diagnostics.error).toBeNull();
     expect(diagnostics.config.codexAccountNamespaces).toEqual(selectors);
     expect(Object.hasOwn(getDefaultConfig(), "codexAccountNamespaces")).toBe(false);
+  });
+
+  test("persists the optional Codex account picker visibility override", () => {
+    for (const enabled of [true, false]) {
+      writeAccountNamespaceConfig({ desktop: "@main" }, { codexAccountPickerEnabled: enabled });
+
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.error).toBeNull();
+      expect(diagnostics.config.codexAccountPickerEnabled).toBe(enabled);
+    }
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountPickerEnabled")).toBe(false);
+  });
+
+  test("rejects a non-boolean Codex account picker visibility override", () => {
+    writeAccountNamespaceConfig({ desktop: "@main" }, { codexAccountPickerEnabled: "yes" });
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("fallback");
+    expect(diagnostics.error).toContain("codexAccountPickerEnabled");
   });
 
   test("validates Claude Desktop profiles and Codex account selectors independently", () => {

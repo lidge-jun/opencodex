@@ -131,6 +131,17 @@ export function appendDefaultCodexAccountNamespace(
   return true;
 }
 
+/**
+ * Whether generated account-qualified rows are enabled for catalog discovery.
+ * A non-empty hand-written map predating the explicit override remains enabled.
+ */
+export function codexAccountPickerIsEnabled(
+  config: Pick<OcxConfig, "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): boolean {
+  return config.codexAccountPickerEnabled !== false
+    && Object.keys(config.codexAccountNamespaces ?? {}).length > 0;
+}
+
 export function isMainCodexAccountTarget(accountId: string): boolean {
   return accountId === MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET || accountId === MAIN_CODEX_ACCOUNT_ID;
 }
@@ -146,4 +157,23 @@ export function codexAccountNamespaceEntries(
 ): Array<[string, string]> {
   return Object.entries(config.codexAccountNamespaces ?? {})
     .map(([namespace, accountId]) => [namespace, normalizeCodexAccountNamespaceTarget(accountId)]);
+}
+
+/**
+ * Picker-visible selector bindings. Missing account targets stay configured for exact routing to
+ * fail closed, but are not advertised. Only public selector keys should leave this boundary.
+ */
+export function visibleCodexAccountNamespaceEntries(
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): Array<[string, string]> {
+  if (!codexAccountPickerIsEnabled(config)) return [];
+  const storedPoolAccounts = new Set(
+    (config.codexAccounts ?? [])
+      .filter(account => !account.isMain)
+      .map(account => account.id),
+  );
+  return codexAccountNamespaceEntries(config)
+    .filter(([, accountId]) =>
+      isMainCodexAccountTarget(accountId) || storedPoolAccounts.has(accountId)
+    );
 }

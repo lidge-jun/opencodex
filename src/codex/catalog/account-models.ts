@@ -1,5 +1,5 @@
 import type { OcxConfig } from "../../types";
-import { isMainCodexAccountTarget } from "../account-namespaces";
+import { visibleCodexAccountNamespaceEntries } from "../account-namespaces";
 import type { RawEntry } from "./parsing";
 
 /** Stable nonsemantic marker used to distinguish generated rows from provider-owned rows. */
@@ -14,18 +14,9 @@ export const CODEX_ACCOUNT_BOUND_CATALOG_KIND = "account-selector-v1";
  * namespace validation. Only those public keys leave this boundary; private account ids do not.
  */
 export function visibleCodexAccountSelectors(
-  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces">,
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
 ): string[] {
-  const storedPoolAccounts = new Set(
-    (config.codexAccounts ?? [])
-      .filter(account => !account.isMain)
-      .map(account => account.id),
-  );
-  return Object.entries(config.codexAccountNamespaces ?? {})
-    .filter(([, accountId]) =>
-      isMainCodexAccountTarget(accountId) || storedPoolAccounts.has(accountId)
-    )
-    .map(([selector]) => selector);
+  return visibleCodexAccountNamespaceEntries(config).map(([selector]) => selector);
 }
 
 export function accountBoundNativeDisplayName(selector: string, native: RawEntry): string {
@@ -53,7 +44,7 @@ export function trustedAccountBoundNativeCatalogSlug(entry: RawEntry): string | 
 }
 
 export function accountBoundNativeModelSlugs(
-  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces">,
+  config: Pick<OcxConfig, "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
   nativeSlugs: Iterable<string>,
 ): string[] {
   const natives = [...nativeSlugs];

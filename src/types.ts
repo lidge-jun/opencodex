@@ -747,6 +747,11 @@ export interface OcxConfig {
    * are intentionally separate from these selectors.
    */
   codexAccountNamespaces?: Record<string, string>;
+  /**
+   * Picker visibility override for account-qualified native models. When omitted, a non-empty
+   * selector map remains visible for compatibility with hand-written configurations.
+   */
+  codexAccountPickerEnabled?: boolean;
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */

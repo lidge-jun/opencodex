@@ -65,6 +65,12 @@ export interface ManagementContext {
    * tests, which are treated as the untrusted `admin-token` case.
    */
   principal?: ManagementPrincipal;
+  /**
+   * Refresh the Codex catalog and propagate failures to the owning route.
+   * Mutations that need recoverable pending-state reporting use this surface;
+   * ordinary management writes keep using the best-effort wrapper below.
+   */
+  refreshCodexCatalogStrict: () => Promise<void>;
   refreshCodexCatalogBestEffort: () => Promise<void>;
   syncClaudeAgentDefsBestEffort: () => Promise<void>;
 }

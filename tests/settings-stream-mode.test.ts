@@ -7,12 +7,12 @@
  * backup-and-defaults repair path), and settable alone via PUT (legacy
  * codexAutoStart-only PUTs keep working).
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
-import { handleManagementAPI } from "../src/server/management-api";
+import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
 import {
@@ -47,13 +47,17 @@ function baseConfig(): OcxConfig {
   };
 }
 
-function putSettings(config: OcxConfig, body: unknown): Promise<Response | null> {
+function putSettings(
+  config: OcxConfig,
+  body: unknown,
+  deps: ManagementApiDeps = {},
+): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings", {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return handleManagementAPI(req, new URL(req.url), config);
+  return handleManagementAPI(req, new URL(req.url), config, deps);
 }
 
 function getSettings(config: OcxConfig): Promise<Response | null> {
@@ -102,6 +106,25 @@ describe("GET /api/settings", () => {
   test("reports appOwnedMemoryBudgetMb with the 256 MiB default", async () => {
     const body = await (await getSettings(baseConfig()))!.json() as { appOwnedMemoryBudgetMb?: number };
     expect(body.appOwnedMemoryBudgetMb).toBe(256);
+  });
+
+  test("reports the effective account-picker state", async () => {
+    const absent = await (await getSettings(baseConfig()))!.json() as {
+      codexAccountPickerEnabled?: boolean;
+    };
+    const inferred = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: { side: "stored-account" },
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+    const hidden = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: { side: "stored-account" },
+      codexAccountPickerEnabled: false,
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+
+    expect(absent.codexAccountPickerEnabled).toBe(false);
+    expect(inferred.codexAccountPickerEnabled).toBe(true);
+    expect(hidden.codexAccountPickerEnabled).toBe(false);
   });
 
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
@@ -258,6 +281,145 @@ describe("PUT /api/settings", () => {
     const config = baseConfig();
     const res = await putSettings(config, {});
     expect(res!.status).toBe(400);
+  });
+
+  test("account-picker enable persists before refresh and retries one failure", async () => {
+    const config = baseConfig();
+    let persisted = false;
+    let refreshes = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+      saveConfigPreservingClaudeCode: saved => {
+        persisted = true;
+        expect(saved.codexAccountPickerEnabled).toBe(true);
+        expect(saved.codexAccountNamespaces).toEqual({ main: "@main" });
+      },
+      refreshCodexCatalog: async () => {
+        expect(persisted).toBe(true);
+        refreshes += 1;
+        if (refreshes === 1) throw new Error("first refresh failed");
+      },
+    });
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      codexAccountPickerEnabled: true,
+      catalogRefreshPending: false,
+    });
+    expect(refreshes).toBe(2);
+    expect(config.codexAccountNamespaces).toEqual({ main: "@main" });
+  });
+
+  test("account-picker disable does not initialize an empty namespace map", async () => {
+    const config = baseConfig();
+    let refreshes = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: false }, {
+      saveConfigPreservingClaudeCode: () => {},
+      refreshCodexCatalog: async () => { refreshes += 1; },
+    });
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      codexAccountPickerEnabled: false,
+      catalogRefreshPending: false,
+    });
+    expect(config.codexAccountNamespaces).toBeUndefined();
+    expect(refreshes).toBe(0);
+  });
+
+  test("account-picker refresh remains a successful persisted mutation when both attempts fail", async () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const config = {
+      ...baseConfig(),
+      codexAccountNamespaces: { main: "@main" },
+      codexAccountPickerEnabled: false,
+    };
+    let persisted = false;
+    let refreshes = 0;
+    try {
+      const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+        saveConfigPreservingClaudeCode: () => { persisted = true; },
+        refreshCodexCatalog: async () => {
+          expect(persisted).toBe(true);
+          refreshes += 1;
+          throw new Error("private refresh failure detail");
+        },
+      });
+
+      expect(response!.status).toBe(200);
+      expect(await response!.json()).toMatchObject({
+        codexAccountPickerEnabled: true,
+        catalogRefreshPending: true,
+      });
+      expect(refreshes).toBe(2);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("ocx sync");
+      expect(warningText).not.toContain("private refresh failure detail");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test("account-picker disable and re-enable preserve custom namespace order", async () => {
+    const namespaces = { side: "stored-account", main: "@main" };
+    const config = { ...baseConfig(), codexAccountNamespaces: namespaces };
+    const persistedOrders: string[][] = [];
+    let refreshes = 0;
+    const deps: ManagementApiDeps = {
+      saveConfigPreservingClaudeCode: saved => {
+        persistedOrders.push(Object.keys(saved.codexAccountNamespaces ?? {}));
+      },
+      refreshCodexCatalog: async () => { refreshes += 1; },
+    };
+
+    const disabled = await putSettings(config, { codexAccountPickerEnabled: false }, deps);
+    expect(await disabled!.json()).toMatchObject({
+      codexAccountPickerEnabled: false,
+      catalogRefreshPending: false,
+    });
+    const reenabled = await putSettings(config, { codexAccountPickerEnabled: true }, deps);
+    expect(await reenabled!.json()).toMatchObject({
+      codexAccountPickerEnabled: true,
+      catalogRefreshPending: false,
+    });
+
+    expect(config.codexAccountNamespaces).toBe(namespaces);
+    expect(persistedOrders).toEqual([["side", "main"], ["side", "main"]]);
+    expect(refreshes).toBe(2);
+  });
+
+  test("account-picker rejects non-boolean values before persistence or refresh", async () => {
+    let persisted = false;
+    let refreshed = false;
+    const response = await putSettings(baseConfig(), { codexAccountPickerEnabled: "yes" }, {
+      saveConfigPreservingClaudeCode: () => { persisted = true; },
+      refreshCodexCatalog: async () => { refreshed = true; },
+    });
+
+    expect(response!.status).toBe(400);
+    expect(await response!.json()).toMatchObject({
+      error: expect.stringContaining("codexAccountPickerEnabled"),
+    });
+    expect(persisted).toBe(false);
+    expect(refreshed).toBe(false);
+  });
+
+  test("failed persistence rolls back picker state before returning", async () => {
+    const config = baseConfig();
+    const before = structuredClone(config);
+    let refreshed = false;
+    const request = putSettings(config, {
+      codexAutoStart: false,
+      streamMode: "legacy-tee",
+      appOwnedMemoryBudgetMb: 128,
+      codexAccountPickerEnabled: true,
+    }, {
+      saveConfigPreservingClaudeCode: () => { throw new Error("save failed"); },
+      refreshCodexCatalog: async () => { refreshed = true; },
+    });
+
+    await expect(request).rejects.toThrow("save failed");
+    expect(config).toEqual(before);
+    expect(refreshed).toBe(false);
   });
 
   test("settings PUT rejects below above fractional and nonnumeric budget values", async () => {

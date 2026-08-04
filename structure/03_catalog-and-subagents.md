@@ -69,6 +69,8 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   the Codex catalog clones each supported native row per selector and hides the bare picker rows;
   bare ids remain routable and stay in raw `/v1/models` unless explicitly disabled. Missing stored
   account targets are not advertised, and private account ids never become catalog labels.
+  `codexAccountPickerEnabled: false` hides generated rows without deleting exact bindings; an
+  omitted flag preserves the established behavior of a nonempty hand-written selector map.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the

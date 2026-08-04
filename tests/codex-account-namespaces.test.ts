@@ -12,10 +12,12 @@ import {
 } from "../src/codex/account-namespace-match";
 import {
   appendDefaultCodexAccountNamespace,
+  codexAccountPickerIsEnabled,
   codexAccountNamespaceEntries,
   defaultCodexAccountNamespaces,
   isMainCodexAccountTarget,
   isValidCodexAccountNamespaceTarget,
+  visibleCodexAccountNamespaceEntries,
 } from "../src/codex/account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 
@@ -304,6 +306,66 @@ describe("Codex account namespace foundations", () => {
         { id: "desktop-row", email: "third@example.test", logLabel: "p464646", isMain: true },
       ],
     })).toEqual({ "main-2": "@main", p454545: "main" });
+  });
+
+  test("keeps existing selector maps enabled unless the visibility override is false", () => {
+    expect(codexAccountPickerIsEnabled({ codexAccountNamespaces: { desktop: "@main" } })).toBe(true);
+    expect(codexAccountPickerIsEnabled({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: true,
+    })).toBe(true);
+    expect(codexAccountPickerIsEnabled({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: false,
+    })).toBe(false);
+    expect(codexAccountPickerIsEnabled({
+      codexAccountNamespaces: {},
+      codexAccountPickerEnabled: true,
+    })).toBe(false);
+    expect(codexAccountPickerIsEnabled({})).toBe(false);
+  });
+
+  test("advertises only public selectors backed by available accounts", () => {
+    const config = {
+      codexAccounts: [{
+        id: "stored-account-id",
+        email: "private@example.test",
+        alias: "Private Display Alias",
+        isMain: false,
+      }],
+      codexAccountNamespaces: {
+        desktop: "@main",
+        team: "stored-account-id",
+        removed: "missing-account-id",
+      },
+    };
+
+    expect(visibleCodexAccountNamespaceEntries(config)).toEqual([
+      ["desktop", MAIN_CODEX_ACCOUNT_ID],
+      ["team", "stored-account-id"],
+    ]);
+    expect(visibleCodexAccountNamespaceEntries(config).length).toBeGreaterThan(0);
+    expect(JSON.stringify(visibleCodexAccountNamespaceEntries(config)))
+      .not.toContain("private@example.test");
+    expect(JSON.stringify(visibleCodexAccountNamespaceEntries(config)))
+      .not.toContain("Private Display Alias");
+  });
+
+  test("hiding picker rows leaves exact routing bindings unchanged", () => {
+    const codexAccountNamespaces = { desktop: "@main", team: "stored-account-id" };
+    const config = {
+      codexAccounts: [{ id: "stored-account-id", isMain: false }],
+      codexAccountNamespaces,
+      codexAccountPickerEnabled: false,
+    };
+
+    expect(visibleCodexAccountNamespaceEntries(config)).toEqual([]);
+    expect(visibleCodexAccountNamespaceEntries(config)).toHaveLength(0);
+    expect(codexAccountNamespaceEntries(config)).toEqual([
+      ["desktop", MAIN_CODEX_ACCOUNT_ID],
+      ["team", "stored-account-id"],
+    ]);
+    expect(config.codexAccountNamespaces).toBe(codexAccountNamespaces);
   });
 
   test("matches route and account namespaces exactly but provider namespaces case-insensitively", () => {

@@ -7,6 +7,7 @@ import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } f
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache } from "./main-account-cache";
 import { forgetCodexAccountPause } from "./account-pause";
+import { visibleCodexAccountNamespaceEntries } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
 let observedMainChatgptAccountId: string | undefined;
@@ -69,7 +70,9 @@ export function resetMainCodexAccountIdentityTrackingForTests(): void {
   clearMainAccountCredentialPresence();
 }
 
-export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): void {
+export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): boolean {
+  const hadVisiblePickerBinding = visibleCodexAccountNamespaceEntries(runtimeConfig)
+    .some(([, boundAccountId]) => boundAccountId === accountId);
   removeCodexAccountCredential(accountId);
   runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? [])
     .filter(account => account.isMain || account.id !== accountId);
@@ -77,4 +80,5 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
   if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
   purgeCodexAccountRuntimeState(accountId);
   invalidateCodexWebSocketsForAccount(accountId);
+  return hadVisiblePickerBinding;
 }

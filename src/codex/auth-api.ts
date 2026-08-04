@@ -14,6 +14,11 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+import {
+  appendDefaultCodexAccountNamespace,
+  codexAccountPickerIsEnabled,
+} from "./account-namespaces";
+import { refreshCodexCatalogWithRetry } from "./catalog-refresh-status";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
 import {
   claimDueCodexQuotaRecoveryProbes,
@@ -121,7 +126,15 @@ const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
 
 const MAX_CODEX_LOGIN_STATE_ROWS = 32;
 const CODEX_LOGIN_TERMINAL_TTL_MS = 300_000;
-interface CodexLoginStateRow { status: string; startedAt: number; accountId?: string; email?: string; error?: string; doneAt?: number }
+interface CodexLoginStateRow {
+  status: string;
+  startedAt: number;
+  accountId?: string;
+  email?: string;
+  error?: string;
+  catalogRefreshPending?: boolean;
+  doneAt?: number;
+}
 const codexAuthLoginState = new Map<string, CodexLoginStateRow>();
 export class CodexLoginStateBusyError extends ResourceAdmissionError {
   constructor() { super("codex_login_state_rows", MAX_CODEX_LOGIN_STATE_ROWS); this.name = "CodexLoginStateBusyError"; }
@@ -374,6 +387,14 @@ function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void
     delete sourceConfig[key];
   }
   Object.assign(sourceConfig, nextConfig);
+}
+
+async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<boolean> {
+  if (!changed || !codexAccountPickerIsEnabled(config)) return false;
+  return refreshCodexCatalogWithRetry(async () => {
+    const { refreshCodexModelCatalog } = await import("./refresh");
+    await refreshCodexModelCatalog(config);
+  });
 }
 
 async function mapWithConcurrency<T, R>(
@@ -1229,11 +1250,23 @@ export async function handleCodexAuthAPI(
     markCodexAccountValidated(body.id, warmup.validatedAt);
     clearAccountNeedsReauth(body.id);
     const accounts = latestConfig.codexAccounts ?? [];
-    accounts.push(withCodexAccountLogLabel({ id: body.id, email: body.email, plan: body.plan, isMain: false }, accounts));
+    const addedAccount = withCodexAccountLogLabel(
+      { id: body.id, email: body.email, plan: body.plan, isMain: false },
+      accounts,
+    );
+    const retainedPickerBindingRestored = codexAccountPickerIsEnabled(latestConfig)
+      && Object.values(latestConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
+    accounts.push(addedAccount);
     latestConfig.codexAccounts = accounts;
+    const namespaceAdded = latestConfig.codexAccountPickerEnabled !== undefined
+      && appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
     saveRuntimeConfig(config, latestConfig);
     reconcileLiveStateStores();
-    return jsonResponse({ ok: true });
+    const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+      latestConfig,
+      namespaceAdded || retainedPickerBindingRestored,
+    );
+    return jsonResponse({ ok: true, catalogRefreshPending });
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "DELETE") {
@@ -1245,10 +1278,14 @@ export async function handleCodexAuthAPI(
     if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
-    deleteCodexAccount(runtimeConfig, id);
+    const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
     reconcileLiveStateStores();
-    return jsonResponse({ ok: true });
+    const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+      runtimeConfig,
+      pickerVisibilityChanged,
+    );
+    return jsonResponse({ ok: true, catalogRefreshPending });
   }
 
   if (url.pathname === "/api/codex-auth/accounts/alias" && req.method === "PUT") {
@@ -1678,6 +1715,7 @@ export async function handleCodexAuthAPI(
                 const latestConfig = getRuntimeConfig(config);
                 const accounts = latestConfig.codexAccounts ?? [];
                 const existingIdx = accounts.findIndex(account => account.id === accountId);
+                let pickerVisibilityChanged = false;
                 const commitConflict = codexAccountPersistenceConflict(
                   latestConfig,
                   accountId,
@@ -1719,12 +1757,31 @@ export async function handleCodexAuthAPI(
                   latestConfig.codexAccounts = accounts;
                   saveRuntimeConfig(config, latestConfig);
                 } else {
-                  accounts.push(withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts));
+                  const addedAccount = withCodexAccountLogLabel(
+                    { id: accountId, email, plan, isMain: false },
+                    accounts,
+                  );
+                  const retainedPickerBindingRestored = codexAccountPickerIsEnabled(latestConfig)
+                    && Object.values(latestConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
+                  accounts.push(addedAccount);
                   latestConfig.codexAccounts = accounts;
+                  const namespaceAdded = latestConfig.codexAccountPickerEnabled !== undefined
+                    && appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
                   saveRuntimeConfig(config, latestConfig);
+                  pickerVisibilityChanged = namespaceAdded || retainedPickerBindingRestored;
                 }
                 reconcileLiveStateStores();
-                setCodexLoginState(flowId, { status: "done", accountId, email, doneAt: Date.now() });
+                const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+                  latestConfig,
+                  pickerVisibilityChanged,
+                );
+                setCodexLoginState(flowId, {
+                  status: "done",
+                  accountId,
+                  email,
+                  ...(catalogRefreshPending ? { catalogRefreshPending: true } : {}),
+                  doneAt: Date.now(),
+                });
                 completed = true;
               }
               break;

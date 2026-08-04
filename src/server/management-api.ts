@@ -102,11 +102,18 @@ export async function handleManagementAPI(
       return jsonResponse({ error: "request body too large" }, 413, req, config);
     }
   }
+  async function refreshCodexCatalogStrict(): Promise<void> {
+    if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
+    const { refreshCodexModelCatalog } = await import("../codex/refresh");
+    await refreshCodexModelCatalog(config);
+  }
+
   async function refreshCodexCatalogBestEffort(): Promise<void> {
+    // Preserve the dependency seam's historical behavior: injected failures
+    // remain observable to route tests, while production discovery is best-effort.
     if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
     try {
-      const { refreshCodexModelCatalog } = await import("../codex/refresh");
-      await refreshCodexModelCatalog(config);
+      await refreshCodexCatalogStrict();
     } catch {
       /* catalog absent */
     }
@@ -133,7 +140,16 @@ export async function handleManagementAPI(
       }
     } catch { /* best-effort */ }
   }
-  const ctx: ManagementContext = { req, url, config, deps, principal, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort };
+  const ctx: ManagementContext = {
+    req,
+    url,
+    config,
+    deps,
+    principal,
+    refreshCodexCatalogStrict,
+    refreshCodexCatalogBestEffort,
+    syncClaudeAgentDefsBestEffort,
+  };
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))
