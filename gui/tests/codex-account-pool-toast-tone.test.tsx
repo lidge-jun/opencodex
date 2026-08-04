@@ -157,3 +157,28 @@ test("successful redeem clears a stale error toast tone", async () => {
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeTruthy();
 });
+
+test("pending model-catalog refresh is shown as a successful mutation warning", async () => {
+  await mountPool(makeController({
+    removeAccount: async () => ({ ok: true, catalogRefreshPending: true }),
+  }));
+
+  const removeBtn = [...host.querySelectorAll("button")].find((btn) =>
+    (btn.getAttribute("aria-label") ?? "").includes("pool@example.test")
+    && (btn.getAttribute("aria-label") ?? "").toLowerCase().includes("remove"),
+  );
+  expect(removeBtn).toBeTruthy();
+  await act(async () => { removeBtn!.dispatchEvent(new win.MouseEvent("click", { bubbles: true })); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+  const warning = host.querySelector(".codex-auth-page-head__feedback.is-warn");
+  expect(warning).toBeTruthy();
+  expect(warning!.textContent).toContain("ocx sync");
+  expect(warning!.textContent).not.toContain("pool@example.test");
+
+  const styles = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+  const warningRule = styles.match(/\.codex-auth-page-head__feedback\.is-warn\s*\{([^}]*)\}/)?.[1] ?? "";
+  expect(warningRule).toContain("overflow: visible");
+  expect(warningRule).toContain("text-overflow: clip");
+  expect(warningRule).toContain("white-space: normal");
+});

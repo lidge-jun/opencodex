@@ -19,6 +19,8 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
+import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import type { NoticeTone } from "../notice-tone";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
@@ -64,7 +66,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [showAdd, setShowAdd] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
-  const [actionFeedbackTone, setActionFeedbackTone] = useState<"ok" | "err" | null>(null);
+  const [actionFeedbackTone, setActionFeedbackTone] = useState<NoticeTone | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
@@ -74,10 +76,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
   const doctorCopy = useCopyFeedback<string>();
 
-  const showActionFeedback = useCallback((text: string, error = false) => {
+  const showActionFeedback = useCallback((text: string, tone: NoticeTone = "ok") => {
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     setActionFeedback(text);
-    setActionFeedbackTone(error ? "err" : "ok");
+    setActionFeedbackTone(tone);
     feedbackTimerRef.current = setTimeout(() => {
       setActionFeedback(null);
       setActionFeedbackTone(null);
@@ -139,9 +141,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setReauthId(null);
   }, []);
 
-  const handleAccountAdded = useCallback(() => {
+  const handleAccountAdded = useCallback((completion: CodexAccountMutationCompletion) => {
     void controller.syncAfterAccountAdded();
-    showActionFeedback(t("codexAuth.accountAdded"));
+    showActionFeedback(
+      completion.catalogRefreshPending
+        ? t("codexAuth.catalogRefreshPending", { cmd: "ocx sync" })
+        : t("codexAuth.accountAdded"),
+      completion.catalogRefreshPending ? "warn" : "ok",
+    );
     closeAddModal();
   }, [closeAddModal, controller, showActionFeedback, t]);
 
@@ -149,7 +156,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const result = await controller.switchAccount(id);
     if (!result.ok) {
       if (result.reason === "busy") return;
-      showActionFeedback(t("codexAuth.switchFailed"), true);
+      showActionFeedback(t("codexAuth.switchFailed"), "err");
       return;
     }
     setConfirm(null);
@@ -166,7 +173,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const entered = window.prompt(t("prov.aliasPrompt"), account.alias ?? "");
     if (entered === null) return;
     const result = await controller.saveAlias(account.id, entered);
-    showActionFeedback(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"), !result.ok);
+    showActionFeedback(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"), result.ok ? "ok" : "err");
   };
 
   const togglePaused = async (account: CodexAccountEntry) => {
@@ -178,7 +185,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       ? paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded"
       : paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", {
       email: account.alias ?? account.email,
-    }), !result.ok);
+    }), result.ok ? "ok" : "err");
   };
 
   const remove = async (id: string) => {
@@ -186,7 +193,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     if (!window.confirm(t("codexAuth.removeConfirm", { id: label }))) return;
     const result = await controller.removeAccount(id);
     if (!result.ok) {
-      showActionFeedback(t("codexAuth.removeFailed"), true);
+      showActionFeedback(t("codexAuth.removeFailed"), "err");
+      return;
+    }
+    if (result.catalogRefreshPending) {
+      showActionFeedback(t("codexAuth.catalogRefreshPending", { cmd: "ocx sync" }), "warn");
     }
   };
 
@@ -194,7 +205,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setRefreshingQuota(true);
     try {
       const ok = await load(true);
-      showActionFeedback(t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed"), !ok);
+      showActionFeedback(t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed"), ok ? "ok" : "err");
     } finally {
       setRefreshingQuota(false);
     }
@@ -207,7 +218,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       ? result.pausedCount > 0
         ? t("codexAuth.pauseExhaustedSucceeded", { count: String(result.pausedCount) })
         : t("codexAuth.pauseExhaustedNone")
-      : t("codexAuth.pauseExhaustedFailed"), !result.ok);
+      : t("codexAuth.pauseExhaustedFailed"), result.ok ? "ok" : "err");
   };
 
   const openResetPopup = async (account: CodexAccountEntry) => {
@@ -237,7 +248,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         setResetConfirm(false);
       }
       if (result.toast) {
-        showActionFeedback(result.toast, !result.ok);
+        showActionFeedback(result.toast, result.ok ? "ok" : "err");
       }
     } finally {
       setRedeeming(false);

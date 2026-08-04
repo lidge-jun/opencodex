@@ -37,9 +37,11 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 
 明示的な選択は Pool assignment strategy と通常の thread affinity を迂回します。対応する account が
 存在しない、一時停止中、cooldown 中、利用不能、または再認証が必要な場合、request は別の account
-へ切り替えず fail closed し、active Pool account も変更しません。適格な selector が 1 つ以上
-設定されると、Codex catalog は bare native picker row を非表示にし、selector ごとに個別の
-`<selector>/<native-openai-model>` row を表示します。bare native model id は明示的に無効化されない
+へ切り替えず fail closed し、active Pool account も変更しません。account-qualified picker の表示が
+有効で、適格な selector が 1 つ以上ある場合、Codex picker は bare native row を非表示にし、適格な
+selector ごとに個別の `<selector>/<native-openai-model>` row を表示します。`codexAccountPickerEnabled`
+が `false` の場合、生成された selector row は非表示になりますが、bare native picker row はこの設定に
+よって非表示にはならず、設定済みの exact selector route は引き続き利用できます。bare native model id は明示的に無効化されない
 限り通常の Pool / Direct routing を維持し、raw `/v1/models` にも残ります。対応する保存済み account
 が存在しない selector は表示されません。selector の検証、衝突規則、privacy guidance は
 [プロバイダーの構成](/reference/configuration/providers/)を参照してください。

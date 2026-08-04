@@ -909,6 +909,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.importMissingTokens": "access_token oder refresh_token fehlen in JSON",
   "codexAuth.importMissingId": "Konto-ID ist erforderlich",
   "codexAuth.accountAdded": "Konto zum Pool hinzugefügt",
+  "codexAuth.catalogRefreshPending": "Die Kontoänderung wurde gespeichert, aber die Aktualisierung des Codex-Modellkatalogs steht noch aus. Führe {cmd} aus, um es erneut zu versuchen.",
   "codexAuth.addPickDesc": "Melde dich mit einem anderen ChatGPT-Konto an, um es zum Pool hinzuzufügen.",
   "codexAuth.oauthLogin": "OAuth-Login",
   "codexAuth.oauthDesc": "Öffnet ChatGPT-Login im Browser",

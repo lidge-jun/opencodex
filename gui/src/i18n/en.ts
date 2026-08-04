@@ -1368,6 +1368,7 @@ export const en = {
   "codexAuth.importMissingTokens": "Missing access_token or refresh_token in JSON",
   "codexAuth.importMissingId": "Account ID is required",
   "codexAuth.accountAdded": "Account added to pool",
+  "codexAuth.catalogRefreshPending": "The account change was saved, but the Codex model catalog refresh is pending. Run {cmd} to retry.",
   "codexAuth.addPickDesc": "Login with another ChatGPT account to add it to the pool.",
   "codexAuth.oauthLogin": "OAuth Login",
   "codexAuth.oauthDesc": "Opens ChatGPT login in browser",

@@ -11,6 +11,7 @@ import {
   type CliStdin,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 
 const USAGE = `Usage:
   ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
@@ -105,6 +106,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       );
       if (state.status === "done") {
         printData(state, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`]);
+        if (!wantsJson) warnIfCodexCatalogRefreshPending(state);
         return;
       }
       if (state.status === "error" || state.status === "expired") {

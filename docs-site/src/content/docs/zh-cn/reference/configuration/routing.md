@@ -39,8 +39,10 @@ upstream 发送裸 `gpt-5.6-sol` model id。selector 后只能使用裸原生 Op
 
 精确选择会绕过 Pool 分配策略和普通 thread affinity。若映射账户不存在、已暂停、处于 cooldown、
 不可用或需要重新认证，请求会 fail closed，不会切换到其他账户，也不会改变 active Pool account。
-配置至少一个合格 selector 后，Codex catalog 会隐藏 bare native picker row，并为每个 selector 显示
-独立的 `<selector>/<native-openai-model>` row。除非显式禁用，bare native model id 仍保持正常的 Pool /
+启用 account-qualified picker 可见性且至少存在一个合格 selector 时，Codex picker 会隐藏 bare native row，
+并为每个合格 selector 显示独立的 `<selector>/<native-openai-model>` row。当
+`codexAccountPickerEnabled` 为 `false` 时，生成的 selector row 会隐藏，但 bare native picker row 不会因此被
+隐藏，已配置的 exact selector route 仍可使用。除非显式禁用，bare native model id 仍保持正常的 Pool /
 Direct routing，并继续出现在 raw `/v1/models` 中。映射到缺失已保存账户的 selector 不会被展示。
 selector 校验、冲突规则和隐私说明见[提供方配置](/reference/configuration/providers/)。
 

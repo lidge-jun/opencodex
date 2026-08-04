@@ -3,6 +3,7 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { writeSessionListCache } from "../session-list-cache";
 import type { OAuthStatus, ProvidersConfig } from "./providers-shared";
+import type { Notify } from "../notice-tone";
 
 export function useProvidersFetch({
   apiBase,
@@ -19,7 +20,7 @@ export function useProvidersFetch({
   setConfig: React.Dispatch<React.SetStateAction<ProvidersConfig | null>>;
   setOauthProviders: React.Dispatch<React.SetStateAction<string[]>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
-  notify: (msg: string, ok: boolean) => void;
+  notify: Notify;
   /** Bump the shell's quota revision; `force` adds `?refresh=1` to its next read. */
   invalidateProviderQuotas: (force?: boolean) => void;
   /** Session seed key for instant Providers shell paint (no secrets — hasApiKey flags only). */
@@ -32,7 +33,7 @@ export function useProvidersFetch({
       setConfig(data ?? null);
       if (configCacheKey && data) writeSessionListCache(configCacheKey, data);
     } catch {
-      notify(t("prov.loadConfigFail"), false);
+      notify(t("prov.loadConfigFail"), "err");
     }
   }, [apiBase, configCacheKey, notify, setConfig, t]);
 

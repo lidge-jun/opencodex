@@ -1522,6 +1522,12 @@ dialog.modal-overlay::backdrop {
   white-space: nowrap;
 }
 .codex-auth-page-head__feedback.is-ok { color: var(--green); }
+.codex-auth-page-head__feedback.is-warn {
+  color: var(--amber);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
 .codex-auth-page-head__feedback.is-err { color: var(--red); }
 .codex-auth-pause-label {
   display: inline-block;

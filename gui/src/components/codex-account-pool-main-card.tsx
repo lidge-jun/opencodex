@@ -5,6 +5,7 @@ import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-he
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
+import type { NoticeTone } from "../notice-tone";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -154,7 +155,7 @@ export function CodexAccountPoolPageHead({
   pausingExhausted: boolean;
   pauseBusy?: boolean;
   actionFeedback?: string | null;
-  actionFeedbackTone?: "ok" | "err" | null;
+  actionFeedbackTone?: NoticeTone | null;
   onRefresh: () => void;
   onPauseExhausted: () => void;
 }) {
@@ -166,7 +167,7 @@ export function CodexAccountPoolPageHead({
       {!embedded && <h2 className="page-title">{t("nav.codexAuth")}</h2>}
       <div className={embedded ? "row" : "codex-auth-page-head__actions"}>
         <span
-          className={`codex-auth-page-head__feedback${actionFeedbackTone === "ok" ? " is-ok" : ""}${actionFeedbackTone === "err" ? " is-err" : ""}`}
+          className={`codex-auth-page-head__feedback${actionFeedbackTone === "ok" ? " is-ok" : ""}${actionFeedbackTone === "warn" ? " is-warn" : ""}${actionFeedbackTone === "err" ? " is-err" : ""}`}
           role="status"
           aria-live="polite"
         >

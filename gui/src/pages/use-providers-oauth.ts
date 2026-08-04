@@ -3,6 +3,7 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
+import type { Notify } from "../notice-tone";
 
 export function useProvidersOAuth({
   apiBase,
@@ -28,7 +29,7 @@ export function useProvidersOAuth({
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
-  notify: (msg: string, ok: boolean) => void;
+  notify: Notify;
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
   fetchAccountSets: (providers: string[]) => Promise<unknown>;
@@ -53,7 +54,7 @@ export function useProvidersOAuth({
       setBusy(current => current === provider ? null : current);
       setLoginInfo(current => current?.provider === provider ? null : current);
     }
-    notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
+    notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), "err");
   }, [aliveRef, apiBase, notify, setBusy, setLoginInfo, t]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
@@ -77,7 +78,7 @@ export function useProvidersOAuth({
       if (oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
+        notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), "err");
         return;
       }
       const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string };
@@ -101,7 +102,7 @@ export function useProvidersOAuth({
             cancelled
               ? t("prov.loginCancelled", { provider: oauthLabel(provider) })
               : t("prov.loginError", { provider: oauthLabel(provider), error: s.error }),
-            false,
+            "err",
           );
           setLoginInfo(null);
           finished = true;
@@ -116,18 +117,18 @@ export function useProvidersOAuth({
             ? s.accounts?.find(a => a.id === reauthTargetId)
             : s.accounts?.find(a => a.active) ?? s.accounts?.find(a => a.id === s.activeAccountId);
           if (reauthTargetId && !target) {
-            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthAccountMissing") }), false);
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthAccountMissing") }), "err");
             setLoginInfo(null);
             finished = true;
             break;
           }
           if (target?.needsReauth) {
-            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthIdentityMismatch") }), false);
+            notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("prov.reauthIdentityMismatch") }), "err");
             setLoginInfo(null);
             finished = true;
             break;
           }
-          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), "ok");
           setLoginInfo(null);
           fetchConfig();
           const knownProviders = Object.keys(accountSets);
@@ -145,12 +146,12 @@ export function useProvidersOAuth({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ provider }),
         }).catch(() => {});
-        notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), false);
+        notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), "err");
         setLoginInfo(null);
       }
     } catch {
       if (oauthLoginGenerationRef.current!.get(provider) === generation) {
-        notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
+        notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), "err");
       }
     } finally {
       if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(null);
@@ -161,7 +162,7 @@ export function useProvidersOAuth({
     try {
       const res = await fetch(`${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
       if (!res.ok) {
-        notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
+        notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), "err");
         return;
       }
       await Promise.all([
@@ -171,9 +172,9 @@ export function useProvidersOAuth({
         fetchProviderQuotas(true),
       ]);
       bumpModelsRefresh();
-      notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
+      notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), "ok");
     } catch {
-      notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
+      notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), "err");
     }
   };
 

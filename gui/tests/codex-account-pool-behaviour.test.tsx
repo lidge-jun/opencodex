@@ -26,6 +26,7 @@ let nextAccountsResponseGate: Promise<void> | null = null;
 let pauseResponseActiveId: string | null = null;
 let bulkPausedAccountIds: string[] = ["a2"];
 let bulkResponseActiveId: string | null = null;
+let deleteCatalogRefreshPending = false;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -44,12 +45,24 @@ beforeEach(() => {
   pauseResponseActiveId = null;
   bulkPausedAccountIds = ["a2"];
   bulkResponseActiveId = null;
+  deleteCatalogRefreshPending = false;
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       const path = String(url).split("/api/")[1] ?? String(url);
-      calls.push(`${init?.method ?? "GET"} ${path}`);
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${path}`);
+      if (method === "DELETE" && path.startsWith("codex-auth/accounts?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            catalogRefreshPending: deleteCatalogRefreshPending,
+            accountId: "private-account",
+            error: "private-error",
+          }),
+        } as unknown as Response;
+      }
       if (path === "codex-auth/accounts/pause") {
         const body = JSON.parse(String(init?.body)) as { id: string; paused: boolean };
         accounts = accounts.map(account => (
@@ -315,6 +328,19 @@ test("a mutation updates the one shared controller state", async () => {
   expect(seen.current!.activeId).toBe("a2");
   // The reconciliation reload landed on the same controller instance.
   expect(seen.current!.accounts.map(a => a.id)).toEqual(["a1", "a2"]);
+});
+
+test("account removal returns only the catalog refresh completion flag", async () => {
+  deleteCatalogRefreshPending = true;
+  const seen = await mountController();
+
+  let result: Awaited<ReturnType<CodexAccountPoolController["removeAccount"]>> | undefined;
+  await act(async () => {
+    result = await seen.current!.removeAccount("a1");
+  });
+
+  expect(result).toEqual({ ok: true, catalogRefreshPending: true });
+  expect(calls).toContain("DELETE codex-auth/accounts?id=a1");
 });
 
 /**

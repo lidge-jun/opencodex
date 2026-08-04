@@ -1314,6 +1314,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.importMissingTokens": "JSON に access_token または refresh_token がありません",
   "codexAuth.importMissingId": "アカウント ID は必須です",
   "codexAuth.accountAdded": "アカウントをプールに追加しました",
+  "codexAuth.catalogRefreshPending": "アカウントの変更は保存されましたが、Codex モデルカタログの更新は保留中です。{cmd} を実行して再試行してください。",
   "codexAuth.addPickDesc": "別の ChatGPT アカウントでログインしてプールに追加します。",
   "codexAuth.oauthLogin": "OAuth ログイン",
   "codexAuth.oauthDesc": "ブラウザで ChatGPT ログインを開きます",

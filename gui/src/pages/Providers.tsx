@@ -17,6 +17,7 @@ import type { ProvidersConfig } from "./providers-shared";
 import { useProvidersOAuth } from "./use-providers-oauth";
 import { useProvidersCrud } from "./use-providers-crud";
 import { useProvidersFetch } from "./use-providers-fetch";
+import type { NoticeTone } from "../notice-tone";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 
@@ -28,7 +29,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   );
   const [adding, setAdding] = useState(false);
   const [status, setStatus] = useState("");
-  const [statusOk, setStatusOk] = useState(false);
+  const [statusTone, setStatusTone] = useState<NoticeTone>("err");
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -46,9 +47,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const bootstrapKeyRef = useRef<string | null>(null);
   const removeBusyRef = useRef(false);
 
-  const notify = useCallback((msg: string, ok: boolean = true) => {
+  const notify = useCallback((msg: string, tone: NoticeTone = "ok") => {
     setStatus(msg);
-    setStatusOk(ok);
+    setStatusTone(tone);
   }, []);
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
@@ -225,7 +226,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       const configured = config.providers.openai;
       const state = openAiAccountProviderState(configured);
       if (state === "invalid") {
-        notify(t("codexAuth.openaiMissing"), false);
+        notify(t("codexAuth.openaiMissing"), "err");
         return;
       }
       if (state === "absent" || state === "disabled") {
@@ -235,9 +236,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           await fetchConfig();
         } catch (error) {
           if (error instanceof OpenAiEnableError) {
-            notify(t(error.i18nKey), false);
+            notify(t(error.i18nKey), "err");
           } else {
-            notify(error instanceof Error ? error.message : t("prov.saveFailed"), false);
+            notify(error instanceof Error ? error.message : t("prov.saveFailed"), "err");
           }
           return;
         } finally {
@@ -265,7 +266,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
         </div>
       </div>
-      {status && <Notice tone={statusOk ? "ok" : "err"}>{status}</Notice>}
+      {status && <Notice tone={statusTone}>{status}</Notice>}
       <ProviderWorkspaceShell
         onRemoveProvider={removeProvider}
         providers={config.providers as Record<string, WorkspaceProvider>}
@@ -361,7 +362,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAdded={(name) => {
           setAdding(false);
           setAddIntent(null);
-          notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+          notify(t("prov.added", { name, cmd: "ocx sync" }), "ok");
           fetchConfig();
           fetchOauth();
           fetchProviderQuotas(true);
@@ -372,9 +373,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAccountLogout={(provider) => { void logoutOAuth(provider); }}
         onOpenAdd={fetchOauth}
         onCloseCodexLogin={() => setCodexLoginOpen(false)}
-        onCodexAdded={() => {
+        onCodexAdded={(completion) => {
           setCodexLoginOpen(false);
-          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ocx sync" }), true);
+          notify(
+            completion.catalogRefreshPending
+              ? t("codexAuth.catalogRefreshPending", { cmd: "ocx sync" })
+              : t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ocx sync" }),
+            completion.catalogRefreshPending ? "warn" : "ok",
+          );
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

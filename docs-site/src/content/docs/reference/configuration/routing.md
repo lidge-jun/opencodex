@@ -40,10 +40,12 @@ ids are valid after the selector.
 
 Exact selection bypasses Pool assignment strategy and ordinary thread affinity. If the mapped
 account is missing, paused, cooling down, unusable, or requires reauthentication, the request fails
-closed instead of switching accounts and does not change the active Pool account. When at least one
-eligible selector is configured, Codex catalogs hide bare native picker rows and list a separate
-`<selector>/<native-openai-model>` row for each selector. Bare native ids retain normal Pool/Direct
-routing and remain in raw `/v1/models` discovery unless explicitly disabled. Selectors whose mapped
+closed instead of switching accounts and does not change the active Pool account. When account-qualified
+picker visibility is enabled and at least one eligible selector exists, the Codex picker hides bare native
+rows and lists a separate `<selector>/<native-openai-model>` row for each eligible selector. When
+`codexAccountPickerEnabled` is `false`, generated selector rows are hidden without suppressing bare native
+picker rows, while configured exact selector routes continue to work. Bare native ids retain normal
+Pool/Direct routing and remain in raw `/v1/models` discovery unless explicitly disabled. Selectors whose mapped
 stored account is missing are not advertised. Selector validation, collision rules, and privacy guidance are documented in
 [Provider Configuration](/reference/configuration/providers/).
 

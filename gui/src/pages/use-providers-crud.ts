@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
 import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 import { apiErrorMessage } from "../api-error";
+import type { Notify } from "../notice-tone";
 
 type ProviderError = { code?: unknown; combos?: unknown; error?: unknown };
 
@@ -37,7 +38,7 @@ export function useProvidersCrud({
   workspaceSelected: string | null;
   setWorkspaceSelected: (name: string | null) => void;
   setRemoveConfirmName: (name: string | null) => void;
-  notify: (msg: string, ok: boolean) => void;
+  notify: Notify;
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
@@ -61,17 +62,17 @@ export function useProvidersCrud({
         const defaultProvider = typeof data.defaultProvider === "string" ? data.defaultProvider : null;
         notify(defaultProvider
           ? t("prov.removedDefault", { name, defaultProvider })
-          : t("prov.removed", { name }), true);
+          : t("prov.removed", { name }), "ok");
         if (workspaceSelected === name) setWorkspaceSelected(null);
         fetchConfig();
         fetchOauth();
         fetchProviderQuotas(true);
       } else {
         const data = await res.json().catch(() => ({})) as ProviderError;
-        notify(providerErrorMessage(data, t, fallback), false);
+        notify(providerErrorMessage(data, t, fallback), "err");
       }
     } catch {
-      notify(fallback, false);
+      notify(fallback, "err");
     } finally {
       removeBusyRef.current = false;
     }
@@ -84,10 +85,10 @@ export function useProvidersCrud({
       body: JSON.stringify({ disabled }),
     });
     if (!res.ok) {
-      notify(await apiErrorMessage(res, disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
+      notify(await apiErrorMessage(res, disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), "err");
       return;
     }
-    notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), true);
+    notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), "ok");
     fetchConfig();
     fetchOauth();
     fetchProviderQuotas(true);
@@ -128,14 +129,14 @@ export function useProvidersCrud({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as ProviderError;
-        notify(providerErrorMessage(data, t, t("prov.setDefaultFail", { name })), false);
+        notify(providerErrorMessage(data, t, t("prov.setDefaultFail", { name })), "err");
         return false;
       }
-      notify(t("prov.setDefaultSuccess", { name }), true);
+      notify(t("prov.setDefaultSuccess", { name }), "ok");
       await fetchConfig();
       return true;
     } catch {
-      notify(t("prov.setDefaultFail", { name }), false);
+      notify(t("prov.setDefaultFail", { name }), "err");
       return false;
     }
   }, [apiBase, fetchConfig, notify, t]);

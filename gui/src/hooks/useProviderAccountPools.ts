@@ -3,6 +3,7 @@ import type { AccountLoadState } from "../components/provider-workspace/types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import type { AccountQuota } from "../codex-quota-utils";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import type { Notify } from "../notice-tone";
 
 export interface Config {
   port: number;
@@ -49,7 +50,7 @@ export function useProviderAccountPools(deps: {
   config: Config | null;
   oauthStatus: Record<string, OAuthStatus>;
   aliveRef: MutableRefObject<boolean>;
-  notify: (msg: string, ok?: boolean) => void;
+  notify: Notify;
   fetchConfig: () => Promise<void>;
   fetchOauth: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
@@ -138,13 +139,13 @@ export function useProviderAccountPools(deps: {
     const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
-      if (!res.ok) { notify(t("prov.accountSwitchFail"), false); return; }
+      if (!res.ok) { notify(t("prov.accountSwitchFail"), "err"); return; }
       const refreshed = await fetchAccountSets([provider]);
       await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
-      if (!refreshed) { notify(t("pws.accountsLoadFailed"), false); return; }
-      notify(t("prov.accountSwitched", { email: label }), true);
+      if (!refreshed) { notify(t("pws.accountsLoadFailed"), "err"); return; }
+      notify(t("prov.accountSwitched", { email: label }), "ok");
     } catch {
-      notify(t("prov.accountSwitchFail"), false);
+      notify(t("prov.accountSwitchFail"), "err");
     } finally {
       if (switchingAccountRef.current?.provider === target.provider && switchingAccountRef.current.accountId === target.accountId) {
         switchingAccountRef.current = null;
@@ -157,12 +158,12 @@ export function useProviderAccountPools(deps: {
     if (entry.active) return;
     const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
     if (res.ok) {
-      notify(t("prov.keySwitched", { key: entry.label ?? entry.masked }), true);
+      notify(t("prov.keySwitched", { key: entry.label ?? entry.masked }), "ok");
       void fetchKeyPools(Object.keys(keyPools));
       void fetchProviderQuotas(true);
     } else {
       const data = await res.json().catch(() => ({}));
-      notify(data.error || t("prov.keySwitchFail"), false);
+      notify(data.error || t("prov.keySwitchFail"), "err");
     }
   };
 
@@ -170,7 +171,7 @@ export function useProviderAccountPools(deps: {
     if (!window.confirm(t("prov.keyRemoveConfirm", { key: entry.label ?? entry.masked }))) return;
     const res = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
     if (res.ok) {
-      notify(t("prov.keyRemoved", { key: entry.label ?? entry.masked }), true);
+      notify(t("prov.keyRemoved", { key: entry.label ?? entry.masked }), "ok");
       void fetchKeyPools(Object.keys(keyPools));
       void fetchConfig();
       void fetchProviderQuotas(true);
@@ -184,10 +185,10 @@ export function useProviderAccountPools(deps: {
       const res = await fetch(`${apiBase}/api/providers/keys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, key }) });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.keyAddFail"), false);
+        notify(data.error || t("prov.keyAddFail"), "err");
         return false;
       }
-      notify(t("prov.keyAdded", { name: provider }), true);
+      notify(t("prov.keyAdded", { name: provider }), "ok");
       setAddingKeyFor(null);
       await Promise.all([
         fetchKeyPools(Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider]),
@@ -195,7 +196,7 @@ export function useProviderAccountPools(deps: {
       ]);
       return true;
     } catch {
-      notify(t("prov.keyAddFail"), false);
+      notify(t("prov.keyAddFail"), "err");
       return false;
     }
   };
@@ -215,12 +216,12 @@ export function useProviderAccountPools(deps: {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };
-      notify(data.error || t("prov.aliasSaveFailed"), false);
+      notify(data.error || t("prov.aliasSaveFailed"), "err");
       return;
     }
     if (type === "oauth") await fetchAccountSets([provider]);
     else await fetchKeyPools(Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider]);
-    notify(t("prov.aliasSaved"), true);
+    notify(t("prov.aliasSaved"), "ok");
   };
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {
@@ -228,12 +229,12 @@ export function useProviderAccountPools(deps: {
     if (!window.confirm(t("prov.accountRemoveConfirm", { email: label }))) return;
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}`, { method: "DELETE" });
-      if (!res.ok) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }
-      notify(t("prov.accountRemoved", { email: label }), true);
+      if (!res.ok) { notify(t("prov.accountRemoveFail", { email: label }), "err"); return; }
+      notify(t("prov.accountRemoved", { email: label }), "ok");
       await fetchAccountSets([provider]);
       await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
     } catch {
-      notify(t("prov.accountRemoveFail", { email: label }), false);
+      notify(t("prov.accountRemoveFail", { email: label }), "err");
     }
   };
 

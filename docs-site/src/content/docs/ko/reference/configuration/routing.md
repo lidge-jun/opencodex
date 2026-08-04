@@ -36,9 +36,11 @@ id만 사용할 수 있습니다.
 
 명시적 선택은 Pool assignment strategy와 일반 thread affinity를 우회합니다. 매핑된 account가 없거나,
 일시 중지되었거나, cooldown 중이거나, 사용할 수 없거나, 재인증이 필요하면 다른 account로 전환하지
-않고 fail closed하며 active Pool account도 변경하지 않습니다. 적격 selector가 하나 이상 설정되면
-Codex catalog는 bare native picker row를 숨기고 각 selector마다 별도의
-`<selector>/<native-openai-model>` row를 표시합니다. bare native model id는 명시적으로 비활성화하지
+않고 fail closed하며 active Pool account도 변경하지 않습니다. account-qualified picker 표시가 활성화되어
+있고 적격 selector가 하나 이상 있으면 Codex picker는 bare native row를 숨기고 각 적격 selector마다 별도의
+`<selector>/<native-openai-model>` row를 표시합니다. `codexAccountPickerEnabled`가 `false`이면 생성된
+selector row는 숨겨지지만 bare native picker row는 이 설정 때문에 숨겨지지 않으며, 설정된 exact selector
+route는 계속 사용할 수 있습니다. bare native model id는 명시적으로 비활성화하지
 않는 한 기존 Pool / Direct routing을 유지하고 raw `/v1/models`에도 남습니다. 매핑된 저장 계정이 없는
 selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy guidance는
 [공급자 설정](/reference/configuration/providers/)을 참고하십시오.

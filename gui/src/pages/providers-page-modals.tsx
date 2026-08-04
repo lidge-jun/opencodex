@@ -6,6 +6,7 @@ import type { AddProviderIntent } from "../components/provider-workspace/Provide
 import type { AccountLoginRow, AccountLoginStatus } from "../components/provider-catalog/ProviderCatalog";
 import type { ProvidersConfig } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
+import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
 export function ProvidersPageModals({
   apiBase,
@@ -57,7 +58,7 @@ export function ProvidersPageModals({
   onAccountLogout: (provider: string) => void;
   onOpenAdd: () => void;
   onCloseCodexLogin: () => void;
-  onCodexAdded: () => void;
+  onCodexAdded: (completion: CodexAccountMutationCompletion) => void;
   onCancelRemove: () => void;
   onConfirmRemove: () => void;
   onCancelJsonLeave?: () => void;

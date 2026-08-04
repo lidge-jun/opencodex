@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, StrictMode, useReducer } from "react";
+import { act, StrictMode, useEffect, useReducer } from "react";
 import type { Root } from "react-dom/client";
 import {
   addCodexAccountUiReducer,
@@ -8,6 +8,7 @@ import {
 } from "../src/components/add-codex-account-reducer";
 import { useAddCodexAccountOAuth } from "../src/components/use-add-codex-account-oauth";
 import { LanguageProvider } from "../src/i18n/provider";
+import type { CodexAccountMutationCompletion } from "../src/codex-account-mutation";
 
 /**
  * StrictMode reauth latch + login-status single-flight / abort contracts for
@@ -95,31 +96,63 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-function Probe({ reauthAccountId }: { reauthAccountId: string }) {
+function Probe({
+  reauthAccountId,
+  onAdded = () => {},
+}: {
+  reauthAccountId: string;
+  onAdded?: (completion: CodexAccountMutationCompletion) => void;
+}) {
   const [ui, dispatch] = useReducer(
     addCodexAccountUiReducer,
     reauthAccountId,
     initialAddCodexAccountUiState,
   );
-  useAddCodexAccountOAuth({
+  const { bindCallbacks } = useAddCodexAccountOAuth({
     apiBase: "",
     reauthAccountId,
     ui,
     dispatch,
     t: ((key: string) => key) as never,
   });
+  useEffect(() => {
+    bindCallbacks(onAdded, () => {});
+  }, [bindCallbacks, onAdded]);
   return <div data-testid="oauth-probe" data-step={ui.step} />;
 }
 
-async function mountProbe(strict: boolean) {
+async function mountProbe(
+  strict: boolean,
+  onAdded?: (completion: CodexAccountMutationCompletion) => void,
+) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    const tree = <LanguageProvider><Probe reauthAccountId="acct-1" /></LanguageProvider>;
+    const tree = <LanguageProvider><Probe reauthAccountId="acct-1" onAdded={onAdded} /></LanguageProvider>;
     root.render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 }
+
+test("completed login forwards only the catalog refresh completion flag", async () => {
+  const completions: CodexAccountMutationCompletion[] = [];
+  await mountProbe(false, completion => { completions.push(completion); });
+
+  await act(async () => { await new Promise((r) => setTimeout(r, 2100)); });
+  const holder = statusHolders.shift();
+  expect(holder).toBeTruthy();
+  await act(async () => {
+    holder!.resolve(Response.json({
+      status: "done",
+      catalogRefreshPending: true,
+      accountId: "private-account",
+      error: "private-error",
+    }));
+    await new Promise((r) => setTimeout(r, 30));
+  });
+
+  expect(completions).toEqual([{ catalogRefreshPending: true }]);
+});
 
 test("StrictMode remount clears the reauth latch and starts OAuth again", async () => {
   await mountProbe(true);

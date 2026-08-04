@@ -1356,6 +1356,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.importMissingTokens": "В JSON отсутствует access_token или refresh_token",
   "codexAuth.importMissingId": "Укажите ID аккаунта",
   "codexAuth.accountAdded": "Аккаунт добавлен в пул",
+  "codexAuth.catalogRefreshPending": "Изменение аккаунта сохранено, но обновление каталога моделей Codex не завершилось. Выполните {cmd}, чтобы повторить попытку.",
   "codexAuth.addPickDesc": "Войдите в другой аккаунт ChatGPT, чтобы добавить его в пул.",
   "codexAuth.oauthLogin": "Вход через OAuth",
   "codexAuth.oauthDesc": "Открывает вход ChatGPT в браузере",

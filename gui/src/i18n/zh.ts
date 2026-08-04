@@ -926,6 +926,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.importMissingTokens": "JSON 中缺少 access_token 或 refresh_token",
   "codexAuth.importMissingId": "请输入账号 ID",
   "codexAuth.accountAdded": "账号已添加到池中",
+  "codexAuth.catalogRefreshPending": "账号更改已保存，但 Codex 模型目录刷新仍待处理。运行 {cmd} 重试。",
   "codexAuth.addPickDesc": "使用另一个 ChatGPT 账号登录以添加到池中。",
   "codexAuth.oauthLogin": "OAuth 登录",
   "codexAuth.oauthDesc": "在浏览器中打开 ChatGPT 登录",

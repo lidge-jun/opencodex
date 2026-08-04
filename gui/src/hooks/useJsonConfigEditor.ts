@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Notify } from "../notice-tone";
 
 export interface Config {
   port: number;
@@ -9,7 +10,7 @@ export interface Config {
 export function useJsonConfigEditor(deps: {
   apiBase: string;
   config: Config | null;
-  notify: (msg: string, ok?: boolean) => void;
+  notify: Notify;
   fetchConfig: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   onSaved: () => void;
@@ -39,10 +40,10 @@ export function useJsonConfigEditor(deps: {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.saveFailed"), false);
+        notify(data.error || t("prov.saveFailed"), "err");
         return false;
       }
-      notify(t("prov.saved"), true);
+      notify(t("prov.saved"), "ok");
       setEditing(false);
       setJsonEditorOpen(false);
       jsonEditorOpenRef.current = false;
@@ -53,7 +54,7 @@ export function useJsonConfigEditor(deps: {
       onSaved();
       return true;
     } catch {
-      notify(t("prov.invalidJson"), false);
+      notify(t("prov.invalidJson"), "err");
       return false;
     } finally {
       setJsonSaving(false);
