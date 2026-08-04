@@ -131,4 +131,31 @@ describe("modelCosts management validation and DTO", () => {
     };
     expect(dto.providers.blsc.modelCosts).toEqual(VALID_COSTS);
   });
+
+  test("safeConfigDTO serializes only the four rate fields of each modelCosts row", () => {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      providers: {
+        blsc: {
+          ...providerBase,
+          modelCosts: {
+            "deepseek-v4-flash": {
+              input: 0.14,
+              output: 0.28,
+              cacheRead: 0.0028,
+              cacheWrite: 0,
+              apiKey: "sekret-value",
+            },
+          },
+        },
+      },
+    }));
+    const dto = safeConfigDTO(loadConfig()) as {
+      providers: Record<string, { modelCosts?: Record<string, Record<string, unknown>> }>;
+    };
+    expect(dto.providers.blsc.modelCosts).toEqual({
+      "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+    });
+    expect(dto.providers.blsc.modelCosts?.["deepseek-v4-flash"]?.apiKey).toBeUndefined();
+  });
 });

@@ -1839,6 +1839,12 @@ function warnDegradedNativeSubagentConfig(rawParsed: unknown, config: OcxConfig)
   }
 }
 
+/**
+ * Load and validate config.json into an OcxConfig. Missing or broken files fall
+ * back to defaults (invalid files are backed up first); a partially-invalid
+ * config is merged with defaults so providers and pool accounts survive. Also
+ * refreshes the user cost-overlay registry from the resulting config.
+ */
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -1896,6 +1902,7 @@ export function loadConfig(): OcxConfig {
   }
 }
 
+/** Refresh the user cost-overlay registry from `config` and return it unchanged. */
 function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
   refreshUserCostOverlays(config);
   return config;
@@ -2419,6 +2426,12 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
   }
 };
 
+/**
+ * Atomic config.json write WITHOUT the mutation lock; callers must hold
+ * `withConfigMutationLockSync`. Returns true when bytes changed. Refreshes the
+ * cost-overlay registry from the persisted config so runtime estimates follow
+ * every save path.
+ */
 function persistConfigUnlocked(config: OcxConfig): boolean {
   const configPath = getConfigPath();
   const bytes = JSON.stringify(config, null, 2) + "\n";
@@ -2434,6 +2447,7 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   return true;
 }
 
+/** Persist `config` to config.json under the config-mutation lock. */
 export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());

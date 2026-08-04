@@ -607,6 +607,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.copied": "コピーしました",
   "logs.detail.source.jawcode": "jawcode カタログ",
   "logs.detail.source.expected": "予想価格オーバーレイ",
+  "logs.detail.source.user": "プロバイダー設定の価格オーバーレイ",
   "logs.detail.verification.verified": "検証済み",
   "logs.detail.verification.derived": "ベースモデルから派生",
   "logs.detail.attempt.target": "プロバイダー / モデル",

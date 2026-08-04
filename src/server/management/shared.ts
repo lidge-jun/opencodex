@@ -127,6 +127,7 @@ export function unavailableCostReason(entry: MetricSource): MetricUnavailableRea
   return "price_unmatched";
 }
 
+/** Display-time cost estimate for one log entry (or its attempt list), including the reasons that qualify the estimate. */
 export function costResult(entry: MetricSource): CostResult {
   const tier = serviceTierContext(entry);
   const estimate = entry.attempts?.length

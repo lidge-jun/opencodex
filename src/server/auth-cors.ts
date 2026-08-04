@@ -18,7 +18,7 @@ import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 
@@ -547,6 +547,35 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
   if (value !== undefined) out[key as string] = value as unknown;
 }
 
+/** True when `value` is a non-negative finite USD-per-1M-token rate. */
+function validRate(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Serialize `providers.<name>.modelCosts` for the dashboard, copying ONLY the
+ * four numeric rate fields per model. Extra hand-edited fields (which the load
+ * validator ignores) must never reach the client, so secrets accidentally
+ * nested under a cost row cannot leak through the DTO.
+ */
+function sanitizeModelCosts(costs: unknown): Record<string, ProviderCostOverlay> | undefined {
+  if (!costs || typeof costs !== "object" || Array.isArray(costs)) return undefined;
+  const out: Record<string, ProviderCostOverlay> = {};
+  for (const [modelId, entry] of Object.entries(costs)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const rates = entry as Record<string, unknown>;
+    const input = rates.input;
+    const output = rates.output;
+    const cacheRead = rates.cacheRead;
+    const cacheWrite = rates.cacheWrite;
+    if (validRate(input) && validRate(output) && validRate(cacheRead) && validRate(cacheWrite)) {
+      out[modelId] = { input, output, cacheRead, cacheWrite };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
 export function safeConfigDTO(config: OcxConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
@@ -570,7 +599,6 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "modelContextWindows",
       "defaultMaxOutputTokens",
       "modelMaxOutputTokens",
-      "modelCosts",
       "openRouterRouting",
       "modelOpenRouterRouting",
       "reasoningEfforts",
@@ -588,6 +616,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
+    const modelCosts = sanitizeModelCosts(provider.modelCosts);
+    if (modelCosts) dto.modelCosts = modelCosts;
     // Resolve the note by DESTINATION, not by name. A preset saved under a custom name is
     // still pointed at the same vendor route, and a usage restriction the user needs to see
     // must not disappear because the row was renamed. Prefer the same-name entry so an

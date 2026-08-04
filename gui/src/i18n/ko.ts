@@ -641,6 +641,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.copied": "복사됨",
   "logs.detail.source.jawcode": "jawcode 카탈로그",
   "logs.detail.source.expected": "expected 가격 오버레이",
+  "logs.detail.source.user": "공급자 구성 가격 오버레이",
   "logs.detail.verification.verified": "검증됨",
   "logs.detail.verification.derived": "기반 모델 유도",
   "logs.detail.attempt.target": "프로바이더 / 모델",
