@@ -467,8 +467,8 @@ test("responsesSseToChatCompletionsSse delivers the first frame before a macrota
   await reader.cancel();
 });
 
-test("POST /v1/chat/completions rejects response_format for routed openai-chat", async () => {
-  const upstream = mockChatUpstream();
+test("POST /v1/chat/completions forwards response_format to routed openai-chat", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
   try {
@@ -477,15 +477,47 @@ test("POST /v1/chat/completions rejects response_format for routed openai-chat",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: "mock/test-model",
-        stream: false,
+        stream: true,
         messages: [{ role: "user", content: "hi" }],
-        response_format: { type: "json_object" },
+        response_format: { type: "json_schema", json_schema: { name: "answer", schema: { type: "object" }, strict: true } },
       }),
     });
-    expect(response.status).toBe(400);
-    const json = await response.json() as { error: { message: string; type: string } };
-    expect(json.error.message).toContain("response_format");
-    expect(json.error.type).toBe("invalid_request_error");
+    expect(response.status).toBe(200);
+    await response.text();
+    // Round trip: chat nested -> internal flat text.format -> re-nested on the wire, byte-identical.
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/responses carries text.format onto the routed chat wire", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        text: { format: { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true } },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
   } finally {
     await server.stop(true);
     upstream.stop(true);

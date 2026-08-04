@@ -418,6 +418,30 @@ describe("routed compaction for key-mode openai-responses (#422)", () => {
     expect(compactionItems.length).toBe(1);
   });
 
+  test("routed chat compaction drops the structured-output format", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return jsonResponse({
+        choices: [{ index: 0, message: { role: "assistant", content: "handoff summary" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      });
+    }) as typeof fetch;
+
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ text: { format: { type: "json_object" } } })),
+      keyProviderConfig({ adapter: "openai-chat" }),
+      { model: "", provider: "" },
+    );
+
+    expect(bodies.length).toBe(1);
+    // The compaction turn is a prose summary; the caller's structured-output request must not
+    // constrain it (core.ts routedCompaction deletes options.textFormat).
+    expect(bodies[0]!.response_format).toBeUndefined();
+    const json = await res.json() as { output?: Array<{ type?: string }> };
+    expect((json.output ?? []).filter(item => item.type === "compaction").length).toBe(1);
+  });
+
   test("strips additional_tools even when top-level tools are absent", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {

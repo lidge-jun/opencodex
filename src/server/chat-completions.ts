@@ -133,10 +133,6 @@ async function handleChatCompletionsWithBudget(
     } else if (internalBody.store === undefined) {
       internalBody.store = false;
     }
-    if (route.provider.adapter === "openai-chat" && internalBody.text !== undefined) {
-      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
-      return chatCompletionsErrorResponse(400, "response_format is not supported for routed openai-chat models");
-    }
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       const raw = chatBody as Rec;
       const parts: string[] = [];

@@ -50,9 +50,10 @@ existing providers, routing, OAuth, and sidecars apply.
 The compatibility surface supports `model`, `messages`, `stream`, function tools
 and tool choice, token limits, temperature/top-p/stop, reasoning effort, parallel
 tool calls, prompt cache keys, metadata, and `response_format` on native Responses
-routes. Routed `openai-chat` models reject `response_format` with HTTP 400 because
-their structured-output support is not verified. Other Chat Completions fields,
-including penalties, `n`, and logprobs, are not currently supported.
+routes and routed `openai-chat` models (`json_object` and `json_schema` are
+forwarded as-is; a backend without structured-output support returns its own
+error). Other Chat Completions fields, including penalties, `n`, and logprobs,
+are not currently supported.
 
 ## Troubleshooting
 
