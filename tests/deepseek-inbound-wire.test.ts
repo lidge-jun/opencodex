@@ -113,12 +113,18 @@ describe("the inbound scope survives the handleResponses replay", () => {
   }
 
   async function respondWithUpstreamJson(
-    payload: Record<string, unknown>,
-    options: { clientStream?: boolean; inboundTransport?: "websocket" } = {},
+    payload: unknown,
+    options: {
+      clientStream?: boolean;
+      inboundTransport?: "websocket";
+      upstreamHeaders?: HeadersInit;
+    } = {},
   ): Promise<Response> {
-    globalThis.fetch = (async () => Response.json(payload, {
+    const upstreamHeaders = new Headers(options.upstreamHeaders);
+    upstreamHeaders.set("content-type", "application/json");
+    globalThis.fetch = (async () => new Response(JSON.stringify(payload), {
       status: 200,
-      headers: { "content-type": "application/json" },
+      headers: upstreamHeaders,
     })) as typeof fetch;
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
     return handleResponses(
@@ -147,11 +153,15 @@ describe("the inbound scope survives the handleResponses replay", () => {
   test("an Anthropic replay reaches /chat/completions, not /responses", async () => {
     // Regression guard for the audit's critical finding: editing only the pre-flight
     // resolution in claude-messages.ts left this URL on /responses.
-    expect((await drive("anthropic")).url).toBe("https://api.deepseek.com/chat/completions");
+    const request = await drive("anthropic");
+    expect(request.url).toBe("https://api.deepseek.com/chat/completions");
+    expect(request.body.stream).toBe(true);
   });
 
   test("a Chat replay reaches /chat/completions, not /responses", async () => {
-    expect((await drive("chat")).url).toBe("https://api.deepseek.com/chat/completions");
+    const request = await drive("chat");
+    expect(request.url).toBe("https://api.deepseek.com/chat/completions");
+    expect(request.body.stream).toBe(true);
   });
 
   test("a Codex WebSocket turn asks DeepSeek for bounded JSON upstream", async () => {
@@ -181,9 +191,17 @@ describe("the inbound scope survives the handleResponses replay", () => {
         arguments: "{\"command\":\"pwd\"}",
         status: "completed",
       }],
+    }, {
+      upstreamHeaders: {
+        "content-length": "999",
+        "content-encoding": "gzip",
+      },
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type") ?? "").toContain("text/event-stream");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("content-encoding")).toBeNull();
     const body = await response.text();
     expect(body).toContain("event: response.created");
     expect(body).toContain("event: response.output_item.done");
@@ -217,6 +235,14 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(body).toContain("event: response.incomplete");
     expect(body).not.toContain("event: response.completed");
     expect(body).toContain("upstream_stall_timeout");
+  });
+
+  test("HTTP stream clients reject null bounded JSON with a typed upstream error", async () => {
+    const response = await respondWithUpstreamJson(null);
+    expect(response.status).toBe(502);
+    const payload = (await response.json()) as { error?: { code?: string; message?: string } };
+    expect(payload.error?.code).toBe("upstream_server_error");
+    expect(payload.error?.message).toContain("malformed JSON");
   });
 
   test("non-streaming HTTP clients keep the bounded JSON response", async () => {

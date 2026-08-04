@@ -887,21 +887,23 @@ async function applyFinalRouteRequestNormalization(args: {
     parsed._clientRequestedStream = parsed.stream;
   }
 
-  // Some Responses upstreams can emit output without a terminal event. Force a
-  // bounded JSON body for those models on every Responses turn (HTTP or WS), then
-  // reframe the completed payload for the client.
-  const responsesUpstreamStreaming = providerModelWebsocketUpstreamStreaming(
-    route.providerName,
-    route.provider,
-    route.modelId,
-  );
-
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
+
+  // Some Responses upstreams can emit output without a terminal event. Apply the
+  // bounded-JSON compatibility policy only after the final wire is known, so Chat
+  // and Anthropic replays that remain on openai-chat keep their streaming contract.
+  const responsesUpstreamStreaming = route.provider.adapter === "openai-responses"
+    ? providerModelWebsocketUpstreamStreaming(
+        route.providerName,
+        route.provider,
+        route.modelId,
+      )
+    : undefined;
 
   if (responsesUpstreamStreaming === false) {
     parsed.stream = false;
@@ -2202,13 +2204,19 @@ async function handleResponsesInner(
       if (parsed._clientRequestedStream === true && options.inboundTransport !== "websocket") {
         let responseJson: Record<string, unknown>;
         try {
-          responseJson = JSON.parse(restoredText) as Record<string, unknown>;
+          const parsedJson: unknown = JSON.parse(restoredText);
+          if (typeof parsedJson !== "object" || parsedJson === null || Array.isArray(parsedJson)) {
+            return formatErrorResponse(502, "upstream_error", "upstream returned malformed JSON");
+          }
+          responseJson = parsedJson as Record<string, unknown>;
         } catch {
           return formatErrorResponse(502, "upstream_error", "upstream returned malformed JSON");
         }
         const sseHeaders = new Headers(headers);
+        sseHeaders.delete("content-length");
+        sseHeaders.delete("content-encoding");
         sseHeaders.set("content-type", "text/event-stream; charset=utf-8");
-        sseHeaders.set("cache-control", "no-cache");
+        sseHeaders.set("cache-control", "no-store");
         return new Response(responsesJsonToClientSse(responseJson), {
           status: upstreamResponse.status,
           statusText: upstreamResponse.statusText,
