@@ -561,8 +561,11 @@ export async function handleLive(
       headers,
       body: outboundBody,
       signal: linkedSignal.signal,
-      // #914: never follow a redirect into a dead-host rejection after the credential was seen.
-      redirect: "manual",
+      // #914: never follow a redirect into a dead-host rejection after the
+      // credential was seen — on the ChatGPT forward path only. Keyed voice
+      // providers keep default redirect following (same-origin routing must
+      // resolve inside the proxy, where the API key still lives).
+      ...(relay.keyed ? {} : { redirect: "manual" as const }),
     });
     // Record every completed upstream response before body size handling so account health /
     // cooldown still updates when we reject an oversized payload.

@@ -6,7 +6,7 @@ import {
   transportErrorCode,
   transportFailureHost,
 } from "../src/lib/upstream-reachability";
-import { TransientRetryEvidenceError } from "../src/lib/upstream-retry";
+import { UpstreamRetryEvidenceError } from "../src/lib/upstream-retry";
 
 function errorWithCode(code: string | undefined, message: string, cause?: unknown): Error {
   const err = new Error(message) as Error & { code?: string; cause?: unknown };
@@ -102,7 +102,7 @@ describe("classifyTransportFailureKind", () => {
     // Mixed 5xx -> rejection: the upstream already answered 503 before the final
     // attempt rejected, so the host and credential path were reached. The
     // evidence wrapper must keep the failure out of the pre-connect class.
-    const wrapped = new TransientRetryEvidenceError(
+    const wrapped = new UpstreamRetryEvidenceError(
       [503],
       errorWithCode("ConnectionRefused", "Unable to connect. Is the computer able to access the url?"),
     );
@@ -111,12 +111,29 @@ describe("classifyTransportFailureKind", () => {
 
   test("a timeout after a transient 5xx keeps the timeout identity", () => {
     const rejection = Object.assign(new Error("Timeout elapsed"), { name: "TimeoutError" });
-    const wrapped = new TransientRetryEvidenceError([503], rejection);
+    const wrapped = new UpstreamRetryEvidenceError([503], rejection);
     expect(classifyTransportFailureKind(wrapped)).toBe("timeout");
   });
 
-  test("an evidence wrapper without prior statuses classifies by its cause", () => {
-    const wrapped = new TransientRetryEvidenceError(
+  test("a rejection after a credential-visible reset stays account-attributed, never neutral", () => {
+    // Mixed reset -> rejection: the first attempt reached the origin and was
+    // reset after the request was read; the next attempt failed to connect.
+    const wrapped = new UpstreamRetryEvidenceError(
+      [],
+      errorWithCode("ConnectionRefused", "Unable to connect. Is the computer able to access the url?"),
+      true,
+    );
+    expect(classifyTransportFailureKind(wrapped)).toBe("connect_error");
+  });
+
+  test("a timeout after a credential-visible reset keeps the timeout identity", () => {
+    const rejection = Object.assign(new Error("Timeout elapsed"), { name: "TimeoutError" });
+    const wrapped = new UpstreamRetryEvidenceError([], rejection, true);
+    expect(classifyTransportFailureKind(wrapped)).toBe("timeout");
+  });
+
+  test("an evidence wrapper without prior statuses or resets classifies by its cause", () => {
+    const wrapped = new UpstreamRetryEvidenceError(
       [],
       errorWithCode("ConnectionRefused", "Unable to connect. Is the computer able to access the url?"),
     );
@@ -125,9 +142,10 @@ describe("classifyTransportFailureKind", () => {
 
   test("the evidence wrapper preserves the final rejection and its statuses", () => {
     const rejection = errorWithCode("ConnectionRefused", "Unable to connect");
-    const wrapped = new TransientRetryEvidenceError([503, 502], rejection);
+    const wrapped = new UpstreamRetryEvidenceError([503, 502], rejection, true);
     expect(wrapped.cause).toBe(rejection);
     expect(wrapped.transientStatuses).toEqual([503, 502]);
+    expect(wrapped.resetSeen).toBe(true);
     expect(transportErrorCode(wrapped)).toBeUndefined();
   });
 });

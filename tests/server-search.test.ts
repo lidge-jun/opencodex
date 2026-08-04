@@ -431,6 +431,7 @@ test("a 307 search upstream is relayed with its Location and never followed (#91
     // The redirect target was never contacted: manual redirects relay the 3xx as-is.
     expect(upstreamCalls).toBe(1);
     // 3xx stays the neutral class even for an exact-account send.
+    expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
     expect(getCodexUpstreamHealth("pool-a")).toBeNull();
     expect(loadConfig().activeCodexAccountId).toBe("pool-b");
   } finally {

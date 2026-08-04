@@ -149,23 +149,35 @@ export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
 
 /**
- * Rejection thrown by {@link fetchWithTransientRetry} when the final attempt
- * rejects after earlier attempts already returned transient 5xx responses.
+ * Rejection thrown by the upstream retry helpers when the terminal attempt
+ * rejects after earlier attempts already produced credential-visible evidence:
+ * transient 5xx responses, or a connection reset after the request was read.
  *
- * A transient 5xx proves the host and credential path were reached, so the
+ * That evidence proves the host and credential path were reached, so the
  * failure must stay account-attributed even though the terminal promise looks
- * like a transport rejection (issue #914 review: mixed 5xx -> rejection must
- * not be downgraded to the account-neutral pre-connection class). The original
- * rejection is preserved as `cause` so its code and message stay inspectable.
+ * like a transport rejection (issue #914 review: mixed 5xx/reset -> rejection
+ * must not be downgraded to the account-neutral pre-connection class). The
+ * original rejection is preserved as `cause` so its code and message stay
+ * inspectable.
  */
-export class TransientRetryEvidenceError extends Error {
+export class UpstreamRetryEvidenceError extends Error {
   constructor(
     public readonly transientStatuses: readonly number[],
     cause: unknown,
+    /** True when a connection-reset retry already reached the origin. */
+    public readonly resetSeen = false,
   ) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`upstream fetch failed after transient 5xx response(s): ${detail}`, { cause });
-    this.name = "TransientRetryEvidenceError";
+    const kinds: string[] = [];
+    if (transientStatuses.length > 0) kinds.push("transient 5xx response(s)");
+    if (resetSeen) kinds.push("a credential-visible connection reset");
+    super(
+      kinds.length > 0
+        ? `upstream fetch failed after ${kinds.join(" and ")}: ${detail}`
+        : `upstream fetch failed: ${detail}`,
+      { cause },
+    );
+    this.name = "UpstreamRetryEvidenceError";
   }
 }
 
@@ -202,12 +214,22 @@ export async function fetchWithResetRetry(
 ): Promise<Response> {
   const attempts = Math.max(1, opts.attempts ?? RESET_RETRY_MAX_ATTEMPTS);
   let lastError: unknown;
+  let sawReset = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
     try {
       return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
     } catch (err) {
-      if (opts.abortSignal?.aborted || !isConnectionResetError(err) || attempt === attempts - 1) throw err;
+      if (opts.abortSignal?.aborted) throw err;
+      if (!isConnectionResetError(err)) {
+        // A reset that already reached the origin is credential-visible
+        // evidence: keep it attached so the terminal rejection cannot be
+        // downgraded to the pre-connection neutral class (#914 review).
+        if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
+        throw err;
+      }
+      if (attempt === attempts - 1) throw err;
+      sawReset = true;
       lastError = err;
       console.warn(
         `[upstream-retry] connection reset${opts.label ? ` (${opts.label})` : ""} — retrying (${attempt + 2}/${attempts})`,
@@ -261,7 +283,7 @@ export async function fetchWithTransientRetry(
     } catch (err) {
       // Keep the prior 5xx evidence attached: the origin already responded, so
       // this rejection is not pre-connection and must not classify as neutral.
-      throw new TransientRetryEvidenceError(transientStatuses, err);
+      throw new UpstreamRetryEvidenceError(transientStatuses, err);
     }
   }
   return res;

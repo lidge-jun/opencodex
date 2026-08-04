@@ -382,6 +382,48 @@ describe("issue #914: pre-connection reachability failures are account-neutral",
     }
   });
 
+  test("mixed credential-visible reset then reachability rejection stays account-attributed (#914 review)", async () => {
+    const config = makePoolConfig();
+    saveConfig(config);
+    let upstreamCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = input instanceof Request
+        ? input.url
+        : input instanceof URL
+          ? input.toString()
+          : String(input);
+      const url = new URL(requestUrl);
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+        upstreamCalls += 1;
+        if (upstreamCalls === 1) {
+          // Read-then-close: the origin saw the credential, then reset the socket.
+          throw Object.assign(new Error("The socket connection was closed unexpectedly"), {
+            code: "ECONNRESET",
+            errno: 0,
+          });
+        }
+        throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+          code: "ConnectionRefused",
+          errno: 0,
+        });
+      }
+      return ORIGINAL_FETCH(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const res = await responsesRequest(server.url.toString(), "thread-mixed-reset");
+      expect(res.status).toBe(502);
+
+      // The reset reached the origin, so the reachability-shaped terminal
+      // rejection must not erase that account evidence.
+      expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 0 });
+      expect(isCodexAccountSoftAvoided("a")).toBe(false);
+      expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("pool sends relay 3xx instead of following a redirect into a dead host (#914 review)", async () => {
     const config = makePoolConfig();
     saveConfig(config);

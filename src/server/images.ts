@@ -454,8 +454,11 @@ export async function handleImages(
       headers,
       body: JSON.stringify(body),
       signal: linkedSignal.signal,
-      // #914: never follow a redirect into a dead-host rejection after the credential was seen.
-      redirect: "manual",
+      // #914: never follow a redirect into a dead-host rejection after the
+      // credential was seen — on the ChatGPT forward path only. Keyed providers
+      // keep default redirect following: their 307/308 routing must resolve
+      // inside the proxy, where the API key still lives.
+      ...(forward ? { redirect: "manual" as const } : {}),
     });
     // Buffer rather than stream: the payload is one JSON document (base64 image, typically a few
     // MB), and buffering keeps the timeout window covering the whole exchange. Cap the size to
