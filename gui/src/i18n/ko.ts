@@ -666,6 +666,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.estimate.usage_estimated": "프로바이더 usage가 추정치입니다.",
   "logs.detail.estimate.cache_detail_missing": "캐시 상세가 없어 입력 전액을 상한으로 추정했습니다.",
   "logs.detail.estimate.expected_price_overlay": "검증된 expected 정가를 사용했습니다.",
+  "logs.detail.estimate.provider_cost_overlay": "공급자 구성 가격 오버레이를 사용했습니다.",
   "logs.col.error": "오류",
   "logs.col.upstreamReason": "업스트림 원인",
   "logs.col.duration": "소요 시간",

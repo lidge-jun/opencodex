@@ -632,6 +632,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.estimate.usage_estimated": "プロバイダーの使用量は推定です。",
   "logs.detail.estimate.cache_detail_missing": "キャッシュの詳細が利用できませんでした; 入力は上限の推定です。",
   "logs.detail.estimate.expected_price_overlay": "検証済みの予想定価が使用されました。",
+  "logs.detail.estimate.provider_cost_overlay": "プロバイダー設定の価格オーバーレイが使用されました。",
   "logs.col.error": "エラー",
   "logs.col.upstreamReason": "上流の理由",
   "logs.col.duration": "所要時間",

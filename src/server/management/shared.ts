@@ -82,7 +82,11 @@ export type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type CostEstimateReason = "usage_estimated" | "cache_detail_missing" | "expected_price_overlay";
+export type CostEstimateReason =
+  | "usage_estimated"
+  | "cache_detail_missing"
+  | "expected_price_overlay"
+  | "provider_cost_overlay";
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
@@ -136,6 +140,8 @@ export function costResult(entry: MetricSource): CostResult {
       && entry.usage.cacheCreationInputTokens === undefined ? "cache_detail_missing" as const : undefined,
     estimate.price?.source === "expected" || estimate.attempts?.some(a => a.price.source === "expected")
       ? "expected_price_overlay" as const : undefined,
+    estimate.price?.source === "user" || estimate.attempts?.some(a => a.price.source === "user")
+      ? "provider_cost_overlay" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };
 }

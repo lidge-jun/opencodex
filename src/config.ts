@@ -74,6 +74,7 @@ import {
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
+import { refreshUserCostOverlays } from "./usage/user-cost-overlays";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
   MAX_APP_OWNED_MEMORY_BUDGET_MB,
@@ -704,6 +705,32 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   return null;
 }
 
+/**
+ * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model
+ * id, each value a 4-tuple of non-negative finite USD-per-1M-token rates.
+ * Returns null when valid/absent, else a human-readable error.
+ */
+export function providerModelCostsConfigError(value: unknown, field = "modelCosts"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `${field} must be a plain object keyed by model id`;
+  }
+  for (const [modelId, entry] of Object.entries(value)) {
+    if (!modelId.trim()) return `${field} keys must be nonblank model ids`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return `${field}.${modelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
+    }
+    const rates = entry as Record<string, unknown>;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
+      const rate = rates[key];
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
+        return `${field}.${modelId}.${key} must be a non-negative finite number (USD per 1M tokens)`;
+      }
+    }
+  }
+  return null;
+}
+
 /** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
 export function apiKeyTransportConfigError(
   provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "apiKeyTransport">,
@@ -1230,6 +1257,14 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "headers"],
         message: headersError,
+      });
+    }
+    const modelCostsError = providerModelCostsConfigError((provider as { modelCosts?: unknown }).modelCosts);
+    if (modelCostsError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelCosts"],
+        message: modelCostsError,
       });
     }
     const apiKeyTransportError = apiKeyTransportConfigError(provider as OcxProviderConfig);
@@ -1811,7 +1846,7 @@ export function loadConfig(): OcxConfig {
   hardenExistingSecret(configPath);
   hardenExistingSecret(join(dir, "auth.json"));
   if (!existsSync(configPath)) {
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
@@ -1828,7 +1863,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -1850,15 +1885,20 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   }
+}
+
+function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
+  refreshUserCostOverlays(config);
+  return config;
 }
 
 export type ConfigDiagnostics = {
@@ -2388,6 +2428,9 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
     if (!isMissingPathError(error)) throw error;
   }
   atomicWriteFile(configPath, bytes);
+  // Keep the runtime overlay registry in sync with every persist path
+  // (saveConfig and mutatePersistedConfig both funnel through here).
+  refreshUserCostOverlays(config);
   return true;
 }
 

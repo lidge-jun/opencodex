@@ -10,6 +10,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerModelCostsConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   retryOn429PolicyConfigError,
 } from "../config";
@@ -471,6 +472,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
   }
+  const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
+  if (modelCostsError) return `provider ${name} ${modelCostsError}`;
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
@@ -567,6 +570,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "modelContextWindows",
       "defaultMaxOutputTokens",
       "modelMaxOutputTokens",
+      "modelCosts",
       "openRouterRouting",
       "modelOpenRouterRouting",
       "reasoningEfforts",

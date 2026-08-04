@@ -647,6 +647,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.estimate.usage_estimated": "Die Anbieternutzung ist geschätzt.",
   "logs.detail.estimate.cache_detail_missing": "Cache-Details fehlen; Eingabe ist als Obergrenze geschätzt.",
   "logs.detail.estimate.expected_price_overlay": "Ein verifizierter Expected-Listenpreis wurde verwendet.",
+  "logs.detail.estimate.provider_cost_overlay": "Ein provider-konfigurierter Preis-Overlay wurde verwendet.",
   "logs.col.error": "Fehler",
   "logs.col.upstreamReason": "Upstream-Grund",
   "logs.col.duration": "Dauer",

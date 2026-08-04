@@ -1129,6 +1129,18 @@ export interface RateLimitRetryPolicy {
 }
 
 /**
+ * User-configured display price for one model (USD per 1M tokens).
+ * Mirrors the `Cost4` shape used by the usage cost estimator; structurally
+ * compatible so config rows can be lifted directly into price overlays.
+ */
+export interface ProviderCostOverlay {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
  * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
  * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
  */
@@ -1250,6 +1262,15 @@ export interface OcxProviderConfig {
   defaultMaxOutputTokens?: number;
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
   modelMaxOutputTokens?: Record<string, number>;
+  /**
+   * Per-model display prices (USD per 1M tokens) keyed by exact model id —
+   * opencode-style per-model pricing in ocx's flat `modelXxx` convention:
+   * `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`.
+   * User-configured prices win over the built-in jawcode/expected catalogs in
+   * the Logs `~$` estimate. Display-time estimation only; never billing. An
+   * all-zero entry means "not billable here" and falls through to the catalogs.
+   */
+  modelCosts?: Record<string, ProviderCostOverlay>;
   headers?: Record<string, string>;
   /** Default provider-routing preferences for models sent through the canonical OpenRouter API. */
   openRouterRouting?: OpenRouterProviderRouting;
