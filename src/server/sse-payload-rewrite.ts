@@ -9,6 +9,10 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 
 export type SsePayloadRewrite = (payload: string) => string;
 
+function isPayloadRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
   const match = buffer.match(/\r?\n\r?\n/);
@@ -58,6 +62,55 @@ export function composeSsePayloadRewrites(...rewrites: SsePayloadRewrite[]): Sse
     let next = payload;
     for (const rewrite of rewrites) next = rewrite(next);
     return next;
+  };
+}
+
+/**
+ * GitHub Copilot's `/responses` wire obfuscates streamed function-call argument
+ * deltas (ciphertext `delta` plus an `obfuscation` field) for the `vscode-chat`
+ * integration. Responses clients (codex-rs) cannot de-obfuscate them, so an
+ * agentic turn stalls on the first tool call. The terminal
+ * `response.function_call_arguments.done` event carries the plaintext
+ * `arguments`, so this rewrite drops the ciphertext deltas and re-emits the
+ * full plaintext arguments as a single delta immediately before `done`, keeping
+ * the stream protocol-conformant (deltas still concatenate to the final
+ * arguments). The `obfuscation` metadata is stripped from every event.
+ */
+export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
+  const obfuscatedCallIds = new Set<string>();
+  return (payload: string): string => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      return payload;
+    }
+    if (!isPayloadRecord(parsed)) return payload;
+    const hadObfuscation = typeof parsed.obfuscation === "string";
+    if (hadObfuscation) delete parsed.obfuscation;
+    const type = parsed.type;
+    if (type === "response.function_call_arguments.delta" && hadObfuscation) {
+      if (typeof parsed.item_id === "string") obfuscatedCallIds.add(parsed.item_id);
+      // Ciphertext chunk: emit an empty delta so the client sees a valid event
+      // without any unusable bytes; the plaintext arrives with `.done`.
+      parsed.delta = "";
+      return JSON.stringify(parsed);
+    }
+    if (type === "response.function_call_arguments.done" && typeof parsed.item_id === "string") {
+      if (obfuscatedCallIds.delete(parsed.item_id)) {
+        const deltaEvent = {
+          type: "response.function_call_arguments.delta",
+          item_id: parsed.item_id,
+          output_index: parsed.output_index,
+          sequence_number: parsed.sequence_number,
+          delta: typeof parsed.arguments === "string" ? parsed.arguments : "",
+        };
+        // The relay writes `data: <payload>` then the block delimiter, so this
+        // payload becomes two consecutive valid SSE events (delta, then done).
+        return `${JSON.stringify(deltaEvent)}\n\ndata: ${JSON.stringify(parsed)}`;
+      }
+    }
+    return hadObfuscation ? JSON.stringify(parsed) : payload;
   };
 }
 

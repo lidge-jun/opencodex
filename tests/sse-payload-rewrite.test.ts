@@ -6,6 +6,7 @@ import { createImageGenCallRestoreRewrite } from "../src/server/responses-image-
 import { createResponsesItemIdPayloadRewrite } from "../src/server/responses-item-id-repair";
 import {
   composeSsePayloadRewrites,
+  createGithubCopilotObfuscationRewrite,
   relaySseWithPayloadRewrite,
 } from "../src/server/sse-payload-rewrite";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -39,6 +40,66 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 describe("SSE payload rewrite composition", () => {
+  test("GitHub Copilot obfuscation rewrite turns ciphertext deltas into plaintext", async () => {
+    const rewrite = createGithubCopilotObfuscationRewrite();
+    const itemId = "cipher-item-id";
+    const upstream = [
+      'data: {"type":"response.function_call_arguments.delta","item_id":"' + itemId + '","output_index":0,"sequence_number":3,"delta":"ciphertext-chunk-1","obfuscation":"abc123"}\n\n',
+      'data: {"type":"response.function_call_arguments.delta","item_id":"' + itemId + '","output_index":0,"sequence_number":4,"delta":"ciphertext-chunk-2","obfuscation":"abc123"}\n\n',
+      'data: {"type":"response.function_call_arguments.done","item_id":"' + itemId + '","output_index":0,"sequence_number":5,"arguments":"{\\"a\\":2,\\"b\\":2}"}\n\n',
+    ].join("");
+
+    const rewritten = await readAll(
+      relaySseWithPayloadRewrite(
+        streamFromText(upstream),
+        rewrite,
+        createTestTranslatorBudget(),
+      ),
+    );
+
+    const events = rewritten
+      .split("\n\n")
+      .map((block) => block.replace(/^data: /, ""))
+      .filter((block) => block.length > 0)
+      .map((block) => JSON.parse(block));
+
+    expect(events.map((event) => event.type)).toEqual([
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.done",
+    ]);
+    expect(events[0].delta).toBe("");
+    expect(events[1].delta).toBe("");
+    expect(events[2].delta).toBe('{"a":2,"b":2}');
+    expect(events[3].arguments).toBe('{"a":2,"b":2}');
+    expect(JSON.stringify(rewritten)).not.toContain("obfuscation");
+    expect(JSON.stringify(rewritten)).not.toContain("ciphertext-chunk");
+  });
+
+  test("GitHub Copilot obfuscation rewrite strips obfuscation from text deltas", async () => {
+    const rewrite = createGithubCopilotObfuscationRewrite();
+    const upstream =
+      'data: {"type":"response.output_text.delta","item_id":"msg_0","output_index":0,"sequence_number":1,"delta":"bonjour","obfuscation":"abc123"}\n\n';
+
+    const rewritten = await readAll(
+      relaySseWithPayloadRewrite(
+        streamFromText(upstream),
+        rewrite,
+        createTestTranslatorBudget(),
+      ),
+    );
+
+    expect(rewritten).toContain('"delta":"bonjour"');
+    expect(rewritten).not.toContain("obfuscation");
+  });
+
+  test("GitHub Copilot obfuscation rewrite passes clean events through unchanged", () => {
+    const rewrite = createGithubCopilotObfuscationRewrite();
+    const payload = '{"type":"response.output_text.delta","delta":"hello"}';
+    expect(rewrite(payload)).toBe(payload);
+  });
+
   test("applies image-gen restore and item-id repair in one relay pass", async () => {
     const upstream = [
       'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_0","role":"assistant"}}\n\n',

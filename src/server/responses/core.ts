@@ -155,7 +155,11 @@ import {
   imageGenToolCallAliases,
   restoreImageGenCallsInJson,
 } from "../responses-image-gen-repair";
-import { composeSsePayloadRewrites, relaySseWithPayloadRewrite } from "../sse-payload-rewrite";
+import {
+  composeSsePayloadRewrites,
+  createGithubCopilotObfuscationRewrite,
+  relaySseWithPayloadRewrite,
+} from "../sse-payload-rewrite";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
@@ -1764,6 +1768,9 @@ async function handleResponsesInner(
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
+          : undefined,
+        route.providerName === "github-copilot"
+          ? createGithubCopilotObfuscationRewrite()
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
