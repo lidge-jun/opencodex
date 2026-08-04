@@ -59,6 +59,7 @@ import { applySystemEnvToggle } from "./system-env";
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
+import { handleRequestHistoryRoutes } from "./management/request-history-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
@@ -138,6 +139,7 @@ export async function handleManagementAPI(
   try {
     routed = (await handleConfigRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
+    ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
