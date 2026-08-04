@@ -669,6 +669,7 @@ export const en = {
   "logs.detail.estimate.usage_estimated": "Provider usage is estimated.",
   "logs.detail.estimate.cache_detail_missing": "Cache details were unavailable; input is an upper-bound estimate.",
   "logs.detail.estimate.expected_price_overlay": "A verified expected list price was used.",
+  "logs.detail.estimate.provider_cost_overlay": "A provider-configured price overlay was used.",
   "logs.col.error": "Error",
   "logs.col.upstreamReason": "Upstream reason",
   "logs.col.duration": "Duration",

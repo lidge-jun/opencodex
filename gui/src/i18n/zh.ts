@@ -654,6 +654,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.estimate.usage_estimated": "提供方 usage 为估算值。",
   "logs.detail.estimate.cache_detail_missing": "缺少缓存明细；输入费用按上限估算。",
   "logs.detail.estimate.expected_price_overlay": "使用了已验证的 Expected 标价。",
+  "logs.detail.estimate.provider_cost_overlay": "使用了提供商自定义的价格覆盖。",
   "logs.col.error": "错误",
   "logs.col.upstreamReason": "上游原因",
   "logs.col.duration": "耗时",

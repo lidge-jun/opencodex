@@ -47,7 +47,11 @@ type MetricUnavailableReason =
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable";
 
-type CostEstimateReason = "usage_estimated" | "cache_detail_missing" | "expected_price_overlay";
+type CostEstimateReason =
+  | "usage_estimated"
+  | "cache_detail_missing"
+  | "expected_price_overlay"
+  | "provider_cost_overlay";
 
 type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -302,6 +306,7 @@ const ESTIMATE_REASON_KEYS = {
   usage_estimated: "logs.detail.estimate.usage_estimated",
   cache_detail_missing: "logs.detail.estimate.cache_detail_missing",
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
+  provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
 } as const satisfies Record<CostEstimateReason, string>;
 
 /**

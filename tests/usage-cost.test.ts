@@ -17,6 +17,12 @@ import {
   resolvePriorityMultiplier,
   type ExpectedPriceOverlay,
 } from "../src/usage/expected-prices";
+import {
+  activeUserCostOverlays,
+  refreshUserCostOverlays,
+  userCostOverlayVersion,
+} from "../src/usage/user-cost-overlays";
+import type { OcxConfig } from "../src/types";
 
 const RATE = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 
@@ -681,5 +687,126 @@ describe("long-context pricing tiers (#908)", () => {
       expect(tier.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(tier.thresholdInputTokens).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("provider cost overlay (user-configured)", () => {
+  const USER_PRICE = { input: 0.5, output: 2, cacheRead: 0.1, cacheWrite: 0.25 };
+  const USER_ROWS: ExpectedPriceOverlay[] = [{
+    provider: "deepseek",
+    modelId: "deepseek-chat",
+    cost4: USER_PRICE,
+    source: "config:providers.deepseek.modelCosts[deepseek-chat]",
+    verifiedAt: "user-configured",
+    status: "verified",
+  }];
+
+  test("user overlay beats the jawcode price and reads verified (not estimated)", () => {
+    const price = resolveMatchedPrice("deepseek", "deepseek-chat", undefined, USER_ROWS);
+    expect(price).toMatchObject({
+      provider: "deepseek",
+      modelId: "deepseek-chat",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+    expect(price?.sourceRef).toBe("config:providers.deepseek.modelCosts[deepseek-chat]");
+    expect(price?.verifiedAt).toBe("user-configured");
+    const estimate = estimateRequestCost({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      usage: { inputTokens: 1_000_000, outputTokens: 500_000 },
+      usageStatus: "reported",
+    }, undefined, USER_ROWS);
+    expect(estimate?.cost.total).toBeCloseTo(0.5 + 1.0, 9);
+    expect(estimate?.estimated).toBe(false);
+    expect(estimate?.price?.source).toBe("user");
+  });
+
+  test("custom provider names resolve only via the user overlay", () => {
+    // Fabricated model id: absent from the jawcode catalog, so only the user
+    // overlay can price it (deepseek-v4-flash itself would resolve through the
+    // model-level vendor fallback).
+    expect(resolveMatchedPrice("blsc", "blsc-test-model")).toBeNull();
+    const rows: ExpectedPriceOverlay[] = [{
+      provider: "blsc",
+      modelId: "blsc-test-model",
+      cost4: USER_PRICE,
+      source: "config:providers.blsc.modelCosts[blsc-test-model]",
+      verifiedAt: "user-configured",
+      status: "verified",
+    }];
+    const price = resolveMatchedPrice("blsc", "blsc-test-model", undefined, rows);
+    expect(price).toMatchObject({ provider: "blsc", modelId: "blsc-test-model", source: "user" });
+  });
+
+  test("all-zero user overlay falls through to the expected overlay price", () => {
+    const zero: ExpectedPriceOverlay[] = [{
+      provider: "deepseek",
+      modelId: "deepseek-chat",
+      cost4: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      source: "config:providers.deepseek.modelCosts[deepseek-chat]",
+      verifiedAt: "user-configured",
+      status: "verified",
+    }];
+    const price = resolveMatchedPrice("deepseek", "deepseek-chat", undefined, zero);
+    expect(price?.source).toBe("expected");
+    expect(price?.cost4.input).toBe(0.27);
+  });
+
+  test("combo fails closed when a user-priced attempt shares a combo with an unpriced one", () => {
+    const attempts = [
+      { ordinal: 1, provider: "deepseek", model: "deepseek-chat", usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 } },
+      { ordinal: 2, provider: "blsc", model: "unknown-model", usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 } },
+    ];
+    expect(estimateComboCost(attempts, undefined, undefined, USER_ROWS)).toBeNull();
+    const priced = [attempts[0]];
+    const combo = estimateComboCost(priced, undefined, undefined, USER_ROWS);
+    expect(combo?.attempts[0].price.source).toBe("user");
+    expect(combo?.attempts[0].cost.total).toBeCloseTo((0.5 * 100 + 2 * 10) / 1e6, 12);
+  });
+
+  test("registry refresh replaces rows, bumps the version, and invalidates the memo", () => {
+    const before = activeUserCostOverlays();
+    const versionBefore = userCostOverlayVersion();
+    refreshUserCostOverlays({
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid",
+          modelCosts: {
+            "deepseek-v4-flash": USER_PRICE,
+            "overlay-test-model": USER_PRICE,
+          },
+        },
+      },
+    } as unknown as OcxConfig);
+    expect(activeUserCostOverlays()).not.toBe(before);
+    expect(userCostOverlayVersion()).toBe(versionBefore + 1);
+    // Default lookup path (registry-backed, memoized) picks the configured price up.
+    const first = resolveMatchedPrice("blsc", "deepseek-v4-flash");
+    expect(first).toMatchObject({ source: "user", cost4: USER_PRICE });
+    expect(resolveMatchedPrice("blsc", "overlay-test-model")?.source).toBe("user");
+    // A price change must not be served from the stale memo.
+    refreshUserCostOverlays({
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid",
+          modelCosts: {
+            "deepseek-v4-flash": { ...USER_PRICE, input: 0.99 },
+            "overlay-test-model": { ...USER_PRICE, input: 0.99 },
+          },
+        },
+      },
+    } as unknown as OcxConfig);
+    const second = resolveMatchedPrice("blsc", "deepseek-v4-flash");
+    expect(second?.cost4.input).toBe(0.99);
+    expect(resolveMatchedPrice("blsc", "overlay-test-model")?.cost4.input).toBe(0.99);
+    // Leave the registry empty for the rest of the file.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+    expect(resolveMatchedPrice("blsc", "overlay-test-model")).toBeNull();
+    // Without the overlay, deepseek-v4-flash falls back to its jawcode vendor price.
+    expect(resolveMatchedPrice("blsc", "deepseek-v4-flash")?.source).toBe("jawcode");
   });
 });
