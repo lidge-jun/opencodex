@@ -42,11 +42,13 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 describe("SSE payload rewrite composition", () => {
   test("GitHub Copilot obfuscation rewrite turns ciphertext deltas into plaintext", async () => {
     const rewrite = createGithubCopilotObfuscationRewrite();
-    const itemId = "cipher-item-id";
+    // GitHub re-encrypts item ids per event; deltas and done never share an id.
+    const deltaItemId = "cipher-delta-id";
+    const doneItemId = "cipher-done-id";
     const upstream = [
-      'data: {"type":"response.function_call_arguments.delta","item_id":"' + itemId + '","output_index":0,"sequence_number":3,"delta":"ciphertext-chunk-1","obfuscation":"abc123"}\n\n',
-      'data: {"type":"response.function_call_arguments.delta","item_id":"' + itemId + '","output_index":0,"sequence_number":4,"delta":"ciphertext-chunk-2","obfuscation":"abc123"}\n\n',
-      'data: {"type":"response.function_call_arguments.done","item_id":"' + itemId + '","output_index":0,"sequence_number":5,"arguments":"{\\"a\\":2,\\"b\\":2}"}\n\n',
+      'data: {"type":"response.function_call_arguments.delta","item_id":"' + deltaItemId + '","output_index":0,"sequence_number":3,"delta":"ciphertext-chunk-1","obfuscation":"abc123"}\n\n',
+      'data: {"type":"response.function_call_arguments.delta","item_id":"' + deltaItemId + '","output_index":0,"sequence_number":4,"delta":"ciphertext-chunk-2","obfuscation":"abc123"}\n\n',
+      'data: {"type":"response.function_call_arguments.done","item_id":"' + doneItemId + '","output_index":0,"sequence_number":5,"arguments":"{\\"a\\":2,\\"b\\":2}"}\n\n',
     ].join("");
 
     const rewritten = await readAll(
@@ -72,6 +74,7 @@ describe("SSE payload rewrite composition", () => {
     expect(events[0].delta).toBe("");
     expect(events[1].delta).toBe("");
     expect(events[2].delta).toBe('{"a":2,"b":2}');
+    expect(events[2].item_id).toBe(doneItemId);
     expect(events[3].arguments).toBe('{"a":2,"b":2}');
     expect(JSON.stringify(rewritten)).not.toContain("obfuscation");
     expect(JSON.stringify(rewritten)).not.toContain("ciphertext-chunk");

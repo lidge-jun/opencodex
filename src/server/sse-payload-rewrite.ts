@@ -77,7 +77,9 @@ export function composeSsePayloadRewrites(...rewrites: SsePayloadRewrite[]): Sse
  * arguments). The `obfuscation` metadata is stripped from every event.
  */
 export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
-  const obfuscatedCallIds = new Set<string>();
+  // GitHub re-encrypts `item_id` per event (delta and done carry different ids for the
+  // same logical call), so calls are tracked by the stable `output_index` instead.
+  const obfuscatedCalls = new Set<number>();
   return (payload: string): string => {
     let parsed: unknown;
     try {
@@ -90,14 +92,14 @@ export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
     if (hadObfuscation) delete parsed.obfuscation;
     const type = parsed.type;
     if (type === "response.function_call_arguments.delta" && hadObfuscation) {
-      if (typeof parsed.item_id === "string") obfuscatedCallIds.add(parsed.item_id);
+      if (typeof parsed.output_index === "number") obfuscatedCalls.add(parsed.output_index);
       // Ciphertext chunk: emit an empty delta so the client sees a valid event
       // without any unusable bytes; the plaintext arrives with `.done`.
       parsed.delta = "";
       return JSON.stringify(parsed);
     }
-    if (type === "response.function_call_arguments.done" && typeof parsed.item_id === "string") {
-      if (obfuscatedCallIds.delete(parsed.item_id)) {
+    if (type === "response.function_call_arguments.done" && typeof parsed.output_index === "number") {
+      if (obfuscatedCalls.delete(parsed.output_index)) {
         const deltaEvent = {
           type: "response.function_call_arguments.delta",
           item_id: parsed.item_id,
