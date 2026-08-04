@@ -142,6 +142,17 @@ export function compactResponseTooLargeError(): Response {
 
 
 
+type ResolvedAlternateCompactContext = {
+  authCtx: CodexAuthContext;
+  provider: OcxProviderConfig;
+  headers: Headers;
+};
+
+type AlternateCompactResolution =
+  | { kind: "ready"; context: ResolvedAlternateCompactContext }
+  | { kind: "none" }
+  | { kind: "local-failure" };
+
 /**
  * Resolve one eligible pool account other than `excludeAccountId`, and build everything
  * the alternate send needs. Returns null when no alternate exists or construction fails,
@@ -158,19 +169,21 @@ async function resolveAlternateCompactContext(args: {
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
   turnAdmissionLease?: AdmissionLease;
-}): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
+}): Promise<AlternateCompactResolution> {
   const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
-  if (!route.codexAccountMode || !excludeAccountId) return null;
+  if (!route.codexAccountMode || !excludeAccountId) return { kind: "none" };
   let authCtx: CodexAuthContext | undefined;
+  let authResolved = false;
   try {
     authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
+    authResolved = true;
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) {
       releaseCodexAuthContextProbeLease(authCtx);
-      return null;
+      return { kind: "none" };
     }
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
     const headers = new Headers({ "content-type": "application/json" });
@@ -185,18 +198,29 @@ async function resolveAlternateCompactContext(args: {
       headers.set("chatgpt-account-id", override.chatgptAccountId);
     }
     if (provider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(provider.apiKey)}`);
-    return { authCtx, provider, headers };
+    return { kind: "ready", context: { authCtx, provider, headers } };
   } catch (err) {
     releaseCodexAuthContextProbeLease(authCtx);
+    if (
+      authResolved
+      || !(
+        err instanceof CodexPoolAuthenticationError
+        || err instanceof CodexAuthContextError
+        || err instanceof CodexAccountCooldownError
+        || err instanceof CodexMainProfileDrainingError
+      )
+    ) {
+      return { kind: "local-failure" };
+    }
     if (err instanceof CodexMainProfileDrainingError) {
       // The native-main fence can start after account A has already rejected the
       // request. Treat the now-fenced main profile as no alternate and preserve A's
       // real rejection instead of replacing it with a synthetic drain response.
-      return null;
+      return { kind: "none" };
     }
     // No eligible alternate (all cooled, affinity expired, reauth needed) — the caller
     // returns the first account's rejection unchanged, which is today's behavior.
-    return null;
+    return { kind: "none" };
   }
 }
 
@@ -408,6 +432,7 @@ export async function handleResponsesCompact(
         retryAfter?: string | null;
         resetAt?: unknown | unknown[];
         promoteAccountId?: string;
+        suppressPromotion?: boolean;
       } = {},
     ) => {
       if (!usesCodexForwardPoolAuth(ctx, route.provider)) return;
@@ -586,6 +611,7 @@ export async function handleResponsesCompact(
       retryAfter?: string | null;
       resetAt?: unknown | unknown[];
       promoteAccountId?: string;
+      suppressPromotion?: boolean;
     };
     let pendingPrimaryPoolOutcome: PendingPrimaryPoolOutcome | null = null;
     let primaryPoolOutcomeSettled = false;
@@ -626,7 +652,7 @@ export async function handleResponsesCompact(
       primaryPoolOutcome.resetAt = firstResetAt;
       // Build the alternate COMPLETELY before cancelling the first body: if construction
       // throws, the first rejection is still intact and can be returned to the client.
-      const alternate = await resolveAlternateCompactContext({
+      const alternateResolution = await resolveAlternateCompactContext({
         req,
         config,
         route,
@@ -634,6 +660,17 @@ export async function handleResponsesCompact(
         excludeAccountId: authCtx.accountId,
         turnAdmissionLease,
       });
+      const alternate = alternateResolution.kind === "ready"
+        ? alternateResolution.context
+        : null;
+      if (alternateResolution.kind === "local-failure") {
+        primaryPoolOutcome.suppressPromotion = true;
+        try {
+          settlePendingPrimaryPoolOutcome();
+        } catch {
+          // Preserve compact's existing A-response contract for local B setup failures.
+        }
+      }
       pendingAlternateAuthCtx = alternate?.authCtx ?? null;
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
@@ -659,10 +696,6 @@ export async function handleResponsesCompact(
             authCtx.writerGeneration,
           );
         }
-        if (alternate.authCtx.accountId) {
-          primaryPoolOutcome.promoteAccountId = alternate.authCtx.accountId;
-        }
-        settlePendingPrimaryPoolOutcome();
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         const alternateAttempts: UpstreamAttemptObservation[] = [];
@@ -674,6 +707,10 @@ export async function handleResponsesCompact(
             "single",
             alternateAttempts,
             () => {
+              if (alternate.authCtx.accountId) {
+                primaryPoolOutcome.promoteAccountId = alternate.authCtx.accountId;
+              }
+              settlePendingPrimaryPoolOutcome();
               alternateSendBegan = true;
               pendingAlternateAuthCtx = null;
             },
@@ -691,6 +728,10 @@ export async function handleResponsesCompact(
       }
     }
     } catch (error) {
+      if (pendingPrimaryPoolOutcome && !primaryPoolOutcomeSettled) {
+        delete pendingPrimaryPoolOutcome.promoteAccountId;
+        pendingPrimaryPoolOutcome.suppressPromotion = true;
+      }
       releaseCodexAuthContextProbeLease(pendingAlternateAuthCtx ?? undefined);
       try {
         settlePendingPrimaryPoolOutcome();
@@ -716,7 +757,9 @@ export async function handleResponsesCompact(
     }
     // Always record the real upstream status: a local buffering failure after a
     // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
-    recordCompactPoolOutcome(outcomeCtx, upstream.status, { retryAfter, resetAt });
+    if (outcomeCtx !== authCtx || !primaryPoolOutcomeSettled) {
+      recordCompactPoolOutcome(outcomeCtx, upstream.status, { retryAfter, resetAt });
+    }
     // Lift usage and response metadata from the buffered upstream JSON into the
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.

@@ -1391,11 +1391,77 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
+  test("compact keeps A active when unexpected alternate resolution fails locally", async () => {
+    await withPoolEnv("ocx-compact-b-resolver-local-", async config => {
+      const originalNow = Date.now;
+      config.accountPoolStrategy = "fill-first";
+      config.activeCodexAccountId = "pool-a";
+      const probeAt = prepareHalfOpenHost(Date.now());
+      const hostKey = canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!;
+      const accounts = config.codexAccounts;
+      const expectedBody = JSON.stringify({ error: { message: "A quota" } });
+      let failNextAccountRead = false;
+      let resolverFailureObserved = false;
+      const physicalAccounts: string[] = [];
+      Object.defineProperty(config, "codexAccounts", {
+        configurable: true,
+        get: () => {
+          if (failNextAccountRead) {
+            failNextAccountRead = false;
+            resolverFailureObserved = true;
+            throw new Error("unexpected alternate resolver failure");
+          }
+          return accounts;
+        },
+      });
+      Date.now = () => probeAt;
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        physicalAccounts.push(new Headers(init?.headers).get("chatgpt-account-id") ?? "");
+        failNextAccountRead = true;
+        return new Response(expectedBody, {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "31" },
+        });
+      }) as typeof fetch;
+      try {
+        const response = await handleResponsesCompact(
+          compactionRequest(baseCompactionBody({})),
+          config,
+          { model: "", provider: "" },
+        );
+        expect(resolverFailureObserved).toBe(true);
+        expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(response.status).toBe(429);
+        expect(response.headers.get("retry-after")).toBe("31");
+        expect(await response.text()).toBe(expectedBody);
+        expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+          lastFailureStatus: 429,
+          cooldownGeneration: 1,
+        });
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(config.activeCodexAccountId).toBe("pool-a");
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
+        expectHostAdmissionUsable(hostKey, probeAt);
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+  });
+
   test("compact releases B recovery ownership when alternate header construction fails", async () => {
     await withPoolEnv("ocx-compact-b-header-prep-", async config => {
+      const originalNow = Date.now;
       config.accountPoolStrategy = "fill-first";
       config.activeCodexAccountId = "pool-a";
       const NativeHeaders = globalThis.Headers;
+      const probeAt = prepareHalfOpenHost(Date.now());
+      const hostKey = canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!;
       let bHeaderAttempted = false;
       const physicalAccounts: string[] = [];
       class ThrowOnBHeaders extends NativeHeaders {
@@ -1407,6 +1473,7 @@ describe("compact alternate-account attempt (#913)", () => {
           super.set(name, value);
         }
       }
+      Date.now = () => probeAt;
       globalThis.Headers = ThrowOnBHeaders as typeof Headers;
       globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
         physicalAccounts.push(new NativeHeaders(init?.headers).get("chatgpt-account-id") ?? "");
@@ -1421,13 +1488,22 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(response.status).toBe(429);
         expect(bHeaderAttempted).toBe(true);
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+          lastFailureStatus: 429,
+          cooldownGeneration: 1,
+        });
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(config.activeCodexAccountId).toBe("pool-a");
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
+        expectHostAdmissionUsable(hostKey, probeAt);
       } finally {
         globalThis.Headers = NativeHeaders;
+        Date.now = originalNow;
       }
     });
   });
 
-  test("compact settles half-open primary response and releases B when caller preparation throws", async () => {
+  test("compact suppresses promotion when quota telemetry fails after B preparation", async () => {
     await withPoolEnv("ocx-compact-host-alt-throw-", async config => {
       const originalNow = Date.now;
       config.accountPoolStrategy = "fill-first";
@@ -1473,6 +1549,12 @@ describe("compact alternate-account attempt (#913)", () => {
         )).rejects.toBe(expected);
         expect(bPrepared).toBe(true);
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+          lastFailureStatus: 429,
+          cooldownGeneration: 1,
+        });
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(config.activeCodexAccountId).toBe("pool-a");
         expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
         expectHostAdmissionUsable(hostKey, probeAt);
       } finally {
@@ -1568,8 +1650,12 @@ describe("compact alternate-account attempt (#913)", () => {
         ), state, expected);
         expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
-        expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(429);
+        expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
+          lastFailureStatus: 429,
+          cooldownGeneration: 1,
+        });
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(config.activeCodexAccountId).toBe("pool-a");
         expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
         expectHostAdmissionUsable(hostKey, probeAt);
       } finally {
