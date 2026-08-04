@@ -20,10 +20,12 @@ import { requestLogDto } from "./shared";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
-function parseOptionalInt(raw: string | null): number | undefined {
+function parseQueryInt(raw: string | null): number | undefined | "invalid" {
   if (raw === null) return undefined;
-  const value = Number(raw.trim());
-  return Number.isInteger(value) ? value : undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return "invalid";
+  const value = Number(trimmed);
+  return Number.isInteger(value) ? value : "invalid";
 }
 
 export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -31,17 +33,38 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
   if (!url.pathname.startsWith("/api/request-history")) return null;
 
   if (url.pathname === "/api/request-history" && req.method === "GET") {
-    const status = parseOptionalInt(url.searchParams.get("status"));
+    const statusRaw = parseQueryInt(url.searchParams.get("status"));
+    if (statusRaw === "invalid") {
+      return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599" } }, 400, req, config);
+    }
+    const status = statusRaw;
     if (status !== undefined && (status < 100 || status > 599)) {
       return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599" } }, 400, req, config);
     }
-    const from = parseOptionalInt(url.searchParams.get("from"));
-    const to = parseOptionalInt(url.searchParams.get("to"));
+    const fromRaw = parseQueryInt(url.searchParams.get("from"));
+    if (fromRaw === "invalid") {
+      return jsonResponse({ error: { code: "invalid_from", message: "from must be an integer timestamp" } }, 400, req, config);
+    }
+    const toRaw = parseQueryInt(url.searchParams.get("to"));
+    if (toRaw === "invalid") {
+      return jsonResponse({ error: { code: "invalid_to", message: "to must be an integer timestamp" } }, 400, req, config);
+    }
+    const from = fromRaw;
+    const to = toRaw;
     if (from !== undefined && to !== undefined && from > to) {
       return jsonResponse({ error: { code: "invalid_range", message: "from must not be after to" } }, 400, req, config);
     }
     const limitRaw = url.searchParams.get("limit");
-    const limit = limitRaw === null ? undefined : parseOptionalInt(limitRaw);
+    const limitParsed = limitRaw === null ? undefined : parseQueryInt(limitRaw);
+    if (limitParsed === "invalid") {
+      return jsonResponse(
+        { error: { code: "invalid_limit", message: `limit must be an integer from 1 to ${REQUEST_HISTORY_MAX_PAGE_SIZE}` } },
+        400,
+        req,
+        config,
+      );
+    }
+    const limit = limitParsed;
     if (limit !== undefined && (limit < 1 || limit > REQUEST_HISTORY_MAX_PAGE_SIZE)) {
       return jsonResponse(
         { error: { code: "invalid_limit", message: `limit must be an integer from 1 to ${REQUEST_HISTORY_MAX_PAGE_SIZE}` } },
@@ -90,7 +113,12 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
   }
 
   if (url.pathname.startsWith("/api/request-history/") && req.method === "GET") {
-    const requestId = decodeURIComponent(url.pathname.slice("/api/request-history/".length));
+    let requestId: string;
+    try {
+      requestId = decodeURIComponent(url.pathname.slice("/api/request-history/".length));
+    } catch {
+      return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
+    }
     if (!requestId || requestId.includes("/")) {
       return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
     }

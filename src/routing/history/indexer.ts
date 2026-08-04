@@ -29,9 +29,9 @@ import {
 } from "../../usage/log";
 import {
   HISTORY_DDL,
-  HISTORY_DB_FILENAME,
   HISTORY_META_KEYS,
   HISTORY_SCHEMA_VERSION,
+  historyIndexPath,
 } from "./schema";
 import {
   decodeHistoryCursor,
@@ -83,8 +83,9 @@ let openPromise: Promise<RequestHistoryIndexMeta> | null = null;
 
 function indexDbPath(): string {
   const dir = getConfigDir();
-  recordOwnedConfigPath(dir, `${dir}/${HISTORY_DB_FILENAME}`);
-  return `${dir}/${HISTORY_DB_FILENAME}`;
+  const path = historyIndexPath(dir);
+  recordOwnedConfigPath(dir, path);
+  return path;
 }
 
 function metaValue(dbHandle: Database, key: string): string | null {
@@ -125,11 +126,22 @@ function sourceIdentity(): UsageLogRevision | null {
   return currentUsageLogRevision();
 }
 
+function readStoredMetaField(dbHandle: Database, key: string): string {
+  return metaValue(dbHandle, key) ?? "";
+}
+
 function sourceIdentityMatches(dbHandle: Database, revision: UsageLogRevision | null): boolean {
   const stored = readIndexedMeta(dbHandle);
   if (revision === null) return stored.sourceSize === 0;
-  return stored.sourceSize === Number(revision.size)
-    && stored.sourceMtimeMs === Number(revision.mtimeMs);
+  const storedPath = readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourcePath);
+  if (!storedPath) return false;
+  const storedDev = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceDev));
+  const storedIno = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceIno));
+  const storedBirthtimeMs = Number(readStoredMetaField(dbHandle, HISTORY_META_KEYS.sourceBirthtimeMs));
+  return storedPath === revision.path
+    && storedDev === Number(revision.dev)
+    && storedIno === Number(revision.ino)
+    && storedBirthtimeMs === Number(revision.birthtimeMs);
 }
 
 /** Extract the `requests` row columns from a canonical persisted entry. */
@@ -301,6 +313,9 @@ function destroyAndRecreate(path: string, reason: string): Database {
   // the file briefly after the throw. Retry the unlink before recreating.
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
+      for (const suffix of ["-wal", "-shm"] as const) {
+        try { unlinkSync(`${path}${suffix}`); } catch { /* sidecar may not exist */ }
+      }
       unlinkSync(path);
       break;
     } catch {
@@ -449,12 +464,18 @@ export async function rebuildRequestHistoryIndex(): Promise<RequestHistoryIndexM
   return metaFor(handle);
 }
 
+type HistoryQueryRow = {
+  row_json: string;
+  timestamp?: number;
+  request_id?: string;
+};
+
 function queryRows(
   handle: Database,
   filters: RequestHistoryFilters,
   cursor: HistoryCursor | null,
   limit: number,
-): { rows: Array<{ row_json: string }>; total: number } {
+): { rows: Array<HistoryQueryRow>; total: number } {
   const where: string[] = [];
   const values: Array<string | number> = [];
   const add = (clause: string, value: string | number) => {
@@ -479,12 +500,18 @@ function queryRows(
   }
   const whereSql = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
   const rows = handle.query(
-    `SELECT row_json FROM requests${whereSql} ORDER BY timestamp DESC, request_id DESC LIMIT ?`,
-  ).all(...values, limit + 1) as Array<{ row_json: string }>;
+    `SELECT row_json, timestamp, request_id FROM requests${whereSql} ORDER BY timestamp DESC, request_id DESC LIMIT ?`,
+  ).all(...values, limit + 1) as Array<HistoryQueryRow>;
   return { rows, total: rows.length };
 }
 
-function hydrateRow(row: { row_json: string } | undefined): PersistedUsageEntry | null {
+function requireDb(): Database {
+  const handle = db;
+  if (!handle) throw new Error("request-history index is not open");
+  return handle;
+}
+
+function hydrateRow(row: HistoryQueryRow | undefined): PersistedUsageEntry | null {
   if (!row) return null;
   try {
     const parsed = JSON.parse(row.row_json) as PersistedUsageEntry;
@@ -511,7 +538,7 @@ export async function queryRequestHistory(
     Math.max(1, Math.trunc(pageSize ?? REQUEST_HISTORY_DEFAULT_PAGE_SIZE)),
     REQUEST_HISTORY_MAX_PAGE_SIZE,
   );
-  const handle = db!;
+  const handle = requireDb();
   const { rows, total } = queryRows(handle, filters, cursor, limit);
   const hasMore = total > limit;
   const pageRows = rows.slice(0, limit);
@@ -523,15 +550,14 @@ export async function queryRequestHistory(
   let nextCursor: string | undefined;
   if (hasMore && pageRows.length > 0) {
     const last = pageRows[pageRows.length - 1]!;
-    const parsed = JSON.parse(last.row_json) as PersistedUsageEntry;
-    nextCursor = encodeHistoryCursor({ t: parsed.timestamp, i: parsed.requestId });
+    nextCursor = encodeHistoryCursor({ t: last.timestamp!, i: last.request_id! });
   }
   return { rows: entries, ...(nextCursor ? { nextCursor } : {}), hasMore, meta };
 }
 
 export async function requestHistoryRowById(requestId: string): Promise<PersistedUsageEntry | null> {
   await openRequestHistoryIndex();
-  const handle = db!;
+  const handle = requireDb();
   const row = handle.query("SELECT row_json FROM requests WHERE request_id = ?").get(requestId) as
     | { row_json: string }
     | undefined;
