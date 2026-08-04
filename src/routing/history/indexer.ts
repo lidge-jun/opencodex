@@ -567,3 +567,13 @@ export async function requestHistoryRowById(requestId: string): Promise<Persiste
 export async function requestHistoryIndexStatus(): Promise<RequestHistoryIndexMeta> {
   return openRequestHistoryIndex();
 }
+
+/**
+ * Raw handle for analytics-style queries. Callers must await
+ * `openRequestHistoryIndex()` first; the handle is valid until
+ * `closeRequestHistoryIndex()`.
+ */
+export function requestHistoryDb(): Database {
+  if (!db) throw new Error("request-history index is not open");
+  return db;
+}
