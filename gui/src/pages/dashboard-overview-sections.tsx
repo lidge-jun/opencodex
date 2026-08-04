@@ -2,7 +2,7 @@ import { IconAlert, IconInfo, IconRefresh } from "../icons";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
 import { navigateHash } from "../hash-routing";
-import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
+import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel, VISION_REASONING_LEVELS } from "./dashboard-shared";
 import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -257,13 +257,22 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
         <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
           <div className="dash-sidecar-card__row">
             <div className="font-semibold">{t("dash.visionSidecar")}</div>
-            <Select
-              value={sidecar?.vision.model ?? "gpt-5.6-luna"}
-              options={sidecarModels}
-              onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
-              disabled={!sidecar || sidecarSaving}
-              label={t("dash.sidecarModel")}
-            />
+            <div className="dash-delegation-controls">
+              <Select
+                value={sidecar?.vision.model ?? "gpt-5.6-luna"}
+                options={sidecarModels}
+                onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
+                disabled={!sidecar || sidecarSaving}
+                label={t("dash.sidecarModel")}
+              />
+              <Select
+                value={sidecar?.vision.reasoning ?? "low"}
+                options={VISION_REASONING_LEVELS.map(value => ({ value, label: value }))}
+                onChange={reasoning => { void saveSidecar({ vision: { reasoning: reasoning as typeof VISION_REASONING_LEVELS[number] } }); }}
+                disabled={!sidecar || sidecarSaving}
+                label={t("dash.visionReasoning")}
+              />
+            </div>
           </div>
           <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
         </div>

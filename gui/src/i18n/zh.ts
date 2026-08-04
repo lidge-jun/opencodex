@@ -209,6 +209,7 @@ export const zh: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "拦截 Codex 应用的后台辅助调用（{models}）并重定向到所选模型。",
   "dash.sidecarBackend": "后端",
   "dash.sidecarModel": "模型",
+  "dash.visionReasoning": "视觉推理强度",
   "dash.backendAuto": "自动",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",

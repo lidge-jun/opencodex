@@ -75,8 +75,9 @@ stall は全体生成 timeout ではありません。SSE 開始前の失敗は 
 
 - 画像はユーザー、developer、ツール結果メッセージから来ます。Codex の `view_image` 結果も
   含まれます。
-- 各画像は設定されたネイティブビジョンモデルに `reasoning.effort: "low"` で渡され、説明が画像
-  部分をインラインに差し替えます。
+- 各画像は選択した OpenAI Responses の `reasoning.effort`（デフォルトは `low`）で設定済みの
+  ネイティブビジョンモデルに渡され、説明が画像部分をインラインに差し替えます。Anthropic vision
+  はこの OpenAI 固有の設定を無視します。
 - 説明は一度に 3 件並列処理し入力順序を維持します。説明モデルに渡すユーザー文脥は
   800 文字、注入する画像説明は 1 枚あたり 2,000 文字に制限します。ChatGPT バックエンドが拒否する
   `max_output_tokens` は送信しません。
@@ -89,14 +90,15 @@ stall は全体生成 timeout ではありません。SSE 開始前の失敗は 
   テキスト専用バックエンドに元画像を送らず削除します。
 - `maxDescriptionsPerTurn`(デフォルト 8)はメインモデル 1 ターンで新規実行する説明数を制限します。キャッシュ
   ヒットと同じターンの重複要求は限度を消費しません。成功した `data:` 画像説明はバックエンド、モデル、
-  detail、画像バイト、メッセージ文脈を基準にキャッシュし、変わり得る `https:` 画像はキャッシュしません。
+  推論負荷、detail、画像バイト、メッセージ文脈を基準にキャッシュし、変わり得る `https:` 画像はキャッシュしません。
 
 ```json
 {
   "visionSidecar": {
     "enabled": true,
-    "backend": "anthropic",
-    "model": "claude-sonnet-5",
+    "backend": "openai",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
   }

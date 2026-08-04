@@ -76,8 +76,9 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
 
 - 이미지는 사용자, developer, 도구 결과 메시지에서 올 수 있습니다. Codex의 `view_image` 결과도
   포함됩니다.
-- 각 이미지는 설정된 네이티브 비전 모델에 `reasoning.effort: "low"`로 전달되고, 설명이 이미지
-  부분을 인라인으로 대체합니다.
+- 각 이미지는 선택한 OpenAI Responses `reasoning.effort`(기본값 `low`)로 설정된 네이티브 비전
+  모델에 전달되고, 설명이 이미지 부분을 인라인으로 대체합니다. Anthropic vision은 이 OpenAI 전용
+  설정을 무시합니다.
 - 설명은 한 번에 3개씩 병렬 처리하며 입력 순서를 유지합니다. 설명 모델에 전달하는 사용자 문맥은
   800자, 주입하는 이미지 설명은 장당 2,000자로 제한합니다. ChatGPT 백엔드가 거부하는
   `max_output_tokens`는 보내지 않습니다.
@@ -90,15 +91,16 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
   없으면 텍스트 전용 백엔드에 원본 이미지를 보내지 않고 제거합니다.
 - `maxDescriptionsPerTurn`(기본값 8)은 메인 모델 한 턴에서 새로 실행할 설명 수를 제한합니다. 캐시
   적중과 같은 턴의 중복 요청은 한도를 쓰지 않습니다. 성공한 `data:` 이미지 설명은 백엔드, 모델,
-  detail, 이미지 바이트, 메시지 문맥을 기준으로 캐시하며, 바뀔 수 있는 `https:` 이미지는 캐시하지
+  추론 강도, detail, 이미지 바이트, 메시지 문맥을 기준으로 캐시하며, 바뀔 수 있는 `https:` 이미지는 캐시하지
   않습니다.
 
 ```json
 {
   "visionSidecar": {
     "enabled": true,
-    "backend": "anthropic",
-    "model": "claude-sonnet-5",
+    "backend": "openai",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
   }

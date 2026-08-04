@@ -76,8 +76,9 @@ persisted legacy `gpt-5.4-mini` value to Luna. If the `visionSidecar.model` fiel
 the vision execution path still has a `gpt-5.4-mini` code fallback.
 
 - Images can come from user, developer, and tool-result messages, including Codex's `view_image`.
-- Each image is sent to the configured native vision model with `reasoning.effort: "low"`; its
-  description replaces the image part inline.
+- Each image is sent to the configured native vision model with the selected OpenAI Responses
+  `reasoning.effort` (`low` by default); its description replaces the image part inline. Anthropic
+  vision ignores this OpenAI-specific setting.
 - Descriptions run with bounded concurrency (3 at a time, input order preserved). User context sent
   to the describer is capped at 800 characters, and each injected description is capped at 2,000
   characters. The request does not send `max_output_tokens`, which the ChatGPT backend rejects.
@@ -90,14 +91,16 @@ the vision execution path still has a `gpt-5.4-mini` code fallback.
   available, the raw image is stripped rather than forwarded to a text-only backend.
 - `maxDescriptionsPerTurn` (default 8) limits new descriptions per main-model turn. Cache hits and
   same-turn duplicates do not consume it. Successful `data:` image descriptions are cached by
-  backend, model, detail, image bytes, and message context; mutable `https:` images are not cached.
+  backend, model, reasoning effort, detail, image bytes, and message context; mutable `https:` images
+  are not cached.
 
 ```json
 {
   "visionSidecar": {
     "enabled": true,
-    "backend": "anthropic",
-    "model": "claude-sonnet-5",
+    "backend": "openai",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
   }

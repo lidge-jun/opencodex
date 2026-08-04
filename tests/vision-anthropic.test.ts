@@ -233,7 +233,7 @@ describe("Anthropic vision planning and management config", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             webSearch: { model: "claude-search", backend: "anthropic", reasoning: "high" },
-            vision: { model: "claude-sonnet-5", backend: "anthropic", maxDescriptionsPerTurn: 4 },
+            vision: { model: "claude-sonnet-5", backend: "anthropic", reasoning: "high", maxDescriptionsPerTurn: 4 },
           }),
         }),
         new URL("http://localhost/api/sidecar-settings"),
@@ -243,6 +243,7 @@ describe("Anthropic vision planning and management config", () => {
       expect((await put.json()).vision).toEqual({
         model: "claude-sonnet-5",
         backend: "anthropic",
+        reasoning: "high",
         maxDescriptionsPerTurn: 4,
       });
       expect(config.webSearchSidecar).toEqual({ model: "claude-search", backend: "anthropic", reasoning: "high" });
@@ -257,6 +258,7 @@ describe("Anthropic vision planning and management config", () => {
       expect(getBody.vision).toEqual({
         model: "claude-sonnet-5",
         backend: "anthropic",
+        reasoning: "high",
         maxDescriptionsPerTurn: 4,
       });
 
@@ -275,15 +277,16 @@ describe("Anthropic vision planning and management config", () => {
       expect(clear.status).toBe(200);
       const clearBody = await clear.json() as Record<string, any>;
       expect(clearBody.webSearch).toEqual({ model: "gpt-5.6-luna" });
-      expect(clearBody.vision).toEqual({ model: "gpt-5.6-luna", maxDescriptionsPerTurn: 4 });
+      expect(clearBody.vision).toEqual({ model: "gpt-5.6-luna", reasoning: "high", maxDescriptionsPerTurn: 4 });
       expect(config.webSearchSidecar).toEqual({ reasoning: "high" });
-      expect(config.visionSidecar).toEqual({ maxDescriptionsPerTurn: 4 });
+      expect(config.visionSidecar).toEqual({ reasoning: "high", maxDescriptionsPerTurn: 4 });
 
       for (const vision of [
         { backend: "other" },
         { maxDescriptionsPerTurn: 0 },
         { maxDescriptionsPerTurn: -1 },
         { maxDescriptionsPerTurn: 1.5 },
+        { reasoning: "ultra" },
       ]) {
         const invalid = await handleManagementAPI(
           new Request("http://localhost/api/sidecar-settings", {
@@ -307,7 +310,7 @@ describe("Anthropic vision planning and management config", () => {
       );
       expect(invalidWebBackend?.status).toBe(400);
       expect(config.webSearchSidecar).toEqual({ reasoning: "high" });
-      expect(config.visionSidecar).toEqual({ maxDescriptionsPerTurn: 4 });
+      expect(config.visionSidecar).toEqual({ reasoning: "high", maxDescriptionsPerTurn: 4 });
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;

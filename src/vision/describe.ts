@@ -9,6 +9,7 @@ import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
 export interface VisionSettings {
   model: string;
+  reasoning: "low" | "medium" | "high" | "xhigh" | "max";
   timeoutMs: number;
 }
 
@@ -77,7 +78,7 @@ export async function describeImage(
       "verbatim, and note UI/layout, colors, branding/logos, charts, and notable details. Focus on " +
       "what's relevant to the user's request. Output only the description.",
     input: [{ type: "message", role: "user", content }],
-    reasoning: { effort: "low" },
+    reasoning: { effort: settings.reasoning },
     // The ChatGPT (codex) backend rejects `max_output_tokens` ("Unsupported parameter"); the
     // description is clamped downstream (DESC_MAX_CHARS) instead.
     store: false,

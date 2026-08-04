@@ -93,7 +93,7 @@ test("Claude replay overrides both sidecars while preserving global-only setting
   });
   expect(visionPlan).toMatchObject({
     backend: "openai",
-    settings: { model: "claude-vision", timeoutMs: 34_567 },
+    settings: { model: "claude-vision", reasoning: "low", timeoutMs: 34_567 },
     maxDescriptionsPerTurn: 4,
   });
 

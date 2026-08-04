@@ -217,6 +217,7 @@ export const en = {
   "models.shadowCallInterceptHint": "Intercepts Codex App's background helper calls ({models}) for titles and commit messages and redirects them to your chosen model.",
   "dash.sidecarBackend": "Backend",
   "dash.sidecarModel": "Model",
+  "dash.visionReasoning": "Vision reasoning effort",
   "dash.backendAuto": "Auto",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",

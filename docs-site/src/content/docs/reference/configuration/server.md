@@ -176,12 +176,13 @@ an inactivity guard, not a total generation deadline.
 | `enabled?` | `boolean` | on when usable | Master image-description switch. |
 | `backend?` | `"openai" \| "anthropic"` | auto | Same explicit-first, Anthropic-credential-aware selection as web search. |
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI or `claude-sonnet-5` for Anthropic. |
+| `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses reasoning effort. Anthropic ignores it. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
 | `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. |
 
 Vision activates only for images sent to a model in its provider's `noVisionModels`. OpenAI has the
 same login/forward requirements as search; explicitly selected Anthropic fails closed without a usable
-credential. Successful `data:` descriptions use a bounded cache keyed by backend, model, detail,
+credential. Successful `data:` descriptions use a bounded cache keyed by backend, model, reasoning effort, detail,
 image bytes, and normalized message context. Hits and same-turn duplicates do not consume the limit.
 Remote `https:` images and failed or empty descriptions are not cached.
 

@@ -48,7 +48,7 @@ function plan(overrides: Partial<VisionPlan> = {}): VisionPlan {
       authContext: { kind: "main", accountId: null },
       headers: new Headers({ Authorization: "Bearer test" }),
     },
-    settings: { model: "vision-model-a", timeoutMs: 5000 },
+    settings: { model: "vision-model-a", reasoning: "low", timeoutMs: 5000 },
     maxDescriptionsPerTurn: 8,
     ...overrides,
   };
@@ -240,7 +240,7 @@ describe("vision description cache and per-turn cap", () => {
     expect(textParts(request, 1).join("\n")).toContain("caption-a");
   });
 
-  test("separates cache keys by backend, model, detail, and normalized context", async () => {
+  test("separates cache keys by backend, model, reasoning, detail, and normalized context", async () => {
     let calls = 0;
     globalThis.fetch = (async (url, init) => {
       calls += 1;
@@ -257,7 +257,8 @@ describe("vision description cache and per-turn cap", () => {
     await run(plan(), "hello   world");
     await run(plan(), "hello world"); // normalized-context hit
     await run(plan(), "hello world", "low");
-    await run(plan({ settings: { model: "vision-model-b", timeoutMs: 5000 } }), "hello world");
+    await run(plan({ settings: { model: "vision-model-b", reasoning: "low", timeoutMs: 5000 } }), "hello world");
+    await run(plan({ settings: { model: "vision-model-a", reasoning: "high", timeoutMs: 5000 } }), "hello world");
     await run(plan(), "different context");
     await run(plan({
       backend: "anthropic",
@@ -265,7 +266,7 @@ describe("vision description cache and per-turn cap", () => {
       anthropicSidecar: { providerName: "anthropic-cache-test", provider: anthropicProvider },
     }), "hello world");
 
-    expect(calls).toBe(5);
+    expect(calls).toBe(6);
   });
 
   test("clamps a successful description before cache insertion and first render", async () => {

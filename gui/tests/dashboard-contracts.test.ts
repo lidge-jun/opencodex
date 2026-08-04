@@ -1,10 +1,19 @@
 import { expect, test } from "bun:test";
 import { en } from "../src/i18n/en";
 import { normalizeInjectionSelection } from "../src/pages/dashboard-core-poll";
+import { mergeSidecarSetting, VISION_REASONING_LEVELS } from "../src/pages/dashboard-shared";
 import { PROJECT_CONFIG_DIAGNOSTICS_POLL_MS, beginPollEpoch, beginPollEpochs } from "../src/startup-health-ui";
 
 test("project-config diagnostics poll cadence is owned by the shared constant", () => {
   expect(PROJECT_CONFIG_DIAGNOSTICS_POLL_MS).toBe(30_000);
+});
+
+test("vision sidecar reasoning exposes the supported ladder and survives optimistic model updates", () => {
+  expect(VISION_REASONING_LEVELS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(mergeSidecarSetting(
+    { model: "gpt-5.6-luna", backend: "openai", reasoning: "high" },
+    { model: "gpt-5.6-luna" },
+  )).toEqual({ model: "gpt-5.6-luna", backend: "openai", reasoning: "high" });
 });
 
 test("dashboard poll epochs share beginPollEpoch", () => {

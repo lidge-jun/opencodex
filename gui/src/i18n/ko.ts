@@ -209,6 +209,7 @@ export const ko: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Codex 앱의 백그라운드 호출({models}, 제목·커밋 메시지)을 가로채 선택한 모델로 바꿉니다.",
   "dash.sidecarBackend": "백엔드",
   "dash.sidecarModel": "모델",
+  "dash.visionReasoning": "비전 추론 강도",
   "dash.backendAuto": "자동",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",

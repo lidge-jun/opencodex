@@ -16,6 +16,7 @@ export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-des
 const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
 const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_REASONING = "low" as const;
 const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
 const DESCRIPTION_CACHE_MAX_ENTRIES = 256;
 export const VISION_DESCRIPTION_CACHE_MAX_BYTES = 1024 * 1024;
@@ -245,7 +246,11 @@ export function planVisionSidecar(
     return {
       backend,
       anthropicSidecar,
-      settings: { model: cfg.model ?? DEFAULT_ANTHROPIC_VISION_MODEL, timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+      settings: {
+        model: cfg.model ?? DEFAULT_ANTHROPIC_VISION_MODEL,
+        reasoning: cfg.reasoning ?? DEFAULT_REASONING,
+        timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      },
       maxDescriptionsPerTurn,
     };
   }
@@ -254,7 +259,11 @@ export function planVisionSidecar(
   return {
     backend,
     forwardSidecar: openAiSidecar,
-    settings: { model: resolveOpenAiVisionModel(config), timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+    settings: {
+      model: resolveOpenAiVisionModel(config),
+      reasoning: cfg.reasoning ?? DEFAULT_REASONING,
+      timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    },
     maxDescriptionsPerTurn,
   };
 }
@@ -297,6 +306,7 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
     key: JSON.stringify([
       plan.backend,
       plan.settings.model,
+      plan.settings.reasoning,
       job.detail ?? "high",
       imageHash,
       sha256(normalizedContext(job.contextText)),

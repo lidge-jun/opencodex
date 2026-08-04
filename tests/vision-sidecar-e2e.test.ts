@@ -113,6 +113,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
 
     const config: OcxConfig = {
       port: 0, hostname: "127.0.0.1", defaultProvider: "textonly", openaiProviderTierVersion: 2,
+      visionSidecar: { reasoning: "high" },
       providers: {
         textonly: {
           adapter: "openai-chat",
@@ -150,6 +151,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(sidecarAccount).toBe("acct-vision-sidecar");
       expect(sidecarBody).toContain("input_image");
       expect(sidecarBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect((JSON.parse(sidecarBody) as { reasoning?: { effort?: string } }).reasoning?.effort).toBe("high");
 
       // The text-only upstream saw the caption, not the image bytes.
       expect(upstreamBody).toContain(CAPTION);

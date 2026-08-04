@@ -144,9 +144,10 @@ OpenAI 백엔드는 ChatGPT 로그인과 활성화된 ChatGPT `forward` provider
 | `enabled?` | `boolean` | on when usable | 주 이미지 설명 스위치입니다. |
 | `backend?` | `"openai" \| "anthropic"` | auto | web search와 같은, 명시값 우선 및 Anthropic 자격 증명 인식 선택 방식입니다. |
 | `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.4-mini`, Anthropic은 `claude-sonnet-5`입니다. |
+| `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 추론 강도입니다. Anthropic은 무시합니다. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 메인 턴당 허용되는 새 설명 캐시 미스 수입니다. `0`이면 호출이 비활성화되며, 잘못된 값은 기본값을 사용합니다. |
 | `timeoutMs?` | `number` | `45000` | 사이드카 fetch 제한 시간입니다. |
 
-Vision은 provider의 `noVisionModels`에 속한 모델로 보낸 이미지에만 활성화됩니다. OpenAI는 검색과 같은 로그인/forward 요건을 갖고 있으며, 명시적으로 선택한 Anthropic은 사용할 수 있는 자격 증명이 없으면 닫힌 상태로 실패합니다. 성공한 `data:` 설명은 backend, model, detail, image bytes, 그리고 정규화된 메시지 컨텍스트를 키로 하는 bounded cache를 사용합니다. 히트와 같은 턴의 중복은 한도를 소모하지 않습니다. 원격 `https:` 이미지와 실패했거나 비어 있는 설명은 캐시하지 않습니다.
+Vision은 provider의 `noVisionModels`에 속한 모델로 보낸 이미지에만 활성화됩니다. OpenAI는 검색과 같은 로그인/forward 요건을 갖고 있으며, 명시적으로 선택한 Anthropic은 사용할 수 있는 자격 증명이 없으면 닫힌 상태로 실패합니다. 성공한 `data:` 설명은 backend, model, reasoning effort, detail, image bytes, 그리고 정규화된 메시지 컨텍스트를 키로 하는 bounded cache를 사용합니다. 히트와 같은 턴의 중복은 한도를 소모하지 않습니다. 원격 `https:` 이미지와 실패했거나 비어 있는 설명은 캐시하지 않습니다.
 
 Anthropic OAuth 사이드카는 opencodex의 기존 Claude Code OAuth fingerprint를 재사용합니다. 의도한 계정과 워크로드로 소크 테스트를 수행합니다.

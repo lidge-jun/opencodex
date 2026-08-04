@@ -205,6 +205,7 @@ export const de: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Fängt die Hintergrund-Hilfsaufrufe der Codex-App ({models}) ab und leitet sie an das gewählte Modell um.",
   "dash.sidecarBackend": "Backend",
   "dash.sidecarModel": "Modell",
+  "dash.visionReasoning": "Vision-Reasoning-Aufwand",
   "dash.backendAuto": "Automatisch",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",

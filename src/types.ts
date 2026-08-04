@@ -877,6 +877,8 @@ export interface OcxVisionSidecarConfig {
   backend?: "openai" | "anthropic";
   /** Vision model that describes images. */
   model?: string;
+  /** OpenAI Responses reasoning effort used by the vision describer. Default: low. */
+  reasoning?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Max description cache misses admitted in one main-model turn. Zero disables description calls. */
   maxDescriptionsPerTurn?: number;
   /** Sidecar fetch timeout (ms). */

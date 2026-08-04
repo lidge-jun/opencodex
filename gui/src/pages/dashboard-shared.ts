@@ -55,11 +55,12 @@ export interface SettingsData {
   };
 }
 export type SidecarBackend = "openai" | "anthropic";
-export interface SidecarSetting { backend?: SidecarBackend; model: string }
+export type VisionReasoning = "low" | "medium" | "high" | "xhigh" | "max";
+export interface SidecarSetting { backend?: SidecarBackend; model: string; reasoning?: VisionReasoning }
 export interface SidecarData { webSearch: SidecarSetting; vision: SidecarSetting }
 export interface SidecarPatch {
   webSearch?: { backend?: SidecarBackend | null; model?: string };
-  vision?: { backend?: SidecarBackend | null; model?: string };
+  vision?: { backend?: SidecarBackend | null; model?: string; reasoning?: VisionReasoning };
 }
 export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
 export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
@@ -142,14 +143,17 @@ export function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string
 
 export function mergeSidecarSetting(
   current: SidecarSetting,
-  update?: { backend?: SidecarBackend | null; model?: string },
+  update?: { backend?: SidecarBackend | null; model?: string; reasoning?: VisionReasoning },
 ): SidecarSetting {
   const merged = { ...current };
   if (update?.model !== undefined) merged.model = update.model;
   if (update?.backend === null) delete merged.backend;
   else if (update?.backend !== undefined) merged.backend = update.backend;
+  if (update?.reasoning !== undefined) merged.reasoning = update.reasoning;
   return merged;
 }
+
+export const VISION_REASONING_LEVELS: VisionReasoning[] = ["low", "medium", "high", "xhigh", "max"];
 
 export function sidecarModelOptions(models: ModelInfo[]) {
   const out: Array<{ value: string; label: string }> = [];

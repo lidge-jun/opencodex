@@ -214,6 +214,7 @@ export const ja: Record<TKey, string> = {
   "models.shadowCallInterceptHint": "Codex App のバックグラウンドヘルパー呼び出し({models}: タイトル、コミットメッセージ)を傍受し、選択したモデルにリダイレクトします。",
   "dash.sidecarBackend": "バックエンド",
   "dash.sidecarModel": "モデル",
+  "dash.visionReasoning": "ビジョン推論負荷",
   "dash.backendAuto": "自動",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",

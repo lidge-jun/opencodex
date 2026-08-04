@@ -312,6 +312,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       vision: {
         model: vs.model ?? "gpt-5.6-luna",
         backend: vs.backend,
+        reasoning: vs.reasoning ?? "low",
         maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
       },
     });
@@ -327,7 +328,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
       webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown };
-      vision?: { model?: unknown; backend?: unknown; maxDescriptionsPerTurn?: unknown };
+      vision?: { model?: unknown; backend?: unknown; reasoning?: unknown; maxDescriptionsPerTurn?: unknown };
     };
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
@@ -342,6 +343,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         || !Number.isInteger(body.vision.maxDescriptionsPerTurn)
         || body.vision.maxDescriptionsPerTurn <= 0)) {
       return jsonResponse({ error: "vision.maxDescriptionsPerTurn must be a positive integer" }, 400);
+    }
+    if (body.vision && body.vision.reasoning !== undefined
+      && body.vision.reasoning !== "low" && body.vision.reasoning !== "medium"
+      && body.vision.reasoning !== "high" && body.vision.reasoning !== "xhigh"
+      && body.vision.reasoning !== "max") {
+      return jsonResponse({ error: "vision.reasoning must be low, medium, high, xhigh, or max" }, 400);
     }
     if (body.webSearch) {
       config.webSearchSidecar = { ...config.webSearchSidecar };
@@ -368,6 +375,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {
         config.visionSidecar.maxDescriptionsPerTurn = body.vision.maxDescriptionsPerTurn;
       }
+      if (body.vision.reasoning === "low" || body.vision.reasoning === "medium"
+        || body.vision.reasoning === "high" || body.vision.reasoning === "xhigh"
+        || body.vision.reasoning === "max") {
+        config.visionSidecar.reasoning = body.vision.reasoning;
+      }
     }
     saveConfigPreservingClaudeCode(config);
     const ws = config.webSearchSidecar ?? {};
@@ -378,6 +390,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       vision: {
         model: vs.model ?? "gpt-5.6-luna",
         backend: vs.backend,
+        reasoning: vs.reasoning ?? "low",
         maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
       },
     });
