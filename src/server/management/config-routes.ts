@@ -542,7 +542,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "models must be an array of strings" }, 400);
     }
     config.favorites = models;
-    saveConfig(config);
+    saveConfigPreservingClaudeCode(config);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ ok: true, models: config.favorites });
   }
