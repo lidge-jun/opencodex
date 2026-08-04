@@ -314,6 +314,82 @@ describe("google provider hardening", () => {
     expect(JSON.parse(antigravity.body).request.generationConfig).toBeUndefined();
   });
 
+  test("effort ladder drives thinkingLevel beyond the flash slice", async () => {
+    const direct = createGoogleAdapter(provider({
+      modelReasoningEfforts: { "gemini-3.1-pro-preview": ["low", "medium", "high"] },
+    }));
+    const proHigh = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+      options: { reasoning: "high" },
+    });
+    const proMinimal = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+      options: { reasoning: "minimal" },
+    });
+    const proUnset = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+    });
+    const unladdered = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.5-flash-lite",
+      options: { reasoning: "high" },
+    });
+
+    expect(JSON.parse(proHigh.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
+    // minimal is not on the pro-preview ladder; the clamp lands on the nearest supported tier.
+    expect(JSON.parse(proMinimal.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+    expect(JSON.parse(proUnset.body).generationConfig).toBeUndefined();
+    expect(JSON.parse(unladdered.body).generationConfig).toBeUndefined();
+  });
+
+  test("Vertex sends thinkingLevel only when a ladder is explicitly configured", async () => {
+    const frozen = createGoogleAdapter(provider({ googleMode: "vertex" }));
+    const opted = createGoogleAdapter(provider({
+      googleMode: "vertex",
+      modelReasoningEfforts: { "gemini-3-pro": ["low", "medium", "high"] },
+    }));
+    const withoutLadder = await frozen.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.5-flash",
+      options: { reasoning: "high" },
+    });
+    const withLadder = await opted.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3-pro",
+      options: { reasoning: "high" },
+    });
+
+    expect(JSON.parse(withoutLadder.body).generationConfig).toBeUndefined();
+    expect(JSON.parse(withLadder.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("unladdered direct flash keeps its hardcoded thinking slice", async () => {
+    const bare = createGoogleAdapter(provider());
+    const flash = await bare.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.6-flash",
+      options: { reasoning: "medium" },
+    });
+
+    expect(JSON.parse(flash.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "medium" });
+  });
+
+  test("image models keep responseModalities even with a provider-wide effort ladder", async () => {
+    const direct = createGoogleAdapter(provider({ reasoningEfforts: ["low", "high"] }));
+    const image = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-flash-image",
+      options: { reasoning: "high" },
+    });
+
+    const generationConfig = JSON.parse(image.body).generationConfig;
+    expect(generationConfig.thinkingConfig).toBeUndefined();
+    expect(generationConfig.responseModalities).toEqual(["TEXT", "IMAGE"]);
+  });
+
   test("publishes audited AI Studio metadata while Vertex stays frozen", () => {
     const google = PROVIDER_REGISTRY.find(entry => entry.id === "google");
     const vertex = PROVIDER_REGISTRY.find(entry => entry.id === "google-vertex");

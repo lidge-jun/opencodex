@@ -30,7 +30,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
-import { mapReasoningEffort } from "../reasoning-effort";
+import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -340,12 +340,22 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (parsed.options.temperature !== undefined) generationConfig.temperature = parsed.options.temperature;
       if (parsed.options.topP !== undefined) generationConfig.topP = parsed.options.topP;
       if (parsed.options.stopSequences) generationConfig.stopSequences = parsed.options.stopSequences;
-      const directFlashThinking = provider.googleMode !== "vertex"
-        && provider.googleMode !== "cloud-code-assist"
-        && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")
+      // Effort → thinkingLevel follows the configured ladder: any model advertising reasoning
+      // efforts (registry preset or user config) sends the mapped level, so a picker-selected
+      // effort actually reaches the wire (gemini-3.1-pro-preview ships a ladder). The original
+      // gemini-3.5/3.6-flash direct-mode slice stays hardcoded so unladdered configs keep their
+      // current behavior; Vertex participates only through an explicitly configured ladder (the
+      // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
+      // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
+      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
+        && !isImageCapableModel(parsed.modelId)
+        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
+          || (provider.googleMode !== "vertex"
+            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
+      const thinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
-      if (directFlashThinking) generationConfig.thinkingConfig = { thinkingLevel: directFlashThinking };
+      if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }
