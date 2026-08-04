@@ -1863,7 +1863,7 @@ describe("server local API auth", () => {
       ? rejectionResponse(unsupportedModelBody())
       : Response.json({ id: "retry-success", status: "completed", output: [] }));
     try {
-      const response = await harness.request({ threadId: affinityThread });
+      const response = await harness.request();
       expect(response.status).toBe(200);
       expect((await response.json() as { id: string }).id).toBe("retry-success");
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
@@ -2590,7 +2590,7 @@ describe("server local API auth", () => {
       return redirectedFetch(input, init);
     }) as typeof fetch;
     try {
-      const response = await harness.request();
+      const response = await harness.request({ threadId: affinityThread });
       expect(response.status).toBe(502);
       expect(await response.json()).toEqual({
         error: {
