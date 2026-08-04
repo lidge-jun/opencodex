@@ -120,7 +120,12 @@ import {
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
-import { decodeRequestErrorResponse, handleResponses, usesCodexForwardPoolAuth } from "./core";
+import {
+  canonicalCodexForwardPoolHostKey,
+  decodeRequestErrorResponse,
+  handleResponses,
+  usesCodexForwardPoolAuth,
+} from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./fetch-helpers";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
@@ -317,8 +322,22 @@ export async function handleResponsesCompact(
     // Resolve the SAME pool/thread auth context as /v1/responses — forwarding the caller's raw
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
     // active for this thread while normal turns succeed.
+    if (req.signal.aborted) {
+      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    }
+    const compactHostKey = canonicalCodexForwardPoolHostKey(route);
+    const compactHostAdmission = compactHostKey
+      ? acquireCodexUpstreamHostAdmission(compactHostKey)
+      : null;
+    if (compactHostAdmission?.kind === "blocked") {
+      return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
+        retryAfter: String(compactHostAdmission.retryAfterSeconds),
+      });
+    }
+    let compactHostAdmissionLease = compactHostAdmission?.lease ?? null;
     let compactProvider = route.provider;
     let authCtx: CodexAuthContext = { kind: "main", accountId: null };
+    try {
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
@@ -340,6 +359,7 @@ export async function handleResponsesCompact(
         }
       }
     } catch (err) {
+      releaseCodexAuthContextProbeLease(authCtx);
       if (err instanceof CodexAccountCooldownError) {
         return cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace);
       }
@@ -367,10 +387,12 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
-    const compactHostKey = usesCodexForwardPoolAuth(authCtx, route.provider)
+    const eventualCompactHostKey = usesCodexForwardPoolAuth(authCtx, route.provider)
       ? canonicalCodexUpstreamHostKey(route.providerName, compactUrl)
       : null;
-    let compactHostAdmissionLease: CodexUpstreamHostAdmissionLease | null = null;
+    if ((compactHostAdmissionLease?.key ?? null) !== eventualCompactHostKey) {
+      throw new Error("Codex compact upstream host changed after admission");
+    }
     const settleObservedCompactHostResponse = (): void => {
       if (!compactHostAdmissionLease) return;
       recordCodexUpstreamHostResponse(compactHostAdmissionLease);
@@ -494,16 +516,6 @@ export async function handleResponsesCompact(
       recordCompactPoolOutcome(authCtx, 499);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
-    const compactHostAdmission = compactHostKey
-      ? acquireCodexUpstreamHostAdmission(compactHostKey)
-      : null;
-    if (compactHostAdmission?.kind === "blocked") {
-      releaseCodexAuthContextProbeLease(authCtx);
-      return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
-        retryAfter: String(compactHostAdmission.retryAfterSeconds),
-      });
-    }
-    compactHostAdmissionLease = compactHostAdmission?.lease ?? null;
     const primaryAttempts: UpstreamAttemptObservation[] = [];
     const primaryAttemptBoundary = { executorStarted: false };
     try {
@@ -685,6 +697,12 @@ export async function handleResponsesCompact(
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) inspectResponseLogJson(logCtx, await buffered.clone().text());
     return buffered;
+    } finally {
+      if (compactHostAdmissionLease) {
+        releaseCodexUpstreamHostAdmissionLease(compactHostAdmissionLease);
+        releaseCodexAuthContextProbeLease(authCtx);
+      }
+    }
   }
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no

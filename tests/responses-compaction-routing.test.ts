@@ -4,7 +4,7 @@
  * contract; every other gateway has to be driven as a plain summarizer, or Codex
  * fatals on a compaction turn that came back as an ordinary message.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,12 +12,18 @@ import { handleResponses, handleResponsesCompact } from "../src/server/responses
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
+  clearThreadAccountMap,
   clearCodexUpstreamHealth,
+  getEffectiveActiveCodexAccountId,
   getCodexUpstreamHealth,
+  peekCodexThreadAffinityAccountId,
+  previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
+import { getAccountQuota } from "../src/codex/quota";
+import { clearPoolRotationState, POOL_KEY_CODEX } from "../src/codex/pool-rotation";
 import {
   CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD,
   acquireCodexUpstreamHostAdmission,
@@ -35,11 +41,19 @@ import {
 import { supportsNativeResponsesCompactEndpoint } from "../src/providers/openai-tiers";
 import type { RequestLogContext } from "../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../src/server/lifecycle";
+import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const originalFetch = globalThis.fetch;
 
+beforeEach(() => {
+  // This suite exercises response routing, not Windows ACL behavior. Match the
+  // account/auth suites so isolated Windows runs do not spawn icacls per fixture.
+  setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+});
+
 afterEach(() => {
+  setIcaclsRunnerForTests(null);
   globalThis.fetch = originalFetch;
   clearCodexUpstreamHostHealth();
 });
@@ -717,6 +731,8 @@ describe("compact alternate-account attempt (#913)", () => {
     process.env.OPENCODEX_HOME = testDir;
     process.env.CODEX_HOME = testDir;
     clearCodexUpstreamHealth();
+    clearThreadAccountMap();
+    clearPoolRotationState(POOL_KEY_CODEX);
     clearCodexUpstreamHostHealth();
     clearAccountQuota();
     for (const id of ["pool-a", "pool-b"]) {
@@ -732,6 +748,8 @@ describe("compact alternate-account attempt (#913)", () => {
     return run(twoAccountPoolConfig()).finally(() => {
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
+      clearThreadAccountMap();
+      clearPoolRotationState(POOL_KEY_CODEX);
       clearCodexUpstreamHostHealth();
       clearAccountQuota();
       clearAccountNeedsReauth("pool-a");
@@ -767,6 +785,74 @@ describe("compact alternate-account attempt (#913)", () => {
     const admission = acquireCodexUpstreamHostAdmission(hostKey, now);
     expect(admission.kind).toBe("admitted");
     if (admission.kind === "admitted") releaseCodexUpstreamHostAdmissionLease(admission.lease, now);
+  }
+
+  function openCanonicalHostCircuit(now = Date.now()): void {
+    const hostKey = canonicalCodexUpstreamHostKey(
+      "openai",
+      "https://chatgpt.com/backend-api/codex",
+    )!;
+    for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
+      const admission = acquireCodexUpstreamHostAdmission(hostKey, now + attempt);
+      if (admission.kind !== "admitted") throw new Error("expected host admission while opening circuit");
+      recordCodexUpstreamHostFailure(admission.lease, now + attempt);
+    }
+  }
+
+  for (const endpoint of ["regular", "compact"] as const) {
+    for (const strategy of ["round-robin", "fill-first"] as const) {
+      test(`${endpoint} open circuit is selection-neutral for an unbound ${strategy} thread`, async () => {
+        await withPoolEnv(`ocx-${endpoint}-${strategy}-neutral-`, async config => {
+          const threadId = `${endpoint}-${strategy}-blocked-thread`;
+          config.accountPoolStrategy = strategy;
+          config.accountPoolStickyLimit = 1;
+          config.autoSwitchThreshold = 80;
+          config.activeCodexAccountId = strategy === "round-robin" ? "pool-b" : "pool-a";
+          if (strategy === "fill-first") updateAccountQuota("pool-a", 100);
+          clearCodexUpstreamHealth();
+          clearThreadAccountMap();
+          clearPoolRotationState(POOL_KEY_CODEX);
+
+          const expectedNextAccount = previewCodexAccountForRequest(threadId, config);
+          expect(expectedNextAccount).not.toBeNull();
+          const effectiveActiveBefore = getEffectiveActiveCodexAccountId(config);
+          const quotaBefore = new Map(["pool-a", "pool-b"].map(id => [id, structuredClone(getAccountQuota(id))]));
+          openCanonicalHostCircuit();
+
+          const physicalAccounts: string[] = [];
+          globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+            physicalAccounts.push(new Headers(init?.headers).get("chatgpt-account-id") ?? "");
+            return jsonResponse(completedPayload("selection-neutral recovery"));
+          }) as typeof fetch;
+          const requestFor = () => compactionRequest(
+            endpoint === "regular"
+              ? regularBody()
+              : baseCompactionBody({ model: "gpt-5.6-sol" }),
+            undefined,
+            { "x-codex-parent-thread-id": threadId },
+          );
+          const invoke = () => endpoint === "regular"
+            ? handleResponses(requestFor(), config, { model: "", provider: "" })
+            : handleResponsesCompact(requestFor(), config, { model: "", provider: "" });
+
+          const blocked = await invoke();
+          expect(blocked.status).toBe(502);
+          expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+          expect(physicalAccounts).toEqual([]);
+          expect(peekCodexThreadAffinityAccountId(threadId)).toBeNull();
+          expect(getEffectiveActiveCodexAccountId(config)).toBe(effectiveActiveBefore);
+          expect(previewCodexAccountForRequest(threadId, config)).toBe(expectedNextAccount);
+          for (const [id, quota] of quotaBefore) expect(getAccountQuota(id)).toEqual(quota);
+
+          clearCodexUpstreamHostHealth();
+          const recovered = await invoke();
+          expect(recovered.status).toBe(200);
+          expect(physicalAccounts).toEqual([
+            expectedNextAccount === "pool-a" ? "pool_acc_a" : "pool_acc_b",
+          ]);
+        });
+      });
+    }
   }
 
   type PreExecutorBoundaryState = {

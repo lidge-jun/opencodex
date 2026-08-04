@@ -238,6 +238,22 @@ export function usesCodexForwardPoolAuth(
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
 }
 
+/**
+ * Canonical host selected by a validated native Pool route. Host admission must
+ * happen before account selection, so derive it from the route-owned base URL;
+ * the authority-only key is checked against the eventual adapter request URL.
+ */
+export function canonicalCodexForwardPoolHostKey(
+  route: Pick<RouteResult, "providerName" | "provider" | "codexAccountMode">,
+) {
+  if (
+    route.codexAccountMode !== "pool"
+    || route.provider.authMode !== "forward"
+    || route.provider.adapter !== "openai-responses"
+  ) return null;
+  return canonicalCodexUpstreamHostKey(route.providerName, route.provider.baseUrl ?? "");
+}
+
 function normalizeCodexUnsupportedModelDetail(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
 }
@@ -804,9 +820,8 @@ async function resolveResponsesCodexAuth(
   route: RouteResult,
   options: HandleResponsesOptions,
 ): Promise<ResponsesAuthResolution> {
+  let authCtx: CodexAuthContext | undefined;
   try {
-    if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
-    let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
       authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
         accountId: route.codexAccountId,
@@ -831,6 +846,7 @@ async function resolveResponsesCodexAuth(
       headers: headersForCodexAuthContext(req.headers, authCtx),
     };
   } catch (err) {
+    releaseCodexAuthContextProbeLease(authCtx);
     if (err instanceof CodexAccountCooldownError) {
       return { ok: false, response: cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace) };
     }
@@ -1312,6 +1328,9 @@ async function handleResponsesInner(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
 ): Promise<Response> {
+  let pendingHostAdmissionLease: CodexUpstreamHostAdmissionLease | null = null;
+  let authCtx: CodexAuthContext = { kind: "main", accountId: null };
+  try {
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
@@ -1440,7 +1459,6 @@ async function handleResponsesInner(
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
   };
-  let authCtx: CodexAuthContext = { kind: "main", accountId: null };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1535,6 +1553,32 @@ async function handleResponsesInner(
   if (route.codexAccountNamespace) {
     logCtx.provider = `${route.providerName}-${route.codexAccountNamespace}`;
   }
+
+  // Preserve inbound validation precedence: malformed requests, invalid routes,
+  // and Direct-mode admission credentials are rejected before host health can
+  // surface a synthetic 502. Pool credential resolution remains behind the
+  // atomic host admission so a blocked request cannot commit routing state.
+  if (route.codexAccountMode === "direct") {
+    try {
+      validateForwardAdmissionCredential(req.headers, config);
+    } catch (err) {
+      if (err instanceof ForwardAdmissionCredentialError) {
+        return formatErrorResponse(401, "authentication_error", err.message);
+      }
+      throw err;
+    }
+  }
+  if (options.abortSignal?.aborted) return clientCancelledResponse();
+  const preAuthHostKey = canonicalCodexForwardPoolHostKey(route);
+  const preAuthHostAdmission = preAuthHostKey
+    ? acquireCodexUpstreamHostAdmission(preAuthHostKey)
+    : null;
+  if (preAuthHostAdmission?.kind === "blocked") {
+    return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
+      retryAfter: String(preAuthHostAdmission.retryAfterSeconds),
+    });
+  }
+  pendingHostAdmissionLease = preAuthHostAdmission?.lease ?? null;
 
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
@@ -1780,7 +1824,12 @@ async function handleResponsesInner(
     const hostKey = tracksCodexPoolHost
       ? canonicalCodexUpstreamHostKey(route.providerName, request.url)
       : null;
-    let hostAdmissionLease: CodexUpstreamHostAdmissionLease | null = null;
+    if ((pendingHostAdmissionLease?.key ?? null) !== hostKey) {
+      releaseCodexAuthContextProbeLease(authCtx);
+      throw new Error("Codex upstream host changed after admission");
+    }
+    let hostAdmissionLease = pendingHostAdmissionLease;
+    pendingHostAdmissionLease = null;
     const attemptHistory: UpstreamAttemptObservation[] = [];
     let primaryAttemptExecutorStarted = false;
     const recordPoolTransportOutcome = (outcome: CodexUpstreamOutcome): void => {
@@ -1834,16 +1883,10 @@ async function handleResponsesInner(
     try {
       if (options.abortSignal?.aborted) {
         releaseCodexAuthContextProbeLease(authCtx);
+        releaseCodexUpstreamHostAdmissionLease(hostAdmissionLease);
+        hostAdmissionLease = null;
         return clientCancelledResponse();
       }
-      const hostAdmission = hostKey ? acquireCodexUpstreamHostAdmission(hostKey) : null;
-      if (hostAdmission?.kind === "blocked") {
-        releaseCodexAuthContextProbeLease(authCtx);
-        return formatErrorResponse(502, "upstream_error", "Provider host is temporarily unavailable", {
-          retryAfter: String(hostAdmission.retryAfterSeconds),
-        });
-      }
-      hostAdmissionLease = hostAdmission?.lease ?? null;
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
@@ -3324,6 +3367,12 @@ async function handleResponsesInner(
   }
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");
+  } finally {
+    if (pendingHostAdmissionLease) {
+      releaseCodexUpstreamHostAdmissionLease(pendingHostAdmissionLease);
+      releaseCodexAuthContextProbeLease(authCtx);
+    }
+  }
 }
 
 

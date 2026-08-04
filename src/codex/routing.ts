@@ -240,6 +240,14 @@ export function clearThreadAccountMap(): void {
   threadAccountMap.clear();
 }
 
+/** Side-effect-free inspection used by routing diagnostics and contract tests. */
+export function peekCodexThreadAffinityAccountId(
+  threadId: string,
+  quotaScope?: CodexQuotaScope,
+): string | null {
+  return getThreadAffinity(threadId, quotaScope)?.accountId ?? null;
+}
+
 export function clearThreadAccountMapForAccount(accountId: string): void {
   for (const [threadId, affinities] of threadAccountMap) {
     for (const [scope, entry] of affinities) {
