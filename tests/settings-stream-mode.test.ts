@@ -283,6 +283,17 @@ describe("PUT /api/settings", () => {
     expect(res!.status).toBe(400);
   });
 
+  test.each([[null], [[]], ["settings"], [42]] as const)(
+    "rejects a non-object settings body with 400 (%j)",
+    async body => {
+      const config = baseConfig();
+      const response = await putSettings(config, body);
+
+      expect(response!.status).toBe(400);
+      expect(await response!.json()).toEqual({ error: "settings body must be an object" });
+    },
+  );
+
   test("account-picker enable persists before refresh and retries one failure", async () => {
     const config = baseConfig();
     let persisted = false;
@@ -419,6 +430,35 @@ describe("PUT /api/settings", () => {
 
     await expect(request).rejects.toThrow("save failed");
     expect(config).toEqual(before);
+    expect(refreshed).toBe(false);
+  });
+
+  test("selector allocation failure rolls back every setting before persistence", async () => {
+    const config = baseConfig();
+    Object.defineProperty(config, "codexAccounts", {
+      configurable: true,
+      get: () => { throw new Error("selector allocation failed"); },
+    });
+    let persisted = false;
+    let refreshed = false;
+
+    const request = putSettings(config, {
+      codexAutoStart: false,
+      streamMode: "legacy-tee",
+      appOwnedMemoryBudgetMb: 128,
+      codexAccountPickerEnabled: true,
+    }, {
+      saveConfigPreservingClaudeCode: () => { persisted = true; },
+      refreshCodexCatalog: async () => { refreshed = true; },
+    });
+
+    await expect(request).rejects.toThrow("selector allocation failed");
+    expect(Object.hasOwn(config, "codexAutoStart")).toBe(false);
+    expect(Object.hasOwn(config, "streamMode")).toBe(false);
+    expect(Object.hasOwn(config, "appOwnedMemoryBudgetMb")).toBe(false);
+    expect(Object.hasOwn(config, "codexAccountNamespaces")).toBe(false);
+    expect(Object.hasOwn(config, "codexAccountPickerEnabled")).toBe(false);
+    expect(persisted).toBe(false);
     expect(refreshed).toBe(false);
   });
 

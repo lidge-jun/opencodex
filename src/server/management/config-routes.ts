@@ -219,13 +219,22 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // (a Windows service does not inherit shell env). A stream-shape
     // change applies to NEW turns only — the config object is shared by
     // reference with the request handlers, no restart needed.
-    let body: {
+    let parsedBody: unknown;
+    try {
+      parsedBody = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (!isPlainRecord(parsedBody)) {
+      return jsonResponse({ error: "settings body must be an object" }, 400);
+    }
+    const body = parsedBody as {
       codexAutoStart?: unknown;
       streamMode?: unknown;
       appOwnedMemoryBudgetMb?: unknown;
       codexAccountPickerEnabled?: unknown;
     };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
       && body.appOwnedMemoryBudgetMb === undefined
@@ -263,29 +272,28 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexAccountPickerEnabled: Object.hasOwn(config, "codexAccountPickerEnabled"),
     };
     const pickerWasEnabled = codexAccountPickerIsEnabled(config);
-    if (typeof body.codexAutoStart === "boolean") {
-      config.codexAutoStart = body.codexAutoStart;
-    }
-    if (body.streamMode !== undefined) {
-      if (body.streamMode === "auto") {
-        delete config.streamMode;
-      } else {
-        config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
-      }
-    }
-    if (typeof body.appOwnedMemoryBudgetMb === "number") {
-      config.appOwnedMemoryBudgetMb = body.appOwnedMemoryBudgetMb;
-    }
-    if (body.codexAccountPickerEnabled === true) {
-      if (Object.keys(config.codexAccountNamespaces ?? {}).length === 0) {
-        config.codexAccountNamespaces = defaultCodexAccountNamespaces(config);
-      }
-      config.codexAccountPickerEnabled = true;
-    } else if (body.codexAccountPickerEnabled === false) {
-      config.codexAccountPickerEnabled = false;
-    }
-    const pickerIsEnabled = codexAccountPickerIsEnabled(config);
     try {
+      if (typeof body.codexAutoStart === "boolean") {
+        config.codexAutoStart = body.codexAutoStart;
+      }
+      if (body.streamMode !== undefined) {
+        if (body.streamMode === "auto") {
+          delete config.streamMode;
+        } else {
+          config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
+        }
+      }
+      if (typeof body.appOwnedMemoryBudgetMb === "number") {
+        config.appOwnedMemoryBudgetMb = body.appOwnedMemoryBudgetMb;
+      }
+      if (body.codexAccountPickerEnabled === true) {
+        if (Object.keys(config.codexAccountNamespaces ?? {}).length === 0) {
+          config.codexAccountNamespaces = defaultCodexAccountNamespaces(config);
+        }
+        config.codexAccountPickerEnabled = true;
+      } else if (body.codexAccountPickerEnabled === false) {
+        config.codexAccountPickerEnabled = false;
+      }
       (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     } catch (error) {
       if (previousSettings.hasCodexAutoStart) config.codexAutoStart = previousSettings.codexAutoStart;
@@ -303,6 +311,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       } else delete config.codexAccountPickerEnabled;
       throw error;
     }
+    const pickerIsEnabled = codexAccountPickerIsEnabled(config);
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
       configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(body.appOwnedMemoryBudgetMb));
       enforceAppOwnedMemoryBudget();

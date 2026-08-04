@@ -389,6 +389,41 @@ function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void
   Object.assign(sourceConfig, nextConfig);
 }
 
+/**
+ * Persist a new account without exposing nondurable selector state. The live
+ * config object's identity is significant to saveConfigPreservingClaudeCode's
+ * WeakMap baselines, so mutate and save synchronously, then restore exact prior
+ * references if either selector allocation or persistence fails.
+ */
+function persistNewCodexAccount(
+  sourceConfig: OcxConfig,
+  runtimeConfig: OcxConfig,
+  addedAccount: CodexAccount,
+): { pickerVisibilityChanged: boolean } {
+  const previousConfig = { ...runtimeConfig };
+  try {
+    const accounts = [...(runtimeConfig.codexAccounts ?? [])];
+    const retainedPickerBindingRestored = codexAccountPickerIsEnabled(runtimeConfig)
+      && Object.values(runtimeConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
+    accounts.push(addedAccount);
+    runtimeConfig.codexAccounts = accounts;
+    if (runtimeConfig.codexAccountPickerEnabled !== undefined
+      && runtimeConfig.codexAccountNamespaces) {
+      runtimeConfig.codexAccountNamespaces = { ...runtimeConfig.codexAccountNamespaces };
+    }
+    const namespaceAdded = runtimeConfig.codexAccountPickerEnabled !== undefined
+      && appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
+    saveRuntimeConfig(sourceConfig, runtimeConfig);
+    return { pickerVisibilityChanged: namespaceAdded || retainedPickerBindingRestored };
+  } catch (error) {
+    for (const key of Object.keys(runtimeConfig) as Array<keyof OcxConfig>) {
+      delete runtimeConfig[key];
+    }
+    Object.assign(runtimeConfig, previousConfig);
+    throw error;
+  }
+}
+
 async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<boolean> {
   if (!changed || !codexAccountPickerIsEnabled(config)) return false;
   return refreshCodexCatalogWithRetry(async () => {
@@ -1249,22 +1284,19 @@ export async function handleCodexAuthAPI(
     });
     markCodexAccountValidated(body.id, warmup.validatedAt);
     clearAccountNeedsReauth(body.id);
-    const accounts = latestConfig.codexAccounts ?? [];
     const addedAccount = withCodexAccountLogLabel(
       { id: body.id, email: body.email, plan: body.plan, isMain: false },
-      accounts,
+      latestConfig.codexAccounts ?? [],
     );
-    const retainedPickerBindingRestored = codexAccountPickerIsEnabled(latestConfig)
-      && Object.values(latestConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
-    accounts.push(addedAccount);
-    latestConfig.codexAccounts = accounts;
-    const namespaceAdded = latestConfig.codexAccountPickerEnabled !== undefined
-      && appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
-    saveRuntimeConfig(config, latestConfig);
+    const { pickerVisibilityChanged } = persistNewCodexAccount(
+      config,
+      latestConfig,
+      addedAccount,
+    );
     reconcileLiveStateStores();
     const catalogRefreshPending = await refreshAccountNamespaceCatalog(
       latestConfig,
-      namespaceAdded || retainedPickerBindingRestored,
+      pickerVisibilityChanged,
     );
     return jsonResponse({ ok: true, catalogRefreshPending });
   }
@@ -1761,14 +1793,11 @@ export async function handleCodexAuthAPI(
                     { id: accountId, email, plan, isMain: false },
                     accounts,
                   );
-                  const retainedPickerBindingRestored = codexAccountPickerIsEnabled(latestConfig)
-                    && Object.values(latestConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
-                  accounts.push(addedAccount);
-                  latestConfig.codexAccounts = accounts;
-                  const namespaceAdded = latestConfig.codexAccountPickerEnabled !== undefined
-                    && appendDefaultCodexAccountNamespace(latestConfig, addedAccount);
-                  saveRuntimeConfig(config, latestConfig);
-                  pickerVisibilityChanged = namespaceAdded || retainedPickerBindingRestored;
+                  ({ pickerVisibilityChanged } = persistNewCodexAccount(
+                    config,
+                    latestConfig,
+                    addedAccount,
+                  ));
                 }
                 reconcileLiveStateStores();
                 const catalogRefreshPending = await refreshAccountNamespaceCatalog(

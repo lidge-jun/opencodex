@@ -47,12 +47,7 @@ import {
   reconcileMainCodexAccountRuntimeState,
   resetMainCodexAccountIdentityTrackingForTests,
 } from "../src/codex/account-lifecycle";
-import {
-  getConfigPath,
-  loadConfig,
-  saveConfig,
-  setPersistedConfigMutationBeforeCommitForTests,
-} from "../src/config";
+import * as configModule from "../src/config";
 import { captureConfigGeneration, registerStateStore } from "../src/lib/state-store-sweeper";
 import {
   reconcileLiveStateStores,
@@ -64,6 +59,14 @@ import {
   resolveFirstUsableOpenAiSidecar,
 } from "../src/providers/openai-sidecar";
 import * as codexRefresh from "../src/codex/refresh";
+
+const {
+  ConfigMutationLockError,
+  getConfigPath,
+  loadConfig,
+  saveConfig,
+  setPersistedConfigMutationBeforeCommitForTests,
+} = configModule;
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -2208,6 +2211,46 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential(accountId)).toBeNull();
   });
 
+  test("manual add never publishes an account selector before config commit", async () => {
+    enableManualImport();
+    mockCodexWarmupSuccess();
+    const accountId = "manual-picker-lock-busy";
+    const config = makeConfig({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: true,
+    });
+    saveConfig(structuredClone(config));
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog");
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        expect(candidate).toBe(config);
+        throw new ConfigMutationLockError("test config commit failed");
+      });
+
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody({ id: accountId })),
+      });
+
+      await expect(handleCodexAuthAPI(req, new URL(req.url), config))
+        .rejects.toBeInstanceOf(ConfigMutationLockError);
+      expect(config.codexAccounts).toEqual([]);
+      expect(config.codexAccountNamespaces).toEqual({ desktop: "@main" });
+      expect(Object.values(config.codexAccountNamespaces ?? {})).not.toContain(accountId);
+      expect(loadConfig()).toMatchObject({
+        codexAccounts: [],
+        codexAccountNamespaces: { desktop: "@main" },
+      });
+      expect(getCodexAccountCredential(accountId)).not.toBeNull();
+      expect(refreshSpy).not.toHaveBeenCalled();
+    } finally {
+      saveSpy.mockRestore();
+      refreshSpy.mockRestore();
+    }
+  });
+
   test("POST /api/codex-auth/accounts rejects invalid JSON when manual import is explicitly enabled", async () => {
     enableManualImport();
     const req = new Request("http://localhost/api/codex-auth/accounts", {
@@ -2257,7 +2300,8 @@ describe("codex-auth API", () => {
       codexAccountNamespaces: { desktop: "@main" },
       codexAccountPickerEnabled: true,
     });
-    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog").mockImplementation(async () => {
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog").mockImplementation(async refreshConfig => {
+      expect(refreshConfig).toBe(config);
       const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
       expect(persisted.codexAccounts?.some(account => account.id === accountId)).toBe(true);
       expect(getCodexAccountCredential(accountId)).not.toBeNull();
@@ -3542,7 +3586,10 @@ describe("codex-auth API", () => {
       codexAccountPickerEnabled: true,
     });
     const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog")
-      .mockRejectedValue(new Error("private oauth refresh details"));
+      .mockImplementation(async refreshConfig => {
+        expect(refreshConfig).toBe(config);
+        throw new Error("private oauth refresh details");
+      });
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const result = await completeMockCodexOAuth({
@@ -3564,6 +3611,49 @@ describe("codex-auth API", () => {
       expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("private oauth refresh details");
     } finally {
       warnSpy.mockRestore();
+      refreshSpy.mockRestore();
+    }
+  });
+
+  test("OAuth add never publishes an account selector before config commit", async () => {
+    const accountId = "oauth-picker-lock-busy";
+    const config = makeConfig({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: true,
+    });
+    saveConfig(structuredClone(config));
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog");
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        expect(candidate).toBe(config);
+        throw new ConfigMutationLockError("test config commit failed");
+      });
+
+    try {
+      const result = await completeMockCodexOAuth({
+        config,
+        requestBody: { id: accountId },
+        oauthAccountId: "oauth-picker-lock-chatgpt-id",
+        email: "oauth-picker-lock@example.test",
+        onWarmup: () => {},
+      });
+
+      expect(result.startStatus).toBe(200);
+      expect(result.state).toMatchObject({
+        status: "error",
+        error: "Configuration is busy; retry login shortly.",
+      });
+      expect(config.codexAccounts).toEqual([]);
+      expect(config.codexAccountNamespaces).toEqual({ desktop: "@main" });
+      expect(Object.values(config.codexAccountNamespaces ?? {})).not.toContain(accountId);
+      expect(loadConfig()).toMatchObject({
+        codexAccounts: [],
+        codexAccountNamespaces: { desktop: "@main" },
+      });
+      expect(getCodexAccountCredential(accountId)).not.toBeNull();
+      expect(refreshSpy).not.toHaveBeenCalled();
+    } finally {
+      saveSpy.mockRestore();
       refreshSpy.mockRestore();
     }
   });
