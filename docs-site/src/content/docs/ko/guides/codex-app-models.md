@@ -133,6 +133,22 @@ model override로 노출합니다. `subagentModels`나 대시보드 Subagents �
 featured-model 목록은 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
 override를 정할 뿐, 모델을 고르거나 delegation을 시작하지는 않습니다.
 
+## Desktop 원격 서버
+
+Codex Desktop의 원격 서버 모드는 클라이언트 자체 `available_models` 허용 목록으로 picker를
+필터링합니다(원격 `use_hidden_models` 설정이 켜져 있을 때 적용). 라우팅된 카탈로그 항목은
+여전히 로드되고 제공됩니다. `model/list`가 항목을 반환하고 번들 CLI도 읽을 수 있지만, Desktop
+렌더러는 표시 전에 이 네이티브 전용 허용 목록에 없는 항목을 버립니다. opencodex는 이 목록에
+개입할 수 없습니다. 업스트림 버그는
+[openai/codex#19694](https://github.com/openai/codex/issues/19694)에서 추적됩니다.
+
+Desktop이 허용 목록을 제어할 수 있게 될 때까지:
+
+- 원격 머신의 `~/.codex/config.toml`에서 모델을 직접 설정하세요(예: `model = "input/grok-4.5"`).
+  picker에는 `Custom`으로 표시될 수 있지만, 요청은 설정된 라우팅 모델을 계속 사용합니다.
+- Desktop picker 대신 Codex CLI 또는 TUI를 사용하세요. 이들은 허용 목록을 적용하지 않으며
+  라우팅 모델을 정상적으로 나열합니다.
+
 ## 모델 상태 새로고침
 
 picker에 오래된 항목이 계속 보이면 카탈로그를 새로 쓰고 대상 Codex 서피스를 다시 시작합니다:

@@ -137,6 +137,23 @@ The featured-model list is separate from the Dashboard's **Sub-agent delegation*
 controls which overrides Codex offers first; it does not select a model or trigger delegation by
 itself.
 
+## Desktop remote servers
+
+Codex Desktop's remote-server mode filters the picker against the client's own
+`available_models` allowlist (active when the remote `use_hidden_models` setting is on). Routed
+catalog entries are still loaded and served - `model/list` returns them and the bundled CLI reads
+them - but the Desktop renderer drops anything that is not on that native-only allowlist before
+rendering. opencodex has no hook into that list; the upstream bug is tracked at
+[openai/codex#19694](https://github.com/openai/codex/issues/19694).
+
+Until Desktop exposes a control for the allowlist:
+
+- Set the model directly in `~/.codex/config.toml` on the remote machine, for example
+  `model = "input/grok-4.5"`. The picker may show `Custom`, but requests still use the configured
+  routed model.
+- Use Codex CLI or TUI instead of the Desktop picker; they do not apply the allowlist and list
+  routed models normally.
+
 ## Refreshing model state
 
 If the picker still shows stale entries, refresh the catalog and restart the target Codex surface:

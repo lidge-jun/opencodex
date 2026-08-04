@@ -91,6 +91,15 @@ Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把�
 
 精选模型列表与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
 
+## Desktop 远程服务器
+
+Codex Desktop 的远程服务器模式会针对客户端自己的 `available_models` 白名单过滤模型选择器（当远程 `use_hidden_models` 设置启用时生效）。路由目录条目仍然会被加载并对外提供——`model/list` 会返回它们，内置 CLI 也能读取——但 Desktop 渲染层在显示前会丢弃任何不在这个仅包含原生模型的白名单中的条目。opencodex 无法影响这份白名单；上游问题在 [openai/codex#19694](https://github.com/openai/codex/issues/19694) 跟踪中。
+
+在 Desktop 提供白名单控制之前：
+
+- 在远程机器的 `~/.codex/config.toml` 中直接设置模型，例如 `model = "input/grok-4.5"`。选择器可能显示为 `Custom`，但请求仍会使用所配置的路由模型。
+- 改用 Codex CLI 或 TUI，而不是 Desktop 选择器；它们不应用该白名单，会正常列出路由模型。
+
 ## 刷新模型状态
 
 如果选择器里仍然显示旧条目，请刷新目录并重启目标 Codex 界面：
