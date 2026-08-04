@@ -665,7 +665,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.estimate.usage_estimated": "Данные об использовании от провайдера — оценочные.",
   "logs.detail.estimate.cache_detail_missing": "Детализация кэша недоступна; входные токены оценены по верхней границе.",
   "logs.detail.estimate.expected_price_overlay": "Использована подтверждённая ожидаемая цена из прайс-листа.",
-  "logs.detail.estimate.provider_cost_overlay": "Использована настроенная пользователем цена провайдера.",
+  "logs.detail.estimate.provider_cost_overlay": "Использован ценовой оверлей провайдера.",
   "logs.col.error": "Ошибка",
   "logs.col.upstreamReason": "Причина от провайдера",
   "logs.col.duration": "Длительность",

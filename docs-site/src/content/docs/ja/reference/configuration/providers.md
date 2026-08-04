@@ -73,7 +73,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `modelMaxInputTokens?` | `Record<string, number>` |カタログの自動圧縮ヒントに使用されるモデルごとの正の最大入力制限。 |
 | `defaultMaxOutputTokens?` | `number` |クライアントが `max_output_tokens` を省略した場合の、プロバイダー全体の `openai-chat` フォールバック。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` |モデルごとの `openai-chat` フォールバック バジェットがプラスになります。正確な/パターン一致はプロバイダーのデフォルトを上回ります。 |
-| `modelCosts?` | `Record<string, Cost4>` | モデルごとの表示価格（100万トークンあたりの米ドル）。正確なモデル ID をキーにします。組み込みカタログにないカスタム・内部プロバイダーの ID も有効です。ユーザー設定の価格は Logs の `~$` 見積もりで組み込みカタログより優先されます（フォールバック順: ユーザー設定 → jawcode カタログ → expected-price オーバーレイ → モデル別ベンダー価格）。全ゼロのエントリは次のソースにフォールバックします。表示専用の見積もりであり、請求には影響しません。 |
+| `modelCosts?` | `Record<string, Cost4>` | モデルごとの表示価格（100万トークンあたりの米ドル）。正確なモデル ID をキーにし、値は `input`, `output`, `cacheRead`, `cacheWrite` の 4 フィールドです（例: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。組み込みカタログにないカスタム・内部プロバイダーの ID も有効です。ユーザー設定の価格は Logs の `~$` 見積もりで組み込みカタログより優先されます（フォールバック順: ユーザー設定 → jawcode カタログ → expected-price オーバーレイ → モデル別ベンダー価格）。全ゼロのエントリは次のソースにフォールバックします。表示専用の見積もりであり、請求には影響しません。 |
 | `headers?` | `Record<string, string>` |追加の上流ヘッダー。認証、Cookie、API キー ヘッダー、埋め込まれた改行、および無効な名前は拒否されます。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` |デフォルトの OpenRouter `order`、`only`、および `allowFallbacks` 設定。 `openai-chat` を持つ正規 OpenRouter に対してのみ有効です。 |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` |プロバイダー全体の OpenRouter 設定を置き換える正確なモデル ID のオーバーライド。 |
