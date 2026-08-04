@@ -29,6 +29,29 @@ export type DestinationKind =
   | "unspecified"
   | "metadata";
 
+/**
+ * Scheme guard for credential-bearing outbound sends (#914 review): forward
+ * credentials and API keys must never be transmitted over cleartext http to a
+ * remote host. Loopback http stays allowed for local gateways and tests —
+ * loopback traffic never leaves the machine.
+ */
+export function credentialSendSchemeError(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "baseUrl must be a valid URL";
+  }
+  if (parsed.protocol === "https:") return null;
+  if (parsed.protocol === "http:" && isLoopbackDestinationHost(parsed.hostname)) return null;
+  return "baseUrl must use https for credential-bearing sends";
+}
+
+function isLoopbackDestinationHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+  return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+}
+
 interface DestinationAssessment {
   kind: DestinationKind;
   detail: string;

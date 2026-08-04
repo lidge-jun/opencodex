@@ -429,6 +429,47 @@ test("an invalid explicit Images provider returns 400 after bearer admission", a
   }
 });
 
+test("a keyed images provider with a cleartext-http remote baseUrl is refused before any send (#914 review)", async () => {
+  const outbound: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    outbound.push(requestUrl);
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "custom-images",
+    openaiProviderTierVersion: 2,
+    providers: {
+      "custom-images": {
+        adapter: "openai-responses",
+        baseUrl: "http://insecure.invalid/v1",
+        allowPrivateNetwork: true,
+        authMode: "key",
+        apiKey: "${OPENCODEX_TEST_IMAGES_API_KEY}",
+      },
+    },
+    images: { provider: "custom-images" },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("must use https");
+    expect(outbound.some(url => url.includes("insecure.invalid"))).toBe(false);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("an invalid explicit Images provider fails closed instead of using another upstream", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);

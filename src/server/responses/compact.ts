@@ -64,6 +64,7 @@ import {
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
+import { credentialSendSchemeError } from "../../lib/destination-policy";
 import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
@@ -353,6 +354,13 @@ export async function handleResponsesCompact(
     // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
     const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
     const compactUrl = `${base}/responses/compact`;
+    if (compactProvider.authMode === "forward") {
+      // Fail closed before any credential leaves the proxy: a hand-edited
+      // forward baseUrl must not transmit Authorization over cleartext http
+      // (#914 review, CWE-319).
+      const schemeError = credentialSendSchemeError(compactUrl);
+      if (schemeError) return formatErrorResponse(502, "upstream_error", `Compact forward provider ${schemeError}`);
+    }
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
     // Takes its context explicitly: the alternate-account flow below records a rejection

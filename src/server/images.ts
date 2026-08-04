@@ -29,6 +29,7 @@ import {
   transportErrorCode,
   transportFailureHost,
 } from "../lib/upstream-reachability";
+import { credentialSendSchemeError } from "../lib/destination-policy";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { SidecarOutcomeMeta } from "../web-search/executor";
 import type { OcxConfig } from "../types";
@@ -444,6 +445,11 @@ export async function handleImages(
   }
 
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
+  // Fail closed before any credential leaves the proxy: neither the ChatGPT
+  // forward credential nor a keyed provider's API key may cross cleartext http
+  // to a remote host (#914 review, CWE-319).
+  const schemeError = credentialSendSchemeError(url);
+  if (schemeError) return formatErrorResponse(502, "upstream_error", `image provider ${schemeError}`);
   const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
   const sidecarExit = sidecarEnter("images");
   try {

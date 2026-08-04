@@ -482,4 +482,47 @@ describe("issue #914: pre-connection reachability failures are account-neutral",
       await server.stop(true);
     }
   });
+
+  test("forward-mode sends refuse a cleartext-http destination before any credential leaves (#914 review)", async () => {
+    // A hand-edited custom forward provider (loadConfig does not reject the
+    // reserved management shape) must still fail closed at the send boundary.
+    saveConfig({
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "insecure-forward",
+      openaiProviderTierVersion: 2,
+      providers: {
+        "insecure-forward": {
+          adapter: "openai-responses",
+          baseUrl: "http://insecure.invalid/backend-api/codex",
+          authMode: "forward",
+          defaultModel: "custom-test-model",
+          models: ["custom-test-model"],
+        },
+      },
+    } as OcxConfig);
+    const outbound: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = input instanceof Request
+        ? input.url
+        : input instanceof URL
+          ? input.toString()
+          : String(input);
+      outbound.push(requestUrl);
+      return ORIGINAL_FETCH(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const res = await ORIGINAL_FETCH(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "custom-test-model", input: "hello", stream: false }),
+      });
+      expect(res.status).toBe(502);
+      expect(await res.text()).toContain("must use https");
+      expect(outbound.some(url => url.includes("insecure.invalid"))).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });

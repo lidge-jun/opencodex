@@ -4,9 +4,31 @@ import { describe, expect, mock, test } from "bun:test";
 const lookupMock = mock(async (_hostname: string, _opts: unknown): Promise<{ address: string; family: number }[]> => []);
 mock.module("node:dns/promises", () => ({ lookup: lookupMock }));
 
-const { providerDestinationConfigError, providerDestinationResolvedError, resolvePublicAddresses } = await import("../src/lib/destination-policy");
+const { credentialSendSchemeError, providerDestinationConfigError, providerDestinationResolvedError, resolvePublicAddresses } = await import("../src/lib/destination-policy");
 
 const provider = (baseUrl: string, allowPrivateNetwork?: boolean) => ({ baseUrl, allowPrivateNetwork });
+
+describe("credentialSendSchemeError — cleartext credential guard (#914 review)", () => {
+  test("https destinations pass", () => {
+    expect(credentialSendSchemeError("https://chatgpt.com/backend-api/codex/responses")).toBeNull();
+    expect(credentialSendSchemeError("https://api.openai.com/v1/images/generations")).toBeNull();
+  });
+
+  test("loopback http destinations pass (local gateways and tests)", () => {
+    expect(credentialSendSchemeError("http://127.0.0.1:11434/v1")).toBeNull();
+    expect(credentialSendSchemeError("http://localhost:8080/v1")).toBeNull();
+    expect(credentialSendSchemeError("http://[::1]:8080/v1")).toBeNull();
+  });
+
+  test("cleartext http to any remote host is rejected", () => {
+    expect(credentialSendSchemeError("http://insecure.example.test/v1")).toContain("https");
+    expect(credentialSendSchemeError("http://93.184.216.34/v1")).toContain("https");
+  });
+
+  test("malformed URLs are rejected", () => {
+    expect(credentialSendSchemeError("not a url")).toContain("valid URL");
+  });
+});
 
 describe("providerDestinationConfigError — reserved IPv4 ranges (review finding, PR #96)", () => {
   const cases: [string, string][] = [

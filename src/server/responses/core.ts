@@ -90,6 +90,7 @@ import {
 } from "../../codex/routing";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import { fetchWithResetRetry, fetchWithTransientRetry, applyUpstreamRecoveryInit } from "../../lib/upstream-retry";
+import { credentialSendSchemeError } from "../../lib/destination-policy";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
@@ -1744,6 +1745,15 @@ async function handleResponsesInner(
       // so a server that redirects to a dead host can never masquerade as a
       // pre-connection failure after the credential was seen (#914).
       const forwardCredentialedSend = route.provider.authMode === "forward";
+      if (forwardCredentialedSend) {
+        // Fail closed before any credential leaves the proxy: a hand-edited
+        // forward baseUrl must not transmit Authorization over cleartext http
+        // (#914 review, CWE-319).
+        const schemeError = credentialSendSchemeError(request.url);
+        if (schemeError) {
+          return formatErrorResponse(502, "upstream_error", `Forward provider ${schemeError}`);
+        }
+      }
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
