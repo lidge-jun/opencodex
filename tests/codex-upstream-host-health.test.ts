@@ -156,6 +156,33 @@ describe("Codex upstream host health (#914)", () => {
     expect(afterConcurrentFailure?.cooldownUntil).toBeUndefined();
   });
 
+  test("a normal response preserves a concurrent lease and its later failure authority", () => {
+    const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
+    const now = 2_800;
+    expect(fail(key, now).consecutiveFailures).toBe(1);
+    const responseLease = admit(key, now + 1);
+    const failureLease = admit(key, now + 1);
+
+    expect(recordCodexUpstreamHostResponse(responseLease, now + 2)).toBe(true);
+    expect(getCodexUpstreamHostHealth(key, now + 2)).toBeNull();
+
+    const afterConcurrentFailure = recordCodexUpstreamHostFailure(failureLease, now + 3);
+    expect(afterConcurrentFailure?.consecutiveFailures).toBe(1);
+    expect(afterConcurrentFailure?.cooldownUntil).toBeUndefined();
+  });
+
+  test("concurrent normal responses settle independently and clean up after the last lease", () => {
+    const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
+    const now = 2_900;
+    const first = admit(key, now);
+    const second = admit(key, now);
+
+    expect(recordCodexUpstreamHostResponse(first, now + 1)).toBe(true);
+    expect(recordCodexUpstreamHostResponse(second, now + 2)).toBe(true);
+    expect(getCodexUpstreamHostHealth(key, now + 2)).toBeNull();
+    expect(releaseCodexUpstreamHostAdmissionLease(second, now + 3)).toBe(false);
+  });
+
   test("caller abort releases a half-open admission without adding evidence", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
     const trippedAt = 3_000;

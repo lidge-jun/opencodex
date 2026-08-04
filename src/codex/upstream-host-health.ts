@@ -165,6 +165,14 @@ function matchingHealth(lease: CodexUpstreamHostAdmissionLease): CodexUpstreamHo
   return health;
 }
 
+function settleLease(
+  health: CodexUpstreamHostHealth,
+  lease: CodexUpstreamHostAdmissionLease,
+): void {
+  health.activeLeaseIds.delete(lease.leaseId);
+  if (health.halfOpenLeaseId === lease.leaseId) delete health.halfOpenLeaseId;
+}
+
 export function getCodexUpstreamHostHealth(
   key: CodexUpstreamHostKey,
   now = Date.now(),
@@ -231,8 +239,7 @@ export function releaseCodexUpstreamHostAdmissionLease(
   if (!lease) return false;
   const health = matchingHealth(lease);
   if (!health) return false;
-  health.activeLeaseIds.delete(lease.leaseId);
-  if (health.halfOpenLeaseId === lease.leaseId) delete health.halfOpenLeaseId;
+  settleLease(health, lease);
   health.lastTouchedAt = now;
   if (health.activeLeaseIds.size === 0 && health.consecutiveFailures === 0) {
     upstreamHostHealth.delete(lease.key);
@@ -248,8 +255,7 @@ export function recordCodexUpstreamHostFailure(
 ): CodexUpstreamHostHealthSnapshot | null {
   const current = matchingHealth(lease);
   if (!current) return null;
-  current.activeLeaseIds.delete(lease.leaseId);
-  if (current.halfOpenLeaseId === lease.leaseId) delete current.halfOpenLeaseId;
+  settleLease(current, lease);
 
   if (options.observedResponse) {
     current.consecutiveFailures = 1;
@@ -283,8 +289,16 @@ export function recordCodexUpstreamHostResponse(
   lease: CodexUpstreamHostAdmissionLease,
   now = Date.now(),
 ): boolean {
-  if (!matchingHealth(lease)) return false;
-  upstreamHostHealth.delete(lease.key);
+  const current = matchingHealth(lease);
+  if (!current) return false;
+  settleLease(current, lease);
+  current.consecutiveFailures = 0;
+  current.lastFailureAt = 0;
+  current.lastTouchedAt = now;
+  delete current.cooldownUntil;
+  if (current.activeLeaseIds.size === 0) {
+    upstreamHostHealth.delete(lease.key);
+  }
   pruneOverflow(now);
   return true;
 }
