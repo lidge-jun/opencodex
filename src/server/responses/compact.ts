@@ -272,6 +272,7 @@ export async function handleResponsesCompact(
   const selectedModelId = route.modelId;
   logCtx.requestedModel = raw.model;
   logCtx.model = selectedModelId;
+  logCtx.routeDecision = route.routeDecision;
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : route.providerName;

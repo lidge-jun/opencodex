@@ -1,5 +1,13 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
-import { preservesPhysicalComboProvider, tryPickComboModel, type ComboPick } from "./combos";
+import {
+  getCombo,
+  isComboTargetInCooldown,
+  preservesPhysicalComboProvider,
+  targetKey,
+  tryPickComboModel,
+  type ComboPick,
+} from "./combos";
+import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
@@ -14,17 +22,29 @@ import {
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
+import {
+  buildRouteDecisionTrace,
+  type RouteDecisionKind,
+  type RouteDecisionTraceV1,
+  type TraceCandidateInput,
+} from "./routing/trace";
 
 export interface RouteResult {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
+  /** Which deterministic routing path produced this route (RI-01). */
+  routeKind: RouteDecisionKind;
+  /** Stable wire reason code for the selected route (RI-01). */
+  routeReason: string;
   codexAccountMode?: CodexAccountMode;
   /** Exact account selected by an account-qualified native model. */
   codexAccountId?: string;
   /** Public namespace used by the account-qualified selector. */
   codexAccountNamespace?: string;
   combo?: ComboPick;
+  /** Bounded route-decision trace (RI-01); never contains secrets. */
+  routeDecision?: RouteDecisionTraceV1;
 }
 
 const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string[] }> = [
@@ -335,6 +355,34 @@ export class NoEnabledOpenAiProviderError extends Error {
   }
 }
 
+/**
+ * One immutable selection trace for a combo request: built once from the
+ * initial pick, before any child dispatch. Fallback execution stays in the
+ * usage entry's `attempts[]`; the trace never changes after selection.
+ */
+export function comboRouteDecisionTrace(
+  config: OcxConfig,
+  comboId: string,
+  pick: ComboPick,
+  requestedModel: string,
+): RouteDecisionTraceV1 {
+  const combo = getCombo(config, comboId);
+  return buildRouteDecisionTrace({
+    requestedModel,
+    routeKind: "combo",
+    selected: {
+      provider: pick.target.provider,
+      model: pick.target.model,
+      reason: "combo-pick",
+      candidateIndex: pick.targetIndex,
+      ...(combo
+        ? { tieBreak: combo.strategy === "round-robin" ? "round-robin" : "failover" }
+        : {}),
+    },
+    candidates: combo ? comboRouteCandidates(config, pick, combo) : undefined,
+  });
+}
+
 // Codex uses a small number of control-plane model ids that are not part of the public GPT/o
 // naming families. Keep this exact: a broad `codex-*` rule could capture a third-party model.
 const CODEX_INTERNAL_OPENAI_MODELS = new Set(["codex-auto-review"]);
@@ -344,14 +392,61 @@ function isBareOpenAiFamilyModel(modelId: string): boolean {
     && (/^(?:gpt-|o1-|o3-|o4-)/.test(modelId) || CODEX_INTERNAL_OPENAI_MODELS.has(modelId));
 }
 
-function routeResult(providerName: string, provider: OcxProviderConfig, modelId: string): RouteResult {
+function routeResult(
+  providerName: string,
+  provider: OcxProviderConfig,
+  modelId: string,
+  routeKind: RouteDecisionKind,
+  routeReason: string,
+): RouteResult {
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
   return {
     providerName,
     provider: routedProviderConfig(providerName, provider),
     modelId,
+    routeKind,
+    routeReason,
     ...(codexAccountMode ? { codexAccountMode } : {}),
   };
+}
+
+/**
+ * Candidate evidence for a combo route: every configured target with its
+ * selection-time eligibility and exclusion reasons. Purely observational; the
+ * pick already happened and this never re-selects.
+ */
+function comboRouteCandidates(
+  config: OcxConfig,
+  pick: NonNullable<RouteResult["combo"]>,
+  combo: NormalizedComboConfig,
+): TraceCandidateInput[] {
+  const now = Date.now();
+  return combo.targets.map((target, index) => {
+    const key = targetKey(target);
+    const provider = config.providers[target.provider];
+    const configured = provider !== undefined;
+    const enabled = configured && provider.disabled !== true;
+    const inCooldown = isComboTargetInCooldown(pick.comboId, target, now);
+    const isSelected = index === pick.targetIndex;
+    // The pick's `attempted` list includes the winner itself; only non-selected
+    // targets can be "already-attempted" (fallback picks exclude earlier tries).
+    const alreadyAttempted = !isSelected && pick.attempted.includes(key);
+    const exclusions: TraceCandidateInput["exclusions"] = [];
+    if (!configured) exclusions.push({ code: "unconfigured" });
+    if (configured && !enabled) exclusions.push({ code: "disabled" });
+    if (inCooldown) exclusions.push({ code: "cooldown" });
+    if (isSelected && inCooldown) exclusions.push({ code: "selected-despite-cooldown" });
+    if (!isSelected && alreadyAttempted && exclusions.length === 0) {
+      exclusions.push({ code: "already-attempted" });
+    }
+    if (!isSelected && exclusions.length === 0) exclusions.push({ code: "not-selected" });
+    return {
+      provider: target.provider,
+      model: target.model,
+      eligible: enabled && !inCooldown && !alreadyAttempted,
+      exclusions,
+    };
+  });
 }
 
 function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: boolean): RouteResult {
@@ -378,7 +473,7 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
         throw new NoEnabledOpenAiProviderError(nativeModelId);
       }
       return {
-        ...routeResult(OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId),
+        ...routeResult(OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId, "explicit-account", "account-namespace"),
         // Exact account injection uses the pool credential machinery even when the canonical
         // provider is globally Direct. The fixed id bypasses pool selection entirely.
         codexAccountMode: "pool",
@@ -395,7 +490,7 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
       // The selected target is already a concrete provider/model reference. Resolve it without
       // consulting combo aliases again, otherwise an alias that shadows the target can recurse.
       const routed = routeModelInternal(config, concrete, true);
-      return { ...routed, combo };
+      return { ...routed, combo, routeKind: "combo" as const, routeReason: "combo-pick" };
     }
   }
 
@@ -415,23 +510,33 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
       // Self-namespaced native id — the vendor segment equals the provider id, so the FULL ref is
       // itself a known model (e.g. orcarouter/auto). Route it whole instead of stripping to the
       // remainder, which would send a bare `auto` the upstream cannot resolve.
-      if (known.includes(modelId)) return routeResult(provName, prov, modelId);
+      if (known.includes(modelId)) {
+        return routeResult(provName, prov, modelId, "explicit-provider", "explicit-provider-namespace");
+      }
       // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
       // slash id via an exact known-id lookup; raw full-slash selectors keep working.
-      return routeResult(provName, prov, decodeRoutedModelId(modelId.slice(slash + 1), known));
+      return routeResult(
+        provName,
+        prov,
+        decodeRoutedModelId(modelId.slice(slash + 1), known),
+        "explicit-provider",
+        "explicit-provider-namespace",
+      );
     }
   }
 
   if (isBareOpenAiFamilyModel(modelId)) {
     const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
-    if (provider && provider.disabled !== true) return routeResult(OPENAI_CODEX_PROVIDER_ID, provider, modelId);
+    if (provider && provider.disabled !== true) {
+      return routeResult(OPENAI_CODEX_PROVIDER_ID, provider, modelId, "native", "native-family");
+    }
     throw new NoEnabledOpenAiProviderError(modelId);
   }
 
   for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.defaultModel === modelId
       || (typeof prov.defaultModel === "string" && encodeRoutedModelId(prov.defaultModel) === modelId)) {
-      return routeResult(provName, prov, prov.defaultModel as string);
+      return routeResult(provName, prov, prov.defaultModel as string, "explicit-provider", "configured-default-model");
     }
   }
 
@@ -441,7 +546,9 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
   for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.models && Array.isArray(prov.models)) {
       const hit = (prov.models as string[]).find(id => id === modelId || encodeRoutedModelId(id) === modelId);
-      if (hit !== undefined) return routeResult(provName, prov, hit);
+      if (hit !== undefined) {
+        return routeResult(provName, prov, hit, "explicit-provider", "configured-model-list");
+      }
     }
   }
 
@@ -451,14 +558,34 @@ function routeModelInternal(config: OcxConfig, modelId: string, bypassCombos: bo
   if (hasOwnProvider(config.providers, config.defaultProvider)) {
     const defaultProv = config.providers[config.defaultProvider];
     if (defaultProv.disabled === true) throw new Error(`Default provider is disabled: ${config.defaultProvider}`);
-    return routeResult(config.defaultProvider, defaultProv, modelId);
+    return routeResult(config.defaultProvider, defaultProv, modelId, "default-provider", "default-provider");
   }
 
   throw new Error(`No provider configured for model: ${modelId}`);
 }
 
 export function routeModel(config: OcxConfig, modelId: string): RouteResult {
-  return routeModelInternal(config, modelId, false);
+  const route = routeModelInternal(config, modelId, false);
+  const accountRef = route.codexAccountNamespace;
+  const combo = route.combo ? getCombo(config, route.combo.comboId) : undefined;
+  route.routeDecision = buildRouteDecisionTrace({
+    requestedModel: modelId,
+    routeKind: route.routeKind,
+    selected: {
+      provider: route.providerName,
+      model: route.modelId,
+      ...(accountRef ? { accountRef } : {}),
+      reason: route.routeReason,
+      ...(route.combo ? { candidateIndex: route.combo.targetIndex } : {}),
+      ...(combo
+        ? { tieBreak: combo.strategy === "round-robin" ? "round-robin" : "failover" }
+        : {}),
+    },
+    candidates: route.routeKind === "combo" && route.combo && combo
+      ? comboRouteCandidates(config, route.combo, combo)
+      : undefined,
+  });
+  return route;
 }
 
 function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResult | undefined {
@@ -469,7 +596,7 @@ function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResu
       );
       if (matchingProvider) {
         const [provName, prov] = matchingProvider;
-        return routeResult(provName, prov, modelId);
+        return routeResult(provName, prov, modelId, "explicit-provider", "model-pattern");
       }
     }
   }

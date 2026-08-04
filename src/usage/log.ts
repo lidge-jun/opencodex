@@ -4,6 +4,7 @@ import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
+import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 
@@ -86,6 +87,12 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
+  /**
+   * Bounded route-decision trace (RI-01): why this provider/model/account was
+   * selected. Additive field; old rows without it parse unchanged. Never
+   * contains prompts, credentials, or hidden reasoning.
+   */
+  routeDecision?: RouteDecisionTraceV1;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -315,6 +322,9 @@ export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): Persiste
 
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
+  const routeDecision = entry.routeDecision
+    ? normalizeRouteDecisionTrace(entry.routeDecision)
+    : undefined;
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -380,6 +390,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...(routeDecision ? { routeDecision } : {}),
   };
 }
 
@@ -644,9 +655,11 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
     fd = openSync(path, "r");
     const size = fstatSync(fd).size;
     if (size <= 0) return [];
-    // ~4 KiB/row budget with a floor; expand once if the window yields too few lines.
-    let windowBytes = Math.min(size, Math.max(64 * 1024, Math.ceil(limit) * 4 * 1024));
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Trace-sized rows (up to MAX_TRACE_BYTES, RI-01) need a larger per-row
+    // budget than the pre-trace ledger; keep expanding until the window covers
+    // the file start or the whole file so a restart never hydrates nothing.
+    let windowBytes = Math.min(size, Math.max(64 * 1024, Math.ceil(limit) * 20 * 1024));
+    while (true) {
       const start = Math.max(0, size - windowBytes);
       const buf = Buffer.alloc(size - start);
       readSync(fd, buf, 0, buf.length, start);
@@ -666,6 +679,7 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       // most recent N valid rows (not N physical lines minus corrupt ones).
       const entries = parseUsageLines(lines);
       if (entries.length >= limit || start === 0 || windowBytes >= size) return entries.slice(-limit);
+      if (windowBytes >= size) break;
       windowBytes = Math.min(size, windowBytes * 4);
     }
     return [];

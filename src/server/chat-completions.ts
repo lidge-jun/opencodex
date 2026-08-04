@@ -118,6 +118,7 @@ async function handleChatCompletionsWithBudget(
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
     logCtx.provider = route.providerName;
+    logCtx.routeDecision = route.routeDecision;
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
       directRoute = route.codexAccountMode === "direct";

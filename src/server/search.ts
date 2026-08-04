@@ -79,6 +79,7 @@ export async function handleSearch(
       }
       exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
       logCtx.provider = `${route.providerName}-${accountNamespace}`;
+      logCtx.routeDecision = route.routeDecision;
       // The ChatGPT search endpoint only understands the native model slug. The
       // account namespace is proxy routing syntax and must not cross the wire.
       relayBody = { ...(body as Record<string, unknown>), model: route.modelId };

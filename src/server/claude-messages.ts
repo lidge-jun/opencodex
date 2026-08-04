@@ -632,6 +632,7 @@ async function handleClaudeMessagesWithBudget(
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
+    logCtx.routeDecision = route.routeDecision;
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
       delete internalBody.max_output_tokens;
