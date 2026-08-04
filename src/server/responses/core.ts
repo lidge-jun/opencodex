@@ -1873,10 +1873,12 @@ async function handleResponsesInner(
       );
     } catch (err) {
       if (!primaryAttemptExecutorStarted && !options.abortSignal?.aborted) {
-        releaseCodexAuthContextProbeLease(authCtx);
-        if (lastUpstreamAttemptResponseStatus(attemptHistory) !== undefined) {
+        const observedStatus = lastUpstreamAttemptResponseStatus(attemptHistory);
+        if (observedStatus !== undefined) {
+          recordPoolTransportOutcome(observedStatus);
           settleObservedHostResponse();
         } else {
+          releaseCodexAuthContextProbeLease(authCtx);
           releaseCodexUpstreamHostAdmissionLease(hostAdmissionLease);
           hostAdmissionLease = null;
         }

@@ -774,7 +774,9 @@ describe("compact alternate-account attempt (#913)", () => {
     targetAccountId: string,
     expected: Error,
     state: { prepared: boolean; cloneThrew: boolean },
+    throwOnBoundaryClone = 1,
   ): typeof Headers {
+    let boundaryCloneCount = 0;
     return class ThrowInFetchWithHeaderTimeout extends NativeHeaders {
       constructor(init?: HeadersInit) {
         super(init);
@@ -782,8 +784,11 @@ describe("compact alternate-account attempt (#913)", () => {
           this.get("chatgpt-account-id") === targetAccountId
           && new Error().stack?.includes("fetchWithHeaderTimeout")
         ) {
-          state.cloneThrew = true;
-          throw expected;
+          boundaryCloneCount += 1;
+          if (boundaryCloneCount === throwOnBoundaryClone) {
+            state.cloneThrew = true;
+            throw expected;
+          }
         }
       }
 
@@ -876,6 +881,48 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
+  test("regular preserves a prior 503 when retry setup fails before provider execution", async () => {
+    await withPoolEnv("ocx-regular-retry-pre-executor-", async config => {
+      const originalNow = Date.now;
+      const NativeHeaders = globalThis.Headers;
+      config.accountPoolStrategy = "fill-first";
+      config.activeCodexAccountId = "pool-a";
+      config.connectTimeoutMs = 25;
+      const probeAt = prepareHalfOpenHost(Date.now());
+      const hostKey = canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!;
+      const expected = new Error("regular retry header clone failed before executor");
+      const state = { prepared: false, cloneThrew: false };
+      const physicalAccounts: string[] = [];
+      Date.now = () => probeAt;
+      globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state, 2);
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        physicalAccounts.push(new NativeHeaders(init?.headers).get("chatgpt-account-id") ?? "");
+        return Response.json({ error: { message: "temporarily unavailable" } }, {
+          status: 503,
+          headers: { "retry-after": "0" },
+        });
+      }) as typeof fetch;
+      try {
+        await expect(handleResponses(
+          compactionRequest(regularBody()),
+          config,
+          { model: "", provider: "" },
+        )).rejects.toBe(expected);
+        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(503);
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
+        expectHostAdmissionUsable(hostKey, probeAt);
+      } finally {
+        globalThis.Headers = NativeHeaders;
+        Date.now = originalNow;
+      }
+    });
+  });
+
   test("compact primary local header setup failure never becomes a physical rejection", async () => {
     await withPoolEnv("ocx-compact-primary-pre-executor-", async config => {
       const originalNow = Date.now;
@@ -908,6 +955,48 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(getCodexUpstreamHealth("pool-a")).toBeNull();
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
         expect(getCodexUpstreamHostHealth(hostKey, probeAt)).not.toBeNull();
+        expectHostAdmissionUsable(hostKey, probeAt);
+      } finally {
+        globalThis.Headers = NativeHeaders;
+        Date.now = originalNow;
+      }
+    });
+  });
+
+  test("compact preserves a prior 503 when retry setup fails before provider execution", async () => {
+    await withPoolEnv("ocx-compact-retry-pre-executor-", async config => {
+      const originalNow = Date.now;
+      const NativeHeaders = globalThis.Headers;
+      config.accountPoolStrategy = "fill-first";
+      config.activeCodexAccountId = "pool-a";
+      config.connectTimeoutMs = 25;
+      const probeAt = prepareHalfOpenHost(Date.now());
+      const hostKey = canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!;
+      const expected = new Error("compact retry header clone failed before executor");
+      const state = { prepared: false, cloneThrew: false };
+      const physicalAccounts: string[] = [];
+      Date.now = () => probeAt;
+      globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state, 2);
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        physicalAccounts.push(new NativeHeaders(init?.headers).get("chatgpt-account-id") ?? "");
+        return Response.json({ error: { message: "temporarily unavailable" } }, {
+          status: 503,
+          headers: { "retry-after": "0" },
+        });
+      }) as typeof fetch;
+      try {
+        await expect(handleResponsesCompact(
+          compactionRequest(baseCompactionBody({})),
+          config,
+          { model: "", provider: "" },
+        )).rejects.toBe(expected);
+        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(503);
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
         expectHostAdmissionUsable(hostKey, probeAt);
       } finally {
         globalThis.Headers = NativeHeaders;

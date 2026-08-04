@@ -519,10 +519,12 @@ export async function handleResponsesCompact(
       );
     } catch (err) {
       if (!primaryAttemptBoundary.executorStarted && !req.signal.aborted) {
-        releaseCodexAuthContextProbeLease(outcomeCtx);
-        if (lastUpstreamAttemptResponseStatus(primaryAttempts) !== undefined) {
+        const observedStatus = lastUpstreamAttemptResponseStatus(primaryAttempts);
+        if (observedStatus !== undefined) {
+          recordCompactPoolOutcome(outcomeCtx, observedStatus);
           settleObservedCompactHostResponse();
         } else {
+          releaseCodexAuthContextProbeLease(outcomeCtx);
           releaseCodexUpstreamHostAdmissionLease(compactHostAdmissionLease);
           compactHostAdmissionLease = null;
         }
