@@ -160,6 +160,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    threadId?: string;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -294,11 +295,13 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      threadId,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
+        ...(threadId ? { "x-codex-parent-thread-id": threadId } : {}),
       },
       body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
       signal,
@@ -1860,7 +1863,7 @@ describe("server local API auth", () => {
       ? rejectionResponse(unsupportedModelBody())
       : Response.json({ id: "retry-success", status: "completed", output: [] }));
     try {
-      const response = await harness.request();
+      const response = await harness.request({ threadId: affinityThread });
       expect(response.status).toBe(200);
       expect((await response.json() as { id: string }).id).toBe("retry-success");
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
@@ -2702,6 +2705,7 @@ describe("server local API auth", () => {
         headers: {
           "content-type": "application/json",
           authorization: "Bearer inbound-main-token",
+          "x-codex-parent-thread-id": affinityThread,
         },
         body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
       });
