@@ -1739,10 +1739,11 @@ async function handleResponsesInner(
       return formatErrorResponse(502, "upstream_error", msg);
     };
     try {
-      // Manual redirect on pool sends: a 3xx surfaces as a Response instead of a
-      // followed redirect, so a server that redirects to a dead host can never
-      // masquerade as a pre-connection failure (recorded rejection class #914).
-      const poolUpstreamSend = usesCodexForwardPoolAuth(authCtx, route.provider);
+      // Manual redirect on every credential-bearing forward send (pool AND
+      // direct): a 3xx surfaces as a Response instead of a followed redirect,
+      // so a server that redirects to a dead host can never masquerade as a
+      // pre-connection failure after the credential was seen (#914).
+      const forwardCredentialedSend = route.provider.authMode === "forward";
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
       // Body is a replayable string; nothing has streamed to the client yet.
@@ -1754,7 +1755,7 @@ async function handleResponsesInner(
             headers: request.headers,
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
-            poolUpstreamSend);
+            forwardCredentialedSend);
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );

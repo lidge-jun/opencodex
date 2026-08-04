@@ -394,6 +394,50 @@ test("an exact-account DNS/TCP failure feeds the (provider, host) ledger (#914 r
   }
 });
 
+test("a 307 search upstream is relayed with its Location and never followed (#914 review)", async () => {
+  const config = exactSearchConfig();
+  saveConfig(config);
+  saveExactSearchCredentials();
+  let upstreamCalls = 0;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      upstreamCalls += 1;
+      if (init?.redirect !== "manual") {
+        throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+          code: "ConnectionRefused",
+          errno: 0,
+        });
+      }
+      return new Response(JSON.stringify({ location: "https://dead.invalid/x" }), {
+        status: 307,
+        headers: { "content-type": "application/json", location: "https://dead.invalid/x" },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "search-session", model: "side/gpt-test" }),
+      redirect: "manual",
+    });
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://dead.invalid/x");
+    // The redirect target was never contacted: manual redirects relay the 3xx as-is.
+    expect(upstreamCalls).toBe(1);
+    // 3xx stays the neutral class even for an exact-account send.
+    expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+    expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("zstd-compressed search request bodies are decoded before the relay", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeSearchUpstream(captured);

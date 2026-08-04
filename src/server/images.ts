@@ -468,6 +468,8 @@ export async function handleImages(
     const relayHeaders: Record<string, string> = {};
     const contentType = upstreamResponse.headers.get("content-type");
     if (contentType) relayHeaders["content-type"] = contentType;
+    const location = upstreamResponse.headers.get("location");
+    if (location) relayHeaders["location"] = location;
     return new Response(payload, { status: upstreamResponse.status, headers: relayHeaders });
   } catch (err) {
     // Client cancel first: it aborts the linked signal too, and must not be logged as an

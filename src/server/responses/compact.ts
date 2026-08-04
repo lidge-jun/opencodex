@@ -193,6 +193,8 @@ const COMPACT_PASSTHROUGH_HEADERS = [
   "x-codex-primary-reset-at",
   "x-codex-secondary-reset-at",
   "x-codex-tertiary-reset-at",
+  // A relayed 3xx keeps its Location so the client can follow it (#914 review).
+  "location",
 ];
 
 function compactResponseHeaders(upstream: Response): Headers {
@@ -401,7 +403,9 @@ export async function handleResponsesCompact(
         connectMs,
         false,
         providerFetch(sendProvider),
-        usesCodexForwardPoolAuth(authCtx, route.provider),
+        // Every credential-bearing forward send gets manual redirects, not only
+        // pool sends: direct mode carries the caller's credential too (#914).
+        sendProvider.authMode === "forward",
       );
       return recovery === "single"
         ? doFetch()

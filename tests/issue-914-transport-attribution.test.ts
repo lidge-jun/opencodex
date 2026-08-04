@@ -89,6 +89,24 @@ function makePoolConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   } as OcxConfig;
 }
 
+function makeDirectConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+  return {
+    port: 0,
+    hostname: "127.0.0.1",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: CODEX_BASE,
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+    ...overrides,
+  } as OcxConfig;
+}
+
 function saveTestCredentials(): void {
   for (const id of ["a", "b"]) {
     saveCodexAccountCredential(id, {
@@ -106,6 +124,48 @@ function responsesRequest(serverUrl: string, thread = THREAD): Promise<Response>
     headers: { "content-type": "application/json", "x-codex-parent-thread-id": thread },
     body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello", stream: false }),
   });
+}
+
+// Direct mode carries the CALLER's credential upstream, so the same no-follow
+// policy must apply without any pool state. The client keeps manual redirects
+// so the relayed 307 is not followed into the dead host by the test itself.
+function directForwardRequest(serverUrl: string, path = "/v1/responses"): Promise<Response> {
+  return ORIGINAL_FETCH(new URL(path, serverUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer inbound-token" },
+    body: JSON.stringify({
+      model: "gpt-5.6-sol",
+      input: path.endsWith("/compact") ? "compact this conversation" : "hello",
+      stream: false,
+    }),
+    redirect: "manual",
+  });
+}
+
+function stubRedirectToDeadHost(): void {
+  globalThis.fetch = (async (input, init) => {
+    const requestUrl = input instanceof Request
+      ? input.url
+      : input instanceof URL
+        ? input.toString()
+        : String(input);
+    const url = new URL(requestUrl);
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
+      if (init?.redirect !== "manual") {
+        // What default-follow fetch would do: chase the 307 into a dead host and
+        // reject with a pre-connection shape AFTER the credential was seen.
+        throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
+          code: "ConnectionRefused",
+          errno: 0,
+        });
+      }
+      return new Response(JSON.stringify({ location: "https://dead.invalid/x" }), {
+        status: 307,
+        headers: { "content-type": "application/json", location: "https://dead.invalid/x" },
+      });
+    }
+    return ORIGINAL_FETCH(input, init);
+  }) as typeof fetch;
 }
 
 function compactRequest(serverUrl: string, thread = THREAD): Promise<Response> {
@@ -325,29 +385,7 @@ describe("issue #914: pre-connection reachability failures are account-neutral",
   test("pool sends relay 3xx instead of following a redirect into a dead host (#914 review)", async () => {
     const config = makePoolConfig();
     saveConfig(config);
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = input instanceof Request
-        ? input.url
-        : input instanceof URL
-          ? input.toString()
-          : String(input);
-      const url = new URL(requestUrl);
-      if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
-        if (init?.redirect !== "manual") {
-          // What default-follow fetch would do: chase the 307 into a dead host and
-          // reject with a pre-connection shape AFTER the credential was seen.
-          throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
-            code: "ConnectionRefused",
-            errno: 0,
-          });
-        }
-        return new Response(JSON.stringify({ location: "https://dead.invalid/x" }), {
-          status: 307,
-          headers: { "content-type": "application/json", location: "https://dead.invalid/x" },
-        });
-      }
-      return ORIGINAL_FETCH(input, init);
-    }) as typeof fetch;
+    stubRedirectToDeadHost();
     const server = startServer(0);
     try {
       // The relayed 307 carries a Location header, so the test client must not
@@ -359,11 +397,44 @@ describe("issue #914: pre-connection reachability failures are account-neutral",
         redirect: "manual",
       });
       expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe("https://dead.invalid/x");
 
       // 3xx is the neutral class: no account evidence, no host evidence.
       expect(getCodexUpstreamHealth("a")).toBeNull();
       expect(isCodexAccountSoftAvoided("a")).toBe(false);
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+      expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("direct forward sends relay 3xx instead of following a redirect into a dead host (#914 review)", async () => {
+    const config = makeDirectConfig();
+    saveConfig(config);
+    stubRedirectToDeadHost();
+    const server = startServer(0);
+    try {
+      const res = await directForwardRequest(server.url.toString());
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe("https://dead.invalid/x");
+      // Direct mode has no pool state to disturb, but it must not classify the
+      // credential-visible 307 as any health evidence either.
+      expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("compact direct forward sends relay 3xx instead of following a redirect into a dead host (#914 review)", async () => {
+    const config = makeDirectConfig();
+    saveConfig(config);
+    stubRedirectToDeadHost();
+    const server = startServer(0);
+    try {
+      const res = await directForwardRequest(server.url.toString(), "/v1/responses/compact");
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe("https://dead.invalid/x");
       expect(getHostConnectHealth(hostConnectHealthKey("openai", "chatgpt.com"))).toBeNull();
     } finally {
       await server.stop(true);

@@ -165,6 +165,10 @@ export async function handleSearch(
     const relayHeaders: Record<string, string> = {};
     const contentType = upstreamResponse.headers.get("content-type");
     if (contentType) relayHeaders["content-type"] = contentType;
+    // A relayed 3xx keeps its Location so the client can follow it; the proxy
+    // must not strip it while also refusing to follow it (#914 review).
+    const location = upstreamResponse.headers.get("location");
+    if (location) relayHeaders["location"] = location;
     return new Response(payload, { status: upstreamResponse.status, headers: relayHeaders });
   } catch (err) {
     if (req.signal.aborted) {
