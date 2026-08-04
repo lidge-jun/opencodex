@@ -9,6 +9,26 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 
 export type SsePayloadRewrite = (payload: string) => string;
 
+function isPayloadRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * GitHub Copilot encrypts reasoning summaries (and re-encrypts them per event) with its own
+ * scheme, which Responses clients cannot decrypt; the app then stays stuck on "thinking".
+ * Replace the ciphertext with a canonical empty plaintext summary so the item completes
+ * immediately and the turn moves on to the actual output.
+ */
+function sanitizeGithubCopilotReasoningItem(item: Record<string, unknown>): boolean {
+  if (item.type !== "reasoning" || typeof item.encrypted_content !== "string") return false;
+  delete item.encrypted_content;
+  const summary = Array.isArray(item.summary) ? item.summary : [];
+  summary.push({ type: "summary_text", text: "" });
+  item.summary = summary;
+  if (!Array.isArray(item.content)) item.content = [];
+  return true;
+}
+
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
   const match = buffer.match(/\r?\n\r?\n/);
@@ -58,6 +78,108 @@ export function composeSsePayloadRewrites(...rewrites: SsePayloadRewrite[]): Sse
     let next = payload;
     for (const rewrite of rewrites) next = rewrite(next);
     return next;
+  };
+}
+
+/**
+ * GitHub Copilot's `/responses` wire obfuscates streamed function-call argument
+ * deltas (ciphertext `delta` plus an `obfuscation` field) for the `vscode-chat`
+ * integration. Responses clients (codex-rs) cannot de-obfuscate them, so an
+ * agentic turn stalls on the first tool call. The terminal
+ * `response.function_call_arguments.done` event carries the plaintext
+ * `arguments`, so this rewrite drops the ciphertext deltas and re-emits the
+ * full plaintext arguments as a single delta immediately before `done`, keeping
+ * the stream protocol-conformant (deltas still concatenate to the final
+ * arguments). The `obfuscation` metadata is stripped from every event.
+ */
+export function createGithubCopilotObfuscationRewrite(): SsePayloadRewrite {
+  // GitHub re-encrypts `item_id` per event (delta and done carry different ids for the
+  // same logical call), so calls are tracked by the stable `output_index` instead.
+  const obfuscatedCalls = new Set<number>();
+  // GitHub also re-encrypts the response id and every item id per event (`created`/`done`
+  // and the terminal `completed` payload disagree). Clients reconcile streamed items with
+  // the completed response by id, so pin every entity to its first-seen id.
+  let responseId: string | null = null;
+  const itemIds = new Map<number, string>();
+  return (payload: string): string => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      return payload;
+    }
+    if (!isPayloadRecord(parsed)) return payload;
+    let changed = false;
+    if (typeof parsed.obfuscation === "string") {
+      delete parsed.obfuscation;
+      changed = true;
+    }
+    const type = parsed.type;
+    if (type === "response.function_call_arguments.delta" && changed) {
+      if (typeof parsed.output_index === "number") obfuscatedCalls.add(parsed.output_index);
+      // Ciphertext chunk: emit an empty delta so the client sees a valid event
+      // without any unusable bytes; the plaintext arrives with `.done`.
+      parsed.delta = "";
+      return JSON.stringify(parsed);
+    }
+    if (type === "response.function_call_arguments.done" && typeof parsed.output_index === "number") {
+      if (obfuscatedCalls.delete(parsed.output_index)) {
+        const deltaEvent = {
+          type: "response.function_call_arguments.delta",
+          item_id: parsed.item_id,
+          output_index: parsed.output_index,
+          sequence_number: parsed.sequence_number,
+          delta: typeof parsed.arguments === "string" ? parsed.arguments : "",
+        };
+        // The relay writes `data: <payload>` then the block delimiter, so this
+        // payload becomes two consecutive valid SSE events (delta, then done).
+        return `${JSON.stringify(deltaEvent)}\n\ndata: ${JSON.stringify(parsed)}`;
+      }
+    }
+    if (type === "response.created" && isPayloadRecord(parsed.response)) {
+      const id = parsed.response.id;
+      if (typeof id === "string") {
+        if (responseId === null) responseId = id;
+        else if (id !== responseId) {
+          parsed.response.id = responseId;
+          changed = true;
+        }
+      }
+    }
+    if (type === "response.output_item.added" || type === "response.output_item.done") {
+      const outputIndex = parsed.output_index;
+      const item = parsed.item;
+      if (typeof outputIndex === "number" && isPayloadRecord(item) && typeof item.id === "string") {
+        const existing = itemIds.get(outputIndex);
+        if (existing === undefined) itemIds.set(outputIndex, item.id);
+        else if (item.id !== existing) {
+          item.id = existing;
+          changed = true;
+        }
+      }
+      if (isPayloadRecord(item) && sanitizeGithubCopilotReasoningItem(item)) changed = true;
+    }
+    if (type === "response.completed" && isPayloadRecord(parsed.response)) {
+      if (typeof parsed.response.id === "string" && responseId !== null && parsed.response.id !== responseId) {
+        parsed.response.id = responseId;
+        changed = true;
+      }
+      if (Array.isArray(parsed.response.output)) {
+        parsed.response.output.forEach((item, outputIndex) => {
+          if (!isPayloadRecord(item)) return;
+          if (typeof item.id === "string") {
+            const existing = itemIds.get(outputIndex);
+            if (existing === undefined) itemIds.set(outputIndex, item.id);
+            else if (item.id !== existing) {
+              item.id = existing;
+              changed = true;
+            }
+          }
+          if (sanitizeGithubCopilotReasoningItem(item)) changed = true;
+        });
+      }
+    }
+    return changed ? JSON.stringify(parsed) : payload;
   };
 }
 
