@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,6 +140,42 @@ describe("headless GUI parity CLI", () => {
     const arrayCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", '["x-app"]'], arrayRuntime.deps);
     expect(arrayCode).toBe(2);
     expect(arrayRuntime.requests).toEqual([]);
+  });
+
+  test("provider edit usage errors redact --headers values", async () => {
+    const errorSpy = spyOn(console, "error");
+    try {
+      // `--headers={...}` is not consumed by takeOption, so the value lands in the
+      // leftovers rejectArgs reports. Header values can carry tokens, so they must
+      // never be echoed to stderr.
+      const runtime = fakeRuntime();
+      const code = await handleProviderRuntimeCommand(
+        "edit",
+        ["agw", "--headers={\"x-app\":\"cli\",\"X-Token\":\"sk-leak-value\"}"],
+        runtime.deps,
+      );
+      expect(code).toBe(2);
+      expect(runtime.requests).toEqual([]);
+      const stderr = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(stderr).toContain("--headers=<redacted>");
+      expect(stderr).not.toContain("sk-leak-value");
+      expect(stderr).not.toContain("X-Token");
+
+      errorSpy.mockClear();
+      // Repeating the option leaves the second flag AND its value in the leftovers.
+      const repeatRuntime = fakeRuntime();
+      const repeatCode = await handleProviderRuntimeCommand(
+        "edit",
+        ["agw", "--headers", "{\"X-Token\":\"sk-leak-value\"}", "--headers", "{\"X-Other\":\"v\"}"],
+        repeatRuntime.deps,
+      );
+      expect(repeatCode).toBe(2);
+      const repeatStderr = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(repeatStderr).toContain("--headers <redacted>");
+      expect(repeatStderr).not.toContain("sk-leak-value");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test("provider test treats a static catalog as neutral", async () => {

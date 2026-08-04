@@ -1901,6 +1901,115 @@ describe("provider management validation", () => {
     expect(liveConfig.providers.agw.headers).toBeUndefined();
     expect(catalogRefreshes).toBeGreaterThan(0);
   });
+  test("provider PATCH merges headers case-insensitively", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        hdr: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true },
+      },
+    };
+    saveConfig(liveConfig);
+    const patch = async (name: string, body: unknown) => {
+      const req = new Request(`http://127.0.0.1/api/providers?name=${name}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        refreshCodexCatalog: async () => {},
+      });
+    };
+
+    expect((await patch("hdr", { headers: { "X-Foo": "old" } }))?.status).toBe(200);
+    expect(liveConfig.providers.hdr.headers).toEqual({ "X-Foo": "old" });
+    // A casing-only update must replace the existing key, not leave both behind for
+    // Headers normalization to combine into "x-foo: old, new".
+    expect((await patch("hdr", { headers: { "x-foo": "new" } }))?.status).toBe(200);
+    expect(liveConfig.providers.hdr.headers).toEqual({ "x-foo": "new" });
+    expect(Object.keys(liveConfig.providers.hdr.headers!)).toHaveLength(1);
+  });
+  test("provider PATCH clear keeps registry static headers", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        "opencode-free": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode.ai/zen/v1",
+          authMode: "key",
+          allowPrivateNetwork: true,
+          headers: { "x-opencode-client": "desktop", "X-User": "v1" },
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    const patch = async (name: string, body: unknown) => {
+      const req = new Request(`http://127.0.0.1/api/providers?name=${name}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        refreshCodexCatalog: async () => {},
+      });
+    };
+
+    // Clearing user-managed headers must not delete the registry-owned static
+    // metadata (opencode-free's x-opencode-client marker) the transport relies on.
+    expect((await patch("opencode-free", { headers: null }))?.status).toBe(200);
+    expect(liveConfig.providers["opencode-free"].headers).toEqual({ "x-opencode-client": "desktop" });
+    const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
+    expect(saved.providers["opencode-free"]?.headers).toEqual({ "x-opencode-client": "desktop" });
+  });
+  test("concurrent provider PATCHes merge different headers", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        hdr: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true },
+      },
+    };
+    saveConfig(liveConfig);
+    const patch = async (name: string, body: unknown) => {
+      const req = new Request(`http://127.0.0.1/api/providers?name=${name}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        refreshCodexCatalog: async () => {},
+      });
+    };
+
+    // Both requests snapshot the same provider before either saves; the lock-scoped
+    // re-apply must merge them instead of letting the later save erase the first.
+    const [first, second] = await Promise.all([
+      patch("hdr", { headers: { "X-A": "a" } }),
+      patch("hdr", { headers: { "X-B": "b" } }),
+    ]);
+    expect(first?.status).toBe(200);
+    expect(second?.status).toBe(200);
+    expect(liveConfig.providers.hdr.headers).toEqual({ "X-A": "a", "X-B": "b" });
+  });
   test("provider context-cap API persists toggles and annotates model rows", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
