@@ -101,6 +101,25 @@ describe("Codex upstream host health (#914)", () => {
     expect(acquireCodexUpstreamHostAdmission(key, probeAt)).toMatchObject({ kind: "blocked" });
   });
 
+  test("a half-open rejection after an observed response starts a fresh streak", () => {
+    const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
+    const trippedAt = 2_500;
+    let tripped: CodexUpstreamHostHealthSnapshot | null = null;
+    for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
+      tripped = fail(key, trippedAt);
+    }
+    const probeAt = tripped!.cooldownUntil!;
+    const afterResponse = recordCodexUpstreamHostFailure(admit(key, probeAt), probeAt, {
+      observedResponse: true,
+    })!;
+
+    expect(afterResponse.consecutiveFailures).toBe(1);
+    expect(afterResponse.cooldownUntil).toBeUndefined();
+    const next = admit(key, probeAt);
+    expect(next.halfOpen).toBe(false);
+    expect(releaseCodexUpstreamHostAdmissionLease(next, probeAt)).toBe(true);
+  });
+
   test("caller abort releases a half-open admission without adding evidence", () => {
     const key = canonicalCodexUpstreamHostKey("openai", "https://chatgpt.com")!;
     const trippedAt = 3_000;

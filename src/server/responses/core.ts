@@ -448,7 +448,14 @@ async function retryCodexPoolOnAlternateAccount(
   const { fetcher, request, retryHeaders } = prepared;
 
   const attempts: UpstreamAttemptObservation[] = [];
-  noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+  let executorStarted = false;
+  const executor = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (!executorStarted) {
+      executorStarted = true;
+      noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+    }
+    return fetcher(input, init);
+  }) as typeof globalThis.fetch;
   try {
     const upstreamResponse = await fetchWithHeaderTimeout(
       request.url,
@@ -461,7 +468,7 @@ async function retryCodexPoolOnAlternateAccount(
       upstream.signal,
       connectMs,
       stream,
-      fetcher,
+      executor,
     );
     attempts.push({ kind: "response", status: upstreamResponse.status });
     return {
@@ -472,6 +479,10 @@ async function retryCodexPoolOnAlternateAccount(
       selectedForwardHeaders: retryHeaders,
     };
   } catch (error) {
+    if (!executorStarted) {
+      releaseCodexAuthContextProbeLease(retryAuthCtx);
+      throw error;
+    }
     attempts.push({ kind: "rejection" });
     return { kind: "transport", error, authCtx: retryAuthCtx, attempts };
   } finally {
@@ -1764,6 +1775,7 @@ async function handleResponsesInner(
       : null;
     let hostAdmissionLease: CodexUpstreamHostAdmissionLease | null = null;
     const attemptHistory: UpstreamAttemptObservation[] = [];
+    let primaryAttemptExecutorStarted = false;
     const recordPoolTransportOutcome = (outcome: CodexUpstreamOutcome): void => {
       if (!usesCodexForwardPoolAuth(authCtx, route.provider)) return;
       recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
@@ -1830,21 +1842,46 @@ async function handleResponsesInner(
       // Body is a replayable string; nothing has streamed to the client yet.
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
-          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
-          return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
+          primaryAttemptExecutorStarted = false;
+          const init = applyUpstreamRecoveryInit({
             method: request.method,
             headers: request.headers,
             body: request.body,
             ...(hostKey ? { redirect: "manual" as const } : {}),
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery);
+          const fetcher = providerFetch(route.provider);
+          let executorStarted = false;
+          const executor = ((input: RequestInfo | URL, fetchInit?: RequestInit) => {
+            if (!executorStarted) {
+              executorStarted = true;
+              primaryAttemptExecutorStarted = true;
+              noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
+            }
+            return fetcher(input, fetchInit);
+          }) as typeof globalThis.fetch;
+          return fetchWithHeaderTimeout(request.url, init, upstream.signal, connectMs, parsed.stream, executor);
         },
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(request.url),
-          onAttempt: observation => attemptHistory.push(observation),
+          onAttempt: observation => {
+            if (observation.kind === "response" || primaryAttemptExecutorStarted) {
+              attemptHistory.push(observation);
+            }
+          },
         },
       );
     } catch (err) {
+      if (!primaryAttemptExecutorStarted && !options.abortSignal?.aborted) {
+        releaseCodexAuthContextProbeLease(authCtx);
+        if (lastUpstreamAttemptResponseStatus(attemptHistory) !== undefined) {
+          settleObservedHostResponse();
+        } else {
+          releaseCodexUpstreamHostAdmissionLease(hostAdmissionLease);
+          hostAdmissionLease = null;
+        }
+        throw err;
+      }
       return transportFailureResponse(err);
     } finally {
       request.releaseBodyObservation?.();

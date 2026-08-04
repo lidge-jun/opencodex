@@ -412,31 +412,38 @@ export async function handleResponsesCompact(
       recovery: "normal" | "single",
       attempts: UpstreamAttemptObservation[],
       onSendStart?: () => void,
+      attemptBoundary?: { executorStarted: boolean },
     ): Promise<Response> => {
       const body = JSON.stringify({ ...compactBody, model: route.modelId });
       const fetcher = providerFetch(sendProvider);
-      let executorStarted = false;
-      const executor = ((input: RequestInfo | URL, init?: RequestInit) => {
-        if (!executorStarted) {
-          executorStarted = true;
-          onSendStart?.();
-        }
-        return fetcher(input, init);
-      }) as typeof globalThis.fetch;
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => {
+        if (attemptBoundary) attemptBoundary.executorStarted = false;
         const init = applyUpstreamRecoveryInit({
           method: "POST",
           headers: sendHeaders,
           body,
           ...(compactHostKey ? { redirect: "manual" as const } : {}),
         }, upstreamRecovery);
+        let executorStarted = false;
+        const executor = ((input: RequestInfo | URL, fetchInit?: RequestInit) => {
+          if (!executorStarted) {
+            executorStarted = true;
+            if (attemptBoundary) attemptBoundary.executorStarted = true;
+            onSendStart?.();
+          }
+          return fetcher(input, fetchInit);
+        }) as typeof globalThis.fetch;
         return fetchWithHeaderTimeout(compactUrl, init, req.signal, connectMs, false, executor);
       };
       if (recovery === "normal") {
         return fetchWithTransientRetry(doFetch, {
           abortSignal: req.signal,
           label: safeHostLabel(compactUrl),
-          onAttempt: observation => attempts.push(observation),
+          onAttempt: observation => {
+            if (observation.kind === "response" || attemptBoundary?.executorStarted !== false) {
+              attempts.push(observation);
+            }
+          },
         });
       }
       try {
@@ -444,7 +451,7 @@ export async function handleResponsesCompact(
         attempts.push({ kind: "response", status: response.status });
         return response;
       } catch (error) {
-        attempts.push({ kind: "rejection" });
+        if (attemptBoundary?.executorStarted !== false) attempts.push({ kind: "rejection" });
         throw error;
       }
     };
@@ -498,11 +505,29 @@ export async function handleResponsesCompact(
     }
     compactHostAdmissionLease = compactHostAdmission?.lease ?? null;
     const primaryAttempts: UpstreamAttemptObservation[] = [];
+    const primaryAttemptBoundary = { executorStarted: false };
     try {
       // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
       // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
-      upstream = await sendCompactAttempt(compactProvider, headers, "normal", primaryAttempts);
+      upstream = await sendCompactAttempt(
+        compactProvider,
+        headers,
+        "normal",
+        primaryAttempts,
+        undefined,
+        primaryAttemptBoundary,
+      );
     } catch (err) {
+      if (!primaryAttemptBoundary.executorStarted && !req.signal.aborted) {
+        releaseCodexAuthContextProbeLease(outcomeCtx);
+        if (lastUpstreamAttemptResponseStatus(primaryAttempts) !== undefined) {
+          settleObservedCompactHostResponse();
+        } else {
+          releaseCodexUpstreamHostAdmissionLease(compactHostAdmissionLease);
+          compactHostAdmissionLease = null;
+        }
+        throw err;
+      }
       return compactTransportFailureResponse(outcomeCtx, err, primaryAttempts);
     }
     if (compactHostKey && isCodexUpstreamRedirectStatus(upstream.status)) {
