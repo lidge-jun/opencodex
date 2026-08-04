@@ -2575,6 +2575,7 @@ describe("server local API auth", () => {
   });
 
   test("alternate preparation failure releases A's recovery probe", async () => {
+    const ALTERNATE_PREPARATION_HEADER_READ = 5;
     const harness = await startPoolRetryHarness(() => new Response("unused"), {
       omitCredentialAccountIds: ["pool-b"],
     });
@@ -2605,7 +2606,7 @@ describe("server local API auth", () => {
         get(target, property) {
           if (property === "headers") {
             headerReads += 1;
-            if (headerReads === 5) throw new Error("synthetic alternate preparation failure");
+            if (headerReads === ALTERNATE_PREPARATION_HEADER_READ) throw new Error("synthetic alternate preparation failure");
           }
           const value = Reflect.get(target, property, target) as unknown;
           return typeof value === "function" ? value.bind(target) : value;
@@ -2624,7 +2625,7 @@ describe("server local API auth", () => {
         "synthetic alternate preparation failure",
       );
       expect(sends).toBe(1);
-      expect(headerReads).toBe(5);
+      expect(headerReads).toBe(ALTERNATE_PREPARATION_HEADER_READ);
       expect(observedProbeLeaseId).toEqual(expect.any(String));
       expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toEqual(expect.any(Number));
       expect(getCodexUpstreamHealth("pool-a")?.probeLeaseId).toBeUndefined();
@@ -2783,6 +2784,54 @@ describe("server local API auth", () => {
       await stopPoolRetryHarness(harness);
     }
   }, { timeout: 30_000 });
+
+  test("a null canonical host key does not force manual redirects across a pool retry", async () => {
+    const redirectModes: Array<RequestRedirect | undefined> = [];
+    const harness = await startPoolRetryHarness(accountId => (
+      accountId === "acct-pool-a"
+        ? new Response("rate limited", { status: 429 })
+        : new Response("ok")
+    ));
+    const upstreamUrl = "https://chatgpt.com/backend-api/codex/responses";
+    const redirectedFetch = globalThis.fetch;
+    const NativeURL = globalThis.URL;
+    let forcedNullHostKey = false;
+
+    class NullHostKeyURL extends NativeURL {
+      constructor(input: string | URL, base?: string | URL) {
+        const value = typeof input === "string" ? input : input.toString();
+        if (!forcedNullHostKey && base === undefined && value === upstreamUrl) {
+          forcedNullHostKey = true;
+          throw new TypeError("synthetic null canonical host key");
+        }
+        super(input, base);
+      }
+    }
+
+    globalThis.URL = NullHostKeyURL as typeof URL;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string"
+        ? input
+        : input instanceof NativeURL
+          ? input.toString()
+          : input.url;
+      if (requestUrl === upstreamUrl) redirectModes.push(init?.redirect);
+      return redirectedFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const response = await harness.request();
+
+      expect(response.status).toBe(200);
+      expect(forcedNullHostKey).toBe(true);
+      expect(harness.dispatches.map(accountId => accountId.replace("acct-", ""))).toEqual(["pool-a", "pool-b"]);
+      expect(redirectModes).toEqual([undefined, undefined]);
+    } finally {
+      globalThis.URL = NativeURL;
+      globalThis.fetch = redirectedFetch;
+      await stopPoolRetryHarness(harness);
+    }
+  });
 
   for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
     test(`${path} releases a pool probe after a pre-response transport failure with no host key`, async () => {

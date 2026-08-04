@@ -306,6 +306,7 @@ interface CodexPoolAccountRetryArgs {
   connectMs: number;
   passthroughEstimate?: number;
   stream: boolean;
+  tracksCodexUpstreamHost: boolean;
 }
 
 type CodexPoolAccountRetryResult =
@@ -358,7 +359,7 @@ async function retryCodexPoolOnAlternateAccount(
 ): Promise<CodexPoolAccountRetryResult> {
   const {
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
-    outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+    outcomeStatus, upstream, connectMs, passthroughEstimate, stream, tracksCodexUpstreamHost,
   } = args;
   // Defense in depth: exact account selectors must never reach alternate-account resolution,
   // even if a future caller forgets to guard this helper.
@@ -469,7 +470,7 @@ async function retryCodexPoolOnAlternateAccount(
         method: request.method,
         headers: request.headers,
         body: request.body,
-        redirect: "manual",
+        ...(tracksCodexUpstreamHost ? { redirect: "manual" as const } : {}),
       },
       upstream.signal,
       connectMs,
@@ -1878,7 +1879,7 @@ async function handleResponsesInner(
         },
       );
     } catch (err) {
-      if (!primaryAttemptExecutorStarted && !options.abortSignal?.aborted) {
+      if (!primaryAttemptExecutorStarted && attemptHistory.length === 0 && !options.abortSignal?.aborted) {
         const observedStatus = lastUpstreamAttemptResponseStatus(attemptHistory);
         if (observedStatus !== undefined) {
           recordPoolTransportOutcome(observedStatus);
@@ -1977,6 +1978,7 @@ async function handleResponsesInner(
             connectMs,
             passthroughEstimate,
             stream: parsed.stream,
+            tracksCodexUpstreamHost: hostKey !== null,
           });
           if (retry.kind === "transport") {
             authCtx = retry.authCtx;

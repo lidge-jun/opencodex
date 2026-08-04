@@ -404,7 +404,7 @@ describe("Codex host-health actual Bun runtime (#914/#922)", () => {
 
   test("credential-visible 307 is manual, bounded, and never exposes Location", async () => {
     const harness = await startHarness({ twoAccounts: true });
-    const deadPort = await closedEphemeralPort();
+    let deadPort = 0;
     const seen: Array<{ authorization: string | null; accountId: string | null; body: string }> = [];
     const redirect = serve(async request => {
       seen.push({
@@ -417,6 +417,7 @@ describe("Codex host-health actual Bun runtime (#914/#922)", () => {
         headers: { location: `http://127.0.0.1:${deadPort}/credential-leak-target` },
       });
     });
+    deadPort = await closedEphemeralPort();
     const redirectModes: Array<RequestRedirect | undefined> = [];
     installCanonicalRouter(call => {
       redirectModes.push(call.init?.redirect);
@@ -470,7 +471,7 @@ describe("Codex host-health actual Bun runtime (#914/#922)", () => {
 
   test("a real 503 followed by a real refused retry preserves both attribution layers", async () => {
     const harness = await startHarness({ twoAccounts: true });
-    const refusedPort = await closedEphemeralPort();
+    let refusedPort = 0;
     let upstream503Hits = 0;
     const upstream503 = serve(async request => {
       upstream503Hits += 1;
@@ -480,6 +481,7 @@ describe("Codex host-health actual Bun runtime (#914/#922)", () => {
         headers: { "retry-after": "0" },
       });
     });
+    refusedPort = await closedEphemeralPort();
     let physicalSends = 0;
     installCanonicalRouter(call => {
       physicalSends += 1;
@@ -500,7 +502,7 @@ describe("Codex host-health actual Bun runtime (#914/#922)", () => {
   for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
     test(`${path} keeps A=429 and one real B rejection separately attributed`, async () => {
       const harness = await startHarness({ twoAccounts: true });
-      const refusedPort = await closedEphemeralPort();
+      let refusedPort = 0;
       const aSeen: Array<{ authorization: string | null; accountId: string | null; body: string }> = [];
       const aQuota = serve(async request => {
         aSeen.push({
@@ -513,6 +515,7 @@ describe("Codex host-health actual Bun runtime (#914/#922)", () => {
           headers: { "retry-after": "60" },
         });
       });
+      refusedPort = await closedEphemeralPort();
       const counts = new Map<string, number>();
       const bHeaders: Headers[] = [];
       installCanonicalRouter(call => {

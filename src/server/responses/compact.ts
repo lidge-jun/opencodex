@@ -518,7 +518,7 @@ export async function handleResponsesCompact(
         primaryAttemptBoundary,
       );
     } catch (err) {
-      if (!primaryAttemptBoundary.executorStarted && !req.signal.aborted) {
+      if (!primaryAttemptBoundary.executorStarted && primaryAttempts.length === 0 && !req.signal.aborted) {
         const observedStatus = lastUpstreamAttemptResponseStatus(primaryAttempts);
         if (observedStatus !== undefined) {
           recordCompactPoolOutcome(outcomeCtx, observedStatus);

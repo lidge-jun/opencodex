@@ -769,11 +769,34 @@ describe("compact alternate-account attempt (#913)", () => {
     if (admission.kind === "admitted") releaseCodexUpstreamHostAdmissionLease(admission.lease, now);
   }
 
+  type PreExecutorBoundaryState = {
+    prepared: boolean;
+    cloneThrew: boolean;
+    boundaryFrameObserved: boolean;
+  };
+
+  const BOUNDARY_FRAME = "fetchWithHeaderTimeout";
+
+  async function expectPreExecutorBoundaryRejection(
+    run: () => Promise<unknown>,
+    state: PreExecutorBoundaryState,
+    expected: Error,
+  ): Promise<void> {
+    let rejection: unknown;
+    try {
+      await run();
+    } catch (error) {
+      rejection = error;
+    }
+    expect(state.boundaryFrameObserved).toBe(true);
+    expect(rejection).toBe(expected);
+  }
+
   function throwingPreExecutorHeaders(
     NativeHeaders: typeof Headers,
     targetAccountId: string,
     expected: Error,
-    state: { prepared: boolean; cloneThrew: boolean },
+    state: PreExecutorBoundaryState,
     throwOnBoundaryClone = 1,
   ): typeof Headers {
     let boundaryCloneCount = 0;
@@ -782,8 +805,9 @@ describe("compact alternate-account attempt (#913)", () => {
         super(init);
         if (
           this.get("chatgpt-account-id") === targetAccountId
-          && new Error().stack?.includes("fetchWithHeaderTimeout")
+          && new Error().stack?.includes(BOUNDARY_FRAME)
         ) {
+          state.boundaryFrameObserved = true;
           boundaryCloneCount += 1;
           if (boundaryCloneCount === throwOnBoundaryClone) {
             state.cloneThrew = true;
@@ -805,16 +829,18 @@ describe("compact alternate-account attempt (#913)", () => {
     await withPoolEnv("ocx-regular-primary-pre-executor-", async config => {
       const originalNow = Date.now;
       const NativeHeaders = globalThis.Headers;
+      const threadId = "regular-retry-pre-executor-thread";
       config.accountPoolStrategy = "fill-first";
       config.activeCodexAccountId = "pool-a";
       config.connectTimeoutMs = 25;
+      const affinedAccount = resolveCodexAccountForThread(threadId, config);
       const probeAt = prepareHalfOpenHost(Date.now());
       const hostKey = canonicalCodexUpstreamHostKey(
         "openai",
         "https://chatgpt.com/backend-api/codex/responses",
       )!;
       const expected = new Error("regular primary header clone failed before executor");
-      const state = { prepared: false, cloneThrew: false };
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
       const physicalAccounts: string[] = [];
       Date.now = () => probeAt;
       globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state);
@@ -823,12 +849,12 @@ describe("compact alternate-account attempt (#913)", () => {
         return Response.json({ id: "must-not-run", status: "completed", output: [] });
       }) as typeof fetch;
       try {
-        await expect(handleResponses(
+        await expectPreExecutorBoundaryRejection(() => handleResponses(
           compactionRequest(regularBody()),
           config,
           { model: "", provider: "" },
-        )).rejects.toBe(expected);
-        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        ), state, expected);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual([]);
         expect(getCodexUpstreamHealth("pool-a")).toBeNull();
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
@@ -854,7 +880,7 @@ describe("compact alternate-account attempt (#913)", () => {
         "https://chatgpt.com/backend-api/codex/responses",
       )!;
       const expected = new Error("regular B header clone failed before executor");
-      const state = { prepared: false, cloneThrew: false };
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
       const physicalAccounts: string[] = [];
       Date.now = () => probeAt;
       globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_b", expected, state);
@@ -863,12 +889,12 @@ describe("compact alternate-account attempt (#913)", () => {
         return Response.json({ error: { message: "A quota" } }, { status: 429 });
       }) as typeof fetch;
       try {
-        await expect(handleResponses(
+        await expectPreExecutorBoundaryRejection(() => handleResponses(
           compactionRequest(regularBody()),
           config,
           { model: "", provider: "" },
-        )).rejects.toBe(expected);
-        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        ), state, expected);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
         expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(429);
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
@@ -885,16 +911,18 @@ describe("compact alternate-account attempt (#913)", () => {
     await withPoolEnv("ocx-regular-retry-pre-executor-", async config => {
       const originalNow = Date.now;
       const NativeHeaders = globalThis.Headers;
+      const threadId = "regular-retry-pre-executor-thread";
       config.accountPoolStrategy = "fill-first";
       config.activeCodexAccountId = "pool-a";
       config.connectTimeoutMs = 25;
+      const affinedAccount = resolveCodexAccountForThread(threadId, config);
       const probeAt = prepareHalfOpenHost(Date.now());
       const hostKey = canonicalCodexUpstreamHostKey(
         "openai",
         "https://chatgpt.com/backend-api/codex/responses",
       )!;
       const expected = new Error("regular retry header clone failed before executor");
-      const state = { prepared: false, cloneThrew: false };
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
       const physicalAccounts: string[] = [];
       Date.now = () => probeAt;
       globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state, 2);
@@ -906,15 +934,19 @@ describe("compact alternate-account attempt (#913)", () => {
         });
       }) as typeof fetch;
       try {
-        await expect(handleResponses(
-          compactionRequest(regularBody()),
+        const response = await handleResponses(
+          compactionRequest(regularBody(), undefined, { "x-codex-parent-thread-id": threadId }),
           config,
           { model: "", provider: "" },
-        )).rejects.toBe(expected);
-        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        );
+        expect(response.status).toBe(502);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
         expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(503);
-        expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(resolveCodexAccountForThread(threadId, config)).toBe(affinedAccount);
+        expect(config.activeCodexAccountId).toBe("pool-a");
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)?.consecutiveFailures).toBe(1);
         expectHostAdmissionUsable(hostKey, probeAt);
       } finally {
         globalThis.Headers = NativeHeaders;
@@ -927,16 +959,18 @@ describe("compact alternate-account attempt (#913)", () => {
     await withPoolEnv("ocx-compact-primary-pre-executor-", async config => {
       const originalNow = Date.now;
       const NativeHeaders = globalThis.Headers;
+      const threadId = "compact-retry-pre-executor-thread";
       config.accountPoolStrategy = "fill-first";
       config.activeCodexAccountId = "pool-a";
       config.connectTimeoutMs = 25;
+      const affinedAccount = resolveCodexAccountForThread(threadId, config);
       const probeAt = prepareHalfOpenHost(Date.now());
       const hostKey = canonicalCodexUpstreamHostKey(
         "openai",
         "https://chatgpt.com/backend-api/codex/responses",
       )!;
       const expected = new Error("compact primary header clone failed before executor");
-      const state = { prepared: false, cloneThrew: false };
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
       const physicalAccounts: string[] = [];
       Date.now = () => probeAt;
       globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state);
@@ -945,12 +979,12 @@ describe("compact alternate-account attempt (#913)", () => {
         return Response.json({ id: "must-not-run", status: "completed", output: [] });
       }) as typeof fetch;
       try {
-        await expect(handleResponsesCompact(
+        await expectPreExecutorBoundaryRejection(() => handleResponsesCompact(
           compactionRequest(baseCompactionBody({})),
           config,
           { model: "", provider: "" },
-        )).rejects.toBe(expected);
-        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        ), state, expected);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual([]);
         expect(getCodexUpstreamHealth("pool-a")).toBeNull();
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
@@ -967,16 +1001,18 @@ describe("compact alternate-account attempt (#913)", () => {
     await withPoolEnv("ocx-compact-retry-pre-executor-", async config => {
       const originalNow = Date.now;
       const NativeHeaders = globalThis.Headers;
+      const threadId = "compact-retry-pre-executor-thread";
       config.accountPoolStrategy = "fill-first";
       config.activeCodexAccountId = "pool-a";
       config.connectTimeoutMs = 25;
+      const affinedAccount = resolveCodexAccountForThread(threadId, config);
       const probeAt = prepareHalfOpenHost(Date.now());
       const hostKey = canonicalCodexUpstreamHostKey(
         "openai",
         "https://chatgpt.com/backend-api/codex/responses",
       )!;
       const expected = new Error("compact retry header clone failed before executor");
-      const state = { prepared: false, cloneThrew: false };
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
       const physicalAccounts: string[] = [];
       Date.now = () => probeAt;
       globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state, 2);
@@ -988,16 +1024,114 @@ describe("compact alternate-account attempt (#913)", () => {
         });
       }) as typeof fetch;
       try {
-        await expect(handleResponsesCompact(
-          compactionRequest(baseCompactionBody({})),
+        const response = await handleResponsesCompact(
+          compactionRequest(baseCompactionBody({}), undefined, { "x-codex-parent-thread-id": threadId }),
           config,
           { model: "", provider: "" },
-        )).rejects.toBe(expected);
-        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        );
+        expect(response.status).toBe(502);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
         expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(503);
-        expect(getCodexUpstreamHostHealth(hostKey, probeAt)).toBeNull();
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(resolveCodexAccountForThread(threadId, config)).toBe(affinedAccount);
+        expect(config.activeCodexAccountId).toBe("pool-a");
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)?.consecutiveFailures).toBe(1);
         expectHostAdmissionUsable(hostKey, probeAt);
+      } finally {
+        globalThis.Headers = NativeHeaders;
+        Date.now = originalNow;
+      }
+    });
+  });
+
+  test("regular preserves an actual ECONNRESET when retry setup later fails before provider execution", async () => {
+    await withPoolEnv("ocx-regular-reset-pre-executor-", async config => {
+      const originalNow = Date.now;
+      const NativeHeaders = globalThis.Headers;
+      const threadId = "regular-reset-pre-executor-thread";
+      config.accountPoolStrategy = "fill-first";
+      config.activeCodexAccountId = "pool-a";
+      config.connectTimeoutMs = 25;
+      const affinedAccount = resolveCodexAccountForThread(threadId, config);
+      const probeAt = prepareHalfOpenHost(Date.now());
+      const hostKey = canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!;
+      const expected = new Error("regular retry header clone failed after ECONNRESET");
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
+      const physicalAccounts: string[] = [];
+      Date.now = () => probeAt;
+      globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state, 2);
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        physicalAccounts.push(new NativeHeaders(init?.headers).get("chatgpt-account-id") ?? "");
+        const reset = new Error("upstream connection reset") as Error & { code?: string };
+        reset.code = "ECONNRESET";
+        throw reset;
+      }) as typeof fetch;
+      try {
+        const response = await handleResponses(
+          compactionRequest(regularBody(), undefined, { "x-codex-parent-thread-id": threadId }),
+          config,
+          { model: "", provider: "" },
+        );
+        expect(response.status).toBe(502);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
+        expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(resolveCodexAccountForThread(threadId, config)).toBe(affinedAccount);
+        expect(config.activeCodexAccountId).toBe("pool-a");
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)?.consecutiveFailures)
+          .toBe(CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD + 1);
+      } finally {
+        globalThis.Headers = NativeHeaders;
+        Date.now = originalNow;
+      }
+    });
+  });
+
+  test("compact preserves an actual ECONNRESET when retry setup later fails before provider execution", async () => {
+    await withPoolEnv("ocx-compact-reset-pre-executor-", async config => {
+      const originalNow = Date.now;
+      const NativeHeaders = globalThis.Headers;
+      const threadId = "compact-reset-pre-executor-thread";
+      config.accountPoolStrategy = "fill-first";
+      config.activeCodexAccountId = "pool-a";
+      config.connectTimeoutMs = 25;
+      const affinedAccount = resolveCodexAccountForThread(threadId, config);
+      const probeAt = prepareHalfOpenHost(Date.now());
+      const hostKey = canonicalCodexUpstreamHostKey(
+        "openai",
+        "https://chatgpt.com/backend-api/codex/responses",
+      )!;
+      const expected = new Error("compact retry header clone failed after ECONNRESET");
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
+      const physicalAccounts: string[] = [];
+      Date.now = () => probeAt;
+      globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_a", expected, state, 2);
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        physicalAccounts.push(new NativeHeaders(init?.headers).get("chatgpt-account-id") ?? "");
+        const reset = new Error("upstream connection reset") as Error & { code?: string };
+        reset.code = "ECONNRESET";
+        throw reset;
+      }) as typeof fetch;
+      try {
+        const response = await handleResponsesCompact(
+          compactionRequest(baseCompactionBody({}), undefined, { "x-codex-parent-thread-id": threadId }),
+          config,
+          { model: "", provider: "" },
+        );
+        expect(response.status).toBe(502);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
+        expect(physicalAccounts).toEqual(["pool_acc_a"]);
+        expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+        expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+        expect(resolveCodexAccountForThread(threadId, config)).toBe(affinedAccount);
+        expect(config.activeCodexAccountId).toBe("pool-a");
+        expect(getCodexUpstreamHostHealth(hostKey, probeAt)?.consecutiveFailures)
+          .toBe(CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD + 1);
       } finally {
         globalThis.Headers = NativeHeaders;
         Date.now = originalNow;
@@ -1139,54 +1273,60 @@ describe("compact alternate-account attempt (#913)", () => {
   });
 
   test("compact settles A's half-open account probe when response header processing throws", async () => {
-    const originalNow = Date.now;
-    const now = 1_800_000_000_000;
-    const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
-    const config = nativePoolConfig();
-    const expected = new Error("compact response header processing failed");
-    try {
-      Date.now = () => now;
-      clearCodexUpstreamHealth();
-      saveCodexAccountCredential("pool-a", {
-        accessToken: "pool-access-token",
-        refreshToken: "pool-refresh-token",
-        expiresAt: now + 30 * 60_000,
+    await withPoolEnv("ocx-compact-a-header-processing-", async config => {
+      const originalNow = Date.now;
+      const now = 1_800_000_000_000;
+      const probeAt = now + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      const expected = new Error("compact response header processing failed");
+      config.codexAccounts = [{
+        id: "pool-a",
+        email: "pool@example.test",
+        isMain: false,
         chatgptAccountId: "pool_acc",
-      });
-      recordCodexUpstreamOutcome(config, "pool-a", 429, {
-        now,
-        resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
-        modelId: "gpt-5.3-codex-spark",
-      });
-      Date.now = () => probeAt;
-      globalThis.fetch = (async () => {
-        const response = Response.json({ error: { message: "A quota" } }, { status: 429 });
-        Object.defineProperty(response, "headers", {
-          configurable: true,
-          get: () => { throw expected; },
+      }] as OcxConfig["codexAccounts"];
+      config.activeCodexAccountId = "pool-a";
+      try {
+        Date.now = () => now;
+        saveCodexAccountCredential("pool-a", {
+          accessToken: "pool-access-token",
+          refreshToken: "pool-refresh-token",
+          expiresAt: now + 30 * 60_000,
+          chatgptAccountId: "pool_acc",
         });
-        return response;
-      }) as typeof fetch;
+        recordCodexUpstreamOutcome(config, "pool-a", 429, {
+          now,
+          resetAt: Math.floor((now + 4 * 24 * 60 * 60_000) / 1_000),
+          modelId: "gpt-5.3-codex-spark",
+        });
+        Date.now = () => probeAt;
+        globalThis.fetch = (async () => {
+          const response = Response.json({ error: { message: "A quota" } }, { status: 429 });
+          Object.defineProperty(response, "headers", {
+            configurable: true,
+            get: () => { throw expected; },
+          });
+          return response;
+        }) as typeof fetch;
 
-      await expect(handleResponsesCompact(
-        compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
-        config,
-        { model: "", provider: "" },
-      )).rejects.toBe(expected);
+        await expect(handleResponsesCompact(
+          compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
+          config,
+          { model: "", provider: "" },
+        )).rejects.toBe(expected);
 
-      Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
-      const nextProbe = await resolveCodexAuthContext(
-        new Headers({ authorization: "Bearer main-token" }),
-        config,
-        "pool",
-        { modelId: "gpt-5.3-codex-spark" },
-      );
-      expect(nextProbe).toMatchObject({ accountId: "pool-a", probeQuotaScope: "spark" });
-      releaseCodexAuthContextProbeLease(nextProbe);
-    } finally {
-      Date.now = originalNow;
-      clearCodexUpstreamHealth();
-    }
+        Date.now = () => probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+        const nextProbe = await resolveCodexAuthContext(
+          new Headers({ authorization: "Bearer main-token" }),
+          config,
+          "pool",
+          { modelId: "gpt-5.3-codex-spark" },
+        );
+        expect(nextProbe).toMatchObject({ accountId: "pool-a", probeQuotaScope: "spark" });
+        releaseCodexAuthContextProbeLease(nextProbe);
+      } finally {
+        Date.now = originalNow;
+      }
+    });
   });
 
   test("compact keeps B ownership when header-timeout setup fails before provider execution", async () => {
@@ -1203,7 +1343,7 @@ describe("compact alternate-account attempt (#913)", () => {
       )!;
       const expected = new Error("B header clone failed before executor");
       const physicalAccounts: string[] = [];
-      const state = { prepared: false, cloneThrew: false };
+      const state = { prepared: false, cloneThrew: false, boundaryFrameObserved: false };
       Date.now = () => probeAt;
       globalThis.Headers = throwingPreExecutorHeaders(NativeHeaders, "pool_acc_b", expected, state);
       globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
@@ -1211,12 +1351,12 @@ describe("compact alternate-account attempt (#913)", () => {
         return Response.json({ error: { message: "A quota" } }, { status: 429 });
       }) as typeof fetch;
       try {
-        await expect(handleResponsesCompact(
+        await expectPreExecutorBoundaryRejection(() => handleResponsesCompact(
           compactionRequest(baseCompactionBody({})),
           config,
           { model: "", provider: "" },
-        )).rejects.toBe(expected);
-        expect(state).toEqual({ prepared: true, cloneThrew: true });
+        ), state, expected);
+        expect(state).toEqual({ prepared: true, cloneThrew: true, boundaryFrameObserved: true });
         expect(physicalAccounts).toEqual(["pool_acc_a"]);
         expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBe(429);
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
@@ -1679,7 +1819,7 @@ describe("compact alternate-account attempt (#913)", () => {
         sends += 1;
         throw new Error("opaque compact rejection");
       }) as typeof fetch;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD; attempt++) {
         expect((await handleResponsesCompact(
           compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
         )).status).toBe(502);
@@ -1688,7 +1828,7 @@ describe("compact alternate-account attempt (#913)", () => {
         compactionRequest(baseCompactionBody({})), config, { model: "", provider: "" },
       );
       expect(blocked.status).toBe(502);
-      expect(sends).toBe(3);
+      expect(sends).toBe(CODEX_UPSTREAM_HOST_FAILURE_THRESHOLD);
       expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
     });
   });
