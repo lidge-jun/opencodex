@@ -9,11 +9,13 @@ opencodex는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI가 이미
 
 OpenAI 항목에는 네이티브 Codex 로그인과 네임스페이스가 붙은 `openai-apikey/<model>` API key
 경로라는 두 가지 credential 경로가 있습니다. `codexAccountMode`만 Pool과 Direct 사이에서 바꾸는 것은
-선택기 id를 바꾸지 않습니다. 하지만 `codexAccountNamespaces`에 대상 계정이 존재하는 selector가 있으면,
-opencodex는 매핑된 계정별로 `<selector>/<native-openai-model>` 행을 추가하고 선택기에서 bare native 행을
-숨깁니다. Selector 이름은 사용자가 정하는 공개 label이며 내장된 계정 역할 의미가 없습니다. `selector`가
-붙은 행을 선택하면 매핑된 계정만 사용하고 활성 Pool 계정은 바뀌지 않습니다. 대상 계정을 사용할 수 없으면
-다른 계정으로 전환하지 않고 요청이 실패합니다. 자세한 내용은 [명시적 Codex 계정 selector](/reference/configuration/routing/#exact-codex-account-selectors)를
+선택기 id를 바꾸지 않습니다. `codexAccountPickerEnabled`가 `false`가 아니고
+`codexAccountNamespaces`에 대상 계정이 존재하는 selector가 있으면, opencodex는 매핑된 계정별로
+`<selector>/<native-openai-model>` 행을 추가하고 선택기에서 bare native 행을 숨깁니다. `false`는 생성된
+행만 숨기며, 설정된 exact selector route는 계속 사용할 수 있고 대상을 사용할 수 없으면 다른 계정으로
+전환하지 않고 실패합니다. Selector 이름은 사용자가 정하는 공개 label이며 내장된 계정 역할 의미가
+없습니다. `selector`가 붙은 행을 선택하면 매핑된 계정만 사용하고 활성 Pool 계정은 바뀌지 않습니다.
+자세한 내용은 [명시적 Codex 계정 selector](/reference/configuration/routing/#exact-codex-account-selectors)를
 참고하세요. API GPT-5.6 항목은 context 1,050,000 / max input 922,000을
 쓰고, `*-pro` picker id는 로그, 사용량, picker 상태에는 가상 id를 유지한 채 wire에서는 base model과
 `reasoning.mode: "pro"`로 풀립니다. API 카탈로그는 `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 그리고 세 개의
@@ -70,8 +72,8 @@ GPT-5.6에만 사용합니다. 오래된 템플릿으로 근사하지 않고 모
 
 | 경로 | 선택기 id와 카탈로그 메타데이터 |
 | --- | --- |
-| Codex 로그인(유효한 account selector 없음) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` 같은 bare native id를 표시하고 `codexAccountMode`에 따라 Pool 또는 Direct를 사용합니다. GPT-5.6 행의 카탈로그 창은 372,000토큰입니다. |
-| Codex 로그인(유효한 account selector 있음) | 유효한 selector와 지원되는 native model의 각 조합마다 `<selector>/<native-openai-model>` 행을 표시합니다. 각 행은 매핑된 계정만 사용하며 bare native 행은 선택기에서 숨깁니다. Native metadata와 context window는 보존됩니다. |
+| Codex 로그인(picker가 숨겨져 있거나 유효한 account selector 없음) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` 같은 bare native id를 표시하고 `codexAccountMode`에 따라 Pool 또는 Direct를 사용합니다. GPT-5.6 행의 카탈로그 창은 372,000토큰입니다. 설정된 exact selector route는 숨겨진 동안에도 호출할 수 있습니다. |
+| Codex 로그인(picker가 활성화되고 유효한 account selector 있음) | 유효한 selector와 지원되는 native model의 각 조합마다 `<selector>/<native-openai-model>` 행을 표시합니다. 각 행은 매핑된 계정만 사용하며 bare native 행은 선택기에서 숨깁니다. Native metadata와 context window는 보존됩니다. |
 | OpenAI(API key) | 정확히 여덟 개의 네임스페이스 행: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 그리고 세 개의 `*-pro` 가상 id (모두 컨텍스트 1,050,000; 최대 입력 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 `cursor/grok-4.5`, `cursor/grok-4.5-fast` (500,000)가 들어갑니다. 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |

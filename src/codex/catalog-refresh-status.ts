@@ -1,3 +1,20 @@
+/** Treat an incomplete catalog rewrite or cache invalidation as a refresh failure. */
+export function assertCodexCatalogRefreshComplete(
+  result: void | {
+    catalogExists: boolean;
+    catalogWritten?: boolean;
+    cacheSynced?: boolean;
+  },
+): void {
+  if (
+    result?.catalogExists === false
+    || result?.catalogWritten === false
+    || result?.cacheSynced === false
+  ) {
+    throw new Error("Codex catalog was not refreshed");
+  }
+}
+
 /**
  * Refresh the Codex catalog, retrying once after a failure.
  *

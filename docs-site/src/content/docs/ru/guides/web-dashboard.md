@@ -116,7 +116,7 @@ GUI — это тонкий клиент поверх JSON-API управлен�
 
 | Эндпоинт | Назначение |
 | --- | --- |
-| `GET` / `PUT /api/settings` | Чтение настроек или переключение автозапуска Codex. |
+| `GET` / `PUT /api/settings` | Чтение настроек или обновление автозапуска Codex, stream mode, app-owned memory budget и видимости account-qualified picker. Если изменение picker сохранено, но catalog refresh ещё ожидается, ответ содержит `catalogRefreshPending: true`; повторите через `ocx sync`. |
 | `GET /api/startup-health` | Чтение безопасной диагностики маршрутизации, службы, shim и устойчивости к перезагрузке. |
 | `GET` / `POST /api/windows-tray` | Чтение или изменение установки и видимости трея Windows; POST поддерживает `install`, `start`, `stop`, `uninstall`. |
 | `POST /api/sync` | Пересборка общего каталога моделей и инвалидация кэша моделей Codex. |

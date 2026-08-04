@@ -109,7 +109,7 @@ GUI はプロキシの JSON 管理 API を使うシンクライアントです�
 
 | エンドポイント | 用途 |
  --- | --- |
-| `GET` / `PUT /api/settings` | 設定を読むか Codex 自動起動をオン/オフします。 |
+| `GET` / `PUT /api/settings` | 設定を読むか、Codex 自動起動、ストリームモード、アプリ管理のメモリ予算、account-qualified picker の表示を更新します。picker の変更が保存されても catalog refresh が保留の場合は `catalogRefreshPending: true` を返すため、`ocx sync` で再試行してください。 |
 | `GET /api/startup-health` | 秘密情報を含まないルーティング、サービス、shim、再起動安全性診断を読み取ります。 |
 | `GET` / `POST /api/windows-tray` | Windows トレイの導入・表示状態を読み取り、`install`、`start`、`stop`、`uninstall` を実行します。 |
 | `POST /api/sync` | 共有モデルカタログを再構築し Codex モデルキャッシュを古い状態としてマークします。 |

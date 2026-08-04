@@ -87,7 +87,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/config` |編集された、管理上安全な構成 DTO を返します。 — |
 | `PUT /api/config` |フルコンフィグ置換ガードを無効にする | 405;代わりにフォーカスされたエンドポイントを使用してください。
-| `GET, PUT /api/settings` |ランタイム/起動設定の読み取り、または自動起動、ストリーム モード、アプリ所有のメモリ バジェットの更新 | 400 無効または空の更新 |
+| `GET, PUT /api/settings` |ランタイム/起動設定の読み取り、または自動起動、ストリーム モード、アプリ所有のメモリ バジェット、account-qualified picker 表示の更新 | 400 無効または空の更新 |
 | `GET /api/startup-health` |キャッシュされたサービス/シムの起動状態を読み取る | — |
 | `POST /api/startup-action` |サービスまたは Codex シムをインストールまたは修復する | 400 無効なアクション。 500 アクション失敗 |
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
@@ -201,7 +201,7 @@ Authorization: Bearer <admin-token>
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除 | 400 無効な入力。手動インポートは無効にすることができます。
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。add/delete response には `catalogRefreshPending` が含まれます | 400 無効な入力。手動インポートは無効にすることができます。
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
@@ -216,7 +216,13 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login` | Codex のログインまたは再認証を開始する | 400 無効なリクエスト。競合/ビジー ログイン状態 |
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
 | `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |
-| `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
+| `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする。完了した add に `catalogRefreshPending: true` が含まれる場合があります |不明なフローは `expired` を報告します。アクティブなフローがない場合は `idle` を報告します |
+
+`PUT /api/settings` は boolean `codexAccountPickerEnabled` を受け付けます。有効にすると、binding が
+ない場合に privacy-safe な selector binding を初期化します。無効にしても binding と exact route は
+保持されます。settings、account add/delete、login の変更は catalog refresh より先に保存されます。
+2 回の refresh がともに失敗した場合も変更自体は成功し、`catalogRefreshPending: true` を返します。
+`ocx sync` で再試行してください。response と warning は元の failure detail を公開しません。
 
 この委任されたファミリーでの構成ライターまたは資格情報の更新ロックのタイムアウトは、コード `CONFIG_MUTATION_LOCK_UNAVAILABLE` の HTTP 503 を返します。クライアントは、その応答を永久的なアカウント障害として扱うのではなく、すぐに再試行する必要があります。
 

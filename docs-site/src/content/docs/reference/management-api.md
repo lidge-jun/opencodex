@@ -102,7 +102,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | --- | --- | --- |
 | `GET /api/config` | Return the redacted, management-safe configuration DTO | — |
 | `PUT /api/config` | Disabled full-config replacement guard | 405; use focused endpoints instead |
-| `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, and app-owned memory budget | 400 invalid or empty update |
+| `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, app-owned memory budget, and account-qualified picker visibility | 400 invalid or empty update |
 | `GET /api/startup-health` | Read cached service/shim startup health | — |
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
@@ -222,7 +222,7 @@ manager. Its routes are:
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts; add/delete responses include `catalogRefreshPending` | 400 invalid input; manual import can be disabled |
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
@@ -237,7 +237,13 @@ manager. Its routes are:
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Submit a manual code for a Codex login flow | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
-| `GET /api/codex-auth/login-status` | Poll a flow or account login state | Unknown flows report `expired`; no active flow reports `idle` |
+| `GET /api/codex-auth/login-status` | Poll a flow or account login state; a completed add can include `catalogRefreshPending: true` | Unknown flows report `expired`; no active flow reports `idle` |
+
+`PUT /api/settings` accepts boolean `codexAccountPickerEnabled`. Enabling it initializes
+privacy-safe selector bindings when none exist; disabling it keeps those bindings and exact routes.
+Settings, account-add, account-delete, and login mutations are persisted before catalog refresh.
+If both refresh attempts fail, the mutation still returns success with `catalogRefreshPending: true`;
+run `ocx sync` to retry. The response and warning do not expose the underlying failure detail.
 
 Configuration-writer or credential-refresh lock timeouts under this delegated family return HTTP
 503 with code `CONFIG_MUTATION_LOCK_UNAVAILABLE`. Clients should retry shortly rather than treating

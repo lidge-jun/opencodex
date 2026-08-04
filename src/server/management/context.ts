@@ -9,7 +9,11 @@ import type { RuntimePortState } from "../../config";
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
-  refreshCodexCatalog?: () => Promise<void>;
+  refreshCodexCatalog?: () => Promise<void | {
+    catalogExists: boolean;
+    catalogWritten?: boolean;
+    cacheSynced?: boolean;
+  }>;
   /**
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config

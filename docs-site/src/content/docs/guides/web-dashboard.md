@@ -153,7 +153,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
+| `GET` / `PUT /api/settings` | Read settings or update Codex autostart, stream mode, app-owned memory budget, and account-qualified picker visibility. A persisted picker change can return `catalogRefreshPending: true`; retry with `ocx sync`. |
 | `GET` / `POST /api/github/star` | Read the `gh`-derived star state, or star the repository. The POST is refused with `403` `agent_consent_required` for agent-driven callers without a dashboard session. |
 | `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |

@@ -2307,8 +2307,8 @@ describe("codex-auth API", () => {
       expect(getCodexAccountCredential(accountId)).not.toBeNull();
       if (pending) throw new Error("private refresh details");
       return {
-        added: 1, path: "catalog.json", catalogExists: false, catalogWritten: false,
-        cacheSynced: false, comboOmissions: [],
+        added: 1, path: "catalog.json", catalogExists: true, catalogWritten: true,
+        cacheSynced: true, comboOmissions: [],
       };
     });
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
@@ -2332,6 +2332,43 @@ describe("codex-auth API", () => {
         expect(String(warnSpy.mock.calls[0]?.[0])).toContain("ocx sync");
         expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("private refresh details");
       }
+    } finally {
+      warnSpy.mockRestore();
+      refreshSpy.mockRestore();
+    }
+  });
+
+  test.each([
+    ["missing", { catalogExists: false, catalogWritten: false, cacheSynced: false }],
+    ["unwritten", { catalogExists: true, catalogWritten: false, cacheSynced: false }],
+    ["cache-unsynced", { catalogExists: true, catalogWritten: true, cacheSynced: false }],
+  ] as const)("UI-managed manual add treats a non-throwing %s catalog as pending", async (state, result) => {
+    enableManualImport();
+    mockCodexWarmupSuccess();
+    const accountId = `manual-picker-${state}-catalog`;
+    const config = makeConfig({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: true,
+    });
+    const refreshSpy = spyOn(codexRefresh, "refreshCodexModelCatalog").mockResolvedValue({
+      added: 0,
+      path: "catalog.json",
+      ...result,
+      comboOmissions: [],
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const req = new Request("http://localhost/api/codex-auth/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manualImportBody({ id: accountId })),
+      });
+      const response = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+      expect(response!.status).toBe(200);
+      expect(await response!.json()).toEqual({ ok: true, catalogRefreshPending: true });
+      expect(refreshSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ocx sync"));
     } finally {
       warnSpy.mockRestore();
       refreshSpy.mockRestore();
@@ -3078,8 +3115,8 @@ describe("codex-auth API", () => {
       expect(persisted.codexAccountNamespaces).toEqual({ team: accountId });
       expect(getCodexAccountCredential(accountId)).toBeNull();
       return {
-        added: 0, path: "catalog.json", catalogExists: false, catalogWritten: false,
-        cacheSynced: false, comboOmissions: [],
+        added: 0, path: "catalog.json", catalogExists: true, catalogWritten: true,
+        cacheSynced: true, comboOmissions: [],
       };
     });
     try {

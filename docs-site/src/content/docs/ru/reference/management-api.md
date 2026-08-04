@@ -103,7 +103,7 @@ GUI-сессия в стиле loopback не выпускается.
 | --- | --- | --- |
 | `GET /api/config` | Вернуть redacted DTO конфигурации, безопасный для management API | — |
 | `PUT /api/config` | Отключённая защита от полной замены конфигурации | 405; используйте вместо этого узкие endpoint'ы |
-| `GET, PUT /api/settings` | Прочитать runtime/startup setting'и или обновить auto-start, stream mode и budget app-owned memory | 400 invalid or empty update |
+| `GET, PUT /api/settings` | Прочитать runtime/startup setting'и или обновить auto-start, stream mode, budget app-owned memory и видимость account-qualified picker | 400 invalid or empty update |
 | `GET /api/startup-health` | Прочитать кэшированное startup health службы/shim'а | — |
 | `POST /api/startup-action` | Установить или починить службу или Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
@@ -224,7 +224,7 @@ Management-аутентификация доказывает доступ к п�
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex; response add/delete содержат `catalogRefreshPending` | 400 invalid input; manual import can be disabled |
 | `PUT /api/codex-auth/accounts/alias` | Задать или очистить alias аккаунта | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
@@ -239,7 +239,13 @@ Management-аутентификация доказывает доступ к п�
 | `POST /api/codex-auth/login` | Запустить login или reauthentication для Codex | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |
-| `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
+| `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта; завершённый add может содержать `catalogRefreshPending: true` | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
+
+`PUT /api/settings` принимает boolean `codexAccountPickerEnabled`. При включении, если binding ещё нет,
+он создаёт privacy-safe selector binding; при отключении binding и exact route сохраняются. Изменения
+settings, account add/delete и login сохраняются до catalog refresh. Если обе попытки refresh неудачны,
+изменение всё равно завершается успешно с `catalogRefreshPending: true`; для повтора выполните `ocx sync`.
+Response и warning не раскрывают исходные failure detail.
 
 Если внутри этого delegated family writer конфигурации или refresh credential'ов не получает lock
 в разумное время, возвращается HTTP 503 с кодом `CONFIG_MUTATION_LOCK_UNAVAILABLE`. Клиенту нужно

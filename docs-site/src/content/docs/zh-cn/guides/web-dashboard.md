@@ -103,7 +103,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 
 | Endpoint | 用途 |
 | --- | --- |
-| `GET` / `PUT /api/settings` | 读取设置或切换 Codex 自动启动。 |
+| `GET` / `PUT /api/settings` | 读取设置，或更新 Codex 自动启动、流模式、应用管理的内存预算和 account-qualified picker 可见性。picker 变更已持久化但 catalog refresh 仍待处理时会返回 `catalogRefreshPending: true`；请运行 `ocx sync` 重试。 |
 | `GET /api/startup-health` | 读取不含秘密信息的路由、服务、shim 和重启安全诊断。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |

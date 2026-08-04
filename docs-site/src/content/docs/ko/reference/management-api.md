@@ -87,7 +87,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/config` | redacted된 management-safe configuration DTO를 반환합니다 | — |
 | `PUT /api/config` | 전체 구성 교체 방지 기능이 비활성화되어 있습니다 | 405; 대신 집중된 엔드포인트를 사용하십시오 |
-| `GET, PUT /api/settings` | 런타임/시작 설정을 읽거나 auto-start, stream mode, 앱 소유 memory budget을 업데이트합니다 | 400 잘못되었거나 비어 있는 업데이트 |
+| `GET, PUT /api/settings` | 런타임/시작 설정을 읽거나 auto-start, stream mode, 앱 소유 memory budget, account-qualified picker 표시를 업데이트합니다 | 400 잘못되었거나 비어 있는 업데이트 |
 | `GET /api/startup-health` | 캐시된 서비스/shim 시작 상태를 읽습니다 | — |
 | `POST /api/startup-action` | 서비스 또는 Codex shim을 설치하거나 복구합니다 | 400 잘못된 작업; 500 작업 실패 |
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
@@ -201,7 +201,7 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다 | 400 잘못된 입력; 수동 가져오기를 비활성화할 수 있음 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다. add/delete 응답에는 `catalogRefreshPending`이 포함됩니다 | 400 잘못된 입력; 수동 가져오기를 비활성화할 수 있음 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
 | `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
@@ -216,7 +216,13 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login` | Codex 로그인 또는 재인증을 시작합니다 | 400 잘못된 요청; 충돌/바쁨 로그인 상태 |
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |
-| `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다 | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
+| `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 완료된 add에 `catalogRefreshPending: true`가 포함될 수 있습니다 | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
+
+`PUT /api/settings`는 boolean `codexAccountPickerEnabled`를 받습니다. 활성화할 때 binding이 없으면
+개인정보를 노출하지 않는 selector binding을 초기화하고, 비활성화할 때는 그 binding과 exact route를
+유지합니다. settings, account add/delete, login 변경은 catalog refresh보다 먼저 저장됩니다. refresh가
+두 번 모두 실패해도 변경은 성공하고 `catalogRefreshPending: true`를 반환합니다. `ocx sync`로 다시
+시도하세요. 응답과 경고는 원래의 실패 세부 정보를 노출하지 않습니다.
 
 이 위임된 계열에서 configuration-writer 또는 credential-refresh lock timeout이 발생하면 HTTP 503과 `CONFIG_MUTATION_LOCK_UNAVAILABLE` 코드가 반환됩니다. 클라이언트는 이를 영구적인 계정 실패로 보지 말고 곧바로 다시 시도해야 합니다.
 

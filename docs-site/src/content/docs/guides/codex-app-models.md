@@ -9,13 +9,15 @@ App's model picker as normal Codex catalog entries.
 
 OpenAI entries use two credential routes: native Codex login and the namespaced
 `openai-apikey/<model>` API-key transport. Changing `codexAccountMode` between Pool and Direct by
-itself does not change picker ids. When `codexAccountNamespaces` has eligible selectors whose
-mapped accounts still exist, however,
-opencodex adds separate `<selector>/<native-openai-model>` rows for the mapped accounts and hides
-the bare native rows from the Codex picker. Selector labels are user-chosen public names with no
-built-in account-role meaning. Selecting a qualified row uses only its mapped account, does not
-change the active Pool account, and fails closed instead of switching accounts when the target is
-unavailable. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
+itself does not change picker ids. When account-picker visibility is enabled
+(`codexAccountPickerEnabled` is not `false`) and `codexAccountNamespaces` has eligible selectors
+whose mapped accounts still exist, opencodex adds separate `<selector>/<native-openai-model>` rows
+for the mapped accounts and hides the bare native rows from the Codex picker. Setting
+`codexAccountPickerEnabled: false` hides only those generated rows; configured qualified ids remain
+exact routes and still fail closed instead of switching accounts. Selector labels are user-chosen
+public names with no built-in account-role meaning. Selecting a qualified row uses only its mapped
+account and does not change the active Pool account. See
+[Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
 API GPT-5.6 entries use
 1,050,000 context / 922,000 max input, and `*-pro` picker ids resolve to the base wire model with
 `reasoning.mode: "pro"` while logs, usage, and picker state keep the virtual id.
@@ -72,8 +74,8 @@ metadata instead of an older-template approximation.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
-| Codex login (eligible account selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
+| Codex login (picker hidden or no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. Configured exact selector routes remain callable while hidden. |
+| Codex login (picker enabled with eligible account selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus `cursor/grok-4.5` and `cursor/grok-4.5-fast` (500,000); live account discovery decides which remain visible. |

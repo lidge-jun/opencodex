@@ -87,7 +87,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/config` | 返回已脱敏、对管理安全的配置 DTO | — |
 | `PUT /api/config` | 禁用的完整配置替换保护 | 405；请改用聚焦端点 |
-| `GET, PUT /api/settings` | 读取运行时/启动设置，或更新自动启动、流模式和应用拥有的内存预算 | 400 无效或空更新 |
+| `GET, PUT /api/settings` | 读取运行时/启动设置，或更新自动启动、流模式、应用拥有的内存预算和 account-qualified picker 可见性 | 400 无效或空更新 |
 | `GET /api/startup-health` | 读取缓存的服务/shim 启动健康状态 | — |
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
@@ -201,7 +201,7 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户 | 400 输入无效；手动导入可能被禁用 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户；add/delete 响应包含 `catalogRefreshPending` | 400 输入无效；手动导入可能被禁用 |
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
 | `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
@@ -216,7 +216,12 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |
-| `GET /api/codex-auth/login-status` | 轮询某个流程或账户登录状态 | 未知流程报告为 `expired`；没有活跃流程时报告为 `idle` |
+| `GET /api/codex-auth/login-status` | 轮询某个流程或账户登录状态；已完成的 add 可能包含 `catalogRefreshPending: true` | 未知流程报告为 `expired`；没有活跃流程时报告为 `idle` |
+
+`PUT /api/settings` 接受布尔值 `codexAccountPickerEnabled`。启用时，如果尚无 binding，它会初始化
+隐私安全的 selector binding；禁用时会保留这些 binding 和 exact route。settings、account add/delete
+与 login 变更都会在 catalog refresh 之前持久化。如果两次 refresh 均失败，变更仍成功，并返回
+`catalogRefreshPending: true`；运行 `ocx sync` 重试。响应和警告不会暴露底层失败详情。
 
 此委托家族下的配置写入器或凭证刷新锁超时，会返回 HTTP 503，代码为 `CONFIG_MUTATION_LOCK_UNAVAILABLE`。客户端应稍后重试，而不是把该响应视为永久性的账户失败。
 

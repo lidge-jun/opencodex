@@ -74,6 +74,7 @@ export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import { managementBodyTooLargeResponse } from "./management/body";
+import { assertCodexCatalogRefreshComplete } from "../codex/catalog-refresh-status";
 
 // installed npm version instead of a stale hardcode.
 export const VERSION = (() => {
@@ -103,15 +104,18 @@ export async function handleManagementAPI(
     }
   }
   async function refreshCodexCatalogStrict(): Promise<void> {
-    if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
+    if (deps.refreshCodexCatalog) {
+      assertCodexCatalogRefreshComplete(await deps.refreshCodexCatalog());
+      return;
+    }
     const { refreshCodexModelCatalog } = await import("../codex/refresh");
-    await refreshCodexModelCatalog(config);
+    assertCodexCatalogRefreshComplete(await refreshCodexModelCatalog(config));
   }
 
   async function refreshCodexCatalogBestEffort(): Promise<void> {
     // Preserve the dependency seam's historical behavior: injected failures
     // remain observable to route tests, while production discovery is best-effort.
-    if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
+    if (deps.refreshCodexCatalog) return refreshCodexCatalogStrict();
     try {
       await refreshCodexCatalogStrict();
     } catch {

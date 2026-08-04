@@ -357,14 +357,49 @@ describe("PUT /api/settings", () => {
       });
 
       expect(response!.status).toBe(200);
+      const payload = await response!.json();
+      expect(payload).toMatchObject({
+        codexAccountPickerEnabled: true,
+        catalogRefreshPending: true,
+      });
+      expect(JSON.stringify(payload)).not.toContain("private refresh failure detail");
+      expect(refreshes).toBe(2);
+      const warningText = warning.mock.calls.flat().join(" ");
+      expect(warningText).toContain("ocx sync");
+      expect(warningText).not.toContain("private refresh failure detail");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test.each([
+    ["missing", { catalogExists: false }],
+    ["unwritten", { catalogExists: true, catalogWritten: false }],
+    ["cache-unsynced", { catalogExists: true, catalogWritten: true, cacheSynced: false }],
+  ] as const)("account-picker treats a non-throwing %s catalog as pending", async (_state, result) => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const config = {
+      ...baseConfig(),
+      codexAccountNamespaces: { main: "@main" },
+      codexAccountPickerEnabled: false,
+    };
+    let refreshes = 0;
+    try {
+      const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+        saveConfigPreservingClaudeCode: () => {},
+        refreshCodexCatalog: async () => {
+          refreshes += 1;
+          return result;
+        },
+      });
+
+      expect(response!.status).toBe(200);
       expect(await response!.json()).toMatchObject({
         codexAccountPickerEnabled: true,
         catalogRefreshPending: true,
       });
       expect(refreshes).toBe(2);
-      const warningText = warning.mock.calls.flat().join(" ");
-      expect(warningText).toContain("ocx sync");
-      expect(warningText).not.toContain("private refresh failure detail");
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("ocx sync"));
     } finally {
       warning.mockRestore();
     }

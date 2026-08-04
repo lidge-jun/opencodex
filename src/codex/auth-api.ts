@@ -18,7 +18,10 @@ import {
   appendDefaultCodexAccountNamespace,
   codexAccountPickerIsEnabled,
 } from "./account-namespaces";
-import { refreshCodexCatalogWithRetry } from "./catalog-refresh-status";
+import {
+  assertCodexCatalogRefreshComplete,
+  refreshCodexCatalogWithRetry,
+} from "./catalog-refresh-status";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
 import {
   claimDueCodexQuotaRecoveryProbes,
@@ -428,7 +431,7 @@ async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolea
   if (!changed || !codexAccountPickerIsEnabled(config)) return false;
   return refreshCodexCatalogWithRetry(async () => {
     const { refreshCodexModelCatalog } = await import("./refresh");
-    await refreshCodexModelCatalog(config);
+    assertCodexCatalogRefreshComplete(await refreshCodexModelCatalog(config));
   });
 }
 
