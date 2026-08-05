@@ -204,7 +204,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("Responses passthrough forwards the vision caption instead of the original image", async () => {
+  test("Responses passthrough does not let an empty image consume the real image caption", async () => {
     let upstreamBody = "";
     let sidecarHits = 0;
     upstream = serveResponsesUpstream(b => { upstreamBody = b; });
@@ -243,6 +243,8 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     const server = startServer(0);
     try {
       const token = fakeChatGptJwt({ chatgpt_account_id: "acct-vision-sidecar" });
+      const request = baseRequest("textonly/blind-model");
+      request.input[0].content.splice(1, 0, { type: "input_image", image_url: "" });
       const res = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: {
@@ -250,13 +252,12 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           authorization: `Bearer ${token}`,
           "chatgpt-account-id": "acct-vision-sidecar",
         },
-        body: JSON.stringify(baseRequest("textonly/blind-model")),
+        body: JSON.stringify(request),
       });
       expect(res.status).toBe(200);
       expect(sidecarHits).toBe(1);
       expect(upstreamBody).toContain(CAPTION);
       expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
-      expect(upstreamBody).not.toContain("image_url");
     } finally {
       await server.stop(true);
     }

@@ -294,11 +294,11 @@ function syncRawBodyImageDescriptions(parsed: OcxParsedRequest, descriptions: re
   if (!isPlainRecord(rawBody) || !Array.isArray(rawBody.input) || descriptions.length === 0) return;
 
   let nextDescription = 0;
-  const rewriteImages = (value: unknown): unknown => {
+  const rewriteImages = (value: unknown, nonEmptyImageUrlsOnly: boolean): unknown => {
     if (Array.isArray(value)) {
       let changed = false;
       const rewritten = value.map(entry => {
-        const next = rewriteImages(entry);
+        const next = rewriteImages(entry, nonEmptyImageUrlsOnly);
         if (next !== entry) changed = true;
         return next;
       });
@@ -306,6 +306,7 @@ function syncRawBodyImageDescriptions(parsed: OcxParsedRequest, descriptions: re
     }
     if (!isPlainRecord(value)) return value;
     if (value.type === "input_image" && typeof value.image_url === "string") {
+      if (nonEmptyImageUrlsOnly && value.image_url.length === 0) return value;
       const description = descriptions[nextDescription++];
       return description === undefined ? value : { type: "input_text", text: description };
     }
@@ -317,16 +318,17 @@ function syncRawBodyImageDescriptions(parsed: OcxParsedRequest, descriptions: re
     if (!isPlainRecord(item)) return item;
     const type = typeof item.type === "string" ? item.type : (typeof item.role === "string" ? "message" : "");
     const role = typeof item.role === "string" ? item.role : "";
-    const field = (
+    const isMessageContent = (
       (type === "message" && (role === "user" || role === "developer"))
       || type === "agent_message"
-    )
+    );
+    const field = isMessageContent
       ? "content"
       : (type === "function_call_output" || type === "custom_tool_call_output")
         ? "output"
         : undefined;
     if (!field) return item;
-    const rewritten = rewriteImages(item[field]);
+    const rewritten = rewriteImages(item[field], isMessageContent);
     if (rewritten === item[field]) return item;
     changed = true;
     return { ...item, [field]: rewritten };
