@@ -185,7 +185,7 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | --- | --- | --- |
 | `GET /api/providers` | Список redacted provider config'ов и состояния discovery | — |
 | `POST /api/providers` | Добавить или заменить одного валидированного провайдера и при желании сделать его default | 400 invalid/dangerous destination or config; 409 namespace collision |
-| `PATCH /api/providers?name=...` | Обновить допустимые поля провайдера, enabled/default state или OpenAI account mode | 400 invalid field or transition; 404 unknown provider |
+| `PATCH /api/providers?name=...` | Обновить допустимые поля провайдера (включая объединяемый блок `headers`), enabled/default state или OpenAI account mode | 400 invalid field or transition; 404 unknown provider |
 | `DELETE /api/providers?name=...` | Удалить провайдера, при возможности переназначив default | 404 unknown provider; 409 `last_provider`; 409 `provider_has_dependent_combos` |
 | `POST /api/providers/test?name=...` | Выполнить ограниченный live-probe connectivity/model-discovery для провайдера | 404 unknown provider; сбои обычно возвращаются как evidence с `ok: false` |
 | `GET /api/provider-quotas` | Прочитать отчёты по provider quota; `refresh=1` форсирует refresh | — |

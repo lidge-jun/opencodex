@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +117,72 @@ describe("headless GUI parity CLI", () => {
       method: "PATCH",
       body: { baseUrl: "https://example.test/v1", apiKeyTransport: "bearer", disabled: true, liveModels: true },
     }]);
+  });
+
+  test("provider edit --headers sends the parsed block and - clears it", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", [
+      "agw", "--headers", '{"x-app":"cli","anthropic-version":"2023-06-01"}', "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests).toEqual([{
+      path: "/api/providers?name=agw",
+      method: "PATCH",
+      body: { headers: { "x-app": "cli", "anthropic-version": "2023-06-01" } },
+    }]);
+
+    const clearRuntime = fakeRuntime();
+    const clearCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "-", "--json"], clearRuntime.deps);
+    expect(clearCode).toBe(0);
+    expect(clearRuntime.requests[0]?.body).toEqual({ headers: null });
+  });
+
+  test("provider edit rejects malformed --headers JSON without a request", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "{not json"], runtime.deps);
+    expect(code).toBe(2);
+    expect(runtime.requests).toEqual([]);
+
+    const arrayRuntime = fakeRuntime();
+    const arrayCode = await handleProviderRuntimeCommand("edit", ["agw", "--headers", '["x-app"]'], arrayRuntime.deps);
+    expect(arrayCode).toBe(2);
+    expect(arrayRuntime.requests).toEqual([]);
+  });
+
+  test("provider edit usage errors redact --headers values", async () => {
+    const errorSpy = spyOn(console, "error");
+    try {
+      // `--headers={...}` is not consumed by takeOption, so the value lands in the
+      // leftovers rejectArgs reports. Header values can carry tokens, so they must
+      // never be echoed to stderr.
+      const runtime = fakeRuntime();
+      const code = await handleProviderRuntimeCommand(
+        "edit",
+        ["agw", "--headers={\"x-app\":\"cli\",\"X-Token\":\"sk-leak-value\"}"],
+        runtime.deps,
+      );
+      expect(code).toBe(2);
+      expect(runtime.requests).toEqual([]);
+      const stderr = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(stderr).toContain("--headers=<redacted>");
+      expect(stderr).not.toContain("sk-leak-value");
+      expect(stderr).not.toContain("X-Token");
+
+      errorSpy.mockClear();
+      // Repeating the option leaves the second flag AND its value in the leftovers.
+      const repeatRuntime = fakeRuntime();
+      const repeatCode = await handleProviderRuntimeCommand(
+        "edit",
+        ["agw", "--headers", "{\"X-Token\":\"sk-leak-value\"}", "--headers", "{\"X-Other\":\"v\"}"],
+        repeatRuntime.deps,
+      );
+      expect(repeatCode).toBe(2);
+      const repeatStderr = errorSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(repeatStderr).toContain("--headers <redacted>");
+      expect(repeatStderr).not.toContain("sk-leak-value");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   test("provider test treats a static catalog as neutral", async () => {

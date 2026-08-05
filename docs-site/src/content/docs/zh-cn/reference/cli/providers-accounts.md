@@ -16,7 +16,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | --- | --- | --- |
 | `list` | `--json` | 列出已配置的提供方以及剩余的注册表条目。 |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 添加一个注册表/自定义提供方。`--force` 会覆盖；`--sync` 会在有人类输出模式运行的代理上刷新配置。 |
-| `edit <name>` | 提供方字段标志，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。 |
+| `edit <name>` | 提供方字段标志，`--headers <json>`，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。`--headers` 会合并自定义请求头；传入 `{}` 或 `-` 可清空。 |
 | `test <name>` | `--json` | 探测真实的上游模型端点。 |
 | `show <name>` | `--json` | 显示已屏蔽 API 密钥的配置。 |
 | `remove <name>` | `--json` | 移除一个非默认提供方；最后一个提供方不能被移除。 |
@@ -35,6 +35,20 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+:::caution[自定义请求头不是凭据通道]
+`--headers` 用于非机密的请求元数据 —— 路由提示、租户或项目选择器、追踪 ID 等。它不是
+存放认证信息的地方，校验器会拒绝标准凭据请求头名称（`Authorization`、`X-Api-Key`、
+`Cookie` 等），并提示改用 `apiKey` / `authMode`。
+
+但校验器无法识别 `X-My-Token` 这类任意名称，因此这条边界需要你自己遵守。原因有两点：
+
+- 该 JSON 是命令行参数，机密会留在 shell 历史和进程列表中；在 CLI 做任何脱敏之前，
+  同一台机器上的其他进程就能读到。
+- 请求头的值以明文保存在 `config.json` 中，这与拥有独立存储和脱敏路径的 API 密钥不同。
+
+任何机密内容请使用 `--api-key` 或 OAuth 登录。
+:::
 
 ## 认证
 
