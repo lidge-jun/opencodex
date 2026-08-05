@@ -101,7 +101,7 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 - **Sub-agents on any model** — feature routed models in Codex's sub-agent picker, with v1/v2
   surface control and fallback chains. See the
   [sub-agent guide](https://opencodex.me/guides/sub-agent-surface/).
-- **Log in once, skip the API key** — OAuth for xAI, Anthropic, and Kimi; or forward
+- **Log in once, skip the API key** — account login for Command Code plus OAuth for xAI, Anthropic, and Kimi; or forward
   `codex login`, paste a key, or use `${ENV_VAR}` references.
 - **Web search & vision sidecars** — non-OpenAI models get real web search and image understanding
   through a sidecar over your ChatGPT login.
@@ -125,7 +125,7 @@ full-slash form keeps working too. Details: [model routing docs](https://opencod
 
 ## Providers & adapters
 
-OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
+OpenAI (ChatGPT login or API key), Command Code, Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
 Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, SiliconFlow, and more. Full list: `ocx init` or the
