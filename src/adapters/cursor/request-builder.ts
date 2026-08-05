@@ -16,8 +16,10 @@ import {
   cursorMcpToolsEncodedSize,
   cursorToolAllowedByChoice,
   cursorToolChoiceAliases,
+  cursorStructuredEditTools,
   cursorToolWireName,
   cursorToolsForActivePrompt,
+  isCursorStructuredEditToolName,
   isBareCodexShellBridgeTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
@@ -41,6 +43,9 @@ function toolPriority(tool: OcxTool, selectedNames: ReadonlySet<string>): number
   // selected filler cannot starve the Codex execution path during truncation (#399).
   if (isBareCodexShellBridgeTool(tool)) return 0;
   if (!tool.namespace && tool.name === "apply_patch") return 1;
+  // Structured edit tools convert to apply_patch on the return path, so they must survive the
+  // same byte/count truncation as the freeform tool they stand in for (#1017).
+  if (!tool.namespace && isCursorStructuredEditToolName(tool.name)) return 1;
   if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 2;
   if (tool.loadedFromToolSearch) return 3;
   if (!tool.namespace) return 4;
@@ -61,7 +66,11 @@ export function applyCursorToolBudget(
   toolChoice: OcxToolChoice | undefined,
 ): CursorToolBudgetResult {
   const catalog = tools ?? [];
-  const eligible = catalog.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog));
+  const baseEligible = catalog.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog));
+  // Synthetic structured edit tools ride along with the freeform apply_patch tool (#1017). They are
+  // part of the advertised catalog, so their serialized size counts toward the byte ceiling here.
+  const synthetic = cursorStructuredEditTools(catalog, toolChoice);
+  const eligible = [...baseEligible, ...synthetic];
   if (
     eligible.length <= CURSOR_TOOL_COUNT_LIMIT
     && cursorMcpToolsEncodedSize(eligible, toolChoice) <= CURSOR_TOOL_BYTES_LIMIT
@@ -101,7 +110,9 @@ export function applyCursorToolBudget(
 
   return {
     tools: eligible.filter(tool => keptSet.has(tool)),
-    omitted: eligible.filter(tool => !keptSet.has(tool)),
+    // Synthetic tools are pinned in phase 1 and never reported as omitted; the note counts only
+    // tools the client itself requested.
+    omitted: baseEligible.filter(tool => !keptSet.has(tool)),
   };
 }
 

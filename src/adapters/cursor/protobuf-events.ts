@@ -3,10 +3,13 @@ import type { AgentServerMessage, McpArgs, ToolCall } from "./gen/agent_pb";
 import { decodeCursorArgsMap } from "./arg-codec";
 import { normalizeArgKeys } from "./arg-normalize";
 import {
+  CODEX_APPLY_PATCH_TOOL,
+  CURSOR_MULTI_EDIT_TOOL,
   cursorShellBridgeArgsValid,
   cursorShellBridgeDropError,
   defaultShellBridgeArgNormalizeSchema,
   isCodexShellBridgeToolName,
+  isCursorStructuredEditToolName,
   normalizeCursorWireName,
   OCX_RESPONSES_TOOL_PROVIDER,
   resolveShellBridgeAliasKey,
@@ -311,6 +314,106 @@ function resolveCompletedArgs(buffered: string, args: McpArgs | undefined, state
   return "";
 }
 
+const PATCH_BEGIN = "*** Begin Patch";
+const PATCH_END = "*** End Patch";
+
+function firstStringArg(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+/** Split a replacement into patch lines, ignoring one trailing newline (line-based patch semantics). */
+function patchLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** One `@@` hunk replacing `oldString` with `newString`. */
+function replacementHunk(oldString: string, newString: string): { hunk: string } | { error: string } {
+  if (oldString.length === 0) {
+    return {
+      error:
+        "structured edit requires a non-empty old_string to locate the replacement; for new files or insertions without existing text, call apply_patch with an `*** Add File` / context hunk or use the shell bridge",
+    };
+  }
+  const removed = patchLines(oldString).map(line => `-${line}`);
+  const added = patchLines(newString).map(line => `+${line}`);
+  return { hunk: ["@@", ...removed, ...added].join("\n") };
+}
+
+/**
+ * Convert a completed Cursor structured edit call (`edit_file` / `multi_edit`) into a valid Codex
+ * apply_patch freeform payload (#1017). Cursor-trained models cannot emit Codex's freeform patch
+ * grammar, so the adapter advertises exact-match replacement tools and performs the grammar here.
+ * Returns `{ patch }` for a valid conversion, `{ error }` for a malformed call (which must never be
+ * relayed verbatim: Codex would reject it locally after the HTTP 200, the reported failure mode),
+ * and `undefined` for tools that are not structured edits.
+ */
+export type StructuredEditTranslation =
+  | { patch: string; error?: undefined }
+  | { error: string; patch?: undefined };
+
+export function translateStructuredEditCall(
+  toolName: string,
+  argsText: string,
+): StructuredEditTranslation | undefined {
+  if (!isCursorStructuredEditToolName(toolName)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argsText);
+  } catch {
+    return {
+      error: `${toolName} arguments were not valid JSON; the call was dropped. ${
+        toolName === CURSOR_MULTI_EDIT_TOOL
+          ? "Use file_path and edits[] (each edit with old_string and new_string)."
+          : "Use file_path, old_string and new_string."
+      }`,
+    };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: `${toolName} arguments must be a JSON object; the call was dropped.` };
+  }
+  const args = parsed as Record<string, unknown>;
+  const path = firstStringArg(args, ["file_path", "filePath", "path", "filepath", "filename"]);
+  if (!path || path.trim().length === 0) {
+    return { error: `${toolName} is missing a non-empty file_path; the call was dropped.` };
+  }
+  const hunks: string[] = [];
+  const addReplacement = (record: Record<string, unknown>): StructuredEditTranslation => {
+    const oldString = firstStringArg(record, ["old_string", "oldString", "oldtext", "old_text"]);
+    const newString = firstStringArg(record, ["new_string", "newString", "newtext", "new_text"]);
+    if (oldString === undefined || newString === undefined) {
+      return { error: `${toolName} requires old_string and new_string; the call was dropped.` };
+    }
+    const hunk = replacementHunk(oldString, newString);
+    if ("error" in hunk) return { error: hunk.error };
+    return { patch: hunk.hunk };
+  };
+  if (toolName === CURSOR_MULTI_EDIT_TOOL) {
+    const edits = args.edits;
+    if (!Array.isArray(edits) || edits.length === 0) {
+      return { error: "multi_edit requires a non-empty edits array; the call was dropped." };
+    }
+    for (const edit of edits) {
+      if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
+        return { error: "multi_edit edits entries must be objects with old_string and new_string; the call was dropped." };
+      }
+      const editResult = addReplacement(edit as Record<string, unknown>);
+      if (editResult.error !== undefined) return editResult;
+      hunks.push(editResult.patch);
+    }
+  } else {
+    const editResult = addReplacement(args);
+    if (editResult.error !== undefined) return editResult;
+    hunks.push(editResult.patch);
+  }
+  return { patch: [PATCH_BEGIN, `*** Update File: ${path}`, ...hunks, PATCH_END].join("\n") };
+}
+
 export function mapSyntheticMcpExecToToolEvents(
   args: McpArgs,
   fallbackCallId = "cursor_mcp_exec",
@@ -340,10 +443,18 @@ export function mapSyntheticMcpExecToToolEvents(
       return [{ type: "error", message: cursorShellBridgeDropError(responsesName) }];
     }
   }
+  const translation = translateStructuredEditCall(responsesName, normalizedArgs);
+  if (translation?.error !== undefined) {
+    return [{ type: "error", message: `${responsesName} call was not converted to apply_patch: ${translation.error}` }];
+  }
+  const emittedName = translation ? CODEX_APPLY_PATCH_TOOL : responsesName;
+  const emittedArgs = translation ? JSON.stringify({ input: translation.patch }) : normalizedArgs;
   // Stateless fallback (no shared event state): emit a complete, self-contained tool call.
   return [
-    { type: "tool_call_start", id: callId, name: responsesName },
-    ...(normalizedArgs.length > 2 ? [{ type: "tool_call_delta" as const, arguments: normalizedArgs }] : []),
+    { type: "tool_call_start", id: callId, name: emittedName },
+    ...(emittedArgs.length > 2
+      ? [{ type: "tool_call_delta" as const, arguments: emittedArgs }]
+      : []),
     { type: "tool_call_end", id: callId },
   ];
 }
@@ -385,12 +496,25 @@ function dropShellBridgeCall(state: CursorProtobufEventState, callId: string, to
   return [{ type: "error", message: cursorShellBridgeDropError(toolName) }];
 }
 
+function dropStructuredEditCall(state: CursorProtobufEventState, callId: string, toolName: string, reason: string): CursorServerMessage[] {
+  state.openToolCalls.delete(callId);
+  state.translatorBudget?.closeCall(callId);
+  state.completedToolCalls.add(callId);
+  return [{ type: "error", message: `${toolName} call was not converted to apply_patch: ${reason}` }];
+}
+
 function commitToolCall(state: CursorProtobufEventState, callId: string, finalArgs: string): CursorServerMessage[] {
   const open = state.openToolCalls.get(callId);
   if (!open) return [];
   const schema = toolSchemaForWireName(state, open.name);
   if (!cursorShellBridgeArgsValid(finalArgs, open.name, schema)) {
     if (isCodexShellBridgeToolName(open.name)) return dropShellBridgeCall(state, callId, open.name);
+  }
+  // Structured edit calls are converted to apply_patch here so both the interactionUpdate and the
+  // native-exec mcpArgs paths emit the same valid freeform payload (#1017).
+  const translation = translateStructuredEditCall(open.name, finalArgs);
+  if (translation?.error !== undefined) {
+    return dropStructuredEditCall(state, callId, open.name, translation.error);
   }
   if (finalArgs !== open.args) {
     const previousBytes = Buffer.byteLength(open.args);
@@ -402,8 +526,10 @@ function commitToolCall(state: CursorProtobufEventState, callId: string, finalAr
     reservation?.commitRetained();
     state.translatorBudget?.releaseRetained(previousBytes, { kind: "tool_args", callId });
   }
-  const out: CursorServerMessage[] = [{ type: "tool_call_start", id: callId, name: open.name }];
-  if (finalArgs.length > 0) out.push({ type: "tool_call_delta", arguments: finalArgs });
+  const emittedName = translation ? CODEX_APPLY_PATCH_TOOL : open.name;
+  const emittedArgs = translation ? JSON.stringify({ input: translation.patch }) : finalArgs;
+  const out: CursorServerMessage[] = [{ type: "tool_call_start", id: callId, name: emittedName }];
+  if (emittedArgs.length > 0) out.push({ type: "tool_call_delta", arguments: emittedArgs });
   out.push(...endToolCall(state, callId));
   return out;
 }

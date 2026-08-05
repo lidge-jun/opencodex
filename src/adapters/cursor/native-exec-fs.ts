@@ -40,7 +40,7 @@ const MAX_GREP_RESULTS = 200;
 const MAX_FILE_BYTES = 1_000_000;
 
 function codexNativeMutationRefusal(operation: "write" | "delete"): string {
-  return `Cursor-native ${operation} is disabled for this Codex request because apply_patch is available. Use the apply_patch tool for file edits so Codex can approve the change, enforce sandbox policy, show diffs, and record rollout. No file was changed.`;
+  return `Cursor-native ${operation} is disabled for this Codex request because apply_patch is available. Use the structured edit tools (\`edit_file\` / \`multi_edit\`) or the \`apply_patch\` tool for file edits so Codex can approve the change, enforce sandbox policy, show diffs, and record rollout. No file was changed.`;
 }
 
 const NATIVE_LOCAL_EXEC_DISABLED =
