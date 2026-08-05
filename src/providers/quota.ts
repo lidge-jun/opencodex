@@ -64,6 +64,15 @@ export interface ProviderQuotaWindow {
   resetAt?: number;
 }
 
+export interface ProviderQuotaCreditsUsd {
+  used: number;
+  limit: number;
+  remaining: number;
+  percent: number;
+  expiresAt?: number;
+  unlimited?: boolean;
+}
+
 export interface ProviderQuota {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
@@ -72,6 +81,7 @@ export interface ProviderQuota {
   monthlyPercent?: number;
   monthlyResetAt?: number;
   customWindows?: ProviderQuotaWindow[];
+  creditsUsd?: ProviderQuotaCreditsUsd;
   updatedAt: number;
 }
 
@@ -203,6 +213,8 @@ function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is Provide
   return typeof quota.fiveHourPercent === "number"
     || typeof quota.weeklyPercent === "number"
     || typeof quota.monthlyPercent === "number"
+    || quota.creditsUsd?.unlimited === true
+    || typeof quota.creditsUsd?.percent === "number"
     || !!quota.customWindows?.some(window => typeof window.percent === "number");
 }
 
@@ -340,6 +352,27 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
   }
   const subscription = a6apiPayload(await subscriptionResponse.json().catch(() => null));
   const token = a6apiPayload(await tokenResponse.json().catch(() => null));
+  const unlimited = token?.unlimited_quota === true
+    || token?.unlimited_quota === 1
+    || token?.unlimited_quota === "true";
+  const normalizedExpiry = normalizeResetAt(token?.expires_at);
+  const expiry = normalizedExpiry && normalizedExpiry > 0
+    ? { expiresAt: normalizedExpiry }
+    : {};
+  if (unlimited) {
+    return report(provider, "a6api:billing", {
+      creditsUsd: {
+        used: 0,
+        limit: 0,
+        remaining: 0,
+        percent: 0,
+        unlimited: true,
+        ...expiry,
+      },
+      customWindows: [{ label: "Unlimited API credits", percent: 0 }],
+      updatedAt: Date.now(),
+    });
+  }
   const limitUsd = firstFinite(subscription, ["hard_limit_usd"]);
   const grantedUnits = firstFinite(token, ["total_granted"]);
   const usedUnits = firstFinite(token, ["total_used"]);
@@ -362,6 +395,13 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
   if (percent === undefined) return TERMINAL_QUOTA_FAILURE;
   const label = `API credits ($${remainingUsd.toFixed(2)} of $${limitUsd.toFixed(2)} remaining)`;
   return report(provider, "a6api:billing", {
+    creditsUsd: {
+      used: usedUsd,
+      limit: limitUsd,
+      remaining: remainingUsd,
+      percent,
+      ...expiry,
+    },
     customWindows: [{ label, percent }],
     updatedAt: Date.now(),
   });

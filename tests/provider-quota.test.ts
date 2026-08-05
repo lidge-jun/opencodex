@@ -282,12 +282,48 @@ describe("fetchProviderQuotaReports", () => {
       label: "API credits ($15.00 of $20.00 remaining)",
       percent: 25,
     }]);
+    expect(result.reports[0]?.quota.creditsUsd).toEqual({
+      used: 5,
+      limit: 20,
+      remaining: 15,
+      percent: 25,
+      expiresAt: Date.parse("2026-08-01T00:00:00Z"),
+    });
     expect(seen.map(row => row.url).sort()).toEqual([
       "https://api.a6api.com/api/usage/token/",
       "https://api.a6api.com/dashboard/billing/subscription",
     ]);
     expect(seen.every(row => row.authorization === "Bearer a6api-secret")).toBe(true);
     expect(seen.every(row => row.redirect === "error")).toBe(true);
+  });
+
+  test("A6API unlimited keys remain visible even when all finite credit totals are zero", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).includes("subscription")
+        ? { data: { hard_limit_usd: 100_000_000 } }
+        : { data: {
+          total_granted: 0,
+          total_used: 0,
+          total_available: 0,
+          unlimited_quota: true,
+          expires_at: 0,
+        } },
+    ), { status: 200 })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(a6apiOnlyConfig(), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.quota.creditsUsd).toEqual({
+      used: 0,
+      limit: 0,
+      remaining: 0,
+      percent: 0,
+      unlimited: true,
+    });
+    expect(result.reports[0]?.quota.customWindows).toEqual([{
+      label: "Unlimited API credits",
+      percent: 0,
+    }]);
   });
 
   test("A6API quota never sends API keys to a non-canonical base URL", async () => {
