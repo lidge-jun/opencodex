@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import {
   analyzeProjectCodexConfig,
   collectProjectCodexConfigWarnings,
+  discoverProjectCodexConfigPaths,
+  explainProjectConfigBypass,
   isGlobalOpencodexRoutingActive,
   invalidateProjectConfigDiagnosticsCache,
   parseTrustedProjectPathsFromCodexConfig,
@@ -210,9 +212,41 @@ model_provider = "openai"
 });
 
 describe("collectProjectCodexConfigWarnings", () => {
+  test("does not discover the global config when walking through its parent directory", () => {
+    const userHome = join(testDir, "user-home");
+    const codexConfigPath = join(userHome, ".codex", "config.toml");
+    const projectDir = join(userHome, "work", "project");
+    const projectConfigPath = join(projectDir, ".codex", "config.toml");
+    const nestedCwd = join(projectDir, "nested");
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    mkdirSync(nestedCwd, { recursive: true });
+    writeFileSync(codexConfigPath, `model_provider = "opencodex-retry"`);
+    writeFileSync(projectConfigPath, `model_provider = "anthropic"`);
+
+    expect(discoverProjectCodexConfigPaths({ cwd: nestedCwd, codexConfigPath }))
+      .toEqual([projectConfigPath]);
+  });
+
+  test("does not discover a project candidate that aliases the global config through a symlink", () => {
+    if (process.platform === "win32") return;
+    const userHome = join(testDir, "symlink-home");
+    const candidatePath = join(userHome, ".codex", "config.toml");
+    const globalAlias = join(testDir, "global-config-link.toml");
+    const projectDir = join(userHome, "work", "project");
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(candidatePath, `model_provider = "opencodex-retry"`);
+    symlinkSync(candidatePath, globalAlias);
+
+    expect(discoverProjectCodexConfigPaths({ cwd: projectDir, codexConfigPath: globalAlias }))
+      .not.toContain(candidatePath);
+  });
+
   test("skips untrusted projects even when they define bypass config", () => {
     const escaped = testDir.replace(/\\/g, "\\\\");
     const projectDir = join(testDir, "proj");
+    const codexConfigPath = join(process.env.CODEX_HOME!, "config.toml");
     writeGlobalRoutingConfig(`
 [projects.'${escaped}\\proj']
 trust_level = "untrusted"
@@ -223,7 +257,7 @@ model_provider = "anthropic"
 [model_providers.anthropic]
 name = "anthropic"
 `);
-    expect(collectProjectCodexConfigWarnings()).toEqual([]);
+    expect(collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath })).toEqual([]);
   });
 
   test("uncached collection reflects project config changes", () => {
@@ -250,5 +284,27 @@ name = "anthropic"
     const second = collectProjectCodexConfigWarnings({ cwd: testDir, codexConfigPath })
       .filter(warning => warning.path === projectConfigPath);
     expect(second.length).toBe(0);
+  });
+});
+
+describe("explainProjectConfigBypass", () => {
+  const warningFor = (detail: string) => [{
+    path: "/repo/.codex/config.toml",
+    code: "model_provider_root" as const,
+    detail,
+    message: "fixture",
+  }];
+
+  test("humanizes OpenCode provider families only at an identifier boundary", () => {
+    expect(explainProjectConfigBypass(warningFor("opencode"))).toContain("uses OpenCode ");
+    expect(explainProjectConfigBypass(warningFor("opencode-go"))).toContain("uses OpenCode ");
+    expect(explainProjectConfigBypass(warningFor("opencode_go"))).toContain("uses OpenCode Go ");
+  });
+
+  test("does not mislabel OpenCodex-prefixed provider ids as OpenCode", () => {
+    expect(explainProjectConfigBypass(warningFor("opencodex"))).toContain("uses OpenCodex ");
+    expect(explainProjectConfigBypass(warningFor("opencodex-retry")))
+      .toContain("uses opencodex-retry ");
+    expect(explainProjectConfigBypass(warningFor("opencodeish"))).toContain("uses opencodeish ");
   });
 });
