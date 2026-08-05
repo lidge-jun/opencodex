@@ -9,7 +9,7 @@ import {
   saveConfig,
 } from "../src/config";
 import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
-import { activeUserCostOverlays, userCostOverlayVersion } from "../src/usage/user-cost-overlays";
+import { activeUserCostOverlays, refreshUserCostOverlays, userCostOverlayVersion } from "../src/usage/user-cost-overlays";
 
 const VALID_COSTS = {
   "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
@@ -24,6 +24,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The overlay registry is module-level; reset it so rows loaded by DTO tests
+  // cannot leak into other test files in a shared-process run.
+  refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   delete process.env.OPENCODEX_HOME;
   if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   testDir = "";
@@ -157,5 +160,19 @@ describe("modelCosts management validation and DTO", () => {
       "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
     });
     expect(dto.providers.blsc.modelCosts?.["deepseek-v4-flash"]?.apiKey).toBeUndefined();
+  });
+
+  test("safeConfigDTO keeps a __proto__ model id as an own row", () => {
+    // JSON text (not an object literal) so "__proto__" is an own row key.
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      providers: { blsc: { ...providerBase, modelCosts: JSON.parse('{"__proto__":{"input":0.14,"output":0.28,"cacheRead":0.0028,"cacheWrite":0}}') } },
+    }));
+    const dto = safeConfigDTO(loadConfig()) as {
+      providers: Record<string, { modelCosts?: Record<string, unknown> }>;
+    };
+    const rows = dto.providers.blsc.modelCosts;
+    expect(rows && Object.keys(rows)).toContain("__proto__");
+    expect(rows?.["__proto__"]).toEqual({ input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 });
   });
 });
