@@ -156,12 +156,12 @@ jobs:
 
           if [ -z "$ci_url" ]; then
             # Deliberately narrower than "any successful ci.yml run for this SHA".
-            # The Windows suite runs on promotion pushes to main/preview and on
-            # dispatch, not on pull requests — so a green PR run for the same SHA
-            # proves Linux and macOS and says nothing about Windows. Accepting it
-            # here would let a publish proceed while the promotion run that
-            # actually carries Windows was still pending, or had failed.
-            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA} on ${GITHUB_REF#refs/heads/} (push event). A pull-request run does not qualify: it skips the Windows leg. Wait for the promotion run to pass before releasing."
+            # The release branch's own push run is the one whose trigger set,
+            # runner selection, and job graph match what is being published —
+            # a green PR run for the same SHA ran against a merge ref with a
+            # different trigger context. Accepting it here would let a publish
+            # proceed while the promotion run was still pending, or had failed.
+            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA} on ${GITHUB_REF#refs/heads/} (push event). A pull-request run does not qualify. Wait for the promotion run to pass before releasing."
             gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 10 || true
             exit 1
           fi

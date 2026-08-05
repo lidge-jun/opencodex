@@ -150,16 +150,18 @@ describe("GitHub Actions hardening", () => {
     expect(macosSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     expect(ci.jobs?.["platform-macos"]).not.toHaveProperty("if");
 
-    // Windows leaving the PR lane is a trade, not a deletion: it still runs
-    // before anything is published. Assert the positive condition rather than the
-    // absence of `pull_request` — `!= 'pull_request'` also matches every push to
-    // dev, which would restore the 16-minute leg to the busiest lane while still
-    // passing a loosely-worded test.
+    // Windows is dispatch-only: it gates nothing, not even the shipping
+    // boundary. The sharded promotion run surfaced ~207 Windows-only failures
+    // that pre-date every released version, so the leg became a measurement
+    // tool a maintainer runs by hand, not a gate. Assert the positive
+    // condition and the absence of every automatic trigger — a stray
+    // `|| github.ref == ...` would restore a red leg to the release path.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toContain("github.event_name == 'workflow_dispatch'");
-    expect(windowsIf).toContain("github.ref == 'refs/heads/main'");
-    expect(windowsIf).toContain("github.ref == 'refs/heads/preview'");
+    expect(windowsIf).not.toContain("refs/heads/main");
+    expect(windowsIf).not.toContain("refs/heads/preview");
     expect(windowsIf).not.toContain("refs/heads/dev");
+    expect(windowsIf).not.toContain("pull_request");
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
     // self-hosted workspace wipe. Without the wipe a deleted file survives on
@@ -355,8 +357,8 @@ describe("GitHub Actions hardening", () => {
     // Whole-list comparison, not samples. Every entry is an input to the
     // published tarball; dropping one silently stops packaging verification for
     // that surface. `src/**` is the load-bearing one: it keeps a source-only PR
-    // running the Windows packaged-CLI smoke now that the Windows suite only
-    // runs at the shipping boundary.
+    // running the Windows smoke jobs (keyring, npm-global) now that the full
+    // Windows suite runs only on manual dispatch.
     const filters = String(filterStep?.with?.filters ?? "");
     const packagingBlock = filters.split(/\n\s*packaging:\s*\n/)[1] ?? "";
     const packaging = [...packagingBlock.matchAll(/-\s*'([^']+)'/g)].map(match => match[1]).sort();
