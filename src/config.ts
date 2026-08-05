@@ -14,6 +14,7 @@ import {
 } from "./codex/account-namespace-match";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
 import { routingProfileIssues } from "./routing/profile";
+import { POLICY_NAMESPACE } from "./routing/profile-namespace";
 import {
   forgetEphemeralSecretPath,
   hardenSecretDir,
@@ -1035,6 +1036,7 @@ const configSchema = z.object({
     const configuredProviderNamespaces = new Set([
       COMBO_NAMESPACE,
       OPENAI_CODEX_PROVIDER_ID,
+      POLICY_NAMESPACE,
       ...Object.keys(config.providers),
     ].map(codexProviderNamespaceKey));
     const namespaceTargets = new Set(
@@ -1046,7 +1048,7 @@ const configSchema = z.object({
         ctx.addIssue({
           code: "custom",
           path: ["codexAccountNamespaces", namespace],
-          message: "account selectors must not collide with configured provider or combo namespaces",
+          message: "account selectors must not collide with configured provider, combo, or routing policy namespaces",
         });
       }
       if (configuredAccountIds.has(namespace) || namespaceTargets.has(namespace)) {

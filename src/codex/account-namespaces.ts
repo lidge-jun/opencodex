@@ -2,6 +2,10 @@ import type { CodexAccount, OcxConfig } from "../types";
 import { COMBO_NAMESPACE } from "../combos/types";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import {
+  POLICY_NAMESPACE,
+  routingProfileAliasNamespacePrefixes,
+} from "../routing/profile-namespace";
+import {
   CODEX_ACCOUNT_LOG_LABEL_RE,
   createCodexAccountLogLabel,
   fallbackCodexAccountLogLabel,
@@ -21,6 +25,7 @@ const RESERVED_NAMESPACE_KEYS = new Set([
   "constructor",
   COMBO_NAMESPACE,
   OPENAI_CODEX_PROVIDER_ID,
+  POLICY_NAMESPACE,
 ].map(codexProviderNamespaceKey));
 const PUBLIC_ACCOUNT_SELECTOR_MAX_ATTEMPTS = 16;
 
@@ -68,17 +73,20 @@ function claimNamespace(requested: string, used: Set<string>): string {
   return namespace;
 }
 
-function occupiedNamespaces(config: Pick<OcxConfig, "combos" | "providers">): Set<string> {
+function occupiedNamespaces(
+  config: Pick<OcxConfig, "combos" | "providers" | "routingProfiles">,
+): Set<string> {
   return new Set([
     ...Object.keys(config.providers).map(codexProviderNamespaceKey),
     ...comboAliasNamespaces(config),
+    ...routingProfileAliasNamespacePrefixes(config),
     ...RESERVED_NAMESPACE_KEYS,
   ]);
 }
 
 /** Build an initial account-selector map without deriving public selectors from aliases or ids. */
 export function defaultCodexAccountNamespaces(
-  config: Pick<OcxConfig, "codexAccounts" | "combos" | "providers">,
+  config: Pick<OcxConfig, "codexAccounts" | "combos" | "providers" | "routingProfiles">,
 ): Record<string, string> {
   const namespaces: Record<string, string> = {};
   const used = occupiedNamespaces(config);
@@ -105,7 +113,10 @@ export function defaultCodexAccountNamespaces(
  * A true result means the map was mutated in place; callers must persist the updated config.
  */
 export function appendDefaultCodexAccountNamespace(
-  config: Pick<OcxConfig, "codexAccountNamespaces" | "codexAccounts" | "combos" | "providers">,
+  config: Pick<
+    OcxConfig,
+    "codexAccountNamespaces" | "codexAccounts" | "combos" | "providers" | "routingProfiles"
+  >,
   account: Pick<CodexAccount, "id" | "isMain" | "logLabel">,
 ): boolean {
   const namespaces = config.codexAccountNamespaces;

@@ -13,8 +13,9 @@ import type {
 import { codexAccountNamespaceEntries } from "../codex/account-namespaces";
 import { listComboIds, resolveComboId } from "../combos";
 import { hasOwnProvider } from "../config";
+import { POLICY_NAMESPACE } from "./profile-namespace";
 
-export const POLICY_NAMESPACE = "policy";
+export { POLICY_NAMESPACE };
 
 export const POLICY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const POLICY_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;

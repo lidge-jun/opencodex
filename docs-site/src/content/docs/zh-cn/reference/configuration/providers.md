@@ -31,7 +31,7 @@ selector 名称是用户自定的公开 label；opencodex 不会为其赋予账�
 `codexAccountNamespaces` 的 key 长度为 1–64 个字符，首尾必须是 ASCII 字母或数字，
 中间可使用字母、数字、`.`、`_` 或 `-`；保留的 JavaScript object 名称会被拒绝。value 必须是有效的
 pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex Desktop 账号。与 provider 及
-保留的 `openai` / `combo` 冲突时不区分大小写；带 namespace 的 combo alias 不能把 selector 复用为
+保留的 `openai` / `combo` / `policy` 冲突时不区分大小写；带 namespace 的 combo 或 routing-profile alias 不能把 selector 复用为
 其 namespace prefix，已配置的 pool id 和其他 selector target 也不能复用为 selector。raw account id
 与 email 应保持私密，selector 才是公开名称。明确选择的行为和优先级见
 [路由配置](/zh-cn/reference/configuration/routing/)。

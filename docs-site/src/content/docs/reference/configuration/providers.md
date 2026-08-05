@@ -32,10 +32,10 @@ Selector names are user-chosen public labels; opencodex assigns no account-role 
 `codexAccountNamespaces` keys are 1–64 characters, starting and ending with an
 ASCII letter or number, with letters, numbers, `.`, `_`, or `-` inside. Reserved JavaScript object
 names are rejected. Each value is a valid pool-account id (never internal `__main__`) or `"@main"`
-for the Codex Desktop account. Provider and reserved `openai` / `combo` collisions are checked
-case-insensitively; a namespaced combo alias cannot reuse a selector as its namespace prefix, and
-configured pool ids or selector targets also cannot reuse a selector. Keep raw account ids and
-emails private; the selector is the public name. See [Routing Configuration](/reference/configuration/routing/)
+for the Codex Desktop account. Provider and reserved `openai` / `combo` / `policy` collisions are
+checked case-insensitively; a namespaced combo or routing-profile alias cannot reuse a selector as
+its namespace prefix, and configured pool ids or selector targets also cannot reuse a selector. Keep
+raw account ids and emails private; the selector is the public name. See [Routing Configuration](/reference/configuration/routing/)
 for exact-selection behavior and precedence.
 
 ## Reserved OpenAI providers

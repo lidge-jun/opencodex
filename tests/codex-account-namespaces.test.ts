@@ -152,6 +152,29 @@ describe("Codex account namespace foundations", () => {
     expect(namespaces).toEqual({ "main-2": "@main", "p111111-2": "stored-account-id" });
   });
 
+  test("avoids routing-profile alias prefixes when allocating defaults", () => {
+    const namespaces = defaultCodexAccountNamespaces({
+      providers: {},
+      routingProfiles: {
+        main: {
+          alias: "main/gpt-5.5",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+        side: {
+          alias: "p111111/gpt-5.5",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+      },
+      codexAccounts: [{
+        id: "stored-account-id",
+        logLabel: "p111111",
+        isMain: false,
+      }],
+    });
+
+    expect(namespaces).toEqual({ "main-2": "@main", "p111111-2": "stored-account-id" });
+  });
+
   test("avoids provider names case-insensitively when allocating defaults", () => {
     expect(defaultCodexAccountNamespaces({
       providers: {
@@ -178,6 +201,30 @@ describe("Codex account namespace foundations", () => {
       p222222: "new-account-id",
     });
     expect(appendDefaultCodexAccountNamespace(config, account)).toBe(false);
+  });
+
+  test("append avoids routing-profile alias prefixes without rewriting existing selectors", () => {
+    const codexAccountNamespaces = { main: "@main" };
+    const config = {
+      providers: {},
+      routingProfiles: {
+        side: {
+          alias: "p222222/gpt-5.5",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+      },
+      codexAccountNamespaces,
+    };
+
+    expect(appendDefaultCodexAccountNamespace(config, {
+      id: "new-account-id",
+      logLabel: "p222222",
+      isMain: false,
+    })).toBe(true);
+    expect(config.codexAccountNamespaces).toEqual({
+      main: "@main",
+      "p222222-2": "new-account-id",
+    });
   });
 
   test("refuses to append an account id already owned by a selector key", () => {

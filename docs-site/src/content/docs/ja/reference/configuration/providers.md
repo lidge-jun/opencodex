@@ -31,8 +31,8 @@ selector 名はユーザーが選ぶ公開 label であり、opencodex はアカ
 `codexAccountNamespaces` のキーは長さ 1〜64 文字、先頭と末尾は ASCII
 英数字、内部には英数字、`.`、`_`、`-` を使用でき、予約済み JavaScript object 名は拒否されます。
 値は有効な pool account id（内部 `__main__` は不可）、または Codex Desktop アカウントを示す
-`"@main"` です。provider と予約済み `openai` / `combo` との衝突は大文字小文字を区別せず検査され、
-namespace 付き combo alias はその namespace prefix に selector を再利用できません。設定済み pool id
+`"@main"` です。provider と予約済み `openai` / `combo` / `policy` との衝突は大文字小文字を区別せず検査され、
+namespace 付き combo または routing-profile alias はその namespace prefix に selector を再利用できません。設定済み pool id
 や他の selector target も selector と再利用できません。raw account id と email は
 非公開のままにし、selector を公開名として使ってください。明示的な選択の動作と優先順位は
 [ルーティング構成](/reference/configuration/routing/)を参照してください。

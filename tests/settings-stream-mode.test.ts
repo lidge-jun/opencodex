@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigPath, loadConfig, saveConfig } from "../src/config";
+import { getConfigPath, loadConfig, saveConfig, validateConfigCandidate } from "../src/config";
 import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
@@ -318,6 +318,40 @@ describe("PUT /api/settings", () => {
     });
     expect(refreshes).toBe(2);
     expect(config.codexAccountNamespaces).toEqual({ main: "@main" });
+  });
+
+  test("account-picker enable avoids routing-profile aliases and persists a reloadable config", async () => {
+    const config: OcxConfig = {
+      ...baseConfig(),
+      routingProfiles: {
+        fast: {
+          alias: "main/gpt-test",
+          candidates: [{ provider: "openai", model: "gpt-test" }],
+        },
+      },
+    };
+    let persisted: OcxConfig | undefined;
+    const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+      saveConfigPreservingClaudeCode: saved => {
+        const validation = validateConfigCandidate(saved);
+        expect(validation.ok).toBe(true);
+        persisted = structuredClone(saved);
+        saveConfig(saved);
+      },
+      refreshCodexCatalog: async () => {},
+    });
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      codexAccountPickerEnabled: true,
+      catalogRefreshPending: false,
+    });
+    expect(persisted?.codexAccountNamespaces).toEqual({ "main-2": "@main" });
+    expect(loadConfig()).toMatchObject({
+      codexAccountPickerEnabled: true,
+      codexAccountNamespaces: { "main-2": "@main" },
+      routingProfiles: { fast: { alias: "main/gpt-test" } },
+    });
   });
 
   test("account-picker disable does not initialize an empty namespace map", async () => {

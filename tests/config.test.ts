@@ -1592,6 +1592,8 @@ describe("opencodex config defaults", () => {
     ],
     ["the combo namespace", { combo: "side-account" }, {}, "must not collide"],
     ["the combo namespace with different casing", { Combo: "side-account" }, {}, "must not collide"],
+    ["the routing policy namespace", { policy: "side-account" }, {}, "must not collide"],
+    ["the routing policy namespace with different casing", { Policy: "side-account" }, {}, "must not collide"],
     ["the canonical OpenAI namespace with different casing", { OpenAI: "side-account" }, {}, "must not collide"],
     [
       "the canonical OpenAI provider namespace before legacy migration",

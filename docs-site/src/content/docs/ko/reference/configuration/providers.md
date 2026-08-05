@@ -31,8 +31,8 @@ selector 이름은 사용자가 정하는 공개 label이며, opencodex는 여�
 `codexAccountNamespaces` 키는 길이가 1~64자이고 시작과 끝은 ASCII 영숫자여야
 하며, 내부에는 영숫자, `.`, `_`, `-`를 사용할 수 있습니다. 예약된 JavaScript object 이름은 거부됩니다.
 값은 유효한 pool account id(내부 `__main__` 제외)이거나 Codex Desktop 계정을 나타내는 `"@main"`입니다.
-provider 및 예약된 `openai` / `combo` 충돌은 대소문자를 구분하지 않고 검사하며, namespace가 있는
-combo alias는 selector를 namespace prefix로 재사용할 수 없습니다. 설정된 pool id와 다른 selector
+provider 및 예약된 `openai` / `combo` / `policy` 충돌은 대소문자를 구분하지 않고 검사하며, namespace가 있는
+combo 또는 routing-profile alias는 selector를 namespace prefix로 재사용할 수 없습니다. 설정된 pool id와 다른 selector
 target도 selector로 재사용할 수 없습니다. raw account id와 email은 비공개로
 유지하고 selector를 공개 이름으로 사용하세요. 명시적 선택 동작과 우선순위는
 [라우팅 설정](/ko/reference/configuration/routing/)을 참고하십시오.
