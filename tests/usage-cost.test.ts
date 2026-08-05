@@ -104,6 +104,22 @@ describe("normalizeCostTokens", () => {
 });
 
 describe("resolveMatchedPrice", () => {
+  test("gpt-5.6 family four-tuples match the post-cut official rates (#907)", () => {
+    const expectations: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+      "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
+      "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+    };
+    for (const [model, tuple] of Object.entries(expectations)) {
+      const price = resolveMatchedPrice("openai", model);
+      expect(price, model).not.toBeNull();
+      expect(price!.cost4.input, `${model} input`).toBeCloseTo(tuple.input, 9);
+      expect(price!.cost4.output, `${model} output`).toBeCloseTo(tuple.output, 9);
+      expect(price!.cost4.cacheRead, `${model} cacheRead`).toBeCloseTo(tuple.cacheRead, 9);
+      expect(price!.cost4.cacheWrite, `${model} cacheWrite`).toBeCloseTo(tuple.cacheWrite, 9);
+    }
+  });
+
   // WP7: claude-opus-5 is exposed by three providers but was missing from the jawcode
   // bundle, so it resolved to null and Logs rendered an em dash instead of a cost.
   // The model-level vendor fallback only searches jawcode metadata, never overlays,
@@ -437,15 +453,26 @@ describe("priority (Fast) service tier multiplier", () => {
     expect(base!.priorityMultiplier).toBeUndefined();
   });
 
-  test("P1b. Fast mode applies the current 0.4x price for gpt-5.6-luna", () => {
+  test("P1b. Fast mode applies the current 2x price for gpt-5.6-luna (#907)", () => {
     const base = estimateRequestCost({ provider: "openai", model: "gpt-5.6-luna", usageStatus: "reported", usage });
     const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.6-luna", usageStatus: "reported", usage, serviceTier: "priority" });
     expect(base).not.toBeNull();
     expect(fast).not.toBeNull();
-    // Standard: $0.20 input + $0.12 output = $0.32. Fast (0.4x): $0.128.
-    expect(base!.cost.total).toBeCloseTo(0.32, 9);
+    // Post-cut standard: 200K×$0.20/M + 20K×$1.20/M = $0.064. Fast (2x): $0.128.
+    expect(base!.cost.total).toBeCloseTo(0.064, 9);
     expect(fast!.cost.total).toBeCloseTo(0.128, 9);
-    expect(fast!.priorityMultiplier).toBe(0.4);
+    expect(fast!.priorityMultiplier).toBe(2);
+  });
+
+  test("P1c. Fast mode applies the current 2x price for gpt-5.6-terra (#907)", () => {
+    const base = estimateRequestCost({ provider: "openai", model: "gpt-5.6-terra", usageStatus: "reported", usage });
+    const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.6-terra", usageStatus: "reported", usage, serviceTier: "priority" });
+    expect(base).not.toBeNull();
+    expect(fast).not.toBeNull();
+    // Post-cut standard: 200K×$2/M + 20K×$12/M = $0.64. Fast (2x): $1.28.
+    expect(base!.cost.total).toBeCloseTo(0.64, 9);
+    expect(fast!.cost.total).toBeCloseTo(1.28, 9);
+    expect(fast!.priorityMultiplier).toBe(2);
   });
 
   test("P2. priority tier applies 2.5x multiplier for gpt-5.5", () => {
@@ -502,8 +529,8 @@ describe("priority (Fast) service tier multiplier", () => {
 
   test("P8. resolvePriorityMultiplier returns correct values", () => {
     expect(resolvePriorityMultiplier("gpt-5.6-sol")).toBe(2);
-    expect(resolvePriorityMultiplier("gpt-5.6-terra")).toBe(1.6);
-    expect(resolvePriorityMultiplier("gpt-5.6-luna")).toBe(0.4);
+    expect(resolvePriorityMultiplier("gpt-5.6-terra")).toBe(2);
+    expect(resolvePriorityMultiplier("gpt-5.6-luna")).toBe(2);
     expect(resolvePriorityMultiplier("gpt-5.5")).toBe(2.5);
     expect(resolvePriorityMultiplier("gpt-5.4-mini")).toBe(2);
     expect(resolvePriorityMultiplier("gpt-5.4")).toBe(2);
@@ -514,8 +541,8 @@ describe("priority (Fast) service tier multiplier", () => {
   test("P9. PRIORITY_MULTIPLIERS table has expected entries", () => {
     expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(6);
     expect(PRIORITY_MULTIPLIERS["gpt-5.6-sol"]).toBe(2);
-    expect(PRIORITY_MULTIPLIERS["gpt-5.6-terra"]).toBe(1.6);
-    expect(PRIORITY_MULTIPLIERS["gpt-5.6-luna"]).toBe(0.4);
+    expect(PRIORITY_MULTIPLIERS["gpt-5.6-terra"]).toBe(2);
+    expect(PRIORITY_MULTIPLIERS["gpt-5.6-luna"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["gpt-5.5"]).toBe(2.5);
     expect(PRIORITY_MULTIPLIERS["gpt-5.4-mini"]).toBe(2);
   });

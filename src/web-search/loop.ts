@@ -63,40 +63,68 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
+  hasMalformedToolCall: boolean;
 } {
   const calls: WebSearchCall[] = [];
   const passthrough: AdapterEvent[] = [];
   let hasRealToolCall = false;
-  let pending: { name: string; id: string; argsBuf: string; events: AdapterEvent[] } | null = null;
+  let hasMalformedToolCall = false;
+  let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[] } | null = null;
+  const isBlank = (value: string): boolean => value.trim().length === 0;
   const flushPending = (): void => {
+    // A pending call that never saw tool_call_end is structurally malformed.
+    if (pending && !pending.closed) hasMalformedToolCall = true;
     if (pending && pending.name !== WEB_SEARCH_TOOL_NAME) {
       passthrough.push(...pending.events);
-      hasRealToolCall = true;
+      if (pending.closed && !isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
     }
     pending = null;
   };
   for (const e of events) {
     if (e.type === "tool_call_start") {
       flushPending();
-      pending = { name: e.name, id: e.id, argsBuf: "", events: [e] };
-    } else if (e.type === "tool_call_delta" && pending) {
-      pending.argsBuf += e.arguments;
-      pending.events.push(e);
-    } else if (e.type === "tool_call_end" && pending) {
-      pending.events.push(e);
-      if (pending.name === WEB_SEARCH_TOOL_NAME) {
-        calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf) });
-      } else {
-        passthrough.push(...pending.events);
-        hasRealToolCall = true;
+      if (isBlank(e.id) || isBlank(e.name)) hasMalformedToolCall = true;
+      pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e] };
+    } else if (e.type === "tool_call_delta") {
+      // Orphan delta (no open call) is malformed.
+      if (!pending) hasMalformedToolCall = true;
+      else {
+        pending.argsBuf += e.arguments;
+        pending.events.push(e);
       }
-      pending = null;
+    } else if (e.type === "tool_call_end") {
+      // Orphan end (no open call) is malformed.
+      if (!pending) {
+        hasMalformedToolCall = true;
+      } else {
+        pending.events.push(e);
+        pending.closed = true;
+        if (pending.name === WEB_SEARCH_TOOL_NAME) {
+          calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf) });
+        } else {
+          passthrough.push(...pending.events);
+          if (!isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
+        }
+        pending = null;
+      }
     } else {
       passthrough.push(e);
     }
   }
   flushPending();
-  return { calls, passthrough, hasRealToolCall };
+  return { calls, passthrough, hasRealToolCall, hasMalformedToolCall };
+}
+
+/**
+ * Visible final-answer text: a non-whitespace text_delta that is NOT commentary
+ * (#1001). Commentary streams early for progress and must not satisfy the
+ * forced-answer output check; thinking alone never counts either.
+ */
+export function hasVisibleAssistantText(events: AdapterEvent[]): boolean {
+  return events.some(event =>
+    event.type === "text_delta"
+    && event.phase !== "commentary"
+    && event.text.trim().length > 0);
 }
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -693,6 +721,18 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // calls reach Codex. forceAnswer also finalizes.
           const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
           if (!shouldLoop) {
+            // #1001: a forced-answer pass that ends `done` must have produced
+            // usable output — never a malformed tool call, and never silence.
+            if (forceAnswer) {
+              // An unterminated call flushes AFTER the terminal event, so find
+              // the terminal rather than assuming it is last (#1001).
+              const terminalEvent = split.passthrough.find(event => event.type === "done");
+              if (terminalEvent?.type === "done"
+                && (split.hasMalformedToolCall
+                  || (!split.hasRealToolCall && !hasVisibleAssistantText(split.passthrough)))) {
+                throw new LoopError(502, "forced-answer pass produced no usable assistant output");
+              }
+            }
             if (executedSearchCount > 0) {
               const failedCount = failedQueries.size;
               console.warn(

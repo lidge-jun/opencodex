@@ -24,6 +24,100 @@ function runWithWebSearch(
   });
 }
 
+describe("issue #1001 — forced-answer passes must produce usable output", () => {
+  const webSearchFirstPass: AdapterEvent[] = [
+    { type: "tool_call_start", id: "ws1", name: "web_search" },
+    { type: "tool_call_delta", arguments: "{\"q\":\"docs\"}" },
+    { type: "tool_call_end" },
+    { type: "done" },
+  ];
+
+  function twoPassAdapter(secondPass: AdapterEvent[]): ProviderAdapter {
+    let pass = 0;
+    return {
+      name: "two-pass",
+      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        const events = pass++ === 0 ? webSearchFirstPass : secondPass;
+        for (const event of events) yield event;
+      },
+      async parseResponse() {
+        throw new Error("parseResponse must be unreachable");
+      },
+    };
+  }
+
+  async function drive(secondPass: AdapterEvent[]) {
+    const response = await runWithWebSearch({
+      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      adapter: twoPassAdapter(secondPass),
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+    return collectSse(response.body!);
+  }
+
+  test("a malformed forced-answer tool call (blank id/name) becomes response.failed, never completed", async () => {
+    const frames = await drive([
+      { type: "tool_call_start", id: "", name: "" },
+      { type: "tool_call_delta", arguments: "{\"x\":1}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]);
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+
+  test("an unterminated tool call on the forced pass is malformed", async () => {
+    const frames = await drive([
+      { type: "tool_call_start", id: "c1", name: "shell" },
+      { type: "tool_call_delta", arguments: "{\"cmd\":\"ls\"" },
+      { type: "done" },
+    ]);
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+
+  test("a forced pass with no text and no tool call becomes response.failed", async () => {
+    const frames = await drive([{ type: "done" }]);
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+
+  test("commentary-only output does not satisfy the forced pass", async () => {
+    const frames = await drive([
+      { type: "text_delta", text: "thinking out loud", phase: "commentary" },
+      { type: "done" },
+    ]);
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+
+  test("visible text on the forced pass completes normally", async () => {
+    const frames = await drive([
+      { type: "text_delta", text: "final answer" },
+      { type: "done" },
+    ]);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
+  });
+
+  test("a valid closed non-web tool call without text is allowed to complete", async () => {
+    const frames = await drive([
+      { type: "tool_call_start", id: "call_1", name: "shell" },
+      { type: "tool_call_delta", arguments: "{\"cmd\":\"ls\"}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
+  });
+});
+
 const routedProvider: OcxProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://example.test/v1",
