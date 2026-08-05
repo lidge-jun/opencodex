@@ -138,6 +138,80 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("codex-auto-review");  // legacy dropped
   });
 
+  test("native-alias sync omits disabled natives and restores pristine metadata after removal", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    const codexCommand = createCodexCatalogFixture(codexHome);
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        { ...nativeEntry("gpt-5.6-sol", 1), display_name: "Original Sol" },
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { readFileSync } = require("node:fs");
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      const catalogPath = ${JSON.stringify(catalogPath)};
+      const config = {
+        port: 10100,
+        defaultProvider: "Nova1",
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            liveModels: false
+          },
+          Nova1: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            liveModels: false,
+            models: ["codex/gpt-5.6-sol"]
+          }
+        },
+        disabledModels: [
+          "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
+          "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
+        ],
+        combos: {
+          "nova-sol": {
+            alias: "gpt-5.6-sol",
+            nativeAlias: true,
+            displayName: "Nova1 - codex-gpt-5.6-sol",
+            targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }]
+          }
+        }
+      };
+      await syncCatalogModels(config);
+      const first = JSON.parse(readFileSync(catalogPath, "utf8"));
+      delete config.combos;
+      config.disabledModels = config.disabledModels.filter(model => model !== "gpt-5.6-sol");
+      await syncCatalogModels(config);
+      console.log(JSON.stringify({ first }));
+    `, { CODEX_CLI_PATH: codexCommand });
+    expect(r.status).toBe(0);
+
+    const first = JSON.parse(r.stdout).first.models as Array<{
+      slug: string;
+      display_name?: string;
+      opencodex_catalog_kind?: string;
+    }>;
+    expect(first.filter(row => row.slug === "gpt-5.6-sol")).toEqual([
+      expect.objectContaining({
+        display_name: "Nova1 - codex-gpt-5.6-sol",
+        opencodex_catalog_kind: "combo-native-alias-v1",
+      }),
+    ]);
+    expect(first.some(row => row.slug === "gpt-5.5")).toBe(false);
+
+    const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as typeof first;
+    expect(restored.filter(row => row.slug === "gpt-5.6-sol")).toEqual([
+      expect.objectContaining({ display_name: "Original Sol" }),
+    ]);
+    expect(restored.find(row => row.slug === "gpt-5.6-sol"))
+      .not.toHaveProperty("opencodex_catalog_kind");
+  });
+
   test("Gap A: an empty routed fetch preserves existing routed entries on disk", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");

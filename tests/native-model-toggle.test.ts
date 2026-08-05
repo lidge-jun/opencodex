@@ -5,6 +5,7 @@ import {
   applyNativeVisibility,
   buildCatalogEntries,
   CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  desktopAllowlistSuppressedNativeSlugs,
   disabledNativeSlugs,
   mergeCatalogEntriesForSync,
   NATIVE_OPENAI_MODELS,
@@ -63,6 +64,28 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(rows.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
     // Known context metadata rides along for the dashboard.
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+  });
+
+  test("native aliases suppress their native dashboard row and activate Desktop allowlist pruning", () => {
+    const config = makeConfig({
+      disabledModels: ["gpt-5.6-sol", "gpt-5.5"],
+      combos: {
+        nova: {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - Sol",
+          targets: [{ provider: "nova", model: "codex/gpt-5.6-sol" }],
+        },
+      },
+    });
+    const rows = nativeModelRows(config);
+    expect(rows.some(row => row.slug === "gpt-5.6-sol")).toBe(false);
+    expect(rows.find(row => row.slug === "gpt-5.5")?.disabled).toBe(true);
+    expect(desktopAllowlistSuppressedNativeSlugs(config))
+      .toEqual(new Set(["gpt-5.6-sol", "gpt-5.5"]));
+    expect(desktopAllowlistSuppressedNativeSlugs(makeConfig({
+      disabledModels: ["gpt-5.5"],
+    }))).toEqual(new Set());
   });
 
   test("configured public selectors replace bare picker rows with account-qualified native clones", () => {

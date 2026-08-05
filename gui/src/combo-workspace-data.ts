@@ -61,6 +61,10 @@ export interface ComboItem {
   model: string;
   /** Optional public model name replacing the default combo/<id> slug; null = default. */
   alias: string | null;
+  /** Explicit takeover of a bare OpenAI-native alias. */
+  nativeAlias: boolean;
+  /** Display-only catalog label used by native aliases. */
+  displayName: string | null;
   strategy: ComboStrategy;
   stickyLimit: number;
   defaultEffort: ComboEffort | null;
@@ -150,6 +154,8 @@ export function parseComboList(payload: unknown): ComboItem[] {
         ? r.model.trim()
         : comboPublicModelId(id, normalizeAlias(r.alias)),
       alias: normalizeAlias(r.alias),
+      nativeAlias: r.nativeAlias === true,
+      displayName: normalizeAlias(r.displayName),
       strategy: normalizeStrategy(r.strategy),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
       defaultEffort: normalizeDefaultEffort(r.defaultEffort),
@@ -207,6 +213,8 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
   if (
     a.id !== b.id
     || a.alias !== b.alias
+    || a.nativeAlias !== b.nativeAlias
+    || a.displayName !== b.displayName
     || a.strategy !== b.strategy
     || a.stickyLimit !== b.stickyLimit
     || a.defaultEffort !== b.defaultEffort
@@ -227,6 +235,8 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     stickyLimit?: number;
     defaultEffort: ComboEffort | null;
     alias?: string;
+    nativeAlias?: true;
+    displayName?: string;
   };
 } {
   return {
@@ -240,6 +250,8 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
       defaultEffort: item.defaultEffort,
       ...(item.strategy === "round-robin" ? { stickyLimit: item.stickyLimit } : {}),
       ...(item.alias && item.alias.trim() ? { alias: item.alias.trim() } : {}),
+      ...(item.nativeAlias ? { nativeAlias: true } : {}),
+      ...(item.displayName && item.displayName.trim() ? { displayName: item.displayName.trim() } : {}),
     },
   };
 }
@@ -282,11 +294,24 @@ export function validateComboDraft(
   if (Object.hasOwn(options.providers, id)) return "providerCollision";
 
   const alias = item.alias?.trim() ?? "";
+  const displayName = item.displayName?.trim() ?? "";
   if (alias) {
     if (!COMBO_ALIAS_RE.test(alias)) return "invalidAlias";
     if (alias === "combo" || alias.startsWith("combo/")) return "aliasReservedNamespace";
-    if (!alias.includes("/") && NATIVE_OPENAI_FAMILY_RE.test(alias)) return "aliasNativeFamily";
+    if (!alias.includes("/") && NATIVE_OPENAI_FAMILY_RE.test(alias) && !item.nativeAlias) return "aliasNativeFamily";
     if ((options.existingAliases ?? []).includes(alias)) return "duplicateAlias";
+  }
+  const displayNameHasControlCharacter = [...(item.displayName ?? "")].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (item.displayName !== null
+    && (displayName.length > 128 || displayNameHasControlCharacter)) {
+    return "invalidAlias";
+  }
+  if (item.nativeAlias
+    && (!alias || alias.includes("/") || !NATIVE_OPENAI_FAMILY_RE.test(alias) || !displayName)) {
+    return "invalidAlias";
   }
   if (item.targets.length < 1) return "noTargets";
 
@@ -323,6 +348,8 @@ export function emptyDraft(id = ""): ComboItem {
     id,
     model: id ? comboModelId(id) : "combo/",
     alias: null,
+    nativeAlias: false,
+    displayName: null,
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: null,

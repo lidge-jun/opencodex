@@ -280,14 +280,16 @@ describe("native main profile scoped server admission", () => {
         {} as OcxConfig,
         { manager, drainTimeoutMs: 0 },
       );
-       expect(blocked?.status).toBe(409);
-       expect(switches).toBe(0);
-       // The proxy must still own native-main at the downstream close boundary,
-       // then release only after the mock authenticated upstream closes.
-       expect(await closeSocket(client)).toBe(1);
-       client = undefined;
-       expect(upstreamCloses).toBe(1);
-       expect(getNativeMainProfileRequestCount()).toBe(0);
+      expect(blocked?.status).toBe(409);
+      expect(switches).toBe(0);
+      // The proxy must still own native-main at the downstream close boundary,
+      // then release only after the mock authenticated upstream closes.
+      expect(await closeSocket(client)).toBe(1);
+      client = undefined;
+      const upstreamCloseDeadline = Date.now() + 2_000;
+      while (upstreamCloses < 1 && Date.now() < upstreamCloseDeadline) await Bun.sleep(10);
+      expect(upstreamCloses).toBe(1);
+      expect(getNativeMainProfileRequestCount()).toBe(0);
       const afterClose = await handleNativeProfileAPI(
         switchRequest(),
         new URL("http://localhost/api/native-main-profiles/switch"),

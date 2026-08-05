@@ -64,7 +64,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -1078,11 +1078,14 @@ export function filterCatalogVisibleModels(
     if (Array.isArray(sel) && sel.length > 0) allowByProvider.set(name, new Set(sel));
   }
   return models.filter(m => {
+    const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {
       // Combo management stores the public alias, while canonical `combo/<id>` references
       // remain valid for backward compatibility through slugEquals below.
-      if (m.alias !== undefined && stored === catalogModelSlug(m)) return false;
+      // A native-alias combo deliberately shares its public id with the native row: a bare
+      // disabledModels value hides that native row, while `combo/<id>` disables the combo.
+      if (m.alias !== undefined && stored === catalogModelSlug(m) && !nativeAlias) return false;
       if (slugEquals(stored, m.provider, m.id)) return false;
     }
     const allow = allowByProvider.get(m.provider);
@@ -1182,6 +1185,43 @@ async function gatherRoutedModelsWithAuth(
   return models;
 }
 
+function completeNativeAliasMembers(
+  combo: NormalizedComboConfig,
+  members: readonly CatalogModel[],
+): CatalogModel[] {
+  if (!combo.nativeAlias || !combo.alias || members.length !== combo.targets.length) {
+    return [...members];
+  }
+  const nativeContextWindow = nativeOpenAiContextWindow(combo.alias);
+  if (nativeContextWindow === undefined) return [...members];
+  const nativeModalities = nativeInputModalities(combo.alias);
+  const nativeEfforts = nativeReasoningEfforts(combo.alias);
+  return members.map(member => {
+    const fallbackContextWindow = applyProviderContextCap(nativeContextWindow, member.contextCap);
+    const contextWindow = typeof member.contextWindow === "number" && member.contextWindow > 0
+      ? member.contextWindow
+      : fallbackContextWindow;
+    const memberMaxInput = typeof member.maxInputTokens === "number" && member.maxInputTokens > 0
+      ? member.maxInputTokens
+      : contextWindow;
+    const maxInputTokens = contextWindow !== undefined && memberMaxInput !== undefined
+      ? Math.min(memberMaxInput, contextWindow)
+      : memberMaxInput;
+    return {
+      ...member,
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
+      ...(!Array.isArray(member.inputModalities) || member.inputModalities.length === 0
+        ? { inputModalities: [...nativeModalities] }
+        : {}),
+      ...(member.reasoningEfforts === undefined ? { reasoningEfforts: [...nativeEfforts] } : {}),
+      ...(member.contextCap !== undefined && contextWindow !== undefined
+        ? { contextCapped: contextWindow < nativeContextWindow }
+        : {}),
+    };
+  });
+}
+
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
   capture: GatherFlightCapture,
@@ -1265,11 +1305,22 @@ async function gatherRoutedModelsUncached(
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
-    const members = combo.targets
+    const discoveredMembers = combo.targets
       .map(target => memberByKey.get(targetKey(target)))
       .filter((member): member is CatalogModel => member !== undefined);
+    const members = completeNativeAliasMembers(combo, discoveredMembers);
     const derived = deriveComboCatalogModel(id, combo, members);
-    if (derived) all.push(derived);
+    if (derived) {
+      const nativeDefault = combo.nativeAlias && combo.alias
+        ? nativeDefaultReasoningEffort(combo.alias)
+        : undefined;
+      if (combo.defaultEffort === null
+        && nativeDefault
+        && derived.reasoningEfforts?.includes(nativeDefault)) {
+        derived.defaultReasoningEffort = nativeDefault;
+      }
+      all.push(derived);
+    }
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);

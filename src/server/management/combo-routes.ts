@@ -111,6 +111,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       clearComboSelectionState,
       clearComboTargetCooldowns,
       comboConfigError,
+      comboDisabledModelId,
+      comboDisabledModelSelectors,
       comboModelId,
       comboPublicModelId,
       normalizeComboConfig,
@@ -122,13 +124,31 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     });
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(body.combo as import("../../types").OcxComboConfig);
-    const stored: import("../../types").OcxComboConfig = normalized.alias === null
-      ? (({ alias: _alias, ...rest }) => rest)(normalized)
-      : normalized;
+    const {
+      alias: normalizedAlias,
+      nativeAlias: normalizedNativeAlias,
+      displayName: normalizedDisplayName,
+      ...normalizedBase
+    } = normalized;
+    const stored: import("../../types").OcxComboConfig = {
+      ...normalizedBase,
+      ...(normalizedAlias ? { alias: normalizedAlias } : {}),
+      ...(normalizedNativeAlias ? { nativeAlias: true } : {}),
+      ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),
+    };
     const sourceId = renameFrom ?? id;
     const previous = config.combos?.[sourceId];
     const oldPublicModel = previous ? comboPublicModelId(sourceId, previous) : null;
     const newPublicModel = comboPublicModelId(id, normalized);
+    const disabledIdentityChanged = previous !== undefined && (
+      renameFrom !== undefined
+      || oldPublicModel !== newPublicModel
+      || (previous.nativeAlias === true) !== normalized.nativeAlias
+    );
+    const oldDisabledSelectors = disabledIdentityChanged
+      ? new Set(comboDisabledModelSelectors(sourceId, previous))
+      : new Set<string>();
+    const newDisabledModel = comboDisabledModelId(id, normalized);
     if (codexAccountNamespaceForModel(config.codexAccountNamespaces, newPublicModel)) {
       return jsonResponse({ error: CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR }, 409);
     }
@@ -154,9 +174,6 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       const migrateReferences = (models: string[]): string[] => [
         ...new Set(models.map(migrateReference)),
       ];
-      if (config.disabledModels) {
-        config.disabledModels = migrateReferences(config.disabledModels);
-      }
       if (config.subagentModels) {
         config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
       }
@@ -186,6 +203,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         }
         config.claudeCode = claudeCode;
       }
+    }
+    if (oldDisabledSelectors.size > 0 && config.disabledModels) {
+      config.disabledModels = [...new Set(config.disabledModels.map(model => (
+        oldDisabledSelectors.has(model) ? newDisabledModel : model
+      )))];
     }
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();

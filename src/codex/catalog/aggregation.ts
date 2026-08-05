@@ -20,6 +20,7 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
+  comboDisabledModelSelectors,
   comboModelId,
   getCombo,
   listComboIds,
@@ -152,6 +153,8 @@ export function deriveComboCatalogModel(
     inputModalities,
     reasoningEfforts,
     ...(combo.alias ? { alias: combo.alias } : {}),
+    ...(combo.nativeAlias ? { nativeAlias: true } : {}),
+    ...(combo.displayName ? { displayName: combo.displayName } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
@@ -252,12 +255,15 @@ export function exactComboCatalogSlugs(
 ): Set<string> {
   const disabled = new Set(config.disabledModels ?? []);
   return new Set(listComboIds(config).flatMap(id => {
-    const alias = typeof config.combos?.[id]?.alias === "string"
-      ? config.combos[id]!.alias!.trim()
+    const raw = config.combos?.[id];
+    const alias = typeof raw?.alias === "string"
+      ? raw.alias.trim()
       : "";
     const canonical = comboModelId(id);
     const publicSlug = alias || canonical;
-    return disabled.has(publicSlug) || disabled.has(canonical) ? [] : [publicSlug];
+    const comboDisabled = comboDisabledModelSelectors(id, raw ?? {})
+      .some(selector => disabled.has(selector));
+    return comboDisabled ? [] : [publicSlug];
   }));
 }
 

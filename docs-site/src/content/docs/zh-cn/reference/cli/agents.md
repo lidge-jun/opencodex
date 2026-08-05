@@ -50,6 +50,10 @@ ocx combo list
 ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ```
 
+`set` 支持 `--strategy`、`--sticky`、`--effort`、`--alias`、`--rename-from`，以及显式的
+Codex Desktop 兼容组合 `--native-alias --display-name <label>`。native alias 会接管一个裸
+OpenAI 系列 id，使用前请先阅读 Combos 指南中的安全和可见性契约。
+
 有关路由行为和配置指导，请参见 [Combos](/guides/combos/)。
 
 ## Observability and debug

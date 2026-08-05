@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { applyNativeVisibility, augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
   CURSOR_STATIC_MODELS,
@@ -26,6 +26,7 @@ import type { NormalizedComboConfig } from "../src/combos/types";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { handleManagementAPI } from "../src/server/management-api";
 import { OAUTH_PROVIDERS } from "../src/oauth";
+import { findNativeTemplate } from "../src/codex/catalog/parsing";
 
 const originalFetch = globalThis.fetch;
 
@@ -51,6 +52,8 @@ function normalizedCombo(
     stickyLimit: 1,
     defaultEffort: "medium",
     alias: null,
+    nativeAlias: false,
+    displayName: null,
     targets: [
       { provider: "a", model: "m1", weight: 1 },
       { provider: "b", model: "m2", weight: 1 },
@@ -291,6 +294,136 @@ describe("combo catalog capability intersection", () => {
       expect(row.web_search_tool_type).toBe("text_and_image");
       expect(row.supports_search_tool).toBe(true);
     }
+  });
+
+  test("native-alias combos replace one bare native row without losing routed identity", () => {
+    const alias = "gpt-5.6-sol";
+    const model = deriveComboCatalogModel(
+      "nova-sol",
+      normalizedCombo({
+        alias,
+        nativeAlias: true,
+        displayName: "Nova1 - codex-gpt-5.6-sol",
+      }),
+      [memberA, memberB],
+    )!;
+    const exact = new Set([alias]);
+
+    const live = buildCatalogEntries(
+      nativeTemplate(),
+      [alias, "gpt-5.5"],
+      [model],
+      undefined,
+      false,
+      "default",
+      exact,
+      ["main"],
+      new Set([alias, "gpt-5.5"]),
+    );
+    const bare = live.filter(entry => entry.slug === alias);
+    expect(bare).toHaveLength(1);
+    expect(bare[0]).toMatchObject({
+      display_name: "Nova1 - codex-gpt-5.6-sol",
+      owned_by: "combo",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+      visibility: "list",
+    });
+    const accountRow = live.find(entry => entry.slug === `main/${alias}`);
+    expect(accountRow).toMatchObject({ opencodex_catalog_kind: "account-selector-v1" });
+    expect(accountRow?.owned_by).not.toBe("combo");
+    expect(live.some(entry => entry.slug === "gpt-5.5")).toBe(false);
+    expect(live.find(entry => entry.slug === "main/gpt-5.5")).toBeDefined();
+
+    applyNativeVisibility(live, new Set([alias]), true);
+    expect(live.find(entry => entry.slug === alias)?.visibility).toBe("list");
+    expect(live.find(entry => entry.slug === `main/${alias}`)?.visibility).toBe("hide");
+
+    const routedOnly = buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      [model],
+      undefined,
+      false,
+      "default",
+      exact,
+    );
+    const merged = mergeCatalogEntriesForSync(
+      [{ ...nativeTemplate(), slug: alias, display_name: "GPT-5.6-Sol" }],
+      routedOnly,
+      new Map(),
+      [],
+      false,
+      new Set(["nova-sol"]),
+      nativeTemplate(),
+      new Set([alias]),
+      new Set(["a", "b"]),
+      "default",
+      exact,
+      false,
+      true,
+      [],
+      new Set([alias, "gpt-5.5"]),
+    );
+    expect(merged.filter(entry => entry.slug === alias)).toHaveLength(1);
+    expect(merged.find(entry => entry.slug === alias)).toMatchObject({
+      display_name: "Nova1 - codex-gpt-5.6-sol",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+      visibility: "list",
+    });
+    expect(merged.some(entry => entry.slug === "gpt-5.5")).toBe(false);
+  });
+
+  test("a disabled native alias cannot resurrect a native row and removal restores it", () => {
+    const alias = "gpt-5.6-sol";
+    const native = { ...nativeTemplate(), slug: alias, display_name: "GPT-5.6-Sol" };
+    const disabled = mergeCatalogEntriesForSync(
+      [native],
+      [],
+      new Map(),
+      [],
+      false,
+      new Set(),
+      nativeTemplate(),
+      new Set(["combo/nova-sol"]),
+      new Set(),
+      "default",
+      new Set(),
+      false,
+      true,
+      [],
+      new Set([alias]),
+    );
+    expect(disabled.some(entry => entry.slug === alias)).toBe(false);
+
+    const restored = mergeCatalogEntriesForSync(
+      [native], [], new Map(), [], false,
+    );
+    expect(restored.find(entry => entry.slug === alias)).toMatchObject({
+      display_name: "GPT-5.6-Sol",
+      visibility: "list",
+    });
+  });
+
+  test("a bare native disable does not disable its native-alias combo", () => {
+    const model = deriveComboCatalogModel(
+      "nova-sol",
+      normalizedCombo({
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - Sol",
+      }),
+      [memberA, memberB],
+    )!;
+    const config = {
+      providers: { combo: {} },
+      disabledModels: ["gpt-5.6-sol"],
+    };
+
+    expect(filterCatalogVisibleModels([model], config)).toEqual([model]);
+    expect(filterCatalogVisibleModels([model], {
+      ...config,
+      disabledModels: ["combo/nova-sol"],
+    })).toEqual([]);
   });
 
   test("preserves exact combo capabilities under an alias", () => {
@@ -578,6 +711,92 @@ describe("combo catalog capability intersection", () => {
       warn.mockRestore();
     }
   }, 15_000);
+
+  test("native aliases use native capability fallbacks when discovery returns only an id", async () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "Nova1",
+      providers: {
+        Nova1: {
+          adapter: "openai-chat",
+          baseUrl: "https://nova.example/v1",
+          liveModels: false,
+          models: ["codex/gpt-5.6-sol", "codex/gpt-5.4-mini"],
+        },
+      },
+      combos: {
+        "nova-sol": {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.6-sol",
+          targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
+        },
+        "nova-mini": {
+          alias: "gpt-5.4-mini",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.4-mini",
+          targets: [{ provider: "Nova1", model: "codex/gpt-5.4-mini" }],
+        },
+      },
+    };
+
+    const rows = await gatherRoutedModels(config);
+    expect(rows.find(row => row.provider === "combo" && row.id === "nova-sol")).toMatchObject({
+      alias: "gpt-5.6-sol",
+      nativeAlias: true,
+      contextWindow: 372_000,
+      maxInputTokens: 372_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultReasoningEffort: "low",
+    });
+    expect(rows.find(row => row.provider === "combo" && row.id === "nova-mini")).toMatchObject({
+      alias: "gpt-5.4-mini",
+      nativeAlias: true,
+      contextWindow: 272_000,
+      maxInputTokens: 272_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      defaultReasoningEffort: "medium",
+    });
+  });
+
+  test("native aliases preserve explicit target capability limits", async () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "Nova1",
+      providers: {
+        Nova1: {
+          adapter: "openai-chat",
+          baseUrl: "https://nova.example/v1",
+          liveModels: false,
+          models: ["codex/gpt-5.6-sol"],
+          modelContextWindows: { "codex/gpt-5.6-sol": 128_000 },
+          modelMaxInputTokens: { "codex/gpt-5.6-sol": 100_000 },
+          modelInputModalities: { "codex/gpt-5.6-sol": ["text"] },
+          modelReasoningEfforts: { "codex/gpt-5.6-sol": ["high"] },
+        },
+      },
+      combos: {
+        "nova-sol": {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.6-sol",
+          targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
+        },
+      },
+    };
+
+    const rows = await gatherRoutedModels(config);
+    expect(rows.find(row => row.provider === "combo" && row.id === "nova-sol")).toMatchObject({
+      contextWindow: 128_000,
+      maxInputTokens: 100_000,
+      inputModalities: ["text"],
+      reasoningEfforts: ["high"],
+    });
+    expect(rows.find(row => row.provider === "combo" && row.id === "nova-sol"))
+      .not.toHaveProperty("defaultReasoningEffort");
+  });
 
   test("exact combo slugs come only from current config", () => {
     expect(exactComboCatalogSlugs({ combos: {
@@ -965,6 +1184,20 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 describe("Codex catalog routed normalization", () => {
+  test("does not reuse a routed native alias as the native catalog template", () => {
+    const routedAlias = {
+      ...nativeTemplate(),
+      slug: "gpt-5.6-sol",
+      owned_by: "combo",
+      description: "Routed via opencodex → Nova1 (openai).",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+    };
+    const native = { ...nativeTemplate(), slug: "gpt-5.5", owned_by: "openai" };
+
+    expect(findNativeTemplate({ models: [routedAlias] })).toBeNull();
+    expect(findNativeTemplate({ models: [routedAlias, native] })).toBe(native);
+  });
+
   test("canonical OpenAI forward mode stays native-only with no routed duplicate", async () => {
     globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
     const rows = await gatherRoutedModels({

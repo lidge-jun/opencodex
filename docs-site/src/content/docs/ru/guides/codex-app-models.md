@@ -4,8 +4,9 @@ description: Как модели opencodex появляются в Codex App, Co
 ---
 
 opencodex не патчит Codex App. Он записывает ту же конфигурацию Codex и тот же каталог моделей,
-которыми уже пользуются Codex CLI/TUI. Поскольку Codex App читает это общее состояние,
-маршрутизируемые модели могут появляться в picker'е App как обычные записи каталога Codex.
+которыми пользуются Codex CLI/TUI. App-server читает это общее состояние, но некоторые версии
+Codex Desktop применяют в renderer дополнительный remote allowlist и могут удалить routed-строки
+из picker'а. Явная combo с `nativeAlias: true` — режим совместимости для этой upstream-ошибки.
 
 Записи OpenAI используют два credential-транспорта: нативный вход Codex и namespaced-транспорт
 API-ключа `openai-apikey/<model>`. Само по себе переключение `codexAccountMode` между Pool и Direct
