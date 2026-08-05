@@ -221,6 +221,21 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(terminals).toEqual(["completed"]);
   });
 
+  test("SSE passthrough appends DONE after a terminal payload without upstream DONE", async () => {
+    const enc = new TextEncoder();
+    const ac = new AbortController();
+    const terminals: string[] = [];
+    const relayed = relaySseWithHeartbeat(streamFromChunks([
+      enc.encode('event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1","status":"completed"}}\n\n'),
+    ]), ac, 15_000, status => terminals.push(status))!;
+
+    const raw = await readAll(relayed);
+
+    expect(raw).toContain('event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1","status":"completed"}}\n\n');
+    expect(raw).toEndWith("data: [DONE]\n\n");
+    expect(terminals).toEqual(["completed"]);
+  });
+
   test("SSE passthrough treats DONE without a terminal as incomplete", async () => {
     const enc = new TextEncoder();
     const ac = new AbortController();

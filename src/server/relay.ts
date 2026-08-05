@@ -517,11 +517,14 @@ export function relaySseWithHeartbeat(
   if (!body) return null;
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const heartbeat = new TextEncoder().encode(": opencodex keepalive\n\n");
+  const encoder = new TextEncoder();
+  const heartbeat = encoder.encode(": opencodex keepalive\n\n");
+  const doneSentinel = encoder.encode("data: [DONE]\n\n");
   let timer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
   let clientCancelled = false;
   let terminalReported = false;
+  let doneSeen = false;
   let buffer = "";
 
   const reportTerminal = (status: ResponsesTerminalStatus) => {
@@ -532,6 +535,10 @@ export function relaySseWithHeartbeat(
 
   const inspectPayload = (payload: string | null) => {
     if (!payload) return;
+    if (payload === "[DONE]") {
+      doneSeen = true;
+      return;
+    }
     const status = terminalStatusFromSsePayload(payload);
     if (status) reportTerminal(status);
   };
@@ -571,6 +578,10 @@ export function relaySseWithHeartbeat(
         if (done) {
           buffer += decoder.decode();
           if (buffer.trim()) inspectPayload(sseDataPayload(buffer));
+          if (terminalReported && !doneSeen) {
+            controller.enqueue(doneSentinel);
+            doneSeen = true;
+          }
           if (!terminalReported && !clientCancelled) reportTerminal("incomplete");
           cleanup();
           controller.close();
@@ -578,6 +589,13 @@ export function relaySseWithHeartbeat(
         }
         inspectChunk(value);
         controller.enqueue(value);
+        if (terminalReported && !doneSeen) {
+          controller.enqueue(doneSentinel);
+          doneSeen = true;
+          cleanup();
+          controller.close();
+          reader.cancel("Responses terminal event received").catch(() => {});
+        }
       } catch (err) {
         if (!clientCancelled) reportTerminal("incomplete");
         cleanup();
