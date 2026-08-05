@@ -173,8 +173,17 @@ export function resolveMatchedPrice(
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
 ): MatchedPrice | null {
+  // User-configured overlays are keyed by the EXACT configured provider name.
+  // Try them before collapsing pool/account log suffixes: a custom provider can
+  // legitimately end with a label-shaped suffix (e.g. blsc-pabcdef), and its own
+  // overlay would otherwise never match the collapsed base name.
+  const collapsed = baseProviderLabel(provider);
+  if (collapsed !== provider) {
+    const exactUserOverlay = userOverlayMatch(provider, modelId, userOverlays);
+    if (exactUserOverlay) return exactUserOverlay;
+  }
   // Pool/account log suffixes (e.g. google-antigravity-p442fff) must collapse before overlay lookup.
-  provider = baseProviderLabel(provider);
+  provider = collapsed;
   // Memoize by (provider, model): usage summaries iterate hundreds of thousands of
   // rows that share a handful of provider/model keys, so resolving each time would
   // dominate /api/usage latency (WP6 audit). The compiled overlays are static;
@@ -228,18 +237,8 @@ function resolveMatchedPriceExact(
 ): MatchedPrice | null {
   // User-configured provider overlay wins over every compiled catalog: the
   // operator's explicit price is authoritative for the ~$ estimate.
-  const userOverlay = findExpectedPriceOverlay(provider, modelId, userOverlays);
-  if (userOverlay && validCost4(userOverlay.cost4) && hasNonZeroCost(userOverlay.cost4)) {
-    return {
-      provider,
-      modelId,
-      cost4: userOverlay.cost4,
-      source: "user",
-      sourceRef: userOverlay.source,
-      verifiedAt: userOverlay.verifiedAt,
-      status: "verified",
-    };
-  }
+  const userOverlay = userOverlayMatch(provider, modelId, userOverlays);
+  if (userOverlay) return userOverlay;
   const metadataProvider = resolveMetadataProvider(provider);
   const bundled = metadataProvider
     ? getModelMetadata(metadataProvider, modelId)
@@ -268,6 +267,25 @@ function resolveMatchedPriceExact(
     sourceRef: overlay.source,
     verifiedAt: overlay.verifiedAt,
     status: overlay.status,
+  };
+}
+
+/** User-configured overlay match (all-zero rows fall through like any other source). */
+function userOverlayMatch(
+  provider: string,
+  modelId: string,
+  userOverlays: readonly ExpectedPriceOverlay[],
+): MatchedPrice | null {
+  const overlay = findExpectedPriceOverlay(provider, modelId, userOverlays);
+  if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) return null;
+  return {
+    provider,
+    modelId,
+    cost4: overlay.cost4,
+    source: "user",
+    sourceRef: overlay.source,
+    verifiedAt: overlay.verifiedAt,
+    status: "verified",
   };
 }
 

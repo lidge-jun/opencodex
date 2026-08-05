@@ -746,6 +746,28 @@ describe("provider cost overlay (user-configured)", () => {
     expect(price).toMatchObject({ provider: "blsc", modelId: "blsc-test-model", source: "user" });
   });
 
+  test("user overlay matches an exact provider name ending with an account-label suffix", () => {
+    refreshUserCostOverlays({
+      providers: {
+        "blsc-pabcdef": {
+          modelCosts: { "custom-model": USER_PRICE },
+        },
+      },
+    } as unknown as OcxConfig);
+    // "pabcdef" matches the Codex account-log-label pattern, so the base label
+    // collapses to "blsc"; the exact provider name must still win for its own
+    // configured overlay.
+    const price = resolveMatchedPrice("blsc-pabcdef", "custom-model");
+    expect(price).toMatchObject({
+      provider: "blsc-pabcdef",
+      modelId: "custom-model",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+    expect(price?.sourceRef).toBe("config:providers.blsc-pabcdef.modelCosts[custom-model]");
+  });
+
   test("all-zero user overlay falls through to the expected overlay price", () => {
     const zero: ExpectedPriceOverlay[] = [{
       provider: "deepseek",
