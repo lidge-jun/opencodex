@@ -94,8 +94,9 @@ the vision execution path still has a `gpt-5.4-mini` code fallback.
   available, the raw image is stripped rather than forwarded to a text-only backend.
 - `maxDescriptionsPerTurn` (default 8) limits new descriptions per main-model turn. Cache hits and
   same-turn duplicates do not consume it. Successful `data:` image descriptions are cached by
-  backend, model, reasoning effort, detail, image bytes, and message context; mutable `https:` images
-  are not cached.
+  backend, model, detail, image bytes, and message context — plus the reasoning effort on OpenAI
+  keys (Anthropic keys omit it, since that field is ignored there); mutable `https:` images are not
+  cached.
 
 ```json
 {

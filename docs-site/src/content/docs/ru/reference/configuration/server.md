@@ -187,8 +187,9 @@ routed-model и hosted-search timeout. Эффективный watchdog мост�
 рассуждений выбранной модели. Vision включается только для изображений, отправленных в модель, входящую в `noVisionModels` её
 провайдера. У OpenAI требования по login/forward те же, что и у поиска; явный Anthropic без
 рабочего credential завершается ошибкой. Успешные описания `data:` используют ограниченный cache,
-ключ которого включает backend, model, reasoning effort, detail, bytes изображения и нормализованный message
-context. Попадания в cache и дубликаты в пределах одного turn'а не расходуют лимит. Удалённые
+ключ которого включает backend, model, detail, bytes изображения и нормализованный message
+context; в ключи OpenAI дополнительно входит reasoning effort (в ключи Anthropic — нет).
+Попадания в cache и дубликаты в пределах одного turn'а не расходуют лимит. Удалённые
 `https:`-изображения, а также пустые и неуспешные описания не кэшируются.
 
 Sidecar'ы Anthropic OAuth повторно используют уже существующий OAuth fingerprint Claude Code от

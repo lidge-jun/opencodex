@@ -183,8 +183,9 @@ an inactivity guard, not a total generation deadline.
 Supported levels are gated by the upstream provider's capabilities and the selected model's
 advertised reasoning ladder. Vision activates only for images sent to a model in its provider's `noVisionModels`. OpenAI has the
 same login/forward requirements as search; explicitly selected Anthropic fails closed without a usable
-credential. Successful `data:` descriptions use a bounded cache keyed by backend, model, reasoning effort, detail,
-image bytes, and normalized message context. Hits and same-turn duplicates do not consume the limit.
+credential. Successful `data:` descriptions use a bounded cache keyed by backend, model, detail,
+image bytes, and normalized message context — plus reasoning effort for OpenAI keys (Anthropic keys
+omit it). Hits and same-turn duplicates do not consume the limit.
 Remote `https:` images and failed or empty descriptions are not cached.
 
 Anthropic OAuth sidecars reuse opencodex's existing Claude Code OAuth fingerprint. Soak-test the

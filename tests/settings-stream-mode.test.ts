@@ -300,13 +300,23 @@ describe("config.json schema resilience", () => {
     raw.visionSidecar!.reasoning = "ultra"; // hand-edit typo
     writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    const reloaded = loadConfig();
-    const warnedAboutReasoning = warnSpy.mock.calls.some(call => String(call[0]).includes("visionSidecar.reasoning"));
-    warnSpy.mockRestore();
-    // Degraded, not defaulted: providers must survive.
-    expect(reloaded.visionSidecar?.reasoning).toBeUndefined();
-    expect(reloaded.providers.openai).toBeDefined();
-    expect(warnedAboutReasoning).toBe(true);
+    try {
+      const reloaded = loadConfig();
+      // Type-only representation: the warning must never echo a persisted value that could
+      // be secret-shaped, while still saying which field degraded and what it fell back to.
+      const warning = warnSpy.mock.calls
+        .map(call => String(call[0]))
+        .find(text => text.includes("visionSidecar.reasoning"));
+      expect(warning).toBeDefined();
+      expect(warning).toContain("(string)");
+      expect(warning).toContain("falling back to low");
+      expect(warning).not.toContain("ultra");
+      // Degraded, not defaulted: providers must survive.
+      expect(reloaded.visionSidecar?.reasoning).toBeUndefined();
+      expect(reloaded.providers.openai).toBeDefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("invalid persisted streamMode degrades to auto without nuking the config", () => {

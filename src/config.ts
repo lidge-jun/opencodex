@@ -1348,7 +1348,9 @@ function warnDegradedVisionReasoning(rawParsed: unknown, validated: OcxConfig): 
   if (!vision || typeof vision !== "object" || Array.isArray(vision)) return;
   const raw = (vision as Record<string, unknown>).reasoning;
   if (raw !== undefined && validated.visionSidecar?.reasoning === undefined) {
-    console.warn(`⚠️  config.json visionSidecar.reasoning ${JSON.stringify(raw)} is unsupported — falling back to low`);
+    // Log only the received TYPE, never the value: a hand-edited config can place a
+    // secret-shaped string in this field (same rule as the retryOn429 sanitizer).
+    console.warn(`⚠️  config.json visionSidecar.reasoning (${typeof raw}) is unsupported — falling back to low`);
   }
 }
 
