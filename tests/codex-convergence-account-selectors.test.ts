@@ -74,6 +74,22 @@ function foreignEntry(): RawEntry {
   };
 }
 
+function nativeMetadataEntry(
+  slug: "gpt-5.5" | "gpt-5.4",
+  baseInstructions: string,
+  priority: number,
+): RawEntry {
+  return {
+    slug,
+    display_name: slug === "gpt-5.5" ? "GPT-5.5 Live" : "GPT-5.4 Live",
+    description: `${slug} installed metadata`,
+    priority,
+    visibility: "list",
+    base_instructions: baseInstructions,
+    supported_reasoning_levels: [{ effort: "medium", description: `${slug} medium` }],
+  };
+}
+
 function config(pickerEnabled: boolean, disabledModels: string[] = []): OcxConfig {
   return {
     port: 10100,
@@ -198,4 +214,76 @@ test("account selectors never qualify unsupported bare native rows", async () =>
     .every(entry => (
       typeof entry.slug === "string" && !entry.slug.endsWith("/gpt-legacy-unsupported")
     ))).toBe(true);
+});
+
+test("convergence preserves unrelated foreign rows alongside fresh configured provider rows", async () => {
+  writeCatalog([
+    nativeEntry(),
+    foreignEntry(),
+  ]);
+  const nextConfig = config(true);
+  nextConfig.providers.static = {
+    adapter: "openai-chat",
+    baseUrl: "https://static.example.test/v1",
+    liveModels: false,
+    models: ["fresh-model"],
+  };
+
+  const catalog = await convergeCatalog(nextConfig);
+  const models = catalog.models ?? [];
+
+  expect(models.some(entry => entry.slug === "static/fresh-model")).toBe(true);
+  expect(models.some(entry => entry.slug === "external/vendor-model")).toBe(true);
+});
+
+test("generated account rows win foreign slug collisions without duplicate catalog entries", async () => {
+  writeCatalog([
+    nativeEntry(),
+    {
+      ...foreignEntry(),
+      slug: "team/gpt-5.6-sol",
+      display_name: "Foreign shadow",
+    },
+  ]);
+
+  const catalog = await convergeCatalog(config(true));
+  const collisions = (catalog.models ?? [])
+    .filter(entry => entry.slug === "team/gpt-5.6-sol");
+
+  expect(collisions).toHaveLength(1);
+  expect(collisions[0]).toMatchObject({
+    display_name: "team / 5.6 Sol",
+    opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  });
+});
+
+test("qualified rows retain the matching installed metadata for each native model", async () => {
+  const gpt55Instructions = "Installed instructions unique to GPT-5.5.";
+  const gpt54Instructions = "Installed instructions unique to GPT-5.4.";
+  writeCatalog([
+    nativeMetadataEntry("gpt-5.5", gpt55Instructions, 3),
+    nativeMetadataEntry("gpt-5.4", gpt54Instructions, 4),
+  ]);
+
+  const catalog = await convergeCatalog(config(true));
+  const models = catalog.models ?? [];
+
+  expect(models.find(entry => entry.slug === "gpt-5.5")?.base_instructions).toBe(gpt55Instructions);
+  expect(models.find(entry => entry.slug === "gpt-5.4")?.base_instructions).toBe(gpt54Instructions);
+  expect(models.find(entry => entry.slug === "team/gpt-5.5")?.base_instructions).toBe(gpt55Instructions);
+  expect(models.find(entry => entry.slug === "team/gpt-5.4")?.base_instructions).toBe(gpt54Instructions);
+});
+
+test("a missing supported native is backfilled and restored when the picker is disabled", async () => {
+  writeCatalog([nativeEntry()]);
+
+  const enabled = await convergeCatalog(config(true));
+  expect(enabled.models?.find(entry => entry.slug === "gpt-5.5")?.visibility).toBe("hide");
+  expect(enabled.models?.find(entry => entry.slug === "team/gpt-5.5")?.visibility).toBe("list");
+
+  const disabled = await convergeCatalog(config(false));
+  expect(disabled.models?.find(entry => entry.slug === "gpt-5.5")?.visibility).toBe("list");
+  expect(disabled.models?.some(entry => (
+    entry.opencodex_catalog_kind === CODEX_ACCOUNT_BOUND_CATALOG_KIND
+  ))).toBe(false);
 });

@@ -422,26 +422,56 @@ function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
 }
 
-export function mergeCatalogEntriesForSync(
-  catalogModels: RawEntry[],
-  routedEntries: RawEntry[],
-  baseline: Map<string, number>,
-  featured: string[],
-  wsEnabled: boolean,
-  goIds: Set<string> = new Set(),
-  template: RawEntry | null = null,
-  disabledModels: ReadonlySet<string> = new Set(),
-  gatheredProviderNames: Set<string> = new Set(routedEntries.flatMap(entry => {
-    const slug = typeof entry.slug === "string" ? entry.slug : "";
-    const slash = slug.indexOf("/");
-    return slash > 0 ? [slug.slice(0, slash)] : [];
-  })),
-  multiAgentMode: MultiAgentMode = "default",
-  exactComboSlugs: ReadonlySet<string> = new Set(),
-  hasPhysicalComboProvider = false,
-  includeNativeOpenAi = true,
-  accountBoundEntries: readonly RawEntry[] = [],
-): RawEntry[] {
+export interface ObservedCatalogMergePolicy {
+  /** Required observed/fixed set; the core merge never consults ambient catalog state. */
+  readonly nativeBackfillSlugs: readonly string[];
+  /** Convergence retains pre-existing unsupported bare rows; retained sync removes them. */
+  readonly unsupportedNativeEntries: "preserve" | "drop";
+  /** Whether merge-policy collision/preservation warnings belong to this caller's flow. */
+  readonly warningPolicy: "emit" | "suppress";
+}
+
+export interface ObservedCatalogMergeInput {
+  readonly catalogModels: RawEntry[];
+  readonly routedEntries: RawEntry[];
+  readonly baseline: ReadonlyMap<string, number>;
+  readonly featured: readonly string[];
+  readonly wsEnabled: boolean;
+  readonly goIds: ReadonlySet<string>;
+  readonly template: RawEntry | null;
+  readonly disabledModels: ReadonlySet<string>;
+  readonly gatheredProviderNames: ReadonlySet<string>;
+  readonly multiAgentMode: MultiAgentMode;
+  readonly exactComboSlugs: ReadonlySet<string>;
+  readonly hasPhysicalComboProvider: boolean;
+  readonly includeNativeOpenAi: boolean;
+  readonly accountBoundEntries: readonly RawEntry[];
+  readonly policy: ObservedCatalogMergePolicy;
+}
+
+/**
+ * Deterministically merge one fully observed catalog state.
+ *
+ * Every non-catalog input is explicit so evidence-bound convergence cannot
+ * accidentally fall back to process-ambient catalog discovery or merge-policy warnings.
+ */
+export function mergeCatalogEntriesFromObservedState({
+  catalogModels,
+  routedEntries,
+  baseline,
+  featured,
+  wsEnabled,
+  goIds,
+  template,
+  disabledModels,
+  gatheredProviderNames,
+  multiAgentMode,
+  exactComboSlugs,
+  hasPhysicalComboProvider,
+  includeNativeOpenAi,
+  accountBoundEntries,
+  policy,
+}: ObservedCatalogMergeInput): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const native = includeNativeOpenAi
     ? catalogModels
@@ -449,7 +479,8 @@ export function mergeCatalogEntriesForSync(
       && !(m.slug as string).includes("/")
       && m.owned_by !== COMBO_NAMESPACE
       && !goIds.has(m.slug as string)
-      && !isUnsupportedOpenAiNativeSlug(m.slug as string))
+      && (policy.unsupportedNativeEntries === "preserve"
+        || !isUnsupportedOpenAiNativeSlug(m.slug as string)))
     .map(m => {
       const slug = m.slug as string;
       // Featured models rank first (rank order); non-featured natives are pushed below the featured
@@ -488,16 +519,21 @@ export function mergeCatalogEntriesForSync(
   // Skip when no enabled canonical openai provider exists (#636) — bare gpt-* would 404.
   const nativeSlugs = new Set(native.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
   if (includeNativeOpenAi) {
-  for (const slug of nativeOpenAiSlugs()) {
-    if (nativeSlugs.has(slug)) continue;
-    nativeSlugs.add(slug);
-    const priority = rank.has(slug)
-      ? rank.get(slug)!
-      : featured.length > 0
-        ? featured.length + 100
-        : 9;
-    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
-  }
+    for (const slug of policy.nativeBackfillSlugs) {
+      if (nativeSlugs.has(slug)) continue;
+      nativeSlugs.add(slug);
+      const priority = rank.has(slug)
+        ? rank.get(slug)!
+        : featured.length > 0
+          ? featured.length + 100
+          : 9;
+      native.push(deriveEntry(
+        template ? JSON.parse(JSON.stringify(template)) : null,
+        slug,
+        "OpenAI native model (Codex OAuth passthrough).",
+        priority,
+      ));
+    }
   }
 
   const nativeBySlug = new Map(native.flatMap(entry =>
@@ -569,10 +605,12 @@ export function mergeCatalogEntriesForSync(
   ));
   finalRoutedEntries = finalRoutedEntries.filter(entry => {
     if (typeof entry.slug !== "string" || !accountBoundSlugs.has(entry.slug)) return true;
-    if (freshSlugs.has(entry.slug)) warnAccountSelectorShadowedProviderOnce(entry.slug);
+    if (freshSlugs.has(entry.slug) && policy.warningPolicy === "emit") {
+      warnAccountSelectorShadowedProviderOnce(entry.slug);
+    }
     return false;
   });
-  if (preservingExistingRouted) {
+  if (preservingExistingRouted && policy.warningPolicy === "emit") {
     console.warn(`[opencodex] catalog sync: routed model fetch returned empty; preserving ${finalRoutedEntries.length} existing routed entr${finalRoutedEntries.length === 1 ? "y" : "ies"} on disk.`);
   }
 
@@ -614,6 +652,50 @@ export function mergeCatalogEntriesForSync(
     multiAgentMode,
     isMultiAgentV2Enabled(),
   );
+}
+
+/** Existing retained-sync compatibility surface backed by the explicit pure merge core. */
+export function mergeCatalogEntriesForSync(
+  catalogModels: RawEntry[],
+  routedEntries: RawEntry[],
+  baseline: Map<string, number>,
+  featured: string[],
+  wsEnabled: boolean,
+  goIds: Set<string> = new Set(),
+  template: RawEntry | null = null,
+  disabledModels: ReadonlySet<string> = new Set(),
+  gatheredProviderNames: Set<string> = new Set(routedEntries.flatMap(entry => {
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    const slash = slug.indexOf("/");
+    return slash > 0 ? [slug.slice(0, slash)] : [];
+  })),
+  multiAgentMode: MultiAgentMode = "default",
+  exactComboSlugs: ReadonlySet<string> = new Set(),
+  hasPhysicalComboProvider = false,
+  includeNativeOpenAi = true,
+  accountBoundEntries: readonly RawEntry[] = [],
+): RawEntry[] {
+  return mergeCatalogEntriesFromObservedState({
+    catalogModels,
+    routedEntries,
+    baseline,
+    featured,
+    wsEnabled,
+    goIds,
+    template,
+    disabledModels,
+    gatheredProviderNames,
+    multiAgentMode,
+    exactComboSlugs,
+    hasPhysicalComboProvider,
+    includeNativeOpenAi,
+    accountBoundEntries,
+    policy: {
+      nativeBackfillSlugs: includeNativeOpenAi ? nativeOpenAiSlugs() : [],
+      unsupportedNativeEntries: "drop",
+      warningPolicy: "emit",
+    },
+  });
 }
 
 interface RetainedCatalogSyncRead {

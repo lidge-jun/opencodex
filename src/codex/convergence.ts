@@ -36,17 +36,16 @@ import {
 } from "./catalog/parsing";
 import {
   buildCatalogEntries,
+  mergeCatalogEntriesFromObservedState,
   orderForSubagents,
 } from "./catalog/sync";
 import { exactComboCatalogSlugs } from "./catalog/aggregation";
 import {
-  applyNativeVisibility,
   NATIVE_OPENAI_MODELS,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
 } from "./catalog/metadata";
 import {
-  CODEX_ACCOUNT_BOUND_CATALOG_KIND,
   trustedAccountBoundNativeCatalogSlug,
   visibleCodexAccountSelectors,
 } from "./catalog/account-models";
@@ -186,72 +185,48 @@ function prepareCatalog(
   const accountSelectors = shouldIncludeAccountBoundNativeOpenAi(config)
     ? visibleCodexAccountSelectors(config)
     : [];
-  const nativeSlugs = includeNativeOpenAi
-    ? [...new Set((active?.models ?? catalog.models ?? []).flatMap(entry => (
-        typeof entry.slug === "string" && !entry.slug.includes("/")
-          ? [entry.slug] : []
-      )))]
-    : [];
-  const entries = buildCatalogEntries(
+  const catalogModels = active?.models ?? catalog.models ?? [];
+  const routedEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
-    nativeSlugs, ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
+    [], ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
     accountSelectors,
-  ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) === undefined);
-  const nativeBySlug = new Map(entries.flatMap(entry => (
-    typeof entry.slug === "string" && !entry.slug.includes("/")
-      ? [[entry.slug, entry] as const]
-      : []
-  )));
+  );
   const accountBoundEntries = accountSelectors.length === 0
     ? []
     : buildCatalogEntries(
       template ? JSON.parse(JSON.stringify(template)) : null,
       NATIVE_OPENAI_MODELS, [], featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
       accountSelectors,
-    ).flatMap(entry => {
-      const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
-      if (nativeSlug === undefined) return [];
-      const sourceEntry = nativeBySlug.get(nativeSlug);
-      if (!sourceEntry) return [entry];
-      const aligned = JSON.parse(JSON.stringify(sourceEntry)) as typeof entry;
-      aligned.slug = entry.slug;
-      aligned.display_name = entry.display_name;
-      aligned.priority = entry.priority;
-      aligned.visibility = "list";
-      aligned.opencodex_catalog_kind = CODEX_ACCOUNT_BOUND_CATALOG_KIND;
-      return [aligned];
-    });
-  entries.push(...accountBoundEntries);
-  const nativeSlugSet = new Set(nativeSlugs);
-  const hasFreshRoutedEntry = entries.some(entry => (
+    ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
+  const baseline = new Map(catalogModels.flatMap(entry => (
     typeof entry.slug === "string"
-    && !nativeSlugSet.has(entry.slug)
-    && trustedAccountBoundNativeCatalogSlug(entry) === undefined
-  ));
-  if (!hasFreshRoutedEntry) {
-    const configuredProviders = new Set(enabledProviders.map(([name]) => name));
-    const preserved = (active?.models ?? []).filter(entry => {
-      if (typeof entry.slug !== "string" || !entry.slug.includes("/")) return false;
-      if (trustedAccountBoundNativeCatalogSlug(entry) !== undefined) return false;
-      const provider = entry.slug.slice(0, entry.slug.indexOf("/"));
-      const description = typeof entry.description === "string" ? entry.description : "";
-      return configuredProviders.has(provider) || !description.startsWith("Routed via opencodex → ");
-    });
-    entries.push(...preserved);
-  }
-  if (!hasPhysicalComboProvider) {
-    const exact = exactComboSlugs;
-    catalog.models = applyNativeVisibility(entries.filter(entry => (
-      typeof entry.slug !== "string" || !exact.has(entry.slug)
-      || (Array.isArray(entry.input_modalities) && entry.input_modalities.length > 0)
-    )), new Set(config.disabledModels ?? []), accountSelectors.length > 0);
-  } else {
-    catalog.models = applyNativeVisibility(
-      entries,
-      new Set(config.disabledModels ?? []),
-      accountSelectors.length > 0,
-    );
-  }
+      && !entry.slug.includes("/")
+      && typeof entry.priority === "number"
+      ? [[entry.slug, entry.priority] as const]
+      : []
+  )));
+  const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
+  catalog.models = mergeCatalogEntriesFromObservedState({
+    catalogModels,
+    routedEntries,
+    baseline,
+    featured,
+    wsEnabled: websocketsEnabled(config),
+    goIds: new Set(enabled.map(model => model.id)),
+    template,
+    disabledModels: new Set(config.disabledModels ?? []),
+    gatheredProviderNames,
+    multiAgentMode,
+    exactComboSlugs,
+    hasPhysicalComboProvider,
+    includeNativeOpenAi,
+    accountBoundEntries,
+    policy: {
+      nativeBackfillSlugs: NATIVE_OPENAI_MODELS,
+      unsupportedNativeEntries: "preserve",
+      warningPolicy: "suppress",
+    },
+  });
   return catalog;
 }
 
