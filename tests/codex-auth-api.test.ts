@@ -126,7 +126,7 @@ async function completeMockCodexOAuth(options: {
   requestBody: { id: string; reauth?: boolean };
   oauthAccountId: string;
   email: string;
-  onWarmup: () => void;
+  onWarmup: () => void | Response;
   usageResponse?: () => Response;
   convergeCodexCatalog?: CodexAuthCatalogConvergence;
 }): Promise<{ startStatus: number; state: { status: string; error?: string; catalogRefreshPending?: boolean } }> {
@@ -163,8 +163,8 @@ async function completeMockCodexOAuth(options: {
         ?? new Response(JSON.stringify({ email: options.email, plan_type: "pro" }), { status: 200 });
     }
     if (target === "https://chatgpt.com/backend-api/codex/responses") {
-      options.onWarmup();
-      return new Response('event: response.completed\ndata: {"type":"response.completed"}\n\n', {
+      const response = options.onWarmup();
+      return response instanceof Response ? response : new Response('event: response.completed\ndata: {"type":"response.completed"}\n\n', {
         status: 200,
         headers: { "Content-Type": "text/event-stream" },
       });
@@ -2488,9 +2488,14 @@ describe("codex-auth API", () => {
 
   test("POST /api/codex-auth/accounts rejects manual import when Codex warmup fails", async () => {
     enableManualImport();
+    const accessToken = "access-manual-test";
+    const accountId = "acct-manual-test";
+    const unrelatedCredential = "manual-independent-private-123456";
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       if (String(input) === "https://chatgpt.com/backend-api/codex/responses") {
-        return new Response("raw upstream token-like text", { status: 401 });
+        return Response.json({
+          detail: `account ${accountId}; Authorization: Bearer ${accessToken}; x-api-key: ${unrelatedCredential}`,
+        }, { status: 401 });
       }
       return previousFetch(input);
     }) as typeof fetch;
@@ -2504,8 +2509,12 @@ describe("codex-auth API", () => {
     const body = await resp!.json() as { error: string; code: string; reason: string };
 
     expect(resp!.status).toBe(401);
-    expect(body).toMatchObject({ code: "codex_warmup_failed", reason: "http_status:401" });
-    expect(JSON.stringify(body)).not.toContain("raw upstream token-like text");
+    expect(body).toMatchObject({ code: "codex_warmup_failed" });
+    expect(body.reason).toContain("http_status:401");
+    expect(body.reason).toContain("[REDACTED]");
+    for (const privateValue of [accessToken, accountId, unrelatedCredential]) {
+      expect(JSON.stringify(body)).not.toContain(privateValue);
+    }
     expect(config.codexAccounts?.map(a => a.id)).toEqual([]);
     expect(getCodexAccountCredential("manual-warmup-fail")).toBeNull();
   });
@@ -3711,6 +3720,31 @@ describe("codex-auth API", () => {
     expect(config.codexAccounts).toEqual([]);
     expect(config.codexAccountNamespaces).toEqual({ "oauth-race": "pool-a" });
     expect(getCodexAccountCredential("oauth-race")).toBeNull();
+  });
+
+  test("OAuth login status never republishes credentials from structured warmup errors", async () => {
+    const logicalAccountId = "oauth-warmup-private";
+    const accessToken = `access-${logicalAccountId}`;
+    const physicalAccountId = "acct-oauth-warmup-private";
+    const unrelatedCredential = "oauth-independent-private-123456";
+    const result = await completeMockCodexOAuth({
+      config: makeConfig(),
+      requestBody: { id: logicalAccountId },
+      oauthAccountId: physicalAccountId,
+      email: "oauth-warmup-private@example.test",
+      onWarmup: () => Response.json({
+        error: {
+          message: `account ${physicalAccountId}; Authorization: Bearer ${accessToken}; x-api-key: ${unrelatedCredential}`,
+        },
+      }, { status: 401 }),
+    });
+
+    expect(result.startStatus).toBe(200);
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toContain("[REDACTED]");
+    for (const privateValue of [accessToken, physicalAccountId, unrelatedCredential]) {
+      expect(result.state.error).not.toContain(privateValue);
+    }
   });
 
   test("OAuth creation reports a durable add when catalog refresh remains pending", async () => {

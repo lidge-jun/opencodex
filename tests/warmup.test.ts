@@ -64,6 +64,35 @@ describe("codex warmup improvements", () => {
     }
   });
 
+  test("warmCodexAccount sanitizes injected credentials in structured upstream detail", async () => {
+    const accessToken = "warmup-private-access-123456";
+    const accountId = "acct-warmup-private-123456";
+    const unrelatedCredential = "independent-private-value-123456";
+    const fetchMock = mock(async () =>
+      new Response(JSON.stringify({
+        detail: `account ${accountId}; Authorization: Bearer ${accessToken}; x-api-key: ${unrelatedCredential}`,
+      }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await warmCodexAccount({ accessToken, chatgptAccountId: accountId });
+      throw new Error("expected warmup to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CodexWarmupError);
+      const detail = (err as CodexWarmupError).upstreamDetail ?? "";
+      const reason = codexWarmupFailureReason(err);
+      for (const privateValue of [accessToken, accountId, unrelatedCredential]) {
+        expect(detail).not.toContain(privateValue);
+        expect(reason).not.toContain(privateValue);
+      }
+      expect(detail).toContain("[REDACTED]");
+      expect(reason).toContain("[REDACTED]");
+    }
+  });
+
   test("warmCodexAccount retries FALLBACK_MODELS when the default model returns 400", async () => {
     const parsedBodies: Record<string, unknown>[] = [];
     const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {

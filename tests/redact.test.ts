@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   REDACTED_SECRET,
+  redactClientDiagnostic,
   redactExactSecretOccurrences,
   redactHeaders,
   redactSecretString,
@@ -563,6 +564,19 @@ describe("redactExactSecretOccurrences", () => {
 
     expect(redacted).toBe('{ "account_id" : "[REDACTED]", "detail" : "keep spacing" }');
     expect(JSON.parse(redacted)).toEqual({ account_id: REDACTED_SECRET, detail: "keep spacing" });
+  });
+
+  test("sanitizes exact and generically framed secrets before callers slice diagnostics", () => {
+    const accessToken = "opaque-pool-access-value-123456";
+    const accountId = "acct-private-123456";
+    const input = `${"x".repeat(455)} ${accountId} Authorization: Bearer ${accessToken}`;
+    const redacted = redactClientDiagnostic(input, [accessToken, accountId]);
+    const capped = redacted.slice(0, 500);
+
+    expect(capped).toContain(REDACTED_SECRET);
+    expect(capped).not.toContain(accountId);
+    expect(capped).not.toContain(accessToken);
+    expect(capped).not.toContain(accessToken.slice(0, 8));
   });
 });
 

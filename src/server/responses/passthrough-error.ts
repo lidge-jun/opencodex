@@ -60,8 +60,8 @@ export function redactPassthroughResponseBody(
  * (UnexpectedResponseError) — issue #452. Only empty bodies need wrapping.
  *
  * Non-empty bodies (including ChatGPT `{detail: ...}` account-model 400s and
- * HTML/text errors) keep their original bytes and headers unless they contain the
- * exact physical account id injected into the upstream request. Pool-retry activation
+ * HTML/text errors) keep their original bytes and headers unless they contain an
+ * exact credential value injected into the upstream request. Pool-retry activation
  * happens before this formatter, so redacting the client-facing copy cannot change
  * the routing decision.
  *

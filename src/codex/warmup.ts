@@ -1,3 +1,5 @@
+import { redactClientDiagnostic } from "../lib/redact";
+
 export class CodexWarmupError extends Error {
   code: "http_status" | "missing_body" | "stream_failed" | "stream_incomplete" | "stream_error" | "invalid_sse" | "no_terminal" | "transport";
   status?: number;
@@ -32,7 +34,10 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_ERROR_BODY_BYTES = 2048;
 
 /** Read the first MAX_ERROR_BODY_BYTES of a response body and extract an error message. */
-async function readErrorDetail(res: Response): Promise<string | undefined> {
+async function readErrorDetail(
+  res: Response,
+  redactExactValues: readonly string[],
+): Promise<string | undefined> {
   try {
     const text = await res.text();
     const trimmed = text.slice(0, MAX_ERROR_BODY_BYTES);
@@ -40,12 +45,19 @@ async function readErrorDetail(res: Response): Promise<string | undefined> {
       const json = JSON.parse(trimmed) as Record<string, unknown>;
       // ChatGPT backend error shape: { error: { message: "..." } } or { detail: "..." }
       const nested = json.error;
-      if (nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).message === "string") {
-        return ((nested as Record<string, unknown>).message as string).slice(0, 512);
+      const detail = nested && typeof nested === "object"
+        && typeof (nested as Record<string, unknown>).message === "string"
+        ? (nested as Record<string, unknown>).message as string
+        : typeof json.detail === "string"
+          ? json.detail
+          : typeof json.error === "string"
+            ? json.error
+            : typeof json.message === "string"
+              ? json.message
+              : undefined;
+      if (detail !== undefined) {
+        return redactClientDiagnostic(detail, redactExactValues).slice(0, 512);
       }
-      if (typeof json.detail === "string") return json.detail.slice(0, 512);
-      if (typeof json.error === "string") return (json.error as string).slice(0, 512);
-      if (typeof json.message === "string") return json.message.slice(0, 512);
     } catch {
       // Non-JSON response body may contain sensitive data (tokens, credentials).
       // Only surface structured error messages, never raw text.
@@ -154,7 +166,7 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
   }
 
   if (!res.ok) {
-    const upstreamDetail = await readErrorDetail(res);
+    const upstreamDetail = await readErrorDetail(res, [options.accessToken, options.chatgptAccountId]);
     throw new CodexWarmupError("http_status", "Codex warmup was rejected", {
       status: res.status,
       upstreamDetail,

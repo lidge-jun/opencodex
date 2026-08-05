@@ -112,7 +112,12 @@ import {
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
-import { decodeRequestErrorResponse, handleResponses, usesCodexForwardPoolAuth } from "./core";
+import {
+  codexForwardRedactExactValues,
+  decodeRequestErrorResponse,
+  handleResponses,
+  usesCodexForwardPoolAuth,
+} from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
@@ -557,9 +562,7 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
-    const redactExactValues = usesCodexForwardPoolAuth(outcomeCtx, route.provider)
-      ? [outcomeCtx.chatgptAccountId]
-      : [];
+    const redactExactValues = codexForwardRedactExactValues(outcomeCtx, route.provider);
     const buffered = await bufferCompactResponse(upstream, req.signal, { redactExactValues });
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.

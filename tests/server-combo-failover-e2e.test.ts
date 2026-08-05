@@ -808,6 +808,7 @@ describe("server combo failover 030 activation matrix", () => {
   test("redacts the serving Codex Pool account id from a combo failure", async () => {
     const rawAccountId = "raw-private-combo-account";
     const physicalAccountId = "acct-private-combo-account";
+    const accessToken = "pool-access-token";
     const config = comboConfig({
       openai: {
         adapter: "openai-responses",
@@ -825,15 +826,15 @@ describe("server combo failover 030 activation matrix", () => {
     config.activeCodexAccountId = rawAccountId;
     config.autoSwitchThreshold = 0;
     saveCodexAccountCredential(rawAccountId, {
-      accessToken: "pool-access-token",
+      accessToken,
       refreshToken: "pool-refresh-token",
       expiresAt: Date.now() + 300_000,
       chatgptAccountId: physicalAccountId,
     });
     customTransientResponse = async () => Response.json({
       error: {
-        message: `request rejected for ${physicalAccountId}`,
-        code: `code-${physicalAccountId}`,
+        message: `request rejected for ${physicalAccountId}; Authorization: Bearer ${accessToken}`,
+        code: `code-${physicalAccountId}-${accessToken}`,
       },
     }, { status: 418 });
 
@@ -842,10 +843,13 @@ describe("server combo failover 030 activation matrix", () => {
     const serialized = await response.text();
     expect(serialized).toContain("[REDACTED]");
     expect(serialized).not.toContain(physicalAccountId);
+    expect(serialized).not.toContain(accessToken);
 
     const { log, usage } = await latestAttemptReceipts(config);
     expect(JSON.stringify(log)).not.toContain(physicalAccountId);
     expect(JSON.stringify(usage)).not.toContain(physicalAccountId);
+    expect(JSON.stringify(log)).not.toContain(accessToken);
+    expect(JSON.stringify(usage)).not.toContain(accessToken);
   });
 
   test("lets a same-provider combo try its next model after a reset-derived 429", async () => {

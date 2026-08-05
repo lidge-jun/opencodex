@@ -513,6 +513,23 @@ export function redactExactSecretOccurrences(
   return redacted;
 }
 
+/**
+ * Sanitize a client-facing diagnostic while retaining exact knowledge of the
+ * credentials that were injected into the upstream request.
+ *
+ * Exact replacement must run first: opaque access tokens and account ids do
+ * not necessarily match a generic credential grammar. Generic redaction then
+ * catches labelled or token-shaped material unrelated to the supplied values.
+ * Callers must apply any display-length cap only after this function returns so
+ * slicing cannot turn a recognizable credential into an unrecognized prefix.
+ */
+export function redactClientDiagnostic(
+  value: string,
+  exactValues: readonly (string | null | undefined)[] = [],
+): string {
+  return redactSecretString(redactExactSecretOccurrences(value, exactValues));
+}
+
 export function redactSecrets(value: unknown): unknown {
   if (typeof value === "string") return redactSecretString(value);
   if (Array.isArray(value)) return value.map(item => redactSecrets(item));

@@ -222,23 +222,26 @@ describe("consumeComboFailure Retry-After separation (#507 review)", () => {
 
   test("exact private values are removed from combo failure messages and codes", async () => {
     const selectedAccountId = "acct-private-123456";
+    const selectedAccessToken = "pool-private-access-123456";
     const upstream = Response.json({
       error: {
-        message: `rejected ${selectedAccountId}`,
-        code: `code-${selectedAccountId}`,
+        message: `rejected ${selectedAccountId}; Authorization: Bearer ${selectedAccessToken}`,
+        code: `code-${selectedAccountId}-${selectedAccessToken}`,
       },
     }, { status: 418 });
     const failure = await consumeComboFailure(
       upstream,
       undefined,
       Date.now(),
-      [selectedAccountId],
+      [selectedAccessToken, selectedAccountId],
     );
     const serialized = await failure.response.text();
 
     expect(serialized).toContain("[REDACTED]");
     expect(serialized).not.toContain(selectedAccountId);
+    expect(serialized).not.toContain(selectedAccessToken);
     expect(failure.classificationText).not.toContain(selectedAccountId);
-    expect(failure.upstreamCode).toBe("code-[REDACTED]");
+    expect(failure.classificationText).not.toContain(selectedAccessToken);
+    expect(failure.upstreamCode).toBe("code-[REDACTED]-[REDACTED]");
   });
 });

@@ -198,6 +198,50 @@ describe("token guardian", () => {
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidatedAt).toBeGreaterThan(Date.now() - 30_000);
   });
 
+  test("codex pool warmup persists only sanitized structured failure detail", async () => {
+    const accessToken = "guardian-private-access-123456";
+    const physicalAccountId = "acct-guardian-private-123456";
+    const unrelatedCredential = "guardian-independent-private-123456";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input) === "https://chatgpt.com/backend-api/codex/responses") {
+        return Response.json({
+          message: `account ${physicalAccountId}; Authorization: Bearer ${accessToken}; x-api-key: ${unrelatedCredential}`,
+        }, { status: 401 });
+      }
+      return new Response(JSON.stringify(OK_TOKEN), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    writeConfig({
+      tokenGuardian: {
+        enabled: true,
+        tickSeconds: 60,
+        leadSeconds: 60,
+        codexWarmupEnabled: true,
+        codexWarmupMaxAgeSeconds: 60,
+      },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    saveCodexAccountCredential("acct-warm-failure", {
+      accessToken,
+      refreshToken: "guardian-refresh-value",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: physicalAccountId,
+    });
+    markCodexAccountValidated("acct-warm-failure", Date.now() - 120_000);
+
+    const result = await guardianSweep(Date.now());
+    const record = readCodexAccountRecord("acct-warm-failure");
+
+    expect(result.failed).toContain("codex:acct-warm-failure");
+    expect(record?.lastCodexValidationStatus).toBe("failed");
+    expect(record?.lastCodexValidationError).toContain("[REDACTED]");
+    for (const privateValue of [accessToken, physicalAccountId, unrelatedCredential]) {
+      expect(record?.lastCodexValidationError).not.toContain(privateValue);
+    }
+  });
+
   test("direct mode warms main only and never enumerates the added-account store", async () => {
     const accountStore = join(tmp, "ocx", "codex-accounts.json");
     writeFileSync(accountStore, "invalid-added-store");

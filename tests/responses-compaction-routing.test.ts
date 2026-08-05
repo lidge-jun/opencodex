@@ -634,10 +634,14 @@ describe("compact alternate-account attempt (#913)", () => {
           if (bearers.length === 1) {
             return Response.json({ error: { message: "pool exhausted" } }, { status: rejection });
           }
-          return Response.json({ error: { message: "upstream busy pool_acc_b" } }, {
+          return Response.json({
+            account_id: "pool_acc_b",
+            access_token: "pool-b-access-token",
+            error: { message: "upstream busy pool_acc_b; Authorization: Bearer pool-b-access-token" },
+          }, {
             status: 503,
-            statusText: "Busy pool_acc_b",
-            headers: { location: "https://example.test/accounts/pool_acc_b" },
+            statusText: "Busy pool_acc_b pool-b-access-token",
+            headers: { location: "https://example.test/retry?access_token=pool-b-access-token" },
           });
         }) as typeof fetch;
 
@@ -650,11 +654,13 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(bearers).toHaveLength(2);
         expect(bearers[0]).not.toBe(bearers[1]);
         expect(res.status).toBe(503);
-        expect(res.statusText).toBe("Busy [REDACTED]");
+        expect(res.statusText).toBe("Busy [REDACTED] [REDACTED]");
         expect(res.headers.get("location")).toBeNull();
         const serialized = await res.text();
         expect(serialized).toContain("[REDACTED]");
         expect(serialized).not.toContain("pool_acc_b");
+        expect(serialized).not.toContain("pool-b-access-token");
+        expect(res.statusText).not.toContain("pool-b-access-token");
       });
     });
 
@@ -663,19 +669,23 @@ describe("compact alternate-account attempt (#913)", () => {
         config.codexAccountNamespaces = { side: "pool-a" };
         const bearers: string[] = [];
         const accountIds: string[] = [];
-        const body = JSON.stringify({ error: { message: "selected account pool_acc_a exhausted" } });
+        const body = JSON.stringify({
+          account_id: "pool_acc_a",
+          access_token: "pool-a-access-token",
+          error: { message: "selected account pool_acc_a exhausted; Authorization: Bearer pool-a-access-token" },
+        });
         globalThis.fetch = (async (_url: string, init?: RequestInit) => {
           const headers = new Headers(init?.headers);
           bearers.push(headers.get("authorization") ?? "");
           accountIds.push(headers.get("chatgpt-account-id") ?? "");
           return new Response(body, {
             status: rejection,
-            statusText: "Rejected pool_acc_a",
+            statusText: "Rejected pool_acc_a pool-a-access-token",
             headers: {
               "content-type": "application/json",
               "retry-after": "42",
               "x-codex-primary-reset-at": "1900000000",
-              location: "https://example.test/accounts/pool_acc_a",
+              location: "https://example.test/retry?access_token=pool-a-access-token",
             },
           });
         }) as typeof fetch;
@@ -692,8 +702,12 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(res.headers.get("retry-after")).toBe("42");
         expect(res.headers.get("x-codex-primary-reset-at")).toBe("1900000000");
         expect(res.headers.get("location")).toBeNull();
-        expect(res.statusText).toBe("Rejected [REDACTED]");
-        expect(await res.text()).toBe(JSON.stringify({ error: { message: "selected account [REDACTED] exhausted" } }));
+        expect(res.statusText).toBe("Rejected [REDACTED] [REDACTED]");
+        expect(await res.json()).toEqual({
+          account_id: "[REDACTED]",
+          access_token: "[REDACTED]",
+          error: { message: "selected account [REDACTED] exhausted; Authorization: Bearer [REDACTED]" },
+        });
         expect(config.activeCodexAccountId).toBe("pool-a");
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       });

@@ -155,6 +155,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    redirect?: RequestRedirect;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -288,6 +289,7 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      redirect,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
@@ -296,6 +298,7 @@ async function startPoolRetryHarness(
       },
       body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
       signal,
+      redirect,
     }),
   };
 }
@@ -1866,16 +1869,21 @@ describe("server local API auth", () => {
     }
   });
 
-  test("pool retry redacts the physical id of the account that produced the final error", async () => {
+  test("pool retry redacts every injected credential from the final upstream error", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
       ? rejectionResponse(unsupportedModelBody())
-      : new Response(JSON.stringify({ account_id: accountId, detail: `rejected ${accountId}` }), {
+      : new Response(JSON.stringify({
+          account_id: accountId,
+          access_token: "pool-b-token",
+          detail: `rejected ${accountId}; Authorization: Bearer pool-b-token`,
+        }), {
           status: 418,
-          statusText: `Rejected ${accountId}`,
+          statusText: `Rejected ${accountId} pool-b-token`,
           headers: {
             "content-type": "application/json",
             "chatgpt-account-id": accountId,
             "x-upstream-debug": `selected=${accountId}`,
+            "x-upstream-authorization": "Bearer pool-b-token",
           },
         }));
     try {
@@ -1883,11 +1891,44 @@ describe("server local API auth", () => {
       expect(response.status).toBe(418);
       expect(response.headers.has("chatgpt-account-id")).toBe(false);
       expect(response.headers.has("x-upstream-debug")).toBe(false);
+      expect(response.headers.has("x-upstream-authorization")).toBe(false);
       expect(await response.json()).toEqual({
         account_id: "[REDACTED]",
-        detail: "rejected [REDACTED]",
+        access_token: "[REDACTED]",
+        detail: "rejected [REDACTED]; Authorization: Bearer [REDACTED]",
       });
+      expect(response.statusText).not.toContain("pool-b-token");
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("pool redirects cannot reflect the injected credential in Location or body", async () => {
+    const harness = await startPoolRetryHarness(() => new Response(
+      "redirecting acct-pool-a with Authorization: Bearer pool-a-token",
+      {
+        status: 307,
+        statusText: "Redirect acct-pool-a pool-a-token",
+        headers: {
+          "content-type": "text/plain",
+          location: "https://example.test/retry?access_token=pool-a-token",
+          "x-upstream-authorization": "Bearer pool-a-token",
+        },
+      },
+    ), { secondAccount: false });
+    try {
+      const response = await harness.request({ redirect: "manual" });
+      const body = await response.text();
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toBeNull();
+      expect(response.headers.get("x-upstream-authorization")).toBeNull();
+      expect(body).toBe("redirecting [REDACTED] with Authorization: Bearer [REDACTED]");
+      for (const privateValue of ["acct-pool-a", "pool-a-token"]) {
+        expect(body).not.toContain(privateValue);
+        expect(response.statusText).not.toContain(privateValue);
+      }
     } finally {
       await stopPoolRetryHarness(harness);
     }

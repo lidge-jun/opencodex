@@ -157,27 +157,32 @@ describe("formatPassthroughUpstreamError (#452)", () => {
 
   test("redacts repeated raw echoes, status text, and header values", async () => {
     const selectedAccountId = "acct-private-123456";
+    const selectedAccessToken = "pool-private-access-123456";
     const headers = new Headers({
       "content-type": "text/plain",
       "chatgpt-account-id": selectedAccountId,
       "x-upstream-debug": `selected=${selectedAccountId}`,
+      "x-upstream-authorization": `Bearer ${selectedAccessToken}`,
       "x-pool-retry-test": "original",
     });
     const response = formatPassthroughUpstreamError(
       418,
-      `${selectedAccountId}\nChatGPT-Account-Id:\r\n ${selectedAccountId}`,
+      `${selectedAccountId}\nAuthorization: Bearer ${selectedAccessToken}\nChatGPT-Account-Id:\r\n ${selectedAccountId}`,
       {
-        statusText: `Rejected ${selectedAccountId}`,
+        statusText: `Rejected ${selectedAccountId} ${selectedAccessToken}`,
         headers,
-        redactExactValues: [selectedAccountId],
+        redactExactValues: [selectedAccessToken, selectedAccountId],
       },
     );
 
-    expect(response.statusText).toBe(`Rejected ${REDACTED_SECRET}`);
+    expect(response.statusText).toBe(`Rejected ${REDACTED_SECRET} ${REDACTED_SECRET}`);
     expect(response.headers.has("chatgpt-account-id")).toBe(false);
     expect(response.headers.has("x-upstream-debug")).toBe(false);
+    expect(response.headers.has("x-upstream-authorization")).toBe(false);
     expect(response.headers.get("x-pool-retry-test")).toBe("original");
-    expect(await response.text()).toBe(`${REDACTED_SECRET}\nChatGPT-Account-Id:\r\n ${REDACTED_SECRET}`);
+    expect(await response.text()).toBe(
+      `${REDACTED_SECRET}\nAuthorization: Bearer ${REDACTED_SECRET}\nChatGPT-Account-Id:\r\n ${REDACTED_SECRET}`,
+    );
   });
 
   test("unchanged bodies retain validators and unrelated account identifiers", async () => {

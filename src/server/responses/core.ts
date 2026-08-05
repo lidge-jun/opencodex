@@ -119,7 +119,11 @@ import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
-import { redactExactSecretOccurrences, redactSecretString } from "../../lib/redact";
+import {
+  redactClientDiagnostic,
+  redactExactSecretOccurrences,
+  redactSecretString,
+} from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
@@ -246,11 +250,13 @@ export function usesCodexForwardPoolAuth(
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
 }
 
-function codexForwardRedactExactValues(
+export function codexForwardRedactExactValues(
   authCtx: CodexAuthContext,
   provider: OcxProviderConfig,
 ): string[] {
-  return usesCodexForwardPoolAuth(authCtx, provider) ? [authCtx.chatgptAccountId] : [];
+  return usesCodexForwardPoolAuth(authCtx, provider)
+    ? [authCtx.accessToken, authCtx.chatgptAccountId]
+    : [];
 }
 
 function normalizeCodexUnsupportedModelDetail(value: string): string {
@@ -646,16 +652,13 @@ export async function consumeComboFailure(
     const body = await readBoundedResponseBody(response, { signal });
     usage = usageFromComboFailureText(body.text);
     if (body.displaySafe) {
-      const safeText = redactExactSecretOccurrences(
-        redactSecretString(body.text),
-        redactExactValues,
-      ).slice(0, 500);
+      const safeText = redactClientDiagnostic(body.text, redactExactValues).slice(0, 500);
       if (safeText) classificationText = safeText;
       try {
         const parsed = JSON.parse(body.text) as { error?: { code?: unknown } | string };
         const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.code : undefined;
         if (typeof nested === "string" && nested.length > 0) {
-          upstreamCode = redactExactSecretOccurrences(nested, redactExactValues);
+          upstreamCode = redactClientDiagnostic(nested, redactExactValues);
         }
       } catch {
         /* non-JSON upstream body — message-only classification */
@@ -2023,7 +2026,7 @@ async function handleResponsesInner(
     // Non-2xx passthrough failures must never reach Codex as an empty body —
     // Codex renders that as the opaque "Unknown error" (#452). Combo attempts
     // keep their typed failure envelope. Non-empty error bodies preserve their wire
-    // shape except for the exact physical account id injected by Pool auth.
+    // shape except for the exact credential values injected by Pool auth.
     // Manual-redirect policy (#914): status and a safe Location are preserved so a
     // redirect to a dead host cannot masquerade as a pre-connection failure. Pool-auth
     // redirect bodies are read under error-body bounds and dropped on unsafe input.
@@ -3016,20 +3019,24 @@ async function handleResponsesInner(
       }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
       cleanupUpstreamAbort();
+      const safeErrorText = redactClientDiagnostic(
+        errorText,
+        codexForwardRedactExactValues(authCtx, route.provider),
+      ).slice(0, 500);
       if (!isFixedCodexAccount(authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
           req.headers,
           subagentQuotaFailureModel,
           upstreamResponse.status === 429 || upstreamResponse.status === 402
             ? upstreamResponse.status
-            : `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`,
+            : `Provider error ${upstreamResponse.status}: ${safeErrorText}`,
           config,
           subagentFallbackAccountId,
         );
       }
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
-      const message = `Provider error ${upstreamResponse.status}: ${redactSecretString(errorText.slice(0, 500))}`;
+      const message = `Provider error ${upstreamResponse.status}: ${safeErrorText}`;
       const retryAfter = resolveClientRetryAfter({
         status: upstreamResponse.status,
         message,
@@ -3136,7 +3143,13 @@ async function handleResponsesInner(
         if (options.abortSignal?.aborted || upstream.signal.aborted) {
           yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
         } else {
-          yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
+          yield {
+            type: "error",
+            message: `Provider continuation failed: ${redactClientDiagnostic(
+              error instanceof Error ? error.message : String(error),
+              codexForwardRedactExactValues(authCtx, route.provider),
+            )}`,
+          };
         }
         return;
       }
@@ -3182,7 +3195,13 @@ async function handleResponsesInner(
           if (options.abortSignal?.aborted || upstream.signal.aborted) {
             yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
           } else {
-            yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
+            yield {
+              type: "error",
+              message: `Provider continuation failed: ${redactClientDiagnostic(
+                error instanceof Error ? error.message : String(error),
+                codexForwardRedactExactValues(authCtx, route.provider),
+              )}`,
+            };
           }
           return;
         }
@@ -3258,10 +3277,14 @@ async function handleResponsesInner(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "unknown error");
+      const safeErrorText = redactClientDiagnostic(
+        errorText,
+        codexForwardRedactExactValues(authCtx, route.provider),
+      ).slice(0, 500);
       yield {
         type: "error",
         status: response.status,
-        message: `Provider continuation error ${response.status}: ${redactSecretString(errorText.slice(0, 500))}`,
+        message: `Provider continuation error ${response.status}: ${safeErrorText}`,
       };
       return;
     }
@@ -3286,7 +3309,13 @@ async function handleResponsesInner(
       if (options.abortSignal?.aborted) {
         yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
       } else {
-        yield { type: "error", message: `Provider continuation parse failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
+        yield {
+          type: "error",
+          message: `Provider continuation parse failed: ${redactClientDiagnostic(
+            error instanceof Error ? error.message : String(error),
+            codexForwardRedactExactValues(authCtx, route.provider),
+          )}`,
+        };
       }
     }
   };
