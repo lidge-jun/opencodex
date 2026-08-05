@@ -7,6 +7,7 @@ import { ManagementRequest } from "./helpers/management-auth";
 import { appendUsageEntry, resetUsageReadCacheForTests, type PersistedUsageEntry } from "../src/usage/log";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
+import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
 let testDir = "";
@@ -112,6 +113,67 @@ describe("route explainability (RI-09)", () => {
       finalProvider: "a",
       finalModel: "m1",
     });
+  });
+
+  test("route-decision endpoint exposes an account selector without private account identity", async () => {
+    const publicSelector = "p7a3c9e";
+    const privateAccountId = "pool-account-private-42";
+    const privatePhysicalAccountId = "chatgpt-account-private-42";
+    const privateEmail = "owner.private@example.test";
+    const cfg = config();
+    cfg.providers.openai = {
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    cfg.codexAccounts = [{
+      id: privateAccountId,
+      email: privateEmail,
+      chatgptAccountId: privatePhysicalAccountId,
+      isMain: false,
+    }];
+    cfg.codexAccountNamespaces = { [publicSelector]: privateAccountId };
+
+    const requestedModel = `${publicSelector}/gpt-5.6`;
+    const route = routeModel(cfg, requestedModel);
+    expect(route.codexAccountId).toBe(privateAccountId);
+    appendUsageEntry({
+      requestId: "explicit-account-explanation",
+      timestamp: 1_700_000_000_000,
+      provider: route.providerName,
+      model: route.modelId,
+      requestedModel,
+      status: 200,
+      durationMs: 100,
+      usageStatus: "reported",
+      routeDecision: route.routeDecision,
+      attempts: [{
+        ordinal: 1,
+        provider: route.providerName,
+        model: route.modelId,
+        adapter: "openai-responses",
+        status: 200,
+        durationMs: 100,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "reported",
+      }],
+    });
+
+    const response = await apiGet(
+      "/api/request-history/explicit-account-explanation/route-decision",
+      cfg,
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      routeDecision?: { selected?: { accountRef?: string } };
+    };
+    expect(body.routeDecision?.selected?.accountRef).toBe(publicSelector);
+    const serialized = JSON.stringify(body);
+    expect(serialized).toContain(publicSelector);
+    expect(serialized).not.toContain(privateAccountId);
+    expect(serialized).not.toContain(privatePhysicalAccountId);
+    expect(serialized).not.toContain(privateEmail);
   });
 
   test("unknown request ids return 404", async () => {
