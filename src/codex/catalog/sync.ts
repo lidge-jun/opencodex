@@ -292,6 +292,19 @@ export function deriveEntry(
   });
 }
 
+export interface ObservedCatalogEntryBuildInput {
+  readonly template: RawEntry | null;
+  readonly gptSlugs: string[];
+  readonly goModels: CatalogModel[];
+  readonly featured?: string[];
+  readonly wsEnabled: boolean;
+  readonly multiAgentMode: MultiAgentMode;
+  readonly exactComboSlugs: ReadonlySet<string>;
+  readonly accountSelectors: readonly string[];
+  readonly multiAgentV2Enabled: boolean;
+}
+
+/** Existing retained-sync compatibility surface; observed convergence uses the explicit helper. */
 export function buildCatalogEntries(
   template: RawEntry | null,
   gptSlugs: string[],
@@ -302,6 +315,31 @@ export function buildCatalogEntries(
   exactComboSlugs: ReadonlySet<string> = new Set(),
   accountSelectors: readonly string[] = [],
 ): RawEntry[] {
+  return buildCatalogEntriesFromObservedState({
+    template,
+    gptSlugs,
+    goModels,
+    featured,
+    wsEnabled,
+    multiAgentMode,
+    exactComboSlugs,
+    accountSelectors,
+    multiAgentV2Enabled: isMultiAgentV2Enabled(),
+  });
+}
+
+/** Build entries solely from caller-observed inputs, with no feature-state filesystem read. */
+export function buildCatalogEntriesFromObservedState({
+  template,
+  gptSlugs,
+  goModels,
+  featured,
+  wsEnabled,
+  multiAgentMode,
+  exactComboSlugs,
+  accountSelectors,
+  multiAgentV2Enabled,
+}: ObservedCatalogEntryBuildInput): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
   // ARRAY order is discarded — so "featuring" a model = giving it the LOWEST priority (0..N-1) so
@@ -377,7 +415,7 @@ export function buildCatalogEntries(
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, isMultiAgentV2Enabled());
+  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled);
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -442,6 +480,7 @@ export interface ObservedCatalogMergeInput {
   readonly disabledModels: ReadonlySet<string>;
   readonly gatheredProviderNames: ReadonlySet<string>;
   readonly multiAgentMode: MultiAgentMode;
+  readonly multiAgentV2Enabled: boolean;
   readonly exactComboSlugs: ReadonlySet<string>;
   readonly hasPhysicalComboProvider: boolean;
   readonly includeNativeOpenAi: boolean;
@@ -466,15 +505,22 @@ export function mergeCatalogEntriesFromObservedState({
   disabledModels,
   gatheredProviderNames,
   multiAgentMode,
+  multiAgentV2Enabled,
   exactComboSlugs,
   hasPhysicalComboProvider,
   includeNativeOpenAi,
   accountBoundEntries,
   policy,
 }: ObservedCatalogMergeInput): RawEntry[] {
+  // Raw catalog rows contain nested arrays/objects that normalization mutates. Detach every row at
+  // the observed-core boundary so callers can safely retain evidence objects or repeat the merge.
+  const detachedCatalogModels = catalogModels.map(entry => structuredClone(entry) as RawEntry);
+  const detachedRoutedEntries = routedEntries.map(entry => structuredClone(entry) as RawEntry);
+  const detachedAccountBoundEntries = accountBoundEntries
+    .map(entry => structuredClone(entry) as RawEntry);
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const native = includeNativeOpenAi
-    ? catalogModels
+    ? detachedCatalogModels
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
       && m.owned_by !== COMBO_NAMESPACE
@@ -539,7 +585,7 @@ export function mergeCatalogEntriesFromObservedState({
   const nativeBySlug = new Map(native.flatMap(entry =>
     typeof entry.slug === "string" ? [[entry.slug, entry] as const] : []
   ));
-  const alignedAccountBoundEntries = accountBoundEntries.map(entry => {
+  const alignedAccountBoundEntries = detachedAccountBoundEntries.map(entry => {
     const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
     const source = nativeSlug === undefined ? undefined : nativeBySlug.get(nativeSlug);
     if (!source) return entry;
@@ -553,15 +599,15 @@ export function mergeCatalogEntriesFromObservedState({
   });
 
   const freshSlugs = new Set(
-    routedEntries.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []),
+    detachedRoutedEntries.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []),
   );
-  let finalRoutedEntries = routedEntries;
-  const existingRoutedEntries = catalogModels.filter(m =>
+  let finalRoutedEntries = detachedRoutedEntries;
+  const existingRoutedEntries = detachedCatalogModels.filter(m =>
     typeof m.slug === "string"
     && m.slug.includes("/")
     && trustedAccountBoundNativeCatalogSlug(m) === undefined
   );
-  const preservingExistingRouted = routedEntries.length === 0
+  const preservingExistingRouted = detachedRoutedEntries.length === 0
     && existingRoutedEntries.length > 0;
   if (preservingExistingRouted) {
     // #855: transient-fetch protection keeps existing rows, but rows OpenCodex
@@ -572,7 +618,7 @@ export function mergeCatalogEntriesFromObservedState({
       return !(isOcxAuthoredRoutedEntry(m) && !gatheredProviderNames.has(provider));
     });
   } else {
-    const preservedForeignRouted = catalogModels.filter(m => {
+    const preservedForeignRouted = detachedCatalogModels.filter(m => {
       if (typeof m.slug !== "string" || !m.slug.includes("/")) return false;
       if (trustedAccountBoundNativeCatalogSlug(m) !== undefined) return false;
       const provider = m.slug.slice(0, m.slug.indexOf("/"));
@@ -581,7 +627,7 @@ export function mergeCatalogEntriesFromObservedState({
       // only genuinely foreign rows (Cursor, user tooling) are preserved.
       return !isOcxAuthoredRoutedEntry(m);
     });
-    finalRoutedEntries = [...routedEntries, ...preservedForeignRouted];
+    finalRoutedEntries = [...detachedRoutedEntries, ...preservedForeignRouted];
   }
   if (!hasPhysicalComboProvider) {
     finalRoutedEntries = finalRoutedEntries.filter(entry => {
@@ -650,11 +696,11 @@ export function mergeCatalogEntriesFromObservedState({
   return applyMultiAgentMode(
     applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0),
     multiAgentMode,
-    isMultiAgentV2Enabled(),
+    multiAgentV2Enabled,
   );
 }
 
-/** Existing retained-sync compatibility surface backed by the explicit pure merge core. */
+/** Existing retained-sync compatibility surface backed by the explicit observed-state merge core. */
 export function mergeCatalogEntriesForSync(
   catalogModels: RawEntry[],
   routedEntries: RawEntry[],
@@ -686,6 +732,7 @@ export function mergeCatalogEntriesForSync(
     disabledModels,
     gatheredProviderNames,
     multiAgentMode,
+    multiAgentV2Enabled: isMultiAgentV2Enabled(),
     exactComboSlugs,
     hasPhysicalComboProvider,
     includeNativeOpenAi,

@@ -35,10 +35,11 @@ import {
   type RawCatalog,
 } from "./catalog/parsing";
 import {
-  buildCatalogEntries,
+  buildCatalogEntriesFromObservedState,
   mergeCatalogEntriesFromObservedState,
   orderForSubagents,
 } from "./catalog/sync";
+import { multiAgentV2EnabledFromConfigText } from "./features";
 import { exactComboCatalogSlugs } from "./catalog/aggregation";
 import {
   NATIVE_OPENAI_MODELS,
@@ -145,7 +146,13 @@ function processEvidence(source: CatalogSourceForGather): CatalogProcessLocalEvi
 function bindGatherPaths(
   session: CatalogFilesystemEvidenceSession,
   snapshot: CatalogAdmissionSnapshot,
-): Readonly<{ catalog: string; cache: string; keyedBackup: string; legacyBackup?: string }> {
+): Readonly<{
+  catalog: string;
+  cache: string;
+  keyedBackup: string;
+  legacyBackup?: string;
+  multiAgentV2Enabled: boolean;
+}> {
   const catalog = targetPath(snapshot.targets.catalog);
   const cache = targetPath(snapshot.targets.cache);
   const keyedBackup = targetPath(snapshot.targets.catalogBackups[0]!);
@@ -154,7 +161,7 @@ function bindGatherPaths(
   const configPath = snapshot.sourceEvidence.required["catalog-target-selection"].logicalPath;
 
   acceptCatalogGatherSourcePath(session, "catalog-target-selection", configPath);
-  readCatalogGatherSource(session, "catalog-target-selection");
+  const configBytes = readCatalogGatherSource(session, "catalog-target-selection");
   acceptCatalogGatherSourcePath(session, "active-catalog-merge", catalog);
   acceptCatalogGatherSourcePath(session, "hashed-backup-fallback", keyedBackup);
   acceptCatalogGatherSourcePath(session, "legacy-backup-fallback", legacyBackup ?? legacyCatalogBackupPath());
@@ -162,7 +169,15 @@ function bindGatherPaths(
   acceptCatalogGatherSourcePath(session, "runtime-selection", codexRuntimeStatePath(getConfigDir()));
   acceptCatalogGatherSourcePath(session, "provider-auth-selection", getAuthStorePath());
   acceptCatalogGatherSourcePath(session, "native-catalog-selection", catalog);
-  return { catalog, cache, keyedBackup, ...(legacyBackup ? { legacyBackup } : {}) };
+  return {
+    catalog,
+    cache,
+    keyedBackup,
+    ...(legacyBackup ? { legacyBackup } : {}),
+    multiAgentV2Enabled: multiAgentV2EnabledFromConfigText(
+      configBytes === null ? null : Buffer.from(configBytes).toString("utf8"),
+    ),
+  };
 }
 
 function prepareCatalog(
@@ -170,6 +185,7 @@ function prepareCatalog(
   source: Extract<CatalogSourceForGather, { kind: "available" }>,
   active: RawCatalog | null,
   routedModels: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>,
+  multiAgentV2Enabled: boolean,
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
@@ -186,18 +202,30 @@ function prepareCatalog(
     ? visibleCodexAccountSelectors(config)
     : [];
   const catalogModels = active?.models ?? catalog.models ?? [];
-  const routedEntries = buildCatalogEntries(
-    template ? JSON.parse(JSON.stringify(template)) : null,
-    [], ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
+  const routedEntries = buildCatalogEntriesFromObservedState({
+    template: template ? JSON.parse(JSON.stringify(template)) : null,
+    gptSlugs: [],
+    goModels: ordered,
+    featured,
+    wsEnabled: websocketsEnabled(config),
+    multiAgentMode,
+    exactComboSlugs,
     accountSelectors,
-  );
+    multiAgentV2Enabled,
+  });
   const accountBoundEntries = accountSelectors.length === 0
     ? []
-    : buildCatalogEntries(
-      template ? JSON.parse(JSON.stringify(template)) : null,
-      NATIVE_OPENAI_MODELS, [], featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
+    : buildCatalogEntriesFromObservedState({
+      template: template ? JSON.parse(JSON.stringify(template)) : null,
+      gptSlugs: NATIVE_OPENAI_MODELS,
+      goModels: [],
+      featured,
+      wsEnabled: websocketsEnabled(config),
+      multiAgentMode,
+      exactComboSlugs,
       accountSelectors,
-    ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
+      multiAgentV2Enabled,
+    }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const baseline = new Map(catalogModels.flatMap(entry => (
     typeof entry.slug === "string"
       && !entry.slug.includes("/")
@@ -217,6 +245,7 @@ function prepareCatalog(
     disabledModels: new Set(config.disabledModels ?? []),
     gatheredProviderNames,
     multiAgentMode,
+    multiAgentV2Enabled,
     exactComboSlugs,
     hasPhysicalComboProvider,
     includeNativeOpenAi,
@@ -276,7 +305,13 @@ export async function gatherCodexCatalogCandidate(
     }
 
     const active = catalogFrom(activeBytes);
-    const preparedCatalog = prepareCatalog(snapshot.config, source, active, routedModels);
+    const preparedCatalog = prepareCatalog(
+      snapshot.config,
+      source,
+      active,
+      routedModels,
+      paths.multiAgentV2Enabled,
+    );
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
     const preparedCacheBytes = `${JSON.stringify({
       fetched_at: "2000-01-01T00:00:00Z",
