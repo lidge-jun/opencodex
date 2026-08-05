@@ -13,6 +13,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
+import { routingProfileIssues } from "./routing/profile";
 import {
   forgetEphemeralSecretPath,
   hardenSecretDir,
@@ -1258,6 +1259,27 @@ const configSchema = z.object({
           ctx.addIssue({
             code: "custom",
             path: ["combos", id, ...issue.path],
+            message: issue.message,
+          });
+        }
+      }
+    }
+  }
+  const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;
+  if (routingProfiles !== undefined) {
+    if (!routingProfiles || typeof routingProfiles !== "object" || Array.isArray(routingProfiles)) {
+      ctx.addIssue({ code: "custom", path: ["routingProfiles"], message: "routingProfiles must be an object" });
+    } else {
+      for (const [id, raw] of Object.entries(routingProfiles as Record<string, unknown>)) {
+        for (const issue of routingProfileIssues(id, raw, {
+          providers: config.providers,
+          combos: combos as Record<string, import("./types").OcxComboConfig> | undefined,
+          routingProfiles: routingProfiles as Record<string, import("./types").OcxRoutingProfileConfig>,
+          codexAccountNamespaces: accountNamespaces,
+        }, { excludeProfileId: id })) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["routingProfiles", id, ...issue.path],
             message: issue.message,
           });
         }

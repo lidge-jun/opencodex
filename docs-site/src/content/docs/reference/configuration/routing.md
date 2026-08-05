@@ -11,6 +11,7 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 | --- | --- | --- | --- |
 | `defaultProvider` | `string` | `"openai"` | Final provider used when no earlier model rule matches. It must name an enabled configured provider. |
 | `combos?` | `Record<string, OcxComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
+| `routingProfiles?` | `Record<string, OcxRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
 
 ## Model resolution order
 
@@ -83,6 +84,78 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 
 For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
 commands, see [Combos](/guides/combos/).
+
+## Routing policy profiles (`config.routingProfiles`)
+
+Routing policy profiles are the Router Intelligence selection layer: an explicitly requested
+`policy/<id>` (or configured alias) selects among a fixed candidate allowlist using hard capability
+requirements and deterministic, explainable scoring. In this release profiles are configuration and
+dry-run evaluation only: production requests are not yet routed through them (execution wiring
+arrives with RI-05), and existing model ids are **never** routed through a profile implicitly.
+Policy ids do not participate in the model resolution order above until execution lands.
+
+Each key is an id matching `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, always addressable as `policy/<id>`,
+with one optional `alias`. Aliases must be unique and cannot collide with configured providers,
+the `<provider>/<model>` routing namespace, combos, codex account namespaces, the `policy/`
+namespace, or reserved bare native families (`gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*`).
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `candidates` | `{ provider: string; model: string }[]` | required | Explicit allowlist of `provider/model` refs. No implicit expansion. |
+| `alias?` | `string` | — | Optional public model id in place of `policy/<id>`. |
+| `require?` | object | `{}` | Hard capability requirements evaluated before scoring (see below). |
+| `optimize?` | object | latency 0.55, health 0.25, cost 0.10, quota 0.10 | Scoring weights; normalized deterministically. |
+| `limits?` | object | — | Hard limits, e.g. `maxEstimatedCostUsd` (enforced by the dry-run evaluator when candidate cost evidence is known). |
+| `unknownEvidence?` | object | capability `exclude`, health/quota/cost `penalize` | How unknown evidence is treated per dimension: `allow`, `penalize`, or `exclude`. Unknown never becomes zero. |
+
+`require` supports: `minContextWindow` (positive integer), and the booleans `tools`, `imageInput`,
+`structuredOutput`, `localOnly`, `remoteAllowed`, `encryptedCodexTasks`; plus `reasoningEffort` and
+`serviceTier` strings.
+
+Request evidence supplied to a dry-run (context window, tools, image input, structured output,
+reasoning effort, service tier, encrypted Codex tasks) is evaluated against candidate capabilities
+together with the profile `require` block; a candidate must satisfy both to be eligible.
+
+The CLI dry-run accepts request-evidence flags but cannot supply candidate capability evidence yet;
+candidate evidence is provided through the API (`POST /api/routing-profiles/dry-run`).
+
+```json
+{
+  "routingProfiles": {
+    "fast": {
+      "alias": "ocx/fast",
+      "candidates": [
+        { "provider": "anthropic", "model": "claude-sonnet-5" },
+        { "provider": "openai", "model": "gpt-5.6-sol" }
+      ],
+      "require": { "tools": true, "minContextWindow": 128000 },
+      "optimize": { "latency": 0.55, "health": 0.25, "cost": 0.10, "quota": 0.10 },
+      "limits": { "maxEstimatedCostUsd": 0.50 },
+      "unknownEvidence": {
+        "capability": "exclude",
+        "health": "penalize",
+        "quota": "penalize",
+        "cost": "penalize"
+      }
+    }
+  }
+}
+```
+
+CLI: `ocx route policy list`, `ocx route policy show <id>`, and
+`ocx route policy dry-run <id> --model-context <tokens> --tools`. Dry-run evaluates candidates
+without sending any upstream request.
+
+### Combos vs policy profiles
+
+- A **combo** is explicit ordered/weighted target routing and failover: the configured order (or
+  smooth weighted round-robin) decides, and failures advance through the list.
+- A **policy profile** is evidence-based selection among configured candidates: hard capability
+  requirements filter first, then deterministic scoring ranks the survivors.
+
+Both are virtual namespaces with aliases and collision validation; they differ in *how* a candidate
+is chosen. Profile scoring will expand with capability (RI-05), health (RI-06), quota (RI-07), and
+cost (RI-08) dimensions; per-request trace recording arrives with execution (RI-05).
 
 ### Catalog eligibility
 

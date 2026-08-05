@@ -1007,13 +1007,18 @@ switch (command) {
     break;
   }
   case "route": {
-    if (args[1] !== "combo") {
-      console.error("Usage: ocx route combo <subcommand>");
+    if (args[1] !== "combo" && args[1] !== "policy") {
+      console.error("Usage: ocx route <combo|policy> <subcommand>");
       process.exitCode = 2;
       break;
     }
-    const { handleComboCommand } = await import("./combo");
-    process.exitCode = await handleComboCommand(args.slice(2));
+    if (args[1] === "combo") {
+      const { handleComboCommand } = await import("./combo");
+      process.exitCode = await handleComboCommand(args.slice(2));
+    } else {
+      const { handleRoutePolicyCommand } = await import("./route-policy");
+      process.exitCode = await handleRoutePolicyCommand(args.slice(2));
+    }
     break;
   }
   case "agent": {

@@ -10,7 +10,8 @@ head SHA, PR number/URL, verification result, and review state.
 - Bun: `1.3.14`; package version: `2.10.0`
 - Worktree: `D:\codex-worktrees\ocx-router-intelligence`
 - Push remote: `origin` (Wibias/opencodex); PR target: `lidge-jun/opencodex:dev`
-- Programme stack: #1003 (RI-01) and #1004 (RI-02) merged to `dev`; #1005 (RI-03) open.
+- Programme stack: #1003 (RI-01), #1004 (RI-02), and #1005 (RI-03) merged to
+  `dev`; #1011 (RI-04) open.
 
 ## Related in-flight PRs (not superseded by this stack)
 
@@ -41,8 +42,8 @@ other; closing one is a maintainer decision and neither is stale.
 |---|---|---|---|---|---|---|
 | RI-01 | `feat/ri-01-route-decision-traces` | `e44d234f0` | `b5a8e7c4c` | #1003 | https://github.com/lidge-jun/opencodex/pull/1003 | MERGED |
 | RI-02 | `feat/ri-02-request-history-index` | `dev` (post-#1003 merge) | `2a72aa4a9` | #1004 | https://github.com/lidge-jun/opencodex/pull/1004 | MERGED |
-| RI-03 | `feat/ri-03-routing-analytics` | `dev` (post-#1004 merge) | pending | #1005 | https://github.com/lidge-jun/opencodex/pull/1005 | OPEN (resync) |
-| RI-04 | `feat/ri-04-policy-profile-core` | `feat/ri-03` head | pending | pending | pending | queued |
+| RI-03 | `feat/ri-03-routing-analytics` | `dev` (post-#1004 merge) | `a594938c5` | #1005 | https://github.com/lidge-jun/opencodex/pull/1005 | MERGED |
+| RI-04 | `feat/ri-04-policy-profile-core` | `dev` (post-#1005 merge) | `31c9f0b28` | #1011 | https://github.com/lidge-jun/opencodex/pull/1011 | OPEN (resync) |
 | RI-05 | `feat/ri-05-capability-aware-routing` | `feat/ri-04` head | pending | pending | pending | queued |
 | RI-06 | `feat/ri-06-health-aware-routing` | `feat/ri-05` head | pending | pending | pending | queued |
 | RI-07 | `feat/ri-07-quota-aware-routing` | `feat/ri-06` head | pending | pending | pending | queued |
@@ -131,8 +132,9 @@ other; closing one is a maintainer decision and neither is stale.
   (2) SQL column names are snake_case - analytics SELECT now aliases to
   camelCase; (3) cost field is `estimate.cost.total` (CostBreakdown), not
   `costUsd`; plus the row-cap is injectable for truncation tests.
-- Final commit: `5f464c730` (CodeRabbit: cooldown parse gate, API `limit` default 5k, devlog + tests)
-- PR: #1005 (OPEN) https://github.com/lidge-jun/opencodex/pull/1005
+- Final commit: `5f464c730` (CodeRabbit: cooldown parse gate, API `limit` default 5k, devlog + tests);
+  merged head on `dev`: `a594938c5`
+- PR: #1005 (MERGED) https://github.com/lidge-jun/opencodex/pull/1005
 - Verification:
   - `bun x tsc --noEmit`: PASSED (0 errors)
   - `bun run test tests/routing-analytics.test.ts`: 10/10 pass:
@@ -143,3 +145,37 @@ other; closing one is a maintainer decision and neither is stale.
   - Focused regression suites: 144/144 pass across 6 files
   - `bun run privacy:scan`: passed
 - Remaining Low findings: none
+
+### RI-04 - feat/ri-04-policy-profile-core
+
+- Base SHA: `a594938c5` (`dev` after #1005 merge; rebased from the RI-03 head
+  when #1003/#1004/#1005 landed)
+- Reviewed commits: `63924495e` (RI-04 core) + review round `d478b393`
+  (request-evidence wiring), `8e1f1c3d` (provider-namespace alias check, dead
+  export removal), `aa9212fa` (CLI cleanup), `27511bf7` (absent-flag
+  semantics, cost-limit enforcement, deterministic id ordering, CodeRabbit
+  round)
+- Findings (self-review): 4 fixed pre-push - (1) `serviceTier` evidence type
+  was `Unknownable` (number|boolean) but service tiers are strings - trace
+  type narrowed to `string | "unknown"`; (2) alias validation missed the
+  reserved `combo/` namespace prefix; (3) trace candidates did not carry
+  `score` - added `score` to `TraceCandidateInput`/`buildCandidate`;
+  (4) test expectation for weight normalization used wrong math (unspecified
+  weights keep defaults; sum 4.35 not 4).
+- Final commit: `27511bf7` (see Reviewed commits)
+- PR: #1011 (OPEN, ready) https://github.com/lidge-jun/opencodex/pull/1011
+- Verification:
+  - `bun x tsc --noEmit`: PASSED (0 errors)
+  - `bun run test tests/routing-profile.test.ts`: 14/14 pass (validation,
+    normalization, revision digest, collisions incl. provider namespace,
+    config load, id/alias resolution, dry-run eligibility incl. request
+    evidence and cost limit, unknown/tie-break, API list+dry-run,
+    API error codes)
+  - Focused regression suites: pass across route-decision-trace,
+    routing-analytics, request-history-index, combos, codex-routing,
+    internal-cli-dispatch
+  - `bun run privacy:scan`: passed
+  - `tests/config.test.ts`: 109/115 pass; the 6 symlink failures reproduce
+    identically on the pristine base (Windows symlink EPERM, environmental)
+- Remaining Low findings: none (B3/B5 residual: no-eligible trace names
+  candidate 0 as `selected`; API evidence fields are permissively dropped)

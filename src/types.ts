@@ -778,6 +778,13 @@ export interface OcxConfig {
   };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
+  /**
+   * Routing policy profiles (Router Intelligence, RI-04+): explicitly requested
+   * `policy/<id>` (or configured alias) models select among an explicit
+   * candidate allowlist using hard capability requirements and deterministic
+   * scoring. Existing model ids are never routed through profiles implicitly.
+   */
+  routingProfiles?: Record<string, OcxRoutingProfileConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
@@ -810,6 +817,63 @@ export interface OcxComboConfig {
    * mandated model id; exact-match requests route here before any provider resolution.
    */
   alias?: string;
+}
+
+export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";
+
+export interface OcxRoutingProfileCandidate {
+  provider: string;
+  model: string;
+}
+
+export interface OcxRoutingProfileRequirements {
+  /** Minimum model context window in tokens. */
+  minContextWindow?: number;
+  tools?: boolean;
+  imageInput?: boolean;
+  structuredOutput?: boolean;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  localOnly?: boolean;
+  remoteAllowed?: boolean;
+  /** Special encrypted Codex task readability (ChatGPT forward pool). */
+  encryptedCodexTasks?: boolean;
+}
+
+export interface OcxRoutingProfileOptimize {
+  latency?: number;
+  health?: number;
+  cost?: number;
+  quota?: number;
+}
+
+export interface OcxRoutingProfileLimits {
+  /** Hard per-request estimated-cost ceiling in USD. */
+  maxEstimatedCostUsd?: number;
+}
+
+export interface OcxRoutingProfileUnknownEvidence {
+  capability?: OcxRoutingUnknownEvidenceMode;
+  health?: OcxRoutingUnknownEvidenceMode;
+  quota?: OcxRoutingUnknownEvidenceMode;
+  cost?: OcxRoutingUnknownEvidenceMode;
+}
+
+export interface OcxRoutingProfileConfig {
+  /**
+   * Explicit candidate allowlist (`provider/model` refs). No implicit
+   * expansion in v1.
+   */
+  candidates: OcxRoutingProfileCandidate[];
+  /** Optional public model name replacing the default `policy/<id>` slug. */
+  alias?: string;
+  /** Hard requirements evaluated before scoring. */
+  require?: OcxRoutingProfileRequirements;
+  /** Optimization weights; normalized deterministically. */
+  optimize?: OcxRoutingProfileOptimize;
+  limits?: OcxRoutingProfileLimits;
+  /** How unknown evidence is handled per dimension. */
+  unknownEvidence?: OcxRoutingProfileUnknownEvidence;
 }
 
 /**

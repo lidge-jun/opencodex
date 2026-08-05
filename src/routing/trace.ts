@@ -46,7 +46,8 @@ export interface RouteCapabilityEvidence {
   image?: Unknownable;
   structuredOutput?: Unknownable;
   reasoningEfforts?: string[];
-  serviceTier?: Unknownable;
+  /** `"unknown"` is reserved: it encodes missing evidence, never a real tier. */
+  serviceTier?: string | "unknown";
   localOnly?: Unknownable;
   remoteAllowed?: Unknownable;
   encryptedCodexTasks?: Unknownable;
@@ -178,6 +179,7 @@ export interface TraceCandidateInput {
   accountRef?: string;
   eligible: boolean;
   exclusions: RouteExclusionReason[];
+  score?: RouteScoreEvidence;
 }
 
 export interface TraceBuildInput {
@@ -215,6 +217,7 @@ function buildCandidate(input: TraceCandidateInput, budget: { strings?: true; ex
         ? { detail: capString(exclusion.detail, budget) }
         : {}),
     })),
+    ...(input.score ? { score: input.score } : {}),
   };
 }
 
@@ -453,8 +456,12 @@ function parseCapability(raw: unknown, caps: ParseCaps): RouteCapabilityEvidence
       .slice(0, 8)
       .map(value => value.slice(0, MAX_TRACE_STRING));
   }
-  const serviceTier = unknownable(raw.serviceTier);
-  if (serviceTier !== undefined) out.serviceTier = serviceTier;
+  if (raw.serviceTier === "unknown") {
+    out.serviceTier = "unknown";
+  } else if (typeof raw.serviceTier === "string" && raw.serviceTier) {
+    if (raw.serviceTier.length > MAX_TRACE_STRING) caps.strings = true;
+    out.serviceTier = raw.serviceTier.slice(0, MAX_TRACE_STRING);
+  }
   const localOnly = unknownable(raw.localOnly);
   if (localOnly !== undefined) out.localOnly = localOnly;
   const remoteAllowed = unknownable(raw.remoteAllowed);
