@@ -1116,6 +1116,12 @@ export interface OcxProviderConfig {
    * Use for non-forward Responses gateways that reserve a hosted tool namespace server-side.
    */
   modelPreferHostedTools?: Record<string, string[]>;
+  /**
+   * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
+   * fields or closing events (#893). Disabled by default and applied only to client-facing
+   * SSE/JSON; raw inspection state remains authoritative.
+   */
+  responsesSnapshotRepair?: boolean;
   /** Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values. */
   reasoningEffortMap?: Record<string, string>;
   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */

@@ -598,6 +598,7 @@ const providerConfigSchema = z.object({
     reasoning: z.array(z.string().min(1)).optional(),
     repairMissingTerminalIds: z.boolean().optional(),
   }).strict().optional(),
+  responsesSnapshotRepair: z.boolean().optional(),
 }).passthrough();
 
 const RESERVED_PROVIDER_NAMES = new Set(["__proto__", "prototype", "constructor"]);

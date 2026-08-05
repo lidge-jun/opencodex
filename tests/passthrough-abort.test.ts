@@ -52,7 +52,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
     expect(sseBranch).toContain("new Response(eagerBody");
-    expect(sseBranch).toContain("const rewrittenBody = payloadRewrites.length > 0");
+    expect(sseBranch).toContain("const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0");
     expect(sseBranch).toContain("eagerPath?.useEagerRelay || win32EagerRewrite");
     expect(sseBranch).not.toContain("win32TerminalRelay");
     // #864: win32 traffic that DOES need a client rewrite takes the eager single

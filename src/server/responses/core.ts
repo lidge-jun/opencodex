@@ -177,6 +177,16 @@ import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEn
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import { recordUpstreamHostFailure, resetUpstreamHostHealth, upstreamHostHealthKey } from "../../codex/upstream-host-health";
+import {
+  createResponsesSnapshotBlockRewrite,
+  hasResponsesSnapshotRepair,
+  repairResponsesSnapshotJson,
+} from "../responses-snapshot-repair";
+import {
+  composeSseBlockRewrites,
+  payloadRewriteAsBlockRewrite,
+  relaySseWithBlockRewrite,
+} from "../sse-payload-rewrite";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /**
@@ -2013,7 +2023,8 @@ async function handleResponsesInner(
     // The bundled known-bad runtime remains on tee by default on both platforms.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
+      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig) || snapshotRepairEnabled;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
@@ -2021,6 +2032,23 @@ async function handleResponsesInner(
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      // #893: sparse-snapshot gateways get field backfills AND lifecycle event
+      // injection at the block level, after payload rewrites. Defaults come
+      // from the finalized OUTBOUND body — the normalized internal tool shapes
+      // are not the Responses wire shapes the snapshot must mirror.
+      const snapshotDefaultsRequest = (() => {
+        try {
+          return JSON.parse(request.body) as unknown;
+        } catch {
+          return undefined;
+        }
+      })();
+      const clientBlockRewrite = snapshotRepairEnabled
+        ? composeSseBlockRewrites(
+          payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)),
+          createResponsesSnapshotBlockRewrite(snapshotDefaultsRequest, translatorBudget),
+        )
+        : undefined;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
@@ -2071,6 +2099,9 @@ async function handleResponsesInner(
           sawTerminal: () => inspector.terminalSeen(),
           ...(win32EagerRewrite
             ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
+            : {}),
+          ...(clientBlockRewrite
+            ? { rewriteBlocks: clientBlockRewrite }
             : {}),
           onSynthetic: kind => {
             if (!reportNativeTerminal) return;
@@ -2159,8 +2190,8 @@ async function handleResponsesInner(
       // Windows was handled by the eager terminal-aware branch above. Remaining
       // tee traffic can use the JS relay to close on a protocol terminal and to
       // convert a mid-stream reset into a clean response.failed event.
-      const rewrittenBody = payloadRewrites.length > 0
-        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
+      const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0
+        ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite ?? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)), translatorBudget)
         : nativeBody;
       const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
       return markNativePassthroughSseResponse(new Response(clientBody, {
@@ -2193,7 +2224,18 @@ async function handleResponsesInner(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
+      const clientJson = (() => {
+        const restored = restoreImageGenCallsInJson(text, imageGenCallAliases);
+        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) return restored;
+        let outbound: unknown;
+        try {
+          outbound = JSON.parse(request.body);
+        } catch {
+          outbound = undefined;
+        }
+        return repairResponsesSnapshotJson(restored, outbound);
+      })();
+      return new Response(clientJson, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,
