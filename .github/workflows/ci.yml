@@ -331,6 +331,10 @@ jobs:
   platform-macos:
     name: macos
     runs-on: macos-latest
+    # The unsharded control for the sharded lanes: the only place the whole
+    # suite runs in one pool, so it is the place that catches what sharding
+    # hides. The flakes it keeps surfacing are timing, not logic, and the fix
+    # is the tests, not a fourth lane.
     timeout-minutes: 30
     steps:
       - name: Checkout

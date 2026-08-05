@@ -205,6 +205,24 @@ async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
   if (!existsSync(path)) throw new Error(`Timed out waiting for ${path}`);
 }
 
+/**
+ * A port file that EXISTS is not a port file that is WRITTEN. The child creates
+ * the file and then fills it, and reading between those two steps parses "" to
+ * 0 — which is how a CI run fetched http://127.0.0.1:0 and called it a flake.
+ * Wait for a port that is actually a port.
+ */
+async function waitForPort(path: string, timeoutMs = 10_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (existsSync(path)) {
+      const port = Number(readFileSync(path, "utf8").trim());
+      if (Number.isInteger(port) && port > 0) return port;
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for a real port in ${path}`);
+    await Bun.sleep(10);
+  }
+}
+
 function childPaths(f: Fixture) {
   return {
     port: join(f.root, "port"),
@@ -494,8 +512,7 @@ describe("native-main startup journal gate", () => {
       const paths = childPaths(f);
       const child = spawnChild(f, paths);
       try {
-        await waitForPath(paths.port);
-        const port = Number(readFileSync(paths.port, "utf8"));
+        const port = await waitForPort(paths.port);
         const blocked = await mainRequest(port);
         expect(blocked.status).toBeGreaterThanOrEqual(400);
         expect(existsSync(paths.upstream)).toBe(false);
@@ -522,8 +539,7 @@ describe("native-main startup journal gate", () => {
       const paths = childPaths(f);
       const child = spawnChild(f, paths);
       try {
-        await waitForPath(paths.port);
-        const port = Number(readFileSync(paths.port, "utf8"));
+        const port = await waitForPort(paths.port);
         expect((await mainRequest(port)).status).toBeGreaterThanOrEqual(400);
         expect(existsSync(paths.upstream)).toBe(false);
         expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
@@ -554,8 +570,7 @@ describe("native-main startup journal gate", () => {
     const paths = childPaths(f);
     const child = spawnChild(f, paths);
     try {
-      await waitForPath(paths.port);
-      const port = Number(readFileSync(paths.port, "utf8"));
+      const port = await waitForPort(paths.port);
       expect((await mainRequest(port)).status).toBe(200);
       await waitForPath(paths.upstream);
       const receipt = JSON.parse(readFileSync(paths.upstream, "utf8").trim());

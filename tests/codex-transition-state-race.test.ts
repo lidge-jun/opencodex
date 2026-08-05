@@ -69,12 +69,21 @@ const transitionProbe = `
     );
     writeFileSync(payload.outcomePath, JSON.stringify(first));
     await waitFor(payload.retryPath);
-    const final = first.kind === "unavailable" && first.reason === "busy"
-      ? beginCodexTransition(
-          { nativeGeneration: 0, currentTxId: null },
-          next(payload.txId),
-        )
-      : first;
+    /*
+     * Retry until the contention resolves, not once. A single retry assumes the
+     * loser found the lock free on its second attempt; on a loaded CI runner
+     * both contenders can lose BOTH, and the test then read [unavailable,
+     * unavailable] as a broken invariant when it was just an unlucky schedule.
+     * The invariant is that it CONVERGES, not that it converges in one retry.
+     */
+    let final = first;
+    for (let attempt = 0; attempt < 10 && final.kind === "unavailable" && final.reason === "busy"; attempt += 1) {
+      await Bun.sleep(25 * (attempt + 1));
+      final = beginCodexTransition(
+        { nativeGeneration: 0, currentTxId: null },
+        next(payload.txId),
+      );
+    }
     result = { id: payload.id, databasePath, first, final };
   } else if (payload.action === "begin") {
     result = {
