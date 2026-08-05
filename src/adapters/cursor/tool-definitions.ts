@@ -208,7 +208,12 @@ export function cursorStructuredEditTools(
 ): OcxTool[] {
   if (!cursorRequestAdvertisesApplyPatch(tools, toolChoice)) return [];
   if (toolChoice && toolChoice !== "auto" && toolChoice !== "required") return [];
-  return [
+  // Never shadow an already-advertised bare tool with the same name (a client catalog could
+  // legitimately expose its own `edit_file` / `multi_edit` MCP-style tools).
+  const existingBareNames = new Set(
+    (tools ?? []).filter(tool => !tool.namespace).map(tool => tool.name),
+  );
+  const candidates: OcxTool[] = [
     {
       name: CURSOR_EDIT_FILE_TOOL,
       description:
@@ -222,6 +227,7 @@ export function cursorStructuredEditTools(
       parameters: { ...CURSOR_MULTI_EDIT_INPUT_SCHEMA },
     },
   ];
+  return candidates.filter(tool => !existingBareNames.has(tool.name));
 }
 
 export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): string {

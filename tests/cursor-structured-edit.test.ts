@@ -105,6 +105,12 @@ describe("cursor structured edit tools (#1017)", () => {
     expect(cursorStructuredEditTools([{ ...applyPatchTool(), namespace: "mcp__fs" }], "auto")).toEqual([]);
   });
 
+  test("does not shadow a bare client tool that already uses a structured edit name", () => {
+    const catalog = [applyPatchTool(), { ...applyPatchTool(), name: CURSOR_EDIT_FILE_TOOL, freeform: undefined }];
+    const tools = cursorStructuredEditTools(catalog, "auto");
+    expect(tools.map(tool => tool.name)).toEqual([CURSOR_MULTI_EDIT_TOOL]);
+  });
+
   test("cursor tool budget keeps the structured edit tools with apply_patch", () => {
     const result = applyCursorToolBudget([applyPatchTool(), execCommandTool()], "auto");
     const names = result.tools.map(tool => tool.name);
