@@ -8,7 +8,14 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
-import { buildCatalogEntries, mergeCatalogEntriesForSync, nativeEffortClamp, shouldApplyNativeEffortClamp, type MultiAgentMode } from "../src/codex/catalog";
+import {
+  buildCatalogEntries,
+  CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  mergeCatalogEntriesForSync,
+  nativeEffortClamp,
+  shouldApplyNativeEffortClamp,
+  type MultiAgentMode,
+} from "../src/codex/catalog";
 import {
   buildCatalogEntriesFromObservedState,
   mergeCatalogEntriesFromObservedState,
@@ -1165,8 +1172,16 @@ describe("3-state multi-agent mode", () => {
         description: "Routed via opencodex → external (external).",
         supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
       }];
+      const accountBoundEntries = [{
+        ...template(),
+        slug: "team/gpt-5.4",
+        display_name: "team / GPT-5.4",
+        opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+        service_tier: "fast",
+      }];
       const originalCatalogModels = structuredClone(catalogModels);
       const originalRoutedEntries = structuredClone(routedEntries);
+      const originalAccountBoundEntries = structuredClone(accountBoundEntries);
       const mergeObserved = () => mergeCatalogEntriesFromObservedState({
         catalogModels,
         routedEntries,
@@ -1182,7 +1197,7 @@ describe("3-state multi-agent mode", () => {
         exactComboSlugs: new Set(),
         hasPhysicalComboProvider: false,
         includeNativeOpenAi: true,
-        accountBoundEntries: [],
+        accountBoundEntries,
         policy: {
           nativeBackfillSlugs: ["gpt-5.5"],
           unsupportedNativeEntries: "preserve",
@@ -1202,6 +1217,7 @@ describe("3-state multi-agent mode", () => {
       expect(mergedBefore.find(entry => entry.slug === "gpt-5.5")?.multi_agent_version).toBe("v2");
       expect(catalogModels).toEqual(originalCatalogModels);
       expect(routedEntries).toEqual(originalRoutedEntries);
+      expect(accountBoundEntries).toEqual(originalAccountBoundEntries);
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = oldCodexHome;

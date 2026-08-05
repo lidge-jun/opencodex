@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
@@ -13,7 +13,9 @@ import { join } from "node:path";
 import { captureCatalogAdmissionSnapshot } from "../src/codex/catalog-admission";
 import {
   CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  NATIVE_OPENAI_MODELS,
   resetCatalogRuntimeStateForTests,
+  syncCatalogModels,
 } from "../src/codex/catalog";
 import {
   commitCodexCatalogCandidate,
@@ -31,6 +33,7 @@ import type { OcxConfig } from "../src/types";
 let root = "";
 let codexHome = "";
 let opencodexHome = "";
+let catalogPath = "";
 let previousCodexHome: string | undefined;
 let previousOpencodexHome: string | undefined;
 
@@ -74,6 +77,15 @@ function foreignEntry(): RawEntry {
   };
 }
 
+function foreignBareNativeEntry(): RawEntry {
+  return {
+    ...nativeEntry(),
+    slug: "user-native",
+    display_name: "User native",
+    description: "Managed by another catalog tool.",
+  };
+}
+
 function nativeMetadataEntry(
   slug: "gpt-5.5" | "gpt-5.4",
   baseInstructions: string,
@@ -101,7 +113,7 @@ function config(pickerEnabled: boolean, disabledModels: string[] = []): OcxConfi
       },
     },
     defaultProvider: "openai",
-    codexAccounts: [{ id: "side-account-id", isMain: false }],
+    codexAccounts: [{ id: "side-account-id", email: "side@example.test", isMain: false }],
     codexAccountNamespaces: {
       desktop: "@main",
       team: "side-account-id",
@@ -112,7 +124,7 @@ function config(pickerEnabled: boolean, disabledModels: string[] = []): OcxConfi
 }
 
 function writeCatalog(models: RawEntry[]): void {
-  writeFileSync(join(codexHome, "opencodex-catalog.json"), `${JSON.stringify({ models }, null, 2)}\n`);
+  writeFileSync(catalogPath, `${JSON.stringify({ models }, null, 2)}\n`);
 }
 
 async function convergeCatalog(nextConfig: OcxConfig): Promise<RawCatalog> {
@@ -121,7 +133,7 @@ async function convergeCatalog(nextConfig: OcxConfig): Promise<RawCatalog> {
   expect(gathered.kind).toBe("candidate");
   if (gathered.kind !== "candidate") throw new Error("expected a catalog candidate");
   expect((await commitCodexCatalogCandidate(gathered.candidate, 1_000)).kind).toBe("committed");
-  return JSON.parse(readFileSync(join(codexHome, "opencodex-catalog.json"), "utf8")) as RawCatalog;
+  return JSON.parse(readFileSync(catalogPath, "utf8")) as RawCatalog;
 }
 
 beforeEach(() => {
@@ -130,6 +142,7 @@ beforeEach(() => {
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-convergence-accounts-")));
   codexHome = join(root, "codex");
   opencodexHome = join(root, "opencodex");
+  catalogPath = join(codexHome, "opencodex-catalog.json");
   mkdirSync(codexHome);
   mkdirSync(opencodexHome);
   process.env.CODEX_HOME = codexHome;
@@ -197,7 +210,7 @@ test("disabling the picker removes generated rows, restores bare rows, and retai
   expect(models.some(entry => entry.slug === "external/vendor-model")).toBe(true);
 });
 
-test("account selectors never qualify unsupported bare native rows", async () => {
+test("convergence drops unsupported bare native rows and never qualifies them", async () => {
   writeCatalog([
     nativeEntry(),
     unsupportedNativeEntry(),
@@ -206,7 +219,7 @@ test("account selectors never qualify unsupported bare native rows", async () =>
   const catalog = await convergeCatalog(config(true));
   const models = catalog.models ?? [];
 
-  expect(models.find(entry => entry.slug === "gpt-legacy-unsupported")?.visibility).toBe("list");
+  expect(models.some(entry => entry.slug === "gpt-legacy-unsupported")).toBe(false);
   expect(models.some(entry => entry.slug === "desktop/gpt-legacy-unsupported")).toBe(false);
   expect(models.some(entry => entry.slug === "team/gpt-legacy-unsupported")).toBe(false);
   expect(models
@@ -236,25 +249,33 @@ test("convergence preserves unrelated foreign rows alongside fresh configured pr
   expect(models.some(entry => entry.slug === "external/vendor-model")).toBe(true);
 });
 
-test("generated account rows win foreign slug collisions without duplicate catalog entries", async () => {
-  writeCatalog([
-    nativeEntry(),
-    {
-      ...foreignEntry(),
-      slug: "team/gpt-5.6-sol",
-      display_name: "Foreign shadow",
-    },
-  ]);
+test("generated account rows silently win freshly gathered provider collisions", async () => {
+  writeCatalog([nativeEntry()]);
+  const nextConfig = config(true);
+  nextConfig.providers.team = {
+    adapter: "openai-chat",
+    baseUrl: "https://team.example.test/v1",
+    liveModels: false,
+    models: ["gpt-5.6-sol"],
+  };
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
 
-  const catalog = await convergeCatalog(config(true));
-  const collisions = (catalog.models ?? [])
-    .filter(entry => entry.slug === "team/gpt-5.6-sol");
+  try {
+    const catalog = await convergeCatalog(nextConfig);
+    const collisions = (catalog.models ?? [])
+      .filter(entry => entry.slug === "team/gpt-5.6-sol");
 
-  expect(collisions).toHaveLength(1);
-  expect(collisions[0]).toMatchObject({
-    display_name: "team / 5.6 Sol",
-    opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
-  });
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]).toMatchObject({
+      display_name: "team / 5.6 Sol",
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+    });
+    expect(warn.mock.calls.some(args => (
+      args.some(value => String(value).includes("account selector collision"))
+    ))).toBe(false);
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test("qualified rows retain the matching installed metadata for each native model", async () => {
@@ -286,4 +307,43 @@ test("a missing supported native is backfilled and restored when the picker is d
   expect(disabled.models?.some(entry => (
     entry.opencodex_catalog_kind === CODEX_ACCOUNT_BOUND_CATALOG_KIND
   ))).toBe(false);
+});
+
+test("retained sync and convergence produce identical canonical bytes in either order", async () => {
+  catalogPath = join(codexHome, "custom-catalog.json");
+  writeFileSync(
+    join(codexHome, "config.toml"),
+    'model_catalog_json = "custom-catalog.json"\n',
+  );
+  const nextConfig = config(false);
+  const seed = (): void => {
+    writeCatalog([
+      nativeEntry(),
+      unsupportedNativeEntry(),
+      foreignBareNativeEntry(),
+    ]);
+  };
+  const readBytes = (): string => readFileSync(catalogPath, "utf8");
+  const expectCanonicalContent = (bytes: string): void => {
+    const slugs = (JSON.parse(bytes) as RawCatalog).models
+      ?.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []) ?? [];
+    for (const slug of NATIVE_OPENAI_MODELS) expect(slugs).toContain(slug);
+    expect(slugs).not.toContain("gpt-legacy-unsupported");
+    expect(slugs).toContain("user-native");
+  };
+
+  seed();
+  await convergeCatalog(nextConfig);
+  const convergenceFirst = readBytes();
+  expectCanonicalContent(convergenceFirst);
+  expect((await syncCatalogModels(nextConfig)).catalogWritten).toBe(true);
+  expect(readBytes()).toBe(convergenceFirst);
+
+  seed();
+  expect((await syncCatalogModels(nextConfig)).catalogWritten).toBe(true);
+  const retainedFirst = readBytes();
+  expectCanonicalContent(retainedFirst);
+  expect(retainedFirst).toBe(convergenceFirst);
+  await convergeCatalog(nextConfig);
+  expect(readBytes()).toBe(retainedFirst);
 });

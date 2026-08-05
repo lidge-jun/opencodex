@@ -32,7 +32,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
-import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
+import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
   bundledCatalogCacheState,
   loadBundledCodexCatalog,
@@ -463,11 +463,19 @@ function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
 export interface ObservedCatalogMergePolicy {
   /** Required observed/fixed set; the core merge never consults ambient catalog state. */
   readonly nativeBackfillSlugs: readonly string[];
-  /** Convergence retains pre-existing unsupported bare rows; retained sync removes them. */
+  /** Whether unsupported OpenAI-family bare rows survive the merge. */
   readonly unsupportedNativeEntries: "preserve" | "drop";
   /** Whether merge-policy collision/preservation warnings belong to this caller's flow. */
   readonly warningPolicy: "emit" | "suppress";
 }
+
+/** Content policy shared by every writer of the canonical Codex model catalog. */
+export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
+  Pick<ObservedCatalogMergePolicy, "nativeBackfillSlugs" | "unsupportedNativeEntries">
+> = Object.freeze({
+  nativeBackfillSlugs: Object.freeze([...NATIVE_OPENAI_MODELS]),
+  unsupportedNativeEntries: "drop",
+});
 
 export interface ObservedCatalogMergeInput {
   readonly catalogModels: RawEntry[];
@@ -738,8 +746,7 @@ export function mergeCatalogEntriesForSync(
     includeNativeOpenAi,
     accountBoundEntries,
     policy: {
-      nativeBackfillSlugs: includeNativeOpenAi ? nativeOpenAiSlugs() : [],
-      unsupportedNativeEntries: "drop",
+      ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "emit",
     },
   });

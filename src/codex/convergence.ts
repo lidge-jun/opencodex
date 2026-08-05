@@ -36,6 +36,7 @@ import {
 } from "./catalog/parsing";
 import {
   buildCatalogEntriesFromObservedState,
+  CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   mergeCatalogEntriesFromObservedState,
   orderForSubagents,
 } from "./catalog/sync";
@@ -251,8 +252,7 @@ function prepareCatalog(
     includeNativeOpenAi,
     accountBoundEntries,
     policy: {
-      nativeBackfillSlugs: NATIVE_OPENAI_MODELS,
-      unsupportedNativeEntries: "preserve",
+      ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "suppress",
     },
   });

@@ -3134,6 +3134,9 @@ async function handleResponsesInner(
         builtContinuationRequest.releaseBodyObservation?.();
       }
     };
+    // Keep this decision site-local because `route.provider` is mutable during recovery. Current
+    // rotations preserve Codex auth identity; recomputation avoids making that invariant part of
+    // the client-facing redaction boundary.
     while (true) {
       try {
         const recoveryKind = nextContinuationRecoveryKind;
