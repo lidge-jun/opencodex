@@ -80,6 +80,8 @@ the vision execution path still has a `gpt-5.4-mini` code fallback.
   over the Responses endpoint with the selected `reasoning.effort` (`low` by default), and its
   description replaces the image part inline. The Anthropic path uses the Messages endpoint with its
   own thinking-budget mapping and ignores this OpenAI-specific setting.
+- Supported levels depend on the selected provider and model. When you pick a level the model does
+  not advertise, the Dashboard clamps the saved value to the model's highest supported rung.
 - Descriptions run with bounded concurrency (3 at a time, input order preserved). User context sent
   to the describer is capped at 800 characters, and each injected description is capped at 2,000
   characters. The request does not send `max_output_tokens`, which the ChatGPT backend rejects.

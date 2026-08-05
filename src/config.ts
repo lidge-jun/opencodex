@@ -1653,18 +1653,21 @@ export function loadConfig(): OcxConfig {
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
+    // Keep an untouched view for warnings: the sanitizers below delete invalid values in place,
+    // so reading `parsed` afterwards would hide exactly what the warning must report.
+    const rawParsed = structuredClone(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeVisionSidecarForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);
-      warnDegradedStreamMode(parsed, config);
-      warnDegradedVisionReasoning(parsed, config);
-      warnDegradedHostname(parsed, config);
-      warnDegradedApiKeys(parsed, config);
-      warnDegradedClaudeSubagentEffort(parsed);
-      warnDegradedNativeSubagentConfig(parsed, config);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      warnDegradedStreamMode(rawParsed, config);
+      warnDegradedVisionReasoning(rawParsed, config);
+      warnDegradedHostname(rawParsed, config);
+      warnDegradedApiKeys(rawParsed, config);
+      warnDegradedClaudeSubagentEffort(rawParsed);
+      warnDegradedNativeSubagentConfig(rawParsed, config);
+      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -1679,12 +1682,12 @@ export function loadConfig(): OcxConfig {
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
       const config = normalizeApiKeyIds(retryResult.data as OcxConfig);
-      warnDegradedHostname(parsed, config);
-      warnDegradedVisionReasoning(parsed, config);
-      warnDegradedApiKeys(parsed, config);
-      warnDegradedClaudeSubagentEffort(parsed);
-      warnDegradedNativeSubagentConfig(parsed, config);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      warnDegradedHostname(rawParsed, config);
+      warnDegradedVisionReasoning(rawParsed, config);
+      warnDegradedApiKeys(rawParsed, config);
+      warnDegradedClaudeSubagentEffort(rawParsed);
+      warnDegradedNativeSubagentConfig(rawParsed, config);
+      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);

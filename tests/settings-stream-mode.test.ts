@@ -7,7 +7,7 @@
  * backup-and-defaults repair path), and settable alone via PUT (legacy
  * codexAutoStart-only PUTs keep working).
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -299,10 +299,14 @@ describe("config.json schema resilience", () => {
     const raw = JSON.parse(readFileSync(getConfigPath(), "utf-8")) as { visionSidecar?: Record<string, unknown> };
     raw.visionSidecar!.reasoning = "ultra"; // hand-edit typo
     writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     const reloaded = loadConfig();
+    const warnedAboutReasoning = warnSpy.mock.calls.some(call => String(call[0]).includes("visionSidecar.reasoning"));
+    warnSpy.mockRestore();
     // Degraded, not defaulted: providers must survive.
     expect(reloaded.visionSidecar?.reasoning).toBeUndefined();
     expect(reloaded.providers.openai).toBeDefined();
+    expect(warnedAboutReasoning).toBe(true);
   });
 
   test("invalid persisted streamMode degrades to auto without nuking the config", () => {
