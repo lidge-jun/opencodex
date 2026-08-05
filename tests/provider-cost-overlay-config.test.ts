@@ -49,15 +49,23 @@ describe("providerModelCostsConfigError", () => {
   });
 
   test("malformed entries are rejected with a field path", () => {
-    expect(providerModelCostsConfigError({ m: "not-an-object" })).toContain("modelCosts.m");
+    expect(providerModelCostsConfigError({ m: "not-an-object" })).toContain('modelCosts."m"');
     expect(providerModelCostsConfigError({ m: { input: 1, output: 1, cacheRead: 0 } }))
-      .toContain("modelCosts.m.cacheWrite");
+      .toContain('modelCosts."m".cacheWrite');
     expect(providerModelCostsConfigError({ m: { input: -1, output: 1, cacheRead: 0, cacheWrite: 0 } }))
-      .toContain("modelCosts.m.input");
+      .toContain('modelCosts."m".input');
     expect(providerModelCostsConfigError({ m: { input: 1, output: Infinity, cacheRead: 0, cacheWrite: 0 } }))
-      .toContain("modelCosts.m.output");
+      .toContain('modelCosts."m".output');
     expect(providerModelCostsConfigError({ m: { input: 1, output: 1, cacheRead: 0, cacheWrite: "0" } }))
-      .toContain("modelCosts.m.cacheWrite");
+      .toContain('modelCosts."m".cacheWrite');
+  });
+
+  test("modelCosts validation errors redact secret-shaped model ids", () => {
+    const error = providerModelCostsConfigError({
+      "sk-abcdef1234567890": { input: 1, output: 1, cacheRead: 0, cacheWrite: "0" },
+    });
+    expect(error).not.toContain("sk-abcdef1234567890");
+    expect(error).toContain("[REDACTED]");
   });
 });
 
@@ -187,7 +195,7 @@ describe("modelCosts management validation and DTO", () => {
       modelCosts: { "deepseek-v4-flash": { input: -0.5, output: 1, cacheRead: 0, cacheWrite: 0 } },
     });
     expect(error).toContain("blsc");
-    expect(error).toContain("modelCosts.deepseek-v4-flash.input");
+    expect(error).toContain('modelCosts."deepseek-v4-flash".input');
   });
 
   test("safeConfigDTO exposes modelCosts for the dashboard", () => {

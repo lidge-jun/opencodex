@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
+import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { resetUsageReadCacheForTests, usageReadCacheStatsForTests } from "../src/usage/log";
 
@@ -148,6 +149,36 @@ describe("GET /api/usage", () => {
       })}\n`);
       const changed = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
       expect(changed.summary.requests).toBe(first.summary.requests + 1);
+      expect(usageReadCacheStatsForTests().fullReads).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("usage route cache invalidates when the user cost overlay version changes", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      // Start from a known overlay version so a leftover entry from an earlier
+      // test cannot satisfy the first request.
+      refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+      const first = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      const second = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(second.summary).toEqual(first.summary);
+      expect(usageReadCacheStatsForTests().fullReads).toBe(1);
+      // A modelCosts save refreshes the overlay registry and bumps its version;
+      // the cached summary must not be reused even though the usage log is unchanged.
+      refreshUserCostOverlays({
+        providers: {
+          blsc: {
+            modelCosts: {
+              "deepseek-v4-flash": { input: 0.5, output: 2, cacheRead: 0.1, cacheWrite: 0.25 },
+            },
+          },
+        },
+      } as unknown as OcxConfig);
+      const changed = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(changed.summary.requests).toBe(first.summary.requests);
       expect(usageReadCacheStatsForTests().fullReads).toBe(2);
     } finally {
       await server.stop(true);

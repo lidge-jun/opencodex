@@ -4,10 +4,13 @@
  * flat `modelXxx` convention, mirroring opencode's per-model pricing).
  *
  * The usage cost estimator stays pure: it receives overlays as parameters and
- * defaults to this registry, which is refreshed at the two config chokepoints
- * (loadConfig and every persist path). A refresh replaces the active array with
- * a NEW identity and bumps a version counter, so the estimator's memo skips
- * stale rows without cross-module invalidation.
+ * defaults to this registry, which is refreshed at the config chokepoints
+ * (loadConfig and every persist path). A refresh that actually changes the
+ * rows replaces the active array with a NEW identity and bumps a version
+ * counter, so the estimator's memo and the /api/usage summary cache skip stale
+ * rows without cross-module invalidation. Refreshes with byte-identical rows
+ * are no-ops: config is reloaded at many chokepoints and an unchanged reload
+ * must not churn the version (see refreshUserCostOverlays).
  *
  * Display-time estimation only — these rows never affect billing.
  */
@@ -17,6 +20,7 @@ import type { ExpectedPriceOverlay } from "./expected-prices";
 const EMPTY: readonly ExpectedPriceOverlay[] = [];
 
 let active: readonly ExpectedPriceOverlay[] = EMPTY;
+let activeSignature = "";
 let version = 0;
 
 /** True when `value` is a complete cost entry: all four rates are non-negative finite numbers. */
@@ -60,6 +64,14 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
       }
     }
   }
+  // Config is re-loaded at many chokepoints (server start, migrations, persist
+  // paths). Bumping the version on every load — even when nothing changed —
+  // would invalidate the /api/usage summary cache on unrelated reloads and
+  // churn the cost memo. Only a real overlay change bumps the version, so the
+  // cache survives reloads of an unchanged config.
+  const signature = JSON.stringify(rows);
+  if (signature === activeSignature) return;
+  activeSignature = signature;
   active = rows;
   version++;
 }

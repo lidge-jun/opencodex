@@ -717,14 +717,18 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
   }
   for (const [modelId, entry] of Object.entries(value)) {
     if (!modelId.trim()) return `${field} keys must be nonblank model ids`;
+    // Redact secret-shaped model ids and JSON-escape control characters so a
+    // malformed write cannot echo a pasted key/secret back through the
+    // management API response.
+    const safeModelId = JSON.stringify(redactSecretString(modelId));
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return `${field}.${modelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
+      return `${field}.${safeModelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
     }
     const rates = entry as Record<string, unknown>;
     for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
       const rate = rates[key];
       if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
-        return `${field}.${modelId}.${key} must be a non-negative finite number (USD per 1M tokens)`;
+        return `${field}.${safeModelId}.${key} must be a non-negative finite number (USD per 1M tokens)`;
       }
     }
   }
