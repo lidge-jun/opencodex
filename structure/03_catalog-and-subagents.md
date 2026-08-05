@@ -63,8 +63,11 @@ Pool mode routes across main plus added Codex credentials. Key rules:
 - **A namespace is a public selector mapped to an internal target.** Generated selectors are how a
   caller names an account — the main login's selector is `main` (collision-suffixed if taken),
   which maps to the config-only sentinel `@main`; the sentinel deliberately sits outside the
-  pool-account id grammar. Selectors must not collide with provider or combo ids
-  (`src/codex/account-namespaces.ts`, `src/codex/account-namespace-match.ts`).
+  pool-account id grammar. Selectors must not collide with configured provider names, the
+  canonical `combo` and `policy` namespaces, or prefixes claimed by slash-qualified combo and
+  routing-profile aliases (`src/codex/account-namespaces.ts`,
+  `src/codex/account-namespace-match.ts`, `src/routing/profile-namespace.ts`,
+  `src/routing/profile.ts`).
 - **Selector labels carry no account-role semantics.** When at least one selector is advertisable,
   the Codex catalog clones each supported native row per selector and hides the bare picker rows;
   bare ids remain routable and stay in raw `/v1/models` unless explicitly disabled. Missing stored

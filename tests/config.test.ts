@@ -1503,12 +1503,56 @@ describe("opencodex config defaults", () => {
     expect(Object.hasOwn(getDefaultConfig(), "codexAccountPickerEnabled")).toBe(false);
   });
 
-  test("rejects a non-boolean Codex account picker visibility override", () => {
-    writeAccountNamespaceConfig({ desktop: "@main" }, { codexAccountPickerEnabled: "yes" });
+  test("malformed persisted picker visibility fails closed without discarding accounts or providers", () => {
+    writeAccountNamespaceConfig({ desktop: "@main", side: "stored-account" }, {
+      codexAccountPickerEnabled: "yes",
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "stored-account", email: "side@example.test", isMain: false },
+      ],
+    });
 
     const diagnostics = readConfigDiagnostics();
-    expect(diagnostics.source).toBe("fallback");
-    expect(diagnostics.error).toContain("codexAccountPickerEnabled");
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      config: {
+        defaultProvider: "openai",
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+        codexAccounts: [
+          { id: "main", email: "main@example.test", isMain: true },
+          { id: "stored-account", email: "side@example.test", isMain: false },
+        ],
+        codexAccountNamespaces: { desktop: "@main", side: "stored-account" },
+        codexAccountPickerEnabled: false,
+      },
+    });
+    expect(diagnostics.warnings).toContain(
+      "codexAccountPickerEnabled ignored: expected a boolean; generated account-qualified picker rows were hidden",
+    );
+    expect(backupNames()).toEqual([]);
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toMatchObject({
+        codexAccountPickerEnabled: false,
+        codexAccountNamespaces: { desktop: "@main", side: "stored-account" },
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("codexAccountPickerEnabled ignored"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    for (const invalid of [null, "false", 1]) {
+      expect(validateConfigCandidate({
+        ...getDefaultConfig(),
+        codexAccountPickerEnabled: invalid,
+      })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("codexAccountPickerEnabled"),
+      });
+    }
   });
 
   test("validates Claude Desktop profiles and Codex account selectors independently", () => {

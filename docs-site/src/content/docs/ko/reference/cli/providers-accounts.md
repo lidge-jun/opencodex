@@ -156,15 +156,20 @@ OAuth 및 API 키 제공자에는 제공자의 할당량 보고 엔드포인트�
 ### `ocx account login|reauth|code|cancel ...`
 
 헤드리스 셸에서 브라우저 기반 또는 수동 코드 계정 인증을 실행합니다. 제공자별 명령 형태는 `ocx account --help`를 보십시오.
+Codex 로그인은 catalog refresh가 보류 중이어도 이미 저장된 상태입니다. 일반 출력은 `ocx sync`로 다시 시도하라고 경고하며,
+`--json` login-status object에는 대신 `catalogRefreshPending: true`가 포함될 수 있습니다.
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
 이 보호된 비대화형 삭제는 `--yes`를 요구합니다. 삭제하기 전에 id가 존재하는지 확인하며, 없는 id는 DELETE를 보내지 않고 종료 코드 1로 끝납니다. Codex App의 main 로그인은 제거할 수 없으므로 `remove openai main --yes`는 거부됩니다. 삭제 후에는 해당 계열을 다시 읽습니다. 고정된 Codex 계정을 제거하면 고정이 풀리고 자동 선택으로 돌아갑니다. OAuth는 남아 있는 첫 번째 계정으로 승격하거나 없다고 보고합니다. API 키 풀은 남아 있는 첫 번째 키로 승격하거나 없다고 보고합니다. `--json`의 성공 및 실패 형식은 다음과 같습니다:
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending`은 Codex 제거 결과에만 있습니다. 값이 `true`여도 제거 자체는 이미 저장되었으며,
+일반 출력은 `ocx sync`로 catalog update를 다시 시도하라고 경고합니다.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

@@ -84,8 +84,9 @@ Pool mode needs stable public names and a store that survives concurrent refresh
 - Public selectors are generated per account; the main login's selector is `main`, collision-suffixed
   if that name is taken, and it maps to the config-only sentinel `@main`, which sits outside the
   pool-account id grammar (`src/codex/account-namespaces.ts`, `src/codex/account-namespace-match.ts`).
-  Selectors must not collide with provider or combo ids. A user alias is display metadata; routing
-  consults credential identity, never the alias.
+  Selectors must not collide with configured provider names, the canonical `combo` and `policy`
+  namespaces, or prefixes claimed by slash-qualified combo and routing-profile aliases. A user
+  alias is display metadata; routing consults credential identity, never the alias.
 - The credential store is generation-guarded and refresh-locked (`src/codex/account-store.ts`): a
   refresh persists only if the generation it started from still holds, and a lost race raises a
   generation-conflict error instead of overwriting the newer credential.

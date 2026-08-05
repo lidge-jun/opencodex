@@ -994,7 +994,10 @@ const configSchema = z.object({
   codexShimAutoRestore: z.boolean().optional(),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
-  codexAccountPickerEnabled: z.boolean().optional(),
+  // This flag controls picker visibility only. A malformed hand edit must fail
+  // closed without discarding providers, accounts, or exact selector routes.
+  // Write-time validation remains strict in validateConfigCandidate().
+  codexAccountPickerEnabled: z.boolean().optional().catch(false),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
@@ -1622,6 +1625,18 @@ function malformedNativeSubagentFieldWarning(field: NativeSubagentPersistedField
   return `${field} ignored: expected ${expected}`;
 }
 
+function malformedCodexAccountPickerWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "codexAccountPickerEnabled")) return null;
+  if (typeof raw.codexAccountPickerEnabled === "boolean") return null;
+  return "codexAccountPickerEnabled ignored: expected a boolean; generated account-qualified picker rows were hidden";
+}
+
+function warnDegradedCodexAccountPicker(rawParsed: unknown): void {
+  const warning = malformedCodexAccountPickerWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
 function nativeSubagentSyncDisabledReason(config: OcxConfig, rawParsed?: unknown): string | null {
   if (config.syncCodexSubagentDefaults !== true) return null;
   const malformed = malformedNativeSubagentFields(rawParsed);
@@ -1672,6 +1687,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedApiKeys(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
+      warnDegradedCodexAccountPicker(parsed);
       return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -1691,6 +1707,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedApiKeys(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
+      warnDegradedCodexAccountPicker(parsed);
       return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
     }
     // Merge couldn't fix it — truly broken config
@@ -1739,6 +1756,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
     warnings.push(`claudeCode.subagentEffort ignored: expected one of ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}`);
   }
   warnings.push(...malformedNativeSubagentFields(rawParsed).map(malformedNativeSubagentFieldWarning));
+  const pickerWarning = malformedCodexAccountPickerWarning(rawParsed);
+  if (pickerWarning) warnings.push(pickerWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -1816,12 +1835,21 @@ function googleAntigravityStaticCatalogVersionError(value: unknown): string | nu
   return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1 or omitted";
 }
 
+function codexAccountPickerEnabledError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexAccountPickerEnabled")) return null;
+  const enabled = raw.codexAccountPickerEnabled;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: codexAccountPickerEnabled: must be a boolean or omitted";
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
-    ?? googleAntigravityStaticCatalogVersionError(value);
+    ?? googleAntigravityStaticCatalogVersionError(value)
+    ?? codexAccountPickerEnabledError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) return { ok: true, config: normalizeApiKeyIds(result.data as OcxConfig) };

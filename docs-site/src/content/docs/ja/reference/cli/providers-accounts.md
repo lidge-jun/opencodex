@@ -156,15 +156,20 @@ OAuth プロバイダーと API キー プロバイダーの場合、これに�
 ### `ocx account login|reauth|code|cancel ...`
 
 ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。
+Codex ログインは catalog refresh が保留中でも保存済みです。通常出力では `ocx sync` で再試行するよう警告し、
+`--json` の login-status object には代わりに `catalogRefreshPending: true` が含まれる場合があります。
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
 この保護された非対話型削除には `--yes` が必要です。削除する前に、ID が存在することが確認されます。 ID が欠落している場合は、DELETE を送信せずに 1 が終了します。メインの Codex App ログインは削除できないため、`remove openai main --yes` は拒否されます。削除後、ファミリーは再度読み取られます。固定された Codex アカウントを削除すると、ピンがクリアされ、自動選択に戻ります。 OAuth は最初に残ったアカウントを昇格させるか、何も報告しません。 API キー プールは、最初に残っているキーを昇格するか、何も報告しません。 `--json` の成功と失敗の形状は次のとおりです。
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending` は Codex の削除でのみ存在します。`true` でも削除自体は保存済みです。
+通常出力では `ocx sync` で catalog update を再試行するよう警告します。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

@@ -179,7 +179,9 @@ token，也不是简单重读账号列表。`--json` 返回
 ### `ocx account login|reauth|code|cancel ...`
 
 在无头 shell 中运行基于浏览器或手动代码的账号认证。请使用
-`ocx account --help` 查看与提供方相关的命令形式。
+`ocx account --help` 查看与提供方相关的命令形式。即使 catalog refresh 仍在等待，已完成的 Codex 登录也已保存。
+普通输出会警告使用 `ocx sync` 重试；`--json` 的 login-status object 则可能包含
+`catalogRefreshPending: true`。
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
@@ -190,9 +192,12 @@ token，也不是简单重读账号列表。`--json` 返回
 提升第一个剩余密钥，或者报告不存在。`--json` 的成功和失败结构如下：
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending` 只会出现在 Codex 删除结果中。即使该值为 `true`，删除也已经持久化；
+普通输出会警告使用 `ocx sync` 重试 catalog 更新。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
