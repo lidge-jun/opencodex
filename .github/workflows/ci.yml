@@ -393,7 +393,10 @@ jobs:
     # `bun test --isolate` on #827 hit the 20-minute kill while still green
     # mid-suite (~19m of tests). 30 minutes is the margin for that tip — not a
     # licence to absorb hung tests (see the oauth mutation waitMs unref fix).
-    timeout-minutes: 30
+    # The suite has grown past that margin: a green run now reaches the
+    # post-checkout cleanup at 30:06 and is killed there, which is not a hung
+    # test, just a suite that takes longer than the budget it was given.
+    timeout-minutes: 40
     steps:
       - name: Show selected runner
         shell: bash
