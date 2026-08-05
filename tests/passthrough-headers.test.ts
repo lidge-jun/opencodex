@@ -43,16 +43,18 @@ describe("passthrough header sanitization (RC5 / F4)", () => {
     expect(sanitized.get("content-type")).toBe("text/event-stream");
   });
 
-  test("drops proxy-owned account identity and any header value that echoes it", () => {
-    const selectedAccountId = "acct-private-123456";
+  test("drops proxy-owned account identity and any header metadata that echoes it", () => {
+    const selectedAccountId = "acct-Private-ABC123";
     const sanitized = sanitizePassthroughHeaders(new Headers({
       "chatgpt-account-id": selectedAccountId,
+      [`x-echo-${selectedAccountId}`]: "safe-value",
       "x-upstream-debug": `selected=${selectedAccountId}`,
       "x-unrelated-account": "cloudflare-tenant",
       "content-type": "application/problem+json",
     }), { redactExactValues: [selectedAccountId] });
 
     expect(sanitized.has("chatgpt-account-id")).toBe(false);
+    expect(sanitized.has(`x-echo-${selectedAccountId}`)).toBe(false);
     expect(sanitized.has("x-upstream-debug")).toBe(false);
     expect(sanitized.get("x-unrelated-account")).toBe("cloudflare-tenant");
     expect(sanitized.get("content-type")).toBe("application/problem+json");

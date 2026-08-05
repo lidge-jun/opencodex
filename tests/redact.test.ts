@@ -538,6 +538,25 @@ describe("redactExactSecretOccurrences", () => {
     );
   });
 
+  test("redacts overlapping exact values from longest to shortest", () => {
+    const shortId = "acct-123456";
+    const longId = "acct-123456-secondary";
+    const redacted = redactExactSecretOccurrences(`id=${longId}`, [shortId, longId]);
+
+    expect(redacted).toBe(`id=${REDACTED_SECRET}`);
+    expect(redacted).not.toContain("secondary");
+  });
+
+  test("redacts an escaped longer value before its literal prefix", () => {
+    const shortId = "acct-123456";
+    const longId = "acct-123456-secondary";
+    const input = '{"id":"acct-123456\\u002dsecondary"}';
+    const redacted = redactExactSecretOccurrences(input, [shortId, longId]);
+
+    expect(redacted).toBe(`{"id":"${REDACTED_SECRET}"}`);
+    expect(redacted).not.toContain("secondary");
+  });
+
   test("redacts semantic JSON Unicode-escape aliases without rewriting siblings", () => {
     const input = '{ "account_id" : "acct\\u002dprivate\\u002d123456", "detail" : "keep spacing" }';
     const redacted = redactExactSecretOccurrences(input, ["acct-private-123456"]);

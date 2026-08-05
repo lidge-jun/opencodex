@@ -390,15 +390,14 @@ function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): strin
     // Keep the original separator spacing so a diagnostic still reads as
     // `header: [REDACTED]` rather than `header:[REDACTED]`.
     const gap = /^[^\S\r\n]*/.exec(rawValue)?.[0] ?? "";
-    const quote = "";
     // `Bearer` is a fixed prefix, reproduced from a literal — never copied from
     // the input — and only where an auth scheme is meaningful.
     const label = match[0].replace(/[^\S\r\n]*:$/, "").trim();
     const isAuthHeader = /^(?:proxy-)?authorization$/i.test(label);
-    const prefix = isAuthHeader && new RegExp(`^[^\\S\\r\\n]*${quote}?Bearer[^\\S\\r\\n]`, "i").test(rawValue)
+    const prefix = isAuthHeader && /^[^\S\r\n]*Bearer[^\S\r\n]/i.test(rawValue)
       ? "Bearer "
       : "";
-    out += value.slice(cursor, afterLabel) + gap + quote + prefix + REDACTED_SECRET + quote;
+    out += value.slice(cursor, afterLabel) + gap + prefix + REDACTED_SECRET;
     cursor = valueEnd;
   }
   return out + value.slice(cursor);
@@ -459,6 +458,51 @@ export function redactExactSecretOccurrences(
   const privateValues = [...exact].sort((a, b) => b.length - a.length);
 
   let redacted = value;
+  // JSON permits semantically identical spellings such as `\u002d` for `-`.
+  // Rewrite only affected string tokens so whitespace, key order, and all sibling
+  // bytes remain untouched when a body contains no private value.
+  // Without a backslash, no escape alias exists, so the literal passes below
+  // provide complete coverage without scanning every character.
+  if (privateValues.length > 0 && redacted.includes("\\")) {
+    let output = "";
+    let copiedThrough = 0;
+    for (let index = 0; index < redacted.length; index++) {
+      if (redacted[index] !== '"') continue;
+      const start = index;
+      index += 1;
+      while (index < redacted.length) {
+        const char = redacted[index];
+        if (char === "\\") {
+          index += 2;
+          continue;
+        }
+        if (char !== '"') {
+          index += 1;
+          continue;
+        }
+
+        const token = redacted.slice(start, index + 1);
+        try {
+          const decoded = JSON.parse(token) as unknown;
+          if (typeof decoded === "string") {
+            let safeDecoded = decoded;
+            for (const exactValue of privateValues) {
+              safeDecoded = safeDecoded.replaceAll(exactValue, REDACTED_SECRET);
+            }
+            if (safeDecoded !== decoded) {
+              output += redacted.slice(copiedThrough, start) + JSON.stringify(safeDecoded);
+              copiedThrough = index + 1;
+            }
+          }
+        } catch {
+          // Not a valid standalone JSON string token; literal replacement below still applies.
+        }
+        break;
+      }
+    }
+    if (copiedThrough !== 0) redacted = output + redacted.slice(copiedThrough);
+  }
+
   for (const exactValue of privateValues) {
     redacted = redacted.replaceAll(exactValue, REDACTED_SECRET);
     const jsonEscaped = JSON.stringify(exactValue).slice(1, -1);
@@ -466,47 +510,7 @@ export function redactExactSecretOccurrences(
       redacted = redacted.replaceAll(jsonEscaped, REDACTED_SECRET);
     }
   }
-
-  // JSON permits semantically identical spellings such as `\u002d` for `-`.
-  // Rewrite only affected string tokens so whitespace, key order, and all sibling
-  // bytes remain untouched when a body contains no private value.
-  let output = "";
-  let copiedThrough = 0;
-  for (let index = 0; index < redacted.length; index++) {
-    if (redacted[index] !== '"') continue;
-    const start = index;
-    index += 1;
-    while (index < redacted.length) {
-      const char = redacted[index];
-      if (char === "\\") {
-        index += 2;
-        continue;
-      }
-      if (char !== '"') {
-        index += 1;
-        continue;
-      }
-
-      const token = redacted.slice(start, index + 1);
-      try {
-        const decoded = JSON.parse(token) as unknown;
-        if (typeof decoded === "string") {
-          let safeDecoded = decoded;
-          for (const exactValue of privateValues) {
-            safeDecoded = safeDecoded.replaceAll(exactValue, REDACTED_SECRET);
-          }
-          if (safeDecoded !== decoded) {
-            output += redacted.slice(copiedThrough, start) + JSON.stringify(safeDecoded);
-            copiedThrough = index + 1;
-          }
-        }
-      } catch {
-        // Not a valid standalone JSON string token; literal replacement above still applies.
-      }
-      break;
-    }
-  }
-  return copiedThrough === 0 ? redacted : output + redacted.slice(copiedThrough);
+  return redacted;
 }
 
 export function redactSecrets(value: unknown): unknown {

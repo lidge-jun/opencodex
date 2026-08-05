@@ -1162,12 +1162,15 @@ export function sanitizePassthroughHeaders(
     "upgrade",
   ]);
   const redactExactValues = options.redactExactValues?.filter(value => value.length > 0) ?? [];
+  const normalizedHeaderExactValues = redactExactValues.map(value => value.toLowerCase());
   const out = new Headers();
   upstream.forEach((value, key) => {
     if (DROP.has(key.toLowerCase())) return;
+    if (redactExactSecretOccurrences(key, normalizedHeaderExactValues) !== key) return;
     const safeValue = redactExactSecretOccurrences(value, redactExactValues);
-    // Dropping the whole field avoids turning structured values (signatures, validators,
-    // redirect URIs) into malformed metadata when they contain a private account id.
+    // Dropping the whole field avoids turning structured values (signatures,
+    // validators, redirect URIs) into malformed metadata when they contain a
+    // private account id. Header names are normalized to lowercase by Headers.
     if (safeValue !== value) return;
     out.set(key, value);
   });
