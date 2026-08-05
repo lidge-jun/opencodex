@@ -198,6 +198,15 @@ describe("modelCosts management validation and DTO", () => {
     expect(error).toContain('modelCosts."deepseek-v4-flash".input');
   });
 
+  test("providerManagementConfigError redacts a token-shaped provider name in modelCosts errors", () => {
+    const error = providerManagementConfigError("sk-abcdef1234567890", {
+      ...providerBase,
+      modelCosts: { m: { input: -1, output: 1, cacheRead: 0, cacheWrite: 0 } },
+    });
+    expect(error).not.toContain("sk-abcdef1234567890");
+    expect(error).toContain("[REDACTED]");
+  });
+
   test("safeConfigDTO exposes modelCosts for the dashboard", () => {
     writeFileSync(getConfigPath(), JSON.stringify({
       port: 12345,

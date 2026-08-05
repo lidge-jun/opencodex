@@ -473,7 +473,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
   }
   const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
-  if (modelCostsError) return `provider ${name} ${modelCostsError}`;
+  if (modelCostsError) {
+    // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
+    // it before it reaches the management API response (same rule as retryOn429 above).
+    return `provider ${JSON.stringify(redactSecretString(name))} ${modelCostsError}`;
+  }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
