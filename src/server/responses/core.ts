@@ -177,7 +177,15 @@ import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentG
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
-import { recordUpstreamHostFailure, resetUpstreamHostHealth, upstreamHostHealthKey } from "../../codex/upstream-host-health";
+import {
+  acquireUpstreamHostAdmission,
+  normalizeUpstreamHostCircuitThreshold,
+  recordUpstreamHostFailure,
+  releaseUpstreamHostAdmission,
+  resetUpstreamHostHealth,
+  upstreamHostHealthKey,
+  type UpstreamHostAdmissionLease,
+} from "../../codex/upstream-host-health";
 import {
   createResponsesSnapshotBlockRewrite,
   hasResponsesSnapshotRepair,
@@ -239,6 +247,26 @@ export function usesCodexForwardPoolAuth(
 ): authCtx is Extract<CodexAuthContext, { kind: "pool" | "main-pool" }> {
   return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
+}
+
+function preAuthUpstreamHostCircuitKey(route: RouteResult, config: OcxConfig): string | null {
+  if (
+    normalizeUpstreamHostCircuitThreshold(config.upstreamHostCircuitThreshold) === 0
+    || route.codexAccountMode !== "pool"
+    || route.codexAccountId !== undefined
+    || route.provider.authMode !== "forward"
+    || route.provider.adapter !== "openai-responses"
+  ) return null;
+  return upstreamHostHealthKey(route.providerName, safeOriginLabel(route.provider.baseUrl ?? ""));
+}
+
+function upstreamHostCircuitOpenResponse(retryAfterSeconds: number): Response {
+  return formatErrorResponse(
+    503,
+    "upstream_host_circuit_open",
+    "Provider host is temporarily unavailable",
+    { retryAfter: String(retryAfterSeconds) },
+  );
 }
 
 function normalizeCodexUnsupportedModelDetail(value: string): string {
@@ -455,7 +483,12 @@ async function retryCodexPoolOnAlternateAccount(
       route.provider.authMode === "forward",
     );
     // A real HTTP response proves the host was reached (#914).
-    resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+    const retryHostKey = upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url));
+    if (normalizeUpstreamHostCircuitThreshold(config.upstreamHostCircuitThreshold) > 0) {
+      resetUpstreamHostHealth(retryHostKey, null);
+    } else {
+      resetUpstreamHostHealth(retryHostKey);
+    }
     return {
       kind: "retried",
       authCtx: retryAuthCtx,
@@ -1296,6 +1329,9 @@ async function handleResponsesInner(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
 ): Promise<Response> {
+  let pendingHostAdmissionLease: UpstreamHostAdmissionLease | null = null;
+  let authCtx: CodexAuthContext = { kind: "main", accountId: null };
+  try {
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
@@ -1425,7 +1461,6 @@ async function handleResponsesInner(
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
   };
-  let authCtx: CodexAuthContext = { kind: "main", accountId: null };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1525,6 +1560,19 @@ async function handleResponsesInner(
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
     logCtx.provider = `${route.providerName}-${route.codexAccountNamespace}`;
+  }
+
+  if (options.abortSignal?.aborted) return clientCancelledResponse();
+  const preAuthHostKey = preAuthUpstreamHostCircuitKey(route, config);
+  if (preAuthHostKey) {
+    const admission = acquireUpstreamHostAdmission(
+      preAuthHostKey,
+      config.upstreamHostCircuitThreshold,
+    );
+    if (admission.kind === "blocked") {
+      return upstreamHostCircuitOpenResponse(admission.retryAfterSeconds);
+    }
+    pendingHostAdmissionLease = admission.lease;
   }
 
   {
@@ -1728,6 +1776,9 @@ async function handleResponsesInner(
   }
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
+    let hostAdmissionLease = pendingHostAdmissionLease;
+    pendingHostAdmissionLease = null;
+    try {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, parsed._rawBody, translatorBudget);
@@ -1754,6 +1805,41 @@ async function handleResponsesInner(
     }
     let request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     recordAdapterReasoning(logCtx, request);
+    const actualHostKey = upstreamHostHealthKey(
+      route.providerName,
+      safeOriginLabel(request.url),
+    );
+    const hostKey = route.provider.authMode === "forward"
+      ? actualHostKey
+      : null;
+    const hostCircuitEnabled = hostKey !== null
+      && normalizeUpstreamHostCircuitThreshold(config.upstreamHostCircuitThreshold) > 0;
+    if (hostAdmissionLease && hostAdmissionLease.key !== hostKey) {
+      return formatErrorResponse(502, "upstream_error", "Provider host changed after circuit admission");
+    }
+    if (options.abortSignal?.aborted) {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return clientCancelledResponse();
+    }
+    if (!hostAdmissionLease && hostCircuitEnabled) {
+      const admission = acquireUpstreamHostAdmission(
+        hostKey!,
+        config.upstreamHostCircuitThreshold,
+      );
+      if (admission.kind === "blocked") {
+        releaseCodexAuthContextProbeLease(authCtx);
+        return upstreamHostCircuitOpenResponse(admission.retryAfterSeconds);
+      }
+      hostAdmissionLease = admission.lease;
+    }
+    const settleObservedHostResponse = (): void => {
+      if (hostCircuitEnabled) {
+        resetUpstreamHostHealth(actualHostKey, hostAdmissionLease);
+      } else {
+        resetUpstreamHostHealth(actualHostKey);
+      }
+      hostAdmissionLease = null;
+    };
     const passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
       ? request.usageLog.inputTokens
       : undefined;
@@ -1769,16 +1855,30 @@ async function handleResponsesInner(
     let upstreamResponse: Response;
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
-      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (options.abortSignal?.aborted) {
+        releaseUpstreamHostAdmission(hostAdmissionLease);
+        hostAdmissionLease = null;
+        releaseCodexAuthContextProbeLease(authCtx);
+        return clientCancelledResponse();
+      }
       const outcome = classifyTransportFailureKind(err);
       // Host-level evidence stands regardless of pool membership: a direct
       // forward send has no pool accounting, but the reachability failure is
       // still host-wide, not account evidence (#914 review).
       if (outcome === "connect_neutral") {
-        recordUpstreamHostFailure(
-          upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)),
-          { code: transportErrorCode(err) },
-        );
+        if (hostCircuitEnabled) {
+          recordUpstreamHostFailure(actualHostKey, {
+            code: transportErrorCode(err),
+            threshold: config.upstreamHostCircuitThreshold,
+            lease: hostAdmissionLease,
+          });
+        } else {
+          recordUpstreamHostFailure(actualHostKey, { code: transportErrorCode(err) });
+        }
+        hostAdmissionLease = null;
+      } else {
+        releaseUpstreamHostAdmission(hostAdmissionLease);
+        hostAdmissionLease = null;
       }
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
@@ -1811,7 +1911,7 @@ async function handleResponsesInner(
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(res => {
-              resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+              settleObservedHostResponse();
               return res;
             });
         },
@@ -1870,7 +1970,7 @@ async function handleResponsesInner(
             }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
               route.provider.authMode === "forward")
               .then(res => {
-                resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+                settleObservedHostResponse();
                 return res;
               });
           },
@@ -2306,6 +2406,12 @@ async function handleResponsesInner(
       status: upstreamResponse.status,
       headers,
     });
+    } finally {
+      if (hostAdmissionLease) {
+        releaseUpstreamHostAdmission(hostAdmissionLease);
+        releaseCodexAuthContextProbeLease(authCtx);
+      }
+    }
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
@@ -3331,6 +3437,12 @@ async function handleResponsesInner(
   }
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");
+  } finally {
+    if (pendingHostAdmissionLease) {
+      releaseUpstreamHostAdmission(pendingHostAdmissionLease);
+      releaseCodexAuthContextProbeLease(authCtx);
+    }
+  }
 }
 
 

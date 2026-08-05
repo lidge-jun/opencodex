@@ -23,6 +23,7 @@ import {
   releaseCodexAuthContextProbeLease,
   resolveCodexAuthContext,
 } from "../src/codex/auth-context";
+import { clearUpstreamHostHealth } from "../src/codex/upstream-host-health";
 import { supportsNativeResponsesCompactEndpoint } from "../src/providers/openai-tiers";
 import type { RequestLogContext } from "../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../src/server/lifecycle";
@@ -571,6 +572,7 @@ describe("compact alternate-account attempt (#913)", () => {
     process.env.OPENCODEX_HOME = testDir;
     process.env.CODEX_HOME = testDir;
     clearCodexUpstreamHealth();
+    clearUpstreamHostHealth();
     clearAccountQuota();
     for (const id of ["pool-a", "pool-b"]) {
       saveCodexAccountCredential(id, {
@@ -584,6 +586,7 @@ describe("compact alternate-account attempt (#913)", () => {
     return run(twoAccountPoolConfig()).finally(() => {
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
+      clearUpstreamHostHealth();
       clearAccountQuota();
       rmSync(testDir, { recursive: true, force: true });
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -927,6 +930,61 @@ describe("compact alternate-account attempt (#913)", () => {
       // Whichever account routing picked first carries the 429; the other carries B's 402.
       const statuses = ["pool-a", "pool-b"].map(id => health(id)?.lastFailureStatus).sort();
       expect(statuses).toEqual([402, 429]);
+    });
+  });
+
+  test("an opt-in regular circuit blocks before selecting another pool account", async () => {
+    await withPoolEnv("ocx-regular-host-circuit-", async config => {
+      config.upstreamHostCircuitThreshold = 1;
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        throw Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+      }) as typeof fetch;
+
+      const request = () => new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello", stream: false }),
+      });
+      const first = await handleResponses(request(), config, { model: "", provider: "" });
+      const second = await handleResponses(request(), config, { model: "", provider: "" });
+
+      expect(first.status).toBe(502);
+      expect(second.status).toBe(503);
+      expect(second.headers.get("retry-after")).toBe("30");
+      expect(sends).toBe(1);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    });
+  });
+
+  test("an opt-in compact circuit blocks before selecting another pool account", async () => {
+    await withPoolEnv("ocx-compact-host-circuit-", async config => {
+      config.upstreamHostCircuitThreshold = 1;
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        throw Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+      }) as typeof fetch;
+
+      const first = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})),
+        config,
+        { model: "", provider: "" },
+      );
+      const second = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({})),
+        config,
+        { model: "", provider: "" },
+      );
+
+      expect(first.status).toBe(502);
+      expect(second.status).toBe(503);
+      expect(second.headers.get("retry-after")).toBe("30");
+      expect(sends).toBe(1);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
     });
   });
 });

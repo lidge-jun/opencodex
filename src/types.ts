@@ -758,6 +758,11 @@ export interface OcxConfig {
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
   /**
+   * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
+   * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
+   */
+  upstreamHostCircuitThreshold?: number;
+  /**
    * Opt-in Anthropic OAuth account pool (#294). Default OFF.
    * Failover on 429 + sticky affinity; new sessions may pick lowest known 5h usage.
    * Experimental — see docs and GUI warning before enabling.
