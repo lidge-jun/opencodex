@@ -37,6 +37,12 @@ namespace 付き combo または routing-profile alias はその namespace prefi
 非公開のままにし、selector を公開名として使ってください。明示的な選択の動作と優先順位は
 [ルーティング構成](/reference/configuration/routing/)を参照してください。
 
+exact account-qualified route は mapping されたアカウントに固定され、canonical `openai` が Direct mode
+でも別アカウントの credential へ暗黙に fallback しません。unqualified native route では Pool routing が
+対象アカウントから選択し、Direct routing は caller の現在の native Codex login だけを使用します。
+`ocx account list`、`ocx account current`、`ocx account use` で Pool state を確認または変更できますが、
+これらの command は exact route の binding を変更しません。
+
 ## 予約済み OpenAI プロバイダー
 
 `openai` および `openai-apikey` は固定予約 ID です。 `openai.codexAccountMode` はデフォルトでは `"pool"` で、メインアカウントと追加アカウント全体を選択します。 `"direct"` は、現在の呼び出し元/メイン ログインのみを使用します。 API は、設定された API キーまたはキー プールのみを使用します。ベア モデルまたは `openai-apikey/<model>` を使用します。クロスルート認証情報のフォールバックはありません。 API GPT-5.6 行は 1,050,000 コンテキスト / 最大 922,000 入力メタデータを伝送し、Pro 仮想 ID は `reasoning.mode: "pro"` を使用してベース ワイヤー モデルに書き換えられます。

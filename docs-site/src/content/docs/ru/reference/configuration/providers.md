@@ -38,6 +38,13 @@ description: Записи провайдеров, аутентификация, 
 raw id аккаунтов и email приватными, а селектор используйте как публичное имя. Поведение и приоритет
 явного выбора описаны в разделе [Конфигурация маршрутизации](/reference/configuration/routing/).
 
+Exact account-qualified route остаётся закреплённым за сопоставленным аккаунтом и никогда не делает
+неявный fallback на credential другого аккаунта, даже когда canonical `openai` работает в Direct mode.
+Для unqualified native route Pool routing выбирает среди подходящих аккаунтов, а Direct routing
+использует только текущий native Codex login вызывающей стороны. Команды `ocx account list`,
+`ocx account current` и `ocx account use` позволяют просматривать или менять Pool state, но не меняют
+binding exact route.
+
 ## Зарезервированные провайдеры OpenAI
 
 `openai` и `openai-apikey` — это фиксированные зарезервированные id. `openai.codexAccountMode`

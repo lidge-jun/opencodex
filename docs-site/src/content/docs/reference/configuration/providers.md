@@ -38,6 +38,12 @@ its namespace prefix, and configured pool ids or selector targets also cannot re
 raw account ids and emails private; the selector is the public name. See [Routing Configuration](/reference/configuration/routing/)
 for exact-selection behavior and precedence.
 
+An exact account-qualified route stays pinned to its mapped account and never silently falls back to
+another account's credential, even when canonical `openai` is in Direct mode. For unqualified native
+routes, Pool routing chooses among eligible accounts; Direct routing uses only the caller's current
+native Codex login. Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect or
+change Pool state; these commands do not change an exact route's binding.
+
 ## Reserved OpenAI providers
 
 `openai` and `openai-apikey` are fixed reserved ids. `openai.codexAccountMode` is `"pool"` by default

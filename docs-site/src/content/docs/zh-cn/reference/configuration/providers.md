@@ -36,6 +36,12 @@ pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex 
 与 email 应保持私密，selector 才是公开名称。明确选择的行为和优先级见
 [路由配置](/zh-cn/reference/configuration/routing/)。
 
+exact account-qualified route 会固定到其 mapping 的账户；即使 canonical `openai` 处于 Direct mode，
+也绝不会静默 fallback 到其他账户的 credential。对于 unqualified native route，Pool routing 会从符合
+条件的账户中选择，Direct routing 只使用 caller 当前的 native Codex login。`ocx account list`、
+`ocx account current` 和 `ocx account use` 可用于查看或更改 Pool state，但这些 command 不会改变 exact
+route 的 binding。
+
 ## 保留的 OpenAI 提供者
 
 `openai` 和 `openai-apikey` 是固定的保留 id。`openai.codexAccountMode` 默认是 `"pool"`，会在主账户和新增账户之间选择；`"direct"` 只使用当前调用者/主登录态。API 只使用其配置的 API key 或 key 池。请使用裸模型名或 `openai-apikey/<model>`；不存在跨路由凭据回退。API 的 GPT-5.6 行携带 1,050,000 上下文 / 922,000 最大输入元数据，而 Pro 虚拟 id 会重写为基础线协议模型并带上 `reasoning.mode: "pro"`。
