@@ -669,10 +669,12 @@ describe("compact alternate-account attempt (#913)", () => {
         config.codexAccountNamespaces = { side: "pool-a" };
         const bearers: string[] = [];
         const accountIds: string[] = [];
+        const encodedAccountId = "pool%5Facc%5Fa";
+        const encodedAccessToken = "pool%2Da%2Daccess%2Dtoken";
         const body = JSON.stringify({
-          account_id: "pool_acc_a",
-          access_token: "pool-a-access-token",
-          error: { message: "selected account pool_acc_a exhausted; Authorization: Bearer pool-a-access-token" },
+          account_id: encodedAccountId,
+          credential: encodedAccessToken,
+          error: { message: `selected account ${encodedAccountId} exhausted; credential ${encodedAccessToken}` },
         });
         globalThis.fetch = (async (_url: string, init?: RequestInit) => {
           const headers = new Headers(init?.headers);
@@ -680,12 +682,12 @@ describe("compact alternate-account attempt (#913)", () => {
           accountIds.push(headers.get("chatgpt-account-id") ?? "");
           return new Response(body, {
             status: rejection,
-            statusText: "Rejected pool_acc_a pool-a-access-token",
+            statusText: `Rejected ${encodedAccountId} ${encodedAccessToken}`,
             headers: {
               "content-type": "application/json",
               "retry-after": "42",
               "x-codex-primary-reset-at": "1900000000",
-              location: "https://example.test/retry?access_token=pool-a-access-token",
+              location: `https://example.test/retry?selected=${encodedAccountId}&credential=${encodedAccessToken}`,
             },
           });
         }) as typeof fetch;
@@ -703,11 +705,14 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(res.headers.get("x-codex-primary-reset-at")).toBe("1900000000");
         expect(res.headers.get("location")).toBeNull();
         expect(res.statusText).toBe("Rejected [REDACTED] [REDACTED]");
-        expect(await res.json()).toEqual({
+        const clientBody = await res.text();
+        expect(JSON.parse(clientBody)).toEqual({
           account_id: "[REDACTED]",
-          access_token: "[REDACTED]",
-          error: { message: "selected account [REDACTED] exhausted; Authorization: Bearer [REDACTED]" },
+          credential: "[REDACTED]",
+          error: { message: "selected account [REDACTED] exhausted; credential [REDACTED]" },
         });
+        expect(clientBody).not.toContain(encodedAccountId);
+        expect(clientBody).not.toContain(encodedAccessToken);
         expect(config.activeCodexAccountId).toBe("pool-a");
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       });

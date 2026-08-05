@@ -67,10 +67,12 @@ describe("codex warmup improvements", () => {
   test("warmCodexAccount sanitizes injected credentials in structured upstream detail", async () => {
     const accessToken = "warmup-private-access-123456";
     const accountId = "acct-warmup-private-123456";
+    const encodedAccessToken = "warmup%2Dprivate%2Daccess%2D123456";
+    const encodedAccountId = "acct%2Dwarmup%2Dprivate%2D123456";
     const unrelatedCredential = "independent-private-value-123456";
     const fetchMock = mock(async () =>
       new Response(JSON.stringify({
-        detail: `account ${accountId}; Authorization: Bearer ${accessToken}; x-api-key: ${unrelatedCredential}`,
+        detail: `account ${encodedAccountId}; credential ${encodedAccessToken}; path /v1%2Fmodels; x-api-key: ${unrelatedCredential}`,
       }), {
         status: 401,
         headers: { "Content-Type": "application/json" },
@@ -88,7 +90,12 @@ describe("codex warmup improvements", () => {
         expect(detail).not.toContain(privateValue);
         expect(reason).not.toContain(privateValue);
       }
+      for (const encodedPrivateValue of [encodedAccessToken, encodedAccountId]) {
+        expect(detail).not.toContain(encodedPrivateValue);
+        expect(reason).not.toContain(encodedPrivateValue);
+      }
       expect(detail).toContain("[REDACTED]");
+      expect(detail).toContain("path /v1%2Fmodels");
       expect(reason).toContain("[REDACTED]");
     }
   });

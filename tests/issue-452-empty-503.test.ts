@@ -185,6 +185,43 @@ describe("formatPassthroughUpstreamError (#452)", () => {
     );
   });
 
+  test("redacts percent-encoded echoes from the body, status, and metadata", async () => {
+    const selectedAccountId = "acct-private-123456";
+    const selectedAccessToken = "pool/private+access=123456";
+    const encodedAccountId = "acct%2Dprivate%2D123456";
+    const encodedAccessToken = "pool%2Fprivate%2Baccess%3D123456";
+    const body = JSON.stringify({
+      account_id: encodedAccountId,
+      credential: encodedAccessToken,
+      unrelated_path: "/v1%2Fmodels",
+    });
+    const headers = new Headers({
+      "content-type": "application/json",
+      "content-length": String(body.length),
+      etag: '"encoded-body"',
+      digest: "sha-256=encoded-body",
+      location: `https://example.test/retry?selected=${encodedAccountId}`,
+      "x-upstream-debug": `credential=${encodedAccessToken}`,
+      "x-safe-path": "/v1%2Fmodels",
+    });
+    const response = formatPassthroughUpstreamError(418, body, {
+      statusText: `Rejected ${encodedAccountId} ${encodedAccessToken}`,
+      headers,
+      redactExactValues: [selectedAccessToken, selectedAccountId],
+    });
+
+    expect(response.statusText).toBe(`Rejected ${REDACTED_SECRET} ${REDACTED_SECRET}`);
+    for (const header of ["content-length", "etag", "digest", "location", "x-upstream-debug"]) {
+      expect(response.headers.has(header)).toBe(false);
+    }
+    expect(response.headers.get("x-safe-path")).toBe("/v1%2Fmodels");
+    expect(await response.json()).toEqual({
+      account_id: REDACTED_SECRET,
+      credential: REDACTED_SECRET,
+      unrelated_path: "/v1%2Fmodels",
+    });
+  });
+
   test("unchanged bodies retain validators and unrelated account identifiers", async () => {
     const body = JSON.stringify({ account_id: "cloudflare-tenant", detail: "unchanged" });
     const headers = new Headers({

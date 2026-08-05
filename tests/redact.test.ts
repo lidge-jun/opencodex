@@ -566,15 +566,377 @@ describe("redactExactSecretOccurrences", () => {
     expect(JSON.parse(redacted)).toEqual({ account_id: REDACTED_SECRET, detail: "keep spacing" });
   });
 
+  test("redacts mixed percent-encoded exact values without changing unrelated bytes", () => {
+    const encodedAccount = "acct%2Dprivate%2d123%34%35%36";
+    const encodedToken = "pool%2fprivate%2Baccess%3d123456";
+    const input = `account=${encodedAccount}&credential=${encodedToken}&path=/v1%2Fmodels&malformed=%2`;
+    const redacted = redactExactSecretOccurrences(input, [
+      "acct-private-123456",
+      "pool/private+access=123456",
+    ]);
+
+    expect(redacted).toBe(
+      `account=${REDACTED_SECRET}&credential=${REDACTED_SECRET}&path=/v1%2Fmodels&malformed=%2`,
+    );
+    expect(redacted).not.toContain(encodedAccount);
+    expect(redacted).not.toContain(encodedToken);
+  });
+
+  test("redacts percent-encoded UTF-8 and literal percent values", () => {
+    expect(redactExactSecretOccurrences(
+      "selected=acct%2D%E9%9B%AA%2D%25",
+      ["acct-雪-%"],
+    )).toBe(`selected=${REDACTED_SECRET}`);
+    expect(redactExactSecretOccurrences("selected=%25", ["%"]))
+      .toBe(`selected=${REDACTED_SECRET}`);
+    expect(redactExactSecretOccurrences("selected=%E9%9B", ["雪"]))
+      .toBe("selected=%E9%9B");
+    expect(redactExactSecretOccurrences("selected=acct+private", ["acct private"]))
+      .toBe("selected=acct+private");
+    expect(redactExactSecretOccurrences("selected=acct%252Dprivate", ["acct-private"]))
+      .toBe("selected=acct%252Dprivate");
+  });
+
+  test("redacts an encoded longer value before its literal prefix", () => {
+    const shortId = "acct-123456";
+    const longId = "acct-123456-secondary";
+    const longEncoded = "acct%2D123456%2Dsecondary";
+    const shortEncoded = "acct%2D123456";
+    const redacted = redactExactSecretOccurrences(
+      `id=${longEncoded}|fallback=${shortEncoded}`,
+      [shortId, longId],
+    );
+
+    expect(redacted).toBe(`id=${REDACTED_SECRET}|fallback=${REDACTED_SECRET}`);
+    expect(redacted).not.toContain(longEncoded);
+    expect(redacted).not.toContain(shortEncoded);
+    expect(redacted).not.toContain("secondary");
+  });
+
+  test("composes JSON and percent aliases without rewriting safe siblings", () => {
+    const input = '{ "id" : "acct\\u002dprivate%2F123", "detail" : "keep %20 spacing" }';
+    const redacted = redactExactSecretOccurrences(input, ["acct-private/123"]);
+
+    expect(redacted).toBe('{ "id" : "[REDACTED]", "detail" : "keep %20 spacing" }');
+    expect(JSON.parse(redacted)).toEqual({ id: REDACTED_SECRET, detail: "keep %20 spacing" });
+  });
+
+  test("composes percent-encoded JSON with JSON Unicode aliases", () => {
+    const input = "payload=%7B%22id%22%3A%22acct%5Cu002dprivate%5Cu002d123456%22%7D";
+    const redacted = redactExactSecretOccurrences(input, ["acct-private-123456"]);
+
+    expect(redacted).toBe("payload=%7B%22id%22%3A%22%5BREDACTED%5D%22%7D");
+    expect(JSON.parse(decodeURIComponent(redacted.slice("payload=".length))))
+      .toEqual({ id: REDACTED_SECRET });
+  });
+
+  test("redacts the longest reverse-composed alias before a literal prefix", () => {
+    const input = "payload=%22acct%5Cu002dprivate%22";
+    const redacted = redactExactSecretOccurrences(input, ["acct", "acct-private"]);
+
+    expect(redacted).toBe("payload=%22%5BREDACTED%5D%22");
+    expect(decodeURIComponent(redacted.slice("payload=".length)))
+      .toBe(`"${REDACTED_SECRET}"`);
+  });
+
+  test("keeps raw JSON valid when only its escaped contents are percent encoded", () => {
+    const input = '{"id":"acct%5Cu002dprivate%5Cu002d123456","keep":1}';
+    const redacted = redactExactSecretOccurrences(input, ["acct-private-123456"]);
+
+    expect(redacted).toBe(`{"id":"${REDACTED_SECRET}","keep":1}`);
+    expect(JSON.parse(redacted)).toEqual({ id: REDACTED_SECRET, keep: 1 });
+  });
+
+  test("does not treat an encoded quote inside raw JSON as a token boundary", () => {
+    const input = '{"id":"acct%22private","gate":"%5C"}';
+    const redacted = redactExactSecretOccurrences(input, ["acct", 'acct"private']);
+
+    expect(redacted).toBe(`{"id":"${REDACTED_SECRET}","gate":"%5C"}`);
+    expect(JSON.parse(redacted)).toEqual({ id: REDACTED_SECRET, gate: "%5C" });
+    expect(redacted).not.toContain("private");
+
+    const paired = '{"id":"pre%22acct%22post","gate":"%5C"}';
+    const pairedRedacted = redactExactSecretOccurrences(
+      paired,
+      ["acct", 'pre"acct"post'],
+    );
+    expect(JSON.parse(pairedRedacted)).toEqual({ id: REDACTED_SECRET, gate: "%5C" });
+  });
+
+  test("redacts mixed raw and encoded JSON token boundaries", () => {
+    for (const input of [
+      'payload=%22acct%5Cu002dprivate"',
+      'payload="acct%5Cu002dprivate%22',
+      'payload=%7B%22id%22%3A%22acct%5Cu002dprivate"%7D',
+    ]) {
+      const redacted = redactExactSecretOccurrences(input, ["acct-private"]);
+      const payload = redacted.slice("payload=".length);
+      const decoded = JSON.stringify(JSON.parse(decodeURIComponent(payload)));
+
+      expect(decoded).not.toContain("acct-private");
+      expect(decoded).toContain(REDACTED_SECRET);
+    }
+  });
+
+  test("redacts raw JSON boundaries that become valid after URL decoding", () => {
+    const secret = 'acct"private';
+    const wire = '"acct%5C"private"';
+    const redacted = redactExactSecretOccurrences(`payload=${wire}`, ["acct", secret]);
+    const decoded = JSON.parse(decodeURIComponent(redacted.slice("payload=".length)));
+
+    expect(decoded).toBe(REDACTED_SECRET);
+    expect(redacted).not.toContain("private");
+  });
+
+  test("prefers a whole-token composition over a prefix in another projection", () => {
+    const secret = "acct\\";
+    const wire = '"acct%5C%5C"';
+    const redacted = redactExactSecretOccurrences(wire, ["acct", secret]);
+
+    expect(JSON.parse(decodeURIComponent(redacted))).toBe(REDACTED_SECRET);
+    expect(redacted).not.toContain("%5C");
+  });
+
+  test("handles escaped JSON keys without skipping the following value", () => {
+    for (const input of [
+      "payload=%7B%22k%5Cu0065y%22%3A%22acct%5Cu002dprivate%22%7D",
+      'payload=%7B%22k%5Cu0065y"%3A%22acct%5Cu002dprivate"%7D',
+    ]) {
+      const redacted = redactExactSecretOccurrences(input, ["acct-private"]);
+      expect(JSON.parse(decodeURIComponent(redacted.slice("payload=".length))))
+        .toEqual({ key: REDACTED_SECRET });
+    }
+
+    const secretKey = "acct-private";
+    const keyInput = "payload=%7B%22acct%5Cu002dprivate%22%3A1%7D";
+    const keyRedacted = redactExactSecretOccurrences(keyInput, [secretKey]);
+    expect(JSON.parse(decodeURIComponent(keyRedacted.slice("payload=".length))))
+      .toEqual({ [REDACTED_SECRET]: 1 });
+  });
+
+  test("accepts ordinary diagnostic punctuation after a composed token", () => {
+    for (const [input, expected] of [
+      ["payload=%22acct%5Cu002dprivate%22|next", "payload=%22%5BREDACTED%5D%22|next"],
+      ["payload=%22acct%5Cu002dprivate%22: unavailable", "payload=%22%5BREDACTED%5D%22: unavailable"],
+      ["%22acct%5Cu002dprivate%22: unavailable", "%22%5BREDACTED%5D%22: unavailable"],
+    ]) {
+      expect(redactExactSecretOccurrences(input!, ["acct-private"])).toBe(expected!);
+    }
+  });
+
+  test("accepts word-adjacent whole composed tokens", () => {
+    const secret = 'acct"private';
+    for (const [input, expected] of [
+      ["%22acct%5C%22private%22word", "%22%5BREDACTED%5D%22word"],
+      ['"acct%5C"private"word', '"%5BREDACTED%5D"word'],
+    ]) {
+      expect(redactExactSecretOccurrences(input!, ["acct", secret])).toBe(expected!);
+    }
+  });
+
+  test("accepts word-adjacent composed substring matches", () => {
+    for (const input of [
+      "%22prefix-acct%5Cu002dprivate-suffix%22word",
+      '"prefix-acct%5Cu002dprivate-suffix%22word',
+      '%22prefix-acct%5Cu002dprivate-suffix"word',
+    ]) {
+      const redacted = redactExactSecretOccurrences(input, ["acct-private"]);
+      expect(JSON.parse(decodeURIComponent(redacted.slice(0, -"word".length))))
+        .toBe(`prefix-${REDACTED_SECRET}-suffix`);
+    }
+  });
+
+  test("a safe adjacent token cannot hide a later composed match", () => {
+    const target = '%22%5Cu0061cct%5Cu002dprivate"';
+    const safe = '"safe%5Cu002dvalue%22';
+    const input = [target, safe, target].join("word");
+    const redacted = redactExactSecretOccurrences(input, ["acct-private"]);
+
+    expect(redacted).not.toContain("%5Cu0061cct%5Cu002dprivate");
+    expect(redacted.match(/%5BREDACTED%5D/g)).toHaveLength(2);
+
+    const encodedThenRawSafe = '%22safe"word"acct%5Cu002dprivate%22';
+    expect(redactExactSecretOccurrences(encodedThenRawSafe, ["acct-private"]))
+      .toBe('%22safe"word"%5BREDACTED%5D%22');
+
+    const rawTarget = '"%5Cu0061cct%5Cu002dprivate"';
+    const rawThenEncodedSafe = '"%5Cu0073afe-value%22';
+    const rawInput = [rawTarget, rawThenEncodedSafe, rawTarget].join("word");
+    const rawRedacted = redactExactSecretOccurrences(rawInput, ["acct-private"]);
+    expect(rawRedacted).not.toContain("%5Cu0061cct%5Cu002dprivate");
+    expect(rawRedacted.match(/\[REDACTED\]|%5BREDACTED%5D/g)).toHaveLength(2);
+  });
+
+  test("does not claim an escaped quote followed by the outer raw close", () => {
+    const secret = 'acct=/雪"';
+    const input = '"%61%63ct=%2F雪%5C""';
+    const redacted = redactExactSecretOccurrences(input, ["acct", secret]);
+
+    expect(JSON.parse(decodeURIComponent(redacted))).toBe(REDACTED_SECRET);
+  });
+
+  test("does not pair a mixed token's raw opening with a later raw quote", () => {
+    const secret = "acct\\";
+    const input = 'payload="acct%5C%5C%22|next "foo"';
+    const redacted = redactExactSecretOccurrences(input, [secret]);
+
+    expect(redacted).toBe('payload="%5BREDACTED%5D%22|next "foo"');
+    expect(redacted).not.toContain("%5C");
+  });
+
+  test("retains a valid raw token when an encoded quote is content", () => {
+    const secret = 'acct-"-private';
+    for (const input of [
+      '"acct\\u002d%22-private"',
+      '{"id":"acct\\u002d%22-private","keep":1}',
+    ]) {
+      const redacted = redactExactSecretOccurrences(input, [secret]);
+      const decoded = JSON.parse(redacted);
+
+      expect(typeof decoded === "string" ? decoded : decoded.id).toBe(REDACTED_SECRET);
+    }
+  });
+
+  test("redacts raw tokens adjacent to diagnostic text", () => {
+    const secret = 'acct-"-private';
+    for (const [input, expected] of [
+      ['prefix"acct\\u002d%22-private"', `prefix"${REDACTED_SECRET}"`],
+      ['prefix\\\\"acct\\u002d%22-private"', `prefix\\\\"${REDACTED_SECRET}"`],
+    ]) {
+      expect(redactExactSecretOccurrences(input!, [secret])).toBe(expected!);
+    }
+
+    expect(redactExactSecretOccurrences(
+      'x"acct\\u002d%22/private"',
+      ['acct-"/private'],
+    )).toBe(`x"${REDACTED_SECRET}"`);
+  });
+
+  test("composes raw JSON backslashes with percent-encoded escape characters", () => {
+    for (const input of [
+      '"acct\\%75%30%30%32%64private"',
+      '"acct\\u%30%30%32%64private"',
+      '{"id":"acct\\%75%30%30%32%64private"}',
+    ]) {
+      const redacted = redactExactSecretOccurrences(input, ["acct-private"]);
+      const decoded = JSON.parse(redacted);
+
+      expect(typeof decoded === "string" ? decoded : decoded.id).toBe(REDACTED_SECRET);
+    }
+  });
+
+  test("does not treat mixed closing quotes as raw token openings", () => {
+    const secret = "acct=a\\";
+    const input = '{"%61%63c%74=a%5C%5C"%3A%7B%22v":%22%61%63ct%3D%61%5C%5C%22,%22sa%66e"%3A"k%65ep%22}}';
+    const redacted = redactExactSecretOccurrences(input, [secret]);
+    const decoded = JSON.parse(decodeURIComponent(redacted));
+
+    expect(decoded).toEqual({ [REDACTED_SECRET]: { v: REDACTED_SECRET, safe: "keep" } });
+    expect(redacted).not.toContain("%5C");
+  });
+
+  test("redacts reverse-composed fields before raw quote pairing", () => {
+    const secret = "acct%%=雪\\";
+    const input = '{"%61cc%74%25%25%3D雪%5C%5C"%3A%7B%22v":%22%61%63ct%25%25%3D雪%5C%5C%22,%22sa%66e"%3A"keep%22%7D%7D';
+    const redacted = redactExactSecretOccurrences(input, [secret]);
+    const decoded = JSON.parse(decodeURIComponent(redacted));
+
+    expect(decoded).toEqual({ [REDACTED_SECRET]: { v: REDACTED_SECRET, safe: "keep" } });
+    expect(redacted).not.toContain("%5C");
+  });
+
+  test("redacts exact values from both valid JSON projections", () => {
+    const accountInput = '["x%22,%22acct%5Cu002dprivate"]';
+    const accountRedacted = redactExactSecretOccurrences(accountInput, ["acct-private"]);
+    expect(JSON.parse(decodeURIComponent(accountRedacted)))
+      .toEqual(["x", REDACTED_SECRET]);
+
+    const token = "eyJhbGci.abc.def";
+    const tokenInput = '{"a":"x%22,%22oauth%22:%22eyJhbGci%5Cu002eabc%5Cu002edef"}';
+    const tokenRedacted = redactExactSecretOccurrences(tokenInput, [token]);
+    expect(JSON.parse(decodeURIComponent(tokenRedacted)))
+      .toEqual({ a: "x", oauth: REDACTED_SECRET });
+  });
+
+  test("rejects decoded token boundaries that cross raw JSON fields", () => {
+    const input = JSON.stringify({ a: "", b: "x%5C", c: "" });
+    const redacted = redactExactSecretOccurrences(input, ['x",']);
+
+    expect(redacted).toBe(input);
+    expect(JSON.parse(redacted)).toEqual({ a: "", b: "x%5C", c: "" });
+  });
+
+  test("redacts encoded UTF-8 matches across 64 KiB boundaries", () => {
+    const secret = "acct-😀-private";
+    const encoded = "acct%2D%F0%9F%98%80%2Dprivate";
+    const prefix = "x".repeat(64 * 1024 - 6);
+    const redacted = redactExactSecretOccurrences(
+      `${prefix}${encoded}|${encoded}`,
+      [secret],
+    );
+
+    expect(redacted).toBe(`${prefix}${REDACTED_SECRET}|${REDACTED_SECRET}`);
+  });
+
+  test("fails closed when percent mapping complexity exceeds its bound", () => {
+    const fragmented = "%20%E9%9B%AA".repeat(70_000);
+
+    expect(redactExactSecretOccurrences(fragmented, ["not-present"]))
+      .toBe(REDACTED_SECRET);
+  });
+
+  test("fails closed when a homogeneous encoded run exceeds its work bound", () => {
+    const dense = "%20".repeat(70_000);
+
+    expect(redactExactSecretOccurrences(dense, ["not-present"]))
+      .toBe(REDACTED_SECRET);
+  });
+
+  test("fails closed when mixed quote candidates exceed their work bound", () => {
+    const dense = `"${"%22".repeat(2_000)}%5C"`;
+
+    expect(redactExactSecretOccurrences(dense, ["not-present"]))
+      .toBe(JSON.stringify(REDACTED_SECRET));
+  });
+
+  test("fails closed on oversized JSON tokens that require composed decoding", () => {
+    const input = JSON.stringify({ detail: `safe\n${"x".repeat(1_100_000)}`, keep: 1 });
+    const redacted = redactExactSecretOccurrences(input, ["not-present"]);
+
+    expect(JSON.parse(redacted)).toEqual({ detail: REDACTED_SECRET, keep: 1 });
+  });
+
+  test("fails closed on oversized URL-outer JSON tokens", () => {
+    const huge = "x".repeat(1_100_000);
+    for (const closingQuote of ["%22", '"']) {
+      const input = `payload=%22safe%5Cn${huge}${closingQuote}&keep=1`;
+      const redacted = redactExactSecretOccurrences(input, ["not-present"]);
+      const [payload, keep] = redacted.slice("payload=".length).split("&");
+
+      expect(JSON.parse(decodeURIComponent(payload!))).toBe(REDACTED_SECRET);
+      expect(keep).toBe("keep=1");
+    }
+  });
+
+  test("fails closed safely on oversized structurally ambiguous JSON", () => {
+    const input = JSON.stringify({ "x%5C": "b".repeat(1024 * 1024 + 100) });
+    const redacted = redactExactSecretOccurrences(input, ["not-present"]);
+
+    expect(JSON.parse(redacted)).toBe(REDACTED_SECRET);
+    expect(redactExactSecretOccurrences(input, [undefined, null, ""])).toBe(input);
+  });
+
   test("sanitizes exact and generically framed secrets before callers slice diagnostics", () => {
     const accessToken = "opaque-pool-access-value-123456";
     const accountId = "acct-private-123456";
-    const input = `${"x".repeat(455)} ${accountId} Authorization: Bearer ${accessToken}`;
+    const encodedAccountId = "acct%2Dprivate%2D123456";
+    const input = `${"x".repeat(455)} ${encodedAccountId} Authorization: Bearer ${accessToken}`;
     const redacted = redactClientDiagnostic(input, [accessToken, accountId]);
     const capped = redacted.slice(0, 500);
 
     expect(capped).toContain(REDACTED_SECRET);
     expect(capped).not.toContain(accountId);
+    expect(capped).not.toContain(encodedAccountId);
     expect(capped).not.toContain(accessToken);
     expect(capped).not.toContain(accessToken.slice(0, 8));
   });

@@ -1905,15 +1905,17 @@ describe("server local API auth", () => {
   });
 
   test("pool redirects cannot reflect the injected credential in Location or body", async () => {
+    const encodedAccountId = "acct%2Dpool%2Da";
+    const encodedAccessToken = "pool%2Da%2Dtoken";
     const harness = await startPoolRetryHarness(() => new Response(
-      "redirecting acct-pool-a with Authorization: Bearer pool-a-token",
+      `redirecting ${encodedAccountId} with credential ${encodedAccessToken}`,
       {
         status: 307,
-        statusText: "Redirect acct-pool-a pool-a-token",
+        statusText: `Redirect ${encodedAccountId} ${encodedAccessToken}`,
         headers: {
           "content-type": "text/plain",
-          location: "https://example.test/retry?access_token=pool-a-token",
-          "x-upstream-authorization": "Bearer pool-a-token",
+          location: `https://example.test/retry?selected=${encodedAccountId}&credential=${encodedAccessToken}`,
+          "x-upstream-credential": encodedAccessToken,
         },
       },
     ), { secondAccount: false });
@@ -1923,11 +1925,15 @@ describe("server local API auth", () => {
 
       expect(response.status).toBe(307);
       expect(response.headers.get("location")).toBeNull();
-      expect(response.headers.get("x-upstream-authorization")).toBeNull();
-      expect(body).toBe("redirecting [REDACTED] with Authorization: Bearer [REDACTED]");
+      expect(response.headers.get("x-upstream-credential")).toBeNull();
+      expect(body).toBe("redirecting [REDACTED] with credential [REDACTED]");
       for (const privateValue of ["acct-pool-a", "pool-a-token"]) {
         expect(body).not.toContain(privateValue);
         expect(response.statusText).not.toContain(privateValue);
+      }
+      for (const encodedPrivateValue of [encodedAccountId, encodedAccessToken]) {
+        expect(body).not.toContain(encodedPrivateValue);
+        expect(response.statusText).not.toContain(encodedPrivateValue);
       }
     } finally {
       await stopPoolRetryHarness(harness);
