@@ -25,6 +25,7 @@ import {
 import {
   formatProviderDisplayName,
   isCatalogProviderId,
+  providerIconSrc,
 } from "../gui/src/provider-icons";
 import { en } from "../gui/src/i18n/en";
 import { interpolate, type TFn } from "../gui/src/i18n/shared";
@@ -455,6 +456,11 @@ describe("provider-icons", () => {
   test("catalog membership excludes legacy Multi and custom ids", () => {
     expect(isCatalogProviderId("openai-multi")).toBe(false);
     expect(isCatalogProviderId("my-proxy")).toBe(false);
+  });
+
+  test("commandcode maps to its own brand mark and display name", () => {
+    expect(providerIconSrc("commandcode")).toBe("/provider-icons/commandcode-color.svg");
+    expect(formatProviderDisplayName("commandcode", englishT)).toBe("Command Code");
   });
 });
 
