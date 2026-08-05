@@ -109,6 +109,14 @@ export function matchingPreviewTags(version: string, tags: string[]): string[] {
  *   that stable's changelog (e.g. 2.7.41-preview → 2.7.43-preview after 2.7.42).
  * - Stable releases: newest prior stable only. Matching preview carry adjusts the
  *   notes range start separately when assembling latest notes.
+ *
+ * Callers must pass the FULL repo tag set, not `git tag --merged HEAD`. Stable
+ * tags live on main's lineage, which the preview branch does not carry, and a
+ * trailing same-core preview (vX.Y.Z-preview.* shipped after vX.Y.Z) must not
+ * hide the stable: for `2.10.0-preview.*` after `v2.9.1` + `v2.9.1-preview.*`,
+ * the baseline must be `v2.9.1`, not the trailing preview. Semver ordering
+ * already ranks the stable above its own trailing preview, so the full set is
+ * sufficient; restricting to merged tags is what reintroduces the bug.
  */
 export function previousReleaseNotesTag(version: string, tags: string[]): string | null {
   if (!version) return null;

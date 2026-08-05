@@ -629,6 +629,18 @@ describe("GitHub Actions hardening", () => {
     expect(createStep.indexOf("gh api")).toBeGreaterThan(-1);
     expect(createStep.indexOf('git tag "$release_tag"')).toBeGreaterThan(-1);
     expect(createStep.indexOf("gh api")).toBeLessThan(createStep.indexOf('git tag "$release_tag"'));
+    // The notes baseline must read the FULL tag set, not `--merged HEAD`: stable
+    // tags live on main's lineage, which the preview branch does not carry, and a
+    // trailing same-core preview must not hide the stable from the range
+    // (v2.9.1-preview → v2.10.0-preview is wrong; the range must start at v2.9.1).
+    expect(createStep).toContain("git tag --list 'v[0-9]*' |");
+    expect(createStep).not.toContain("--merged HEAD");
+    // The merged-only restriction remains on the service gate, whose
+    // changed-files comparison is deliberately lineage-relative.
+    const ciGateStep = workflow
+      .split("- name: Require successful Cross-platform CI for this commit")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(ciGateStep).toContain("--merged HEAD");
     // First-channel releases must not call generate-notes without an explicit baseline
     // (GitHub would otherwise pick the newest repo tag, possibly from the other channel).
     // Scope to the single if-block that owns generate-notes; createStep has two

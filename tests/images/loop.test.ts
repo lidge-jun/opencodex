@@ -251,10 +251,27 @@ describe("runWithImageBridge", () => {
 
   test("retry wait longer than connectTimeoutMs restarts the header deadline (no 504)", async () => {
     let sends = 0;
+    const attemptSignals: (AbortSignal | undefined)[] = [];
+    const abortedAtFetch: boolean[] = [];
     const retryingAdapter: ProviderAdapter = {
       ...mockAdapter,
-      fetchResponse: async () => {
+      fetchResponse: async (_request, ctx) => {
         sends += 1;
+        // Captured AT FETCH TIME. Checking `aborted` later would observe the
+        // deadline expiring naturally after the body was consumed, which says
+        // nothing about whether the replay started with a live budget.
+        attemptSignals.push(ctx?.abortSignal);
+        abortedAtFetch.push(ctx?.abortSignal?.aborted ?? true);
+        /*
+         * Honor the deadline the bridge handed us.
+         *
+         * Without this the mock answers 200 no matter what, so the deadline
+         * could be left armed across the backoff and the test would still pass.
+         * That is not hypothetical: removing BOTH the pre-wait `clear()` and the
+         * post-wait re-arm in src/images/loop.ts left this test green, which
+         * means the regression it is named after was never actually guarded.
+         */
+        ctx?.abortSignal?.throwIfAborted();
         if (sends === 1) {
           return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
             status: 429,
@@ -272,12 +289,41 @@ describe("runWithImageBridge", () => {
       connectTimeoutMs: 100,
       retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 150, maxIntervalMs: 60_000, respectRetryAfter: false },
     });
+    /*
+     * Status first, and before the body is consumed. A header deadline that
+     * expires on the FIRST iteration is answered eagerly with an HTTP 504 and a
+     * JSON body — there is no SSE stream yet — so a stream-only assertion cannot
+     * see it.
+     */
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+
     const sse = await response.text();
     // The deliberate backoff must not consume the response-header deadline: a fresh deadline is
     // armed after the wait, so the replay gets a new connect budget instead of a 504.
     expect(sends).toBe(2);
     expect(sse).toContain("recovered");
-    expect(sse).not.toContain("504");
+    /*
+     * Terminal events, not a substring search for "504".
+     *
+     * The old assertion was `expect(sse).not.toContain("504")`, which searched
+     * the whole stream — including the random 32-hex response id. Roughly one id
+     * in 137 contains "504", so with two ids in a stream this reddened about 1
+     * run in 69 for no reason at all (measured: 1 failure in 37 local runs).
+     * It was also unable to detect a REAL 504, whose JSON body carries a timeout
+     * message rather than the number.
+     */
+    expect(sse).toContain("event: response.completed");
+    expect(sse).not.toContain("event: response.failed");
+    /*
+     * And the mechanism itself: the replay must get a NEW deadline, not the
+     * disarmed remains of the first one. Identity is the only way to see the
+     * difference, since a cleared deadline and a fresh deadline both fail to
+     * expire.
+     */
+    expect(attemptSignals).toHaveLength(2);
+    expect(attemptSignals[1]).not.toBe(attemptSignals[0]);
+    expect(abortedAtFetch).toEqual([false, false]);
   }, 5_000);
 
   test("retryOn429 budget is shared across iterations (per request, not per round)", async () => {

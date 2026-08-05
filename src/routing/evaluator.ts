@@ -9,6 +9,7 @@
 import type { OcxConfig } from "../types";
 import {
   buildRouteDecisionTrace,
+  MAX_REQUIREMENTS,
   type RouteCapabilityEvidence,
   type RouteCostEvidence,
   type RouteDecisionTraceV1,
@@ -265,8 +266,9 @@ export function evaluatePolicyProfile(
     const unsatisfied = bad.some(requirement => requirement.outcome === "unsatisfied");
     const unknown = bad.some(requirement => requirement.outcome === "unknown");
     // Unknown capability handling per profile: exclude (default), penalize,
-    // or allow. "penalize" currently cannot move the score because RI-04 has
-    // no capability component yet - the capability score arrives with RI-05.
+    // or allow. "penalize" cannot move the score while configuredPriorityScore
+    // is the only component; the capability score dimension is still future
+    // (RI-06+), so "penalize" behaves identically to "allow" in this release.
     const excludedByUnknown = unknown && profile.unknownEvidence.capability === "exclude";
     const costLimit = profile.limits.maxEstimatedCostUsd;
     const estimatedCost = evidence.cost?.estimatedUsd;
@@ -311,7 +313,7 @@ export function evaluatePolicyProfile(
     profile: { id: profile.id, revision: profile.revision },
     // Flat, capped summary (truncation is flagged by the builder); per-candidate
     // attribution lives in each candidate's `requirements`/`exclusions`.
-    requirements: candidates.flatMap(candidate => candidate.requirements).slice(0, 16),
+    requirements: candidates.flatMap(candidate => candidate.requirements).slice(0, MAX_REQUIREMENTS),
     candidates: candidates.map(candidate => ({
       provider: candidate.provider,
       model: candidate.model,

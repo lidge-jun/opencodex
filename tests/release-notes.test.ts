@@ -105,6 +105,19 @@ describe("previousReleaseNotesTag", () => {
       "v2.7.42",
     ])).toBe("v2.7.42");
   });
+
+  test("a trailing same-core preview does not hide the stable (2.9.1 → 2.10.0-preview)", () => {
+    // v2.9.1-preview.20260802 shipped after the v2.9.1 stable on another lineage;
+    // the next preview train must still baseline the stable, not the trailing
+    // preview. This is the workflow's `git tag --list` (full set) contract: the
+    // same input restricted to `--merged HEAD` would drop v2.9.1 and wrongly
+    // return v2.9.1-preview.20260802.
+    expect(previousReleaseNotesTag("2.10.0-preview.20260802", [
+      "v2.9.1-preview.20260802",
+      "v2.9.1",
+      "v2.10.0-preview.20260802",
+    ])).toBe("v2.9.1");
+  });
 });
 
 describe("stripCarriedReleaseNotes", () => {

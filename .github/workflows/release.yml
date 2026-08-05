@@ -168,7 +168,11 @@ jobs:
 
           echo "Cross-platform CI passed for ${GITHUB_SHA}: ${ci_url}"
 
-          # Notes / service baseline:
+          # Service baseline (lineage-relative): merged tags only, so the
+          # changed-files gate compares against the last release actually
+          # reachable from this commit. The release-notes baseline below uses the
+          # full tag set instead, so a stable on another lineage can anchor the
+          # changelog range.
           # - Preview: newest prior release of either channel (stable or preview). A
           #   preview→preview-only baseline skips a shipped stable and restates it.
           # - Stable: newest prior stable only (matching preview carry adjusts the
@@ -310,8 +314,14 @@ jobs:
 
           # Channel previous tag for Full Changelog + default notes baseline.
           # Preview baselines any prior release; stable baselines prior stable only.
+          # Read the FULL tag set: stable tags live on main's lineage, which the
+          # preview branch does not carry, and a trailing same-core preview
+          # (vX.Y.Z-preview.* shipped after vX.Y.Z) must not hide the stable from
+          # the compare range. The helper's semver ordering already ranks the
+          # stable above its own trailing preview, so the full tag list yields
+          # v2.9.1 → v2.10.0-preview instead of v2.9.1-preview → v2.10.0-preview.
           previous_tag="$(
-            git tag --merged HEAD --list 'v[0-9]*' |
+            git tag --list 'v[0-9]*' |
               bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"
           )"
           npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
