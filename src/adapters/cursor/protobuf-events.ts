@@ -340,8 +340,19 @@ function replacementHunk(oldString: string, newString: string): { hunk: string }
         "structured edit requires a non-empty old_string to locate the replacement; for new files or insertions without existing text, call apply_patch with an `*** Add File` / context hunk or use the shell bridge",
     };
   }
-  const removed = patchLines(oldString).map(line => `-${line}`);
-  const added = patchLines(newString).map(line => `+${line}`);
+  const oldLines = patchLines(oldString);
+  const newLines = patchLines(newString);
+  // Line-based patch semantics cannot express an edit that only adds or removes the file's
+  // final newline, and an old/new pair that normalizes to the same lines is a silent no-op —
+  // reject it rather than emitting an empty hunk that apply_patch would drop.
+  if (oldLines.length === 0 && newLines.length === 0) {
+    return { error: "structured edit requires a non-empty old_string; an empty replacement is not a valid edit" };
+  }
+  if (oldLines.length === newLines.length && oldLines.every((line, i) => line === newLines[i])) {
+    return { error: "structured edit old_string and new_string are identical after line normalization; the replacement is a no-op and was dropped" };
+  }
+  const removed = oldLines.map(line => `-${line}`);
+  const added = newLines.map(line => `+${line}`);
   return { hunk: ["@@", ...removed, ...added].join("\n") };
 }
 
@@ -391,7 +402,7 @@ export function translateStructuredEditCall(
     }
     const hunk = replacementHunk(oldString, newString);
     if ("error" in hunk) return { error: hunk.error };
-    return { patch: hunk.hunk };
+    return { patch: hunk.hunk as string };
   };
   if (toolName === CURSOR_MULTI_EDIT_TOOL) {
     const edits = args.edits;

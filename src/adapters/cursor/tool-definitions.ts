@@ -217,17 +217,29 @@ export function cursorStructuredEditTools(
     {
       name: CURSOR_EDIT_FILE_TOOL,
       description:
-        "Replace one block of exact text in a file. OpenCodex converts the replacement into a Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. old_string must match the current file content exactly.",
+        "Replace one block of exact text in a file. OpenCodex converts the replacement into a Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. old_string must match the current file content exactly at exactly one location (apply_patch rejects ambiguous hunks). Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
       parameters: { ...CURSOR_EDIT_FILE_INPUT_SCHEMA },
     },
     {
       name: CURSOR_MULTI_EDIT_TOOL,
       description:
-        "Apply several ordered exact-text replacements to one file. OpenCodex converts the edits into a single Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. Each old_string must match the current file content exactly.",
+        "Apply several exact-text replacements to one file. OpenCodex converts the edits into a single Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. Each old_string must match the current file content exactly at exactly one location (apply_patch rejects ambiguous hunks). Edits are independent: every old_string is matched against the ORIGINAL file content, so a later edit must not rely on text introduced by an earlier one. Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
       parameters: { ...CURSOR_MULTI_EDIT_INPUT_SCHEMA },
     },
   ];
   return candidates.filter(tool => !existingBareNames.has(tool.name));
+}
+
+/**
+ * True when this request actually advertises the synthetic structured edit tools (`edit_file` /
+ * `multi_edit`) — i.e. a freeform `apply_patch` is advertised, no tool-choice pin blocks widening,
+ * and neither name is shadowed by an existing bare tool in the client catalog.
+ */
+export function cursorRequestAdvertisesStructuredEdits(
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
+  toolChoice?: OcxRequestOptions["toolChoice"],
+): boolean {
+  return cursorStructuredEditTools(tools, toolChoice).length > 0;
 }
 
 export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): string {

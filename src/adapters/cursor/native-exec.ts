@@ -70,6 +70,8 @@ export interface CursorNativeExecContext extends CursorNativeExecDeps {
   unsafeAllowNativeLocalExec?: boolean;
   /** apply_patch is visible for this request; Cursor-native write/delete must not bypass Codex. */
   rejectNativeFileMutations?: boolean;
+  /** The synthetic exact-match edit tools (edit_file / multi_edit) are advertised this request. */
+  structuredEditAvailable?: boolean;
 }
 
 export function cursorUnsafeNativeLocalExecEnabled(input: Pick<CursorNativeExecContext, "unsafeAllowNativeLocalExec"> = {}): boolean {
@@ -514,8 +516,8 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
     if (execCase === "fetchArgs") return [rejectFetchExecForPolicy(execMsg)];
   }
   if (execCase === "readArgs") return [readExec(execMsg)];
-  if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg) : writeExec(execMsg)];
-  if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg) : deleteExec(execMsg)];
+  if (execCase === "writeArgs") return [deps.rejectNativeFileMutations ? rejectWriteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : writeExec(execMsg)];
+  if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : deleteExec(execMsg)];
   if (execCase === "lsArgs") return [lsExec(execMsg)];
   if (execCase === "grepArgs") return [grepExec(execMsg)];
   if (execCase === "shellArgs") return [shellExec(execMsg)];

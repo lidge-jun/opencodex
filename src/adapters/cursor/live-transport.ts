@@ -66,6 +66,7 @@ import { desktopDepsFromConfig } from "./native-exec-desktop";
 import {
   buildCursorToolDefinitions,
   cursorRequestAdvertisesApplyPatch,
+  cursorRequestAdvertisesStructuredEdits,
   cursorRequestHasShellAlias,
   cursorToolArgNormalizeSchema,
   cursorToolWireName,
@@ -544,6 +545,7 @@ class LiveCursorTransport implements CursorTransport {
       ...this.execContext,
       clientToolDefs,
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
+      structuredEditAvailable: cursorRequestAdvertisesStructuredEdits(request.tools, request.toolChoice),
     };
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();

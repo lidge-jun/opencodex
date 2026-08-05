@@ -162,7 +162,7 @@ describe("translateStructuredEditCall", () => {
       old_string: "line1\nline2",
       new_string: "line1\nchanged\nline2",
     });
-    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args))?.toMatchObject({
+    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args)).toEqual({
       patch: [
         "*** Begin Patch",
         "*** Update File: src/b.ts",
@@ -179,14 +179,18 @@ describe("translateStructuredEditCall", () => {
 
   test("accepts Cursor-style argument aliases", () => {
     const args = JSON.stringify({ path: "src/c.ts", oldtext: "a", newtext: "b" });
-    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args))?.toMatchObject({ patch: expect.stringContaining("*** Update File: src/c.ts") });
+    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args)).toEqual(
+      expect.objectContaining({ patch: expect.stringContaining("*** Update File: src/c.ts") }),
+    );
     const camel = JSON.stringify({ filePath: "src/c.ts", oldString: "a", newString: "b" });
-    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, camel))?.toMatchObject({ patch: expect.stringContaining("*** Update File: src/c.ts") });
+    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, camel)).toEqual(
+      expect.objectContaining({ patch: expect.stringContaining("*** Update File: src/c.ts") }),
+    );
   });
 
   test("converts an empty new_string into a deletion hunk", () => {
     const args = JSON.stringify({ file_path: "src/d.ts", old_string: "dead", new_string: "" });
-    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args))?.toMatchObject({
+    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args)).toEqual({
       patch: [
         "*** Begin Patch",
         "*** Update File: src/d.ts",
@@ -205,7 +209,7 @@ describe("translateStructuredEditCall", () => {
         { old_string: "c", new_string: "d" },
       ],
     });
-    expect(translateStructuredEditCall(CURSOR_MULTI_EDIT_TOOL, args))?.toMatchObject({
+    expect(translateStructuredEditCall(CURSOR_MULTI_EDIT_TOOL, args)).toEqual({
       patch: [
         "*** Begin Patch",
         "*** Update File: src/e.ts",
@@ -228,6 +232,21 @@ describe("translateStructuredEditCall", () => {
     expect(translateStructuredEditCall(CURSOR_MULTI_EDIT_TOOL, JSON.stringify({ file_path: "src/f.ts", edits: [] }))?.error).toBeTruthy();
     expect(translateStructuredEditCall(CURSOR_MULTI_EDIT_TOOL, JSON.stringify({ file_path: "src/f.ts", edits: [{ old_string: "a" }] }))?.error).toBeTruthy();
     expect(translateStructuredEditCall("exec_command", JSON.stringify({ cmd: "echo hi" }))).toBeUndefined();
+  });
+
+  test("rejects a trailing-newline-only edit as a silent no-op", () => {
+    // old_string normalizes to the same lines as new_string; line-based patch cannot express "add a final newline".
+    const args = JSON.stringify({ file_path: "src/nl.ts", old_string: "export {};\n", new_string: "export {};" });
+    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args)).toEqual({
+      error: "structured edit old_string and new_string are identical after line normalization; the replacement is a no-op and was dropped",
+    });
+  });
+
+  test("rejects identical old/new as a no-op", () => {
+    const args = JSON.stringify({ file_path: "src/same.ts", old_string: "x", new_string: "x" });
+    expect(translateStructuredEditCall(CURSOR_EDIT_FILE_TOOL, args)).toEqual({
+      error: "structured edit old_string and new_string are identical after line normalization; the replacement is a no-op and was dropped",
+    });
   });
 });
 
@@ -359,6 +378,46 @@ describe("cursor protobuf event translation", () => {
         }),
       },
       { type: "tool_call_end", id: "call_3" },
+    ]);
+  });
+
+  test("translates a non-identity wire-name mapping (Cursor display name -> Codex tool name) for multi_edit", () => {
+    // Cursor advertises the Responses tool as `mcp_opencodex-responses_multi_edit`; the adapter must
+    // map that display name back to the advertised `multi_edit` before translating (#399 pattern).
+    const state = createCursorProtobufEventState({
+      clientToolNames: [CURSOR_MULTI_EDIT_TOOL, "apply_patch"],
+      toolSchemas: new Map([[CURSOR_MULTI_EDIT_TOOL, CURSOR_MULTI_EDIT_INPUT_SCHEMA]]),
+      cursorToolNameMap: new Map([[CURSOR_MULTI_EDIT_TOOL, CURSOR_MULTI_EDIT_TOOL]]),
+    });
+    const toolCall = mcpToolCall(`mcp_opencodex-responses_${CURSOR_MULTI_EDIT_TOOL}`, {
+      file_path: "src/multi.ts",
+      edits: [
+        { old_string: "a", new_string: "b" },
+        { old_string: "c", new_string: "d" },
+      ],
+    });
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_4", modelCallId: "model_4", toolCall }),
+    }), state)).toEqual([
+      { type: "tool_call_start", id: "call_4", name: "apply_patch" },
+      {
+        type: "tool_call_delta",
+        arguments: JSON.stringify({
+          input: [
+            "*** Begin Patch",
+            "*** Update File: src/multi.ts",
+            "@@",
+            "-a",
+            "+b",
+            "@@",
+            "-c",
+            "+d",
+            "*** End Patch",
+          ].join("\n"),
+        }),
+      },
+      { type: "tool_call_end", id: "call_4" },
     ]);
   });
 });
