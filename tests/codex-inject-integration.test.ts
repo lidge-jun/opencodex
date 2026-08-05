@@ -100,6 +100,125 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(second).toBe(first);
   });
 
+  test("fastMode=false forces fast_mode=false in both config and profile", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("[features]");
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).toContain("fast_mode = false");
+    expect(profile).not.toContain("fast_mode = true");
+  });
+
+  test("fastMode=true adds fast_mode=true to a config without a [features] table", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: true }));
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("[features]");
+    expect(config).toContain("fast_mode = true");
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).toContain("fast_mode = true");
+  });
+
+  test("fastMode unset preserves the user's existing fast_mode setting", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n\n[features]\nfast_mode = false\n', "utf8");
+
+    const r = runInject(codexHome, ocxHome);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).not.toContain("fast_mode");
+  });
+
+  test("fastMode unset does not add a [features] table to a config that lacks one", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const r = runInject(codexHome, ocxHome);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).not.toContain("[features]");
+    expect(config).not.toContain("fast_mode");
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).not.toContain("fast_mode");
+  });
+
+  test("fastMode=false updates a commented [features] header without duplicating the table", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model = "gpt-5.5"',
+      "",
+      "[features] # user comment",
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    expect(r.status).toBe(0);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+    expect(Bun.TOML.parse(config).features.fast_mode).toBe(false);
+  });
+
+  test("fastMode=false updates a quoted [\"features\"] header without duplicating the table", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model = "gpt-5.5"',
+      "",
+      '["features"]',
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    expect(r.status).toBe(0);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+    expect(Bun.TOML.parse(config).features.fast_mode).toBe(false);
+  });
+
+  test("fastMode=false updates a quoted \"fast_mode\" key", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model = "gpt-5.5"',
+      "",
+      "[features]",
+      '"fast_mode" = true',
+      "",
+    ].join("\n"), "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ fastMode: false }));
+    expect(r.status).toBe(0);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("fast_mode = false");
+    expect(config).not.toContain("fast_mode = true");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+    expect(Bun.TOML.parse(config).features.fast_mode).toBe(false);
+  });
+
   test("opt-in injects native subagent defaults, removes them when disabled, and restores the native config", () => {
     const original = [
       'model = "gpt-5.5"',

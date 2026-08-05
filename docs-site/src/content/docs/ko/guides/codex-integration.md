@@ -21,6 +21,10 @@ openai_base_url = "http://127.0.0.1:10100/v1"
 fast_mode = true
 ```
 
+주입되는 `fast_mode`는 3-상태 `fastMode` 설정을 따릅니다. `true`면 `fast_mode = true`를 쓰고,
+`false`면 `fast_mode = false`를 쓰며, 설정하지 않으면 기존 `fast_mode`를 그대로 두고
+`[features]` 테이블도 추가하지 않습니다.
+
 프록시는 기본적으로 포트 `10100`에서 듣고 `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, 그리고 `/api/*` 관리 표면을 제공합니다.
 
 ### 내장 이미지 생성 (`image_gen`)

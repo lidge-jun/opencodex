@@ -27,6 +27,9 @@ openai_base_url = "http://127.0.0.1:10100/v1"
 fast_mode = true
 ```
 
+注入的 `fast_mode` 遵循三态 `fastMode` 配置：`true` 写入 `fast_mode = true`，`false` 写入
+`fast_mode = false`，未设置时保留用户已有的 `fast_mode` 且不添加 `[features]` 表。
+
 proxy 默认监听 `10100` 端口，并提供 `POST /v1/responses`、`POST /v1/responses/compact`、
 `POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/models`、`GET /healthz`，
 以及 `/api/*` 管理面。

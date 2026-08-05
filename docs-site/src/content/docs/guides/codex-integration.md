@@ -27,6 +27,10 @@ openai_base_url = "http://127.0.0.1:10100/v1"
 fast_mode = true
 ```
 
+The injected `fast_mode` follows the tri-state `fastMode` setting: `true` writes `fast_mode = true`,
+`false` writes `fast_mode = false`, and unset leaves an existing `fast_mode` untouched without
+adding a `[features]` table.
+
 The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
 `GET /v1/models`, `GET /healthz`, and the `/api/*` management surface.
