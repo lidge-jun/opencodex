@@ -13,8 +13,9 @@ OpenAI 항목에는 네이티브 Codex 로그인과 네임스페이스가 붙은
 `codexAccountNamespaces`에 대상 계정이 존재하는 selector가 있으면, opencodex는 매핑된 계정별로
 `<selector>/<native-openai-model>` 행을 추가하고 선택기에서 bare native 행을 숨깁니다. `false`는 생성된
 행만 숨기며, 설정된 exact selector route는 계속 사용할 수 있고 대상을 사용할 수 없으면 다른 계정으로
-전환하지 않고 실패합니다. Selector 이름은 사용자가 정하는 공개 label이며 내장된 계정 역할 의미가
-없습니다. `selector`가 붙은 행을 선택하면 매핑된 계정만 사용하고 활성 Pool 계정은 바뀌지 않습니다.
+전환하지 않고 실패합니다. Selector 이름은 설정 가능한 공개 label입니다. 초기화 시 개인정보 보호형
+기본값이 자동 생성되며 내장된 계정 역할 의미는 없습니다. `selector`가 붙은 행을 선택하면 매핑된 계정만
+사용하고 활성 Pool 계정은 바뀌지 않습니다.
 자세한 내용은 [명시적 Codex 계정 selector](/reference/configuration/routing/#exact-codex-account-selectors)를
 참고하세요. API GPT-5.6 항목은 context 1,050,000 / max input 922,000을
 쓰고, `*-pro` picker id는 로그, 사용량, picker 상태에는 가상 id를 유지한 채 wire에서는 base model과
@@ -23,7 +24,8 @@ Pro 가상 id까지 정확히 여덟 개로 고정되어 있으며, 일반적인
 선택한 tier를 유지하되 reasoning 객체 없이 base model만 보냅니다.
 
 선택기 id로 credential 경로를 명시적으로 선택하세요. Pool/Direct는 Providers 페이지에서 바꾸며,
-아래 `<selector>`는 `codexAccountNamespaces`로 매핑한 사용자 지정 공개 label입니다:
+아래 `<selector>`는 `codexAccountNamespaces`로 매핑한 설정 가능한 공개 label이며, 초기화된 binding에서는
+자동 생성값일 수 있습니다:
 
 ```text
 gpt-5.6-sol                         # Pool 또는 Direct를 통한 bare Codex 로그인 경로

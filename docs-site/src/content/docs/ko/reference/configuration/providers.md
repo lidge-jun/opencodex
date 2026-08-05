@@ -27,7 +27,8 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 꺼짐 | 선택적 선제 OAuth 갱신과 Codex 계정 워밍업 정책입니다. |
 
-selector 이름은 사용자가 정하는 공개 label이며, opencodex는 여기에 계정 역할 의미를 부여하지 않습니다.
+selector 이름은 설정 가능한 공개 label입니다. 초기화된 binding에는 개인정보 보호형 기본값이 자동으로
+생성되며, opencodex는 여기에 계정 역할 의미를 부여하지 않습니다.
 `codexAccountNamespaces` 키는 길이가 1~64자이고 시작과 끝은 ASCII 영숫자여야
 하며, 내부에는 영숫자, `.`, `_`, `-`를 사용할 수 있습니다. 예약된 JavaScript object 이름은 거부됩니다.
 값은 유효한 pool account id(내부 `__main__` 제외)이거나 Codex Desktop 계정을 나타내는 `"@main"`입니다.

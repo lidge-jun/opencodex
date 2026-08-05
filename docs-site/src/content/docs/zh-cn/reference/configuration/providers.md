@@ -27,7 +27,8 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
 
-selector 名称是用户自定的公开 label；opencodex 不会为其赋予账户角色语义。
+selector 名称是可配置的公开 label；初始化 binding 会使用隐私安全的自动生成默认值，opencodex
+不会为其赋予账户角色语义。
 `codexAccountNamespaces` 的 key 长度为 1–64 个字符，首尾必须是 ASCII 字母或数字，
 中间可使用字母、数字、`.`、`_` 或 `-`；保留的 JavaScript object 名称会被拒绝。value 必须是有效的
 pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex Desktop 账号。与 provider 及

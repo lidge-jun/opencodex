@@ -27,7 +27,8 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
 
-selector 名はユーザーが選ぶ公開 label であり、opencodex はアカウント role の意味を付与しません。
+selector 名は設定可能な公開 label です。初期化された binding にはプライバシーに配慮した自動生成の
+既定値が使われ、opencodex はアカウント role の意味を付与しません。
 `codexAccountNamespaces` のキーは長さ 1〜64 文字、先頭と末尾は ASCII
 英数字、内部には英数字、`.`、`_`、`-` を使用でき、予約済み JavaScript object 名は拒否されます。
 値は有効な pool account id（内部 `__main__` は不可）、または Codex Desktop アカウントを示す

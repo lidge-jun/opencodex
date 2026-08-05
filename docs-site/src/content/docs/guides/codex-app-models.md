@@ -14,8 +14,9 @@ itself does not change picker ids. When account-picker visibility is enabled
 whose mapped accounts still exist, opencodex adds separate `<selector>/<native-openai-model>` rows
 for the mapped accounts and hides the bare native rows from the Codex picker. Setting
 `codexAccountPickerEnabled: false` hides only those generated rows; configured qualified ids remain
-exact routes and still fail closed instead of switching accounts. Selector labels are user-chosen
-public names with no built-in account-role meaning. Selecting a qualified row uses only its mapped
+exact routes and still fail closed instead of switching accounts. Selector labels are configurable
+public names. Initialization creates privacy-safe defaults, and labels have no built-in account-role
+meaning. Selecting a qualified row uses only its mapped
 account and does not change the active Pool account. See
 [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
 API GPT-5.6 entries use
@@ -26,7 +27,8 @@ three Pro virtual ids; there is no generic `gpt-5.6-pro` alias.
 Compact requests keep the selected tier but send the base model without a reasoning object.
 
 Select the credential route represented by the picker id. Change Pool/Direct on the Providers page;
-`<selector>` below is a user-chosen public label mapped through `codexAccountNamespaces`:
+`<selector>` below is a configurable public label mapped through `codexAccountNamespaces`;
+initialized bindings may use an automatically generated value:
 
 ```text
 gpt-5.6-sol                         # bare Codex-login route via Pool or Direct
