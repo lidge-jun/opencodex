@@ -152,7 +152,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `opencode` | `~/.config/opencode/opencode.json`（设置了 `XDG_CONFIG_HOME` 时以其为准） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 无 - 块中携带字面值 `opencodex-loopback` |
 
-opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 完全不使用环境变量：它在构建模型列表时会解析 `apiKey`，一旦该值是未设置的环境变量引用，就会隐藏整个 provider，因此导出的块携带的是字面占位值 `opencodex-loopback`，而回环上的代理从不校验这个值。
+opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi 导出不需要环境变量，而是携带字面占位值 `opencodex-loopback`。这个值是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果已有配置包含未设置的环境变量引用，它就会隐藏整个 provider。回环上的代理从不校验生成的占位值。
 
 :::caution[合并，不要替换]
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。

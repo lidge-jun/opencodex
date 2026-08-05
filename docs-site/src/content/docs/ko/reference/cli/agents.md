@@ -157,7 +157,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME`이 설정되어 있으면 우선합니다) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 없음 - 블록에 리터럴 `opencodex-loopback`이 들어갑니다 |
 
-opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. Pi는 환경 변수를 전혀 쓰지 않습니다. Pi는 모델 목록을 만들 때 `apiKey`를 해석하는데, 그 값이 설정되지 않은 env 참조이면 provider 전체를 숨겨 버리므로, 내보낸 블록에는 리터럴 placeholder인 `opencodex-loopback`이 들어갑니다. 루프백에서 proxy는 이 값을 검사하지 않습니다.
+opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 생성한 Pi 블록에는 환경 변수가 필요 없으며, 리터럴 placeholder인 `opencodex-loopback`이 들어갑니다. 이 값은 필수입니다. Pi는 모델 목록을 만들 때 `apiKey`를 해석하고, 기존 config에 설정되지 않은 env 참조가 있으면 provider 전체를 숨기기 때문입니다. 루프백에서 proxy는 생성된 placeholder를 검사하지 않습니다.
 
 :::caution[Merge, never replace]
 `ocx export`는 실제 client config를 절대 쓰지 않습니다. 대상 경로는 손으로 병합하라고 출력되며, `--out`은 `--force` 없이 기존 파일을 덮어쓰지 않습니다. config를 바꾸어 덮어쓰면 이미 들어 있던 다른 provider, agent, MCP entry가 사라지기 때문입니다.

@@ -151,7 +151,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `opencode` | `~/.config/opencode/opencode.json` (設定すると `XDG_CONFIG_HOME` が勝ち) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | なし - ブロックにリテラル `opencodex-loopback` が入ります |
 
-opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。Pi は環境変数をまったく使いません。Pi はモデル リストを構築する際に `apiKey` を解決し、その値が未設定の環境変数参照である場合はプロバイダー全体を隠すため、エクスポートされたブロックにはリテラルのプレースホルダー `opencodex-loopback` が入ります。ループバックではプロキシがこの値を検査することはありません。
+opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex が生成する Pi のエクスポートには環境変数が不要で、リテラルのプレースホルダー `opencodex-loopback` が入ります。この値は必須です。Pi はモデル リストを構築する際に `apiKey` を解決し、既存の設定に未設定の環境変数参照がある場合はプロバイダー全体を隠すためです。ループバックでは、生成されたプレースホルダーをプロキシが検査することはありません。
 
 :::caution[マージし、決して置き換えないでください]
 `ocx export` は実際のクライアント設定を書き込むことはありません。宛先は手動でマージできるように出力されます。`--out` は、`--force` なしで既存のファイルを上書きすることを拒否します。これは、設定を置き換えると、その中にすでに含まれている他のプロバイダー、エージェント、および MCP エントリが破壊されるためです。

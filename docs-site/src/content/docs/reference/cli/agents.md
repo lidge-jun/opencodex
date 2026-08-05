@@ -178,10 +178,11 @@ client applies its own defaults for those).
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
 
-opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. Pi does not use a variable at all: it
-resolves `apiKey` while building its model list and hides the whole provider when the value is an
-unset env reference, so the exported block carries the literal placeholder `opencodex-loopback`,
-which the proxy never checks on loopback.
+opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi export does not require
+an environment variable: it carries the literal `opencodex-loopback` placeholder. This is
+load-bearing because Pi resolves `apiKey` while building its model list and hides the whole
+provider when an existing config contains an unset env reference. The proxy never checks the
+generated placeholder on loopback.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by
