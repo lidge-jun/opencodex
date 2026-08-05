@@ -2091,7 +2091,7 @@ async function handleResponsesInner(
     // `streamMode: "eager-relay"` opt-in. Darwin `auto` always stays tee. The
     // eager shape skips tee and uses one bounded reader with inline inspection
     // (src/server/relay-eager.ts; policy:
-    // devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
+    // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
     // The bundled known-bad runtime remains on tee by default on both platforms.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;

@@ -4,7 +4,7 @@
 
 Two overnight contributor pull requests describe real defects that the #951–#973
 stack does not touch. Both were left open at the end of the overnight triage
-(`devlog/_plan/260804_overnight_triage/000_dispositions.md`) with "real,
+(`devlog/_fin/260804_overnight_triage/000_dispositions.md`) with "real,
 independent, own review track" as the verdict. This unit turns that verdict into
 a seventh stack layer, reconstructed here, and closes the source pull requests
 as superseded.

@@ -152,8 +152,14 @@ describe("devlog is tracked, with no submodule left behind", () => {
    * boundary terms in order to define what the tripwire looks for. Exempting it is
    * narrow and path-pinned — a NEW unit gets no exemption, so the check still fires
    * for real triage.
+   *
+   * The unit closed and moved to `_fin/` (devlog/_plan/260805_devlog_fin_sweep), which
+   * makes this exemption redundant: the scan below reads `_plan/` only. It is repointed
+   * rather than deleted so the reason survives — if the unit ever returns to `_plan/`,
+   * or a reader asks why the tripwire tolerates a document full of its own trigger
+   * words, the answer is still here.
    */
-  const TRIPWIRE_META_EXEMPT_PREFIX = "devlog/_plan/260730_devlog_publication_feasibility/";
+  const TRIPWIRE_META_EXEMPT_PREFIX = "devlog/_fin/260730_devlog_publication_feasibility/";
 
   /**
    * Security-boundary vocabulary, in both languages this devlog is written in.

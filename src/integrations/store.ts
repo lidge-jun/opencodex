@@ -8,7 +8,7 @@
  * bookkeeping seams to that same store so the two can never point at different
  * roots.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/006 §Config-dir seam.
+ * Design of record: devlog/_fin/260802_client_toggle_api/006 §Config-dir seam.
  */
 import {
   appendOperation,

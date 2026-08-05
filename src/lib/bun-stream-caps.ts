@@ -10,7 +10,7 @@
  * safety pin. Darwin no-rewrite traffic stays on tee
  * for `auto` regardless of runtime capability and reaches eager relay only via
  * explicit `streamMode: "eager-relay"` opt-in (see
- * devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
+ * devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
  *
  * Prerelease conservatism: a version carrying a prerelease suffix (e.g.
  * `1.4.0-canary.3`) is NEVER treated as fixed even when its numeric triple

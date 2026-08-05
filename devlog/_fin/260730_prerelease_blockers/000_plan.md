@@ -1,7 +1,7 @@
 # 000 — 다음 배포 전 블로커: 목표, 제약, 작업 순서
 
 기준 커밋: `origin/dev = 0666b4169`, `main = d1f544bbc (v2.7.43)`.
-선행 조사: `devlog/_plan/260730_issue_triage_dev_head/000_triage_matrix.md`.
+선행 조사: `devlog/_fin/260730_issue_triage_dev_head/000_triage_matrix.md`.
 
 ## 목표
 

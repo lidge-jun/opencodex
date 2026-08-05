@@ -7,7 +7,7 @@
  * file is not in a state we can reason about. A disable that deletes work the
  * user did after us would be worse than never shipping the feature.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/030 and 031.
+ * Design of record: devlog/_fin/260802_client_toggle_api/030 and 031.
  */
 import { dirname } from "node:path";
 import { EXPORT_CLIENTS, type ExportModel } from "../clients/config-export";

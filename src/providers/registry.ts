@@ -412,7 +412,7 @@ const TENCENT_CODING_PLAN_MODELS = ["tc-code-latest", "glm-5", "kimi-k2.5", "min
 // is documented as grounds for suspension — see the `note` on both Plan entries.
 // Report a break by opening an issue tagging the owner; the three things that rot first are the
 // static catalogs (liveModels:false cannot self-heal), the base URLs, and those Plan terms.
-// Full evidence ledger: devlog/_plan/260801_pr611_volcengine_evidence/000_evidence_ledger.md
+// Full evidence ledger: devlog/_fin/260801_pr611_volcengine_evidence/000_evidence_ledger.md
 const VOLCENGINE_ARK_MODELS = [
   "doubao-seed-2-1-pro-260628",
   "doubao-seed-2-1-turbo-260628",
@@ -537,7 +537,7 @@ const NVIDIA_NIM_KIMI_MODELS = [
  *
  * Two lists, both verified per-model against NVIDIA documentation on 2026-08-04
  * (build.nvidia.com model pages and docs.api.nvidia.com/nim/reference/*). Evidence and
- * the per-id audit: devlog/_plan/260804_stack7_service_vision/011_nim_id_audit.md.
+ * the per-id audit: devlog/_fin/260804_stack7_service_vision/011_nim_id_audit.md.
  *
  * Read `noVisionModels` carefully — it lists models that CANNOT see images, which is
  * what routes them through the proxy's vision sidecar (src/vision/index.ts) and makes the

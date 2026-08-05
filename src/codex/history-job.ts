@@ -14,7 +14,7 @@
  * exception crossing back into a route that already persisted its mutation — is
  * how a successful change gets reported as a 500.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/020_history_isolation.md.
+ * Design record: devlog/_fin/260804_codex_write_substrate/020_history_isolation.md.
  */
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";

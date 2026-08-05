@@ -6,7 +6,7 @@
  * could therefore coordinate through different databases. The namespace is
  * keyed only by the effective uid/SID and the canonical CODEX_HOME.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/005_contract.md §7.
+ * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §7.
  */
 import { createHash } from "node:crypto";
 import {

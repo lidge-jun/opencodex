@@ -21,7 +21,7 @@
  * at import time, so a request that leaned on those constants would silently
  * address the wrong home.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/020_history_isolation.md.
+ * Design record: devlog/_fin/260804_codex_write_substrate/020_history_isolation.md.
  */
 import { withHistoryWriteSerialization } from "./history-lock";
 import {

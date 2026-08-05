@@ -15,7 +15,7 @@ import type { OcxConfig } from "../src/types";
  * Properties that hold ACROSS the whole client-integration feature, which is
  * why they live here rather than inside any one phase's suite.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/070 §4. The matrix
+ * Design of record: devlog/_fin/260802_client_toggle_api/070 §4. The matrix
  * there was rewritten at the A-gate after an audit found three of the
  * original five duplicated existing coverage and one was unfalsifiable; these
  * are the properties nothing else asserts.

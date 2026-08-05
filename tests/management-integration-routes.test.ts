@@ -18,7 +18,7 @@ import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 /**
- * Route contract for devlog/_plan/260802_client_toggle_api/040 §6-§7.
+ * Route contract for devlog/_fin/260802_client_toggle_api/040 §6-§7.
  *
  * Every refusal here is produced by the real writer against a real temp HOME
  * and a real temp store. A status-only fake would let a branch that never

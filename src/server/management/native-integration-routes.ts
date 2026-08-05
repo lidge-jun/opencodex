@@ -9,12 +9,12 @@
  * route — turning them back on is the undo.
  *
  * That conclusion cost eleven audit rounds; the reasoning is in
- * devlog/_plan/260803_integrations_toggle_all/, and 007 records why Codex and
+ * devlog/_fin/260803_integrations_toggle_all/, and 007 records why Codex and
  * Claude Desktop are NOT here: their state spans several artifacts and a live
  * database, so they need a durable operation record this module deliberately
  * does not have.
  *
- * Design of record: devlog/_plan/260803_integrations_toggle_all/030 (routes),
+ * Design of record: devlog/_fin/260803_integrations_toggle_all/030 (routes),
  * 011 (Claude Code), 012 (Grok).
  */
 import { readRuntimePort, saveConfigPreservingClaudeCode } from "../../config";

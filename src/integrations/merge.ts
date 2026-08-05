@@ -7,7 +7,7 @@
  * remove, and inferring ownership from a name is how a config editor destroys
  * work it did not create.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/031_wp3_writer_impl.md.
+ * Design of record: devlog/_fin/260802_client_toggle_api/031_wp3_writer_impl.md.
  */
 import type { ManagedContribution } from "../clients/config-export";
 

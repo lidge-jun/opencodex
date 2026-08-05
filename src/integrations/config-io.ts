@@ -5,7 +5,7 @@
  * needs it too, and a reader that disagreed with the writer about what counts
  * as an absent file is exactly how an unreadable config gets overwritten.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/021 §5-6.
+ * Design of record: devlog/_fin/260802_client_toggle_api/021 §5-6.
  */
 import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import type { ConfigFormat } from "../clients/config-export";

@@ -911,7 +911,7 @@ result branch:
 (`gui/src/pages/integrations/refusal-copy.ts:56-71`). `write_failed` continues to
 show the server's boundary-specific message. A refusal is rendered in the card's
 notice area after the dialog closes; it never opens a second modal, matching the
-established direction (`../260803_integrations_toggle_all/002_consequence_dialog_ux.md:124-149`).
+established direction (`../../_fin/260803_integrations_toggle_all/002_consequence_dialog_ux.md:124-149`).
 
 ## i18n
 

@@ -3,7 +3,7 @@
 // Plan/evidence: devlog/_plan/260715_issue126_nim_kimi.
 // 260804 issue #956: NIM vision classification — text-only models activate the sidecar,
 // natively image-capable models do not. Plan/evidence:
-// devlog/_plan/260804_stack7_service_vision (010 design, 011 per-id audit).
+// devlog/_fin/260804_stack7_service_vision (010 design, 011 per-id audit).
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, formatOpenAIChatErrorBody } from "../src/adapters/openai-chat";
 import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../src/codex/catalog";

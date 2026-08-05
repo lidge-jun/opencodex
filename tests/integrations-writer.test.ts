@@ -15,7 +15,7 @@ import {
 import type { OcxConfig } from "../src/types";
 
 /**
- * Activation coverage for devlog/_plan/260802_client_toggle_api/031 §6.
+ * Activation coverage for devlog/_fin/260802_client_toggle_api/031 §6.
  *
  * Every test drives the real writer against a temp HOME and a temp store, so
  * "we never touch anything we do not own" is proven by the filesystem rather

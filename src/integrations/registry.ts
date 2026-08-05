@@ -6,7 +6,7 @@
  * client's config. This one says where it lives, how to tell whether the client
  * is installed at all, and whether a remote bind is safe for it.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/021 §1.
+ * Design of record: devlog/_fin/260802_client_toggle_api/021 §1.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";

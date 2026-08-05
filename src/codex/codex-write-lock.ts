@@ -26,7 +26,7 @@
  * Lock order is `N -> C`. C is `withConfigMutationLockSync`, entered while N is
  * held and released before N commits. There is no `C -> N`.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/030_lock_protocol.md.
+ * Design record: devlog/_fin/260804_codex_write_substrate/030_lock_protocol.md.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";

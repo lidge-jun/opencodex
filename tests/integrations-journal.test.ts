@@ -7,7 +7,7 @@ import { SNAPSHOT_RETENTION, type JournalEntry } from "../src/integrations/journ
 import type { OwnershipRecord } from "../src/integrations/ownership";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
 
-/** Activation coverage for devlog/_plan/260802_client_toggle_api/021 §6. */
+/** Activation coverage for devlog/_fin/260802_client_toggle_api/021 §6. */
 let root: string;
 let store: IntegrationStateStore;
 

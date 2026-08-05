@@ -10,7 +10,7 @@ import {
 import { normalizeHashPath, replaceHash } from "../src/hash-routing";
 
 /**
- * Routing contract for devlog/_plan/260802_client_toggle_api/050 §2-§3.
+ * Routing contract for devlog/_fin/260802_client_toggle_api/050 §2-§3.
  *
  * The three legacy top-level pages (`api`, `claude`, `grok`) collapse into one
  * `integrations` route with nested hashes. The load-bearing property is not

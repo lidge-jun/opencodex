@@ -7,7 +7,7 @@
  * UPDATE, and the opaque one-shot capability backed by an already-open
  * `BEGIN IMMEDIATE` transaction.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/005_contract.md §1.
+ * Design record: devlog/_fin/260804_codex_write_substrate/005_contract.md §1.
  */
 import { randomUUID } from "node:crypto";
 import { chmodSync, lstatSync, realpathSync } from "node:fs";

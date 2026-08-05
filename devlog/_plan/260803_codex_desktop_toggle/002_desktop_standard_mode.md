@@ -1,7 +1,7 @@
 # Claude Desktop: standard mode is documented, so disable is buildable
 
 Research doc. This one overturns the load-bearing conclusion of
-`../260803_integrations_toggle_all/001_removal_path_inventory.md` §Claude Desktop.
+`../../_fin/260803_integrations_toggle_all/001_removal_path_inventory.md` §Claude Desktop.
 
 ## What the previous conclusion got right, and where it overreached
 

@@ -10,7 +10,7 @@
  *    verbatim — so they go through `atomicWriteFile`, which applies 0600 plus
  *    Windows ACL hardening.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/021 §4.
+ * Design of record: devlog/_fin/260802_client_toggle_api/021 §4.
  */
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";

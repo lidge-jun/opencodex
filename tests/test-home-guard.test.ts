@@ -7,7 +7,7 @@
  * real run uses. The only assertion that touches the developer's actual home reads a
  * hash; nothing here can write it.
  *
- * Incident: devlog/_plan/260730_codex_rs_upstream_v2_live_handoff/070.
+ * Incident: devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";

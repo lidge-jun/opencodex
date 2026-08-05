@@ -16,7 +16,7 @@
  * READS ONLY. Nothing here creates a directory, a database, or a marker: an
  * admission that manufactures the state it is admitting cannot refuse.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/040_ownership_convergence.md.
+ * Design record: devlog/_fin/260804_codex_write_substrate/040_ownership_convergence.md.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

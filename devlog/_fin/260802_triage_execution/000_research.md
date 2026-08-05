@@ -1,12 +1,12 @@
 # 260802 Triage Execution — 000 Research / Handoff
 
 Date: 2026-08-02. This unit executes the decisions recorded in
-`devlog/_plan/260802_issue_pr_triage/` (000_research.md audited PASS,
+`devlog/_fin/260802_issue_pr_triage/` (000_research.md audited PASS,
 010_triage_matrix.md complete for all 37 issues + 32 PRs).
 
 ## Inputs
 
-- Triage matrix buckets (from `../260802_issue_pr_triage/010_triage_matrix.md`):
+- Triage matrix buckets (from `../../_fin/260802_issue_pr_triage/010_triage_matrix.md`):
   - PR merge candidates: 866, 862, 860, 854, 853 (+653 conditional).
   - PR build-ourselves-worthy: 865, 863.
   - PR close-or-defer: 644, 616, 707.

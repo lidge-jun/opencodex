@@ -21,7 +21,7 @@
  * root. Readers and probes stay in `history-provider.ts`; nothing in the CLI, the
  * server, the guardian, `inject.ts` or `sync.ts` may reach these symbols.
  *
- * Design record: devlog/_plan/260804_codex_write_substrate/020_history_isolation.md.
+ * Design record: devlog/_fin/260804_codex_write_substrate/020_history_isolation.md.
  */
 import { assertHistoryWritePermit, type HistoryWritePermit } from "../history-lock";
 import {

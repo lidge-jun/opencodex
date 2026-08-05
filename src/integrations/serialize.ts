@@ -21,7 +21,7 @@
  * might misread — and the writer turns the failure into a structured refusal
  * rather than an exception.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/011_wp1_builders.md.
+ * Design of record: devlog/_fin/260802_client_toggle_api/011_wp1_builders.md.
  */
 
 export type ConfigFormat = "json" | "yaml" | "toml" | "json5";
