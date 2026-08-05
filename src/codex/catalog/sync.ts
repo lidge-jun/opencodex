@@ -214,6 +214,13 @@ export function deriveEntry(
     // Routed (namespaced) models inherit the gpt template — correct its OpenAI/GPT identity
     // and advertise the reasoning ladder Codex accepts.
     if (isRouted) {
+      // A routed model is NOT the native template: never inherit its context
+      // window when /models omits context metadata (#992). Known metadata
+      // restores exact values below; otherwise the strict-fields fallback
+      // supplies the conservative 128k triple.
+      delete e.context_window;
+      delete e.max_context_window;
+      delete e.auto_compact_token_limit;
       // Native id for identity text + metadata lookups — the slug may be an encoded
       // alias (`provider/vendor-model`); the model object carries the native id.
       const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
