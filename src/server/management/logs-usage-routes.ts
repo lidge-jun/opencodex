@@ -70,6 +70,7 @@ import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig 
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
@@ -193,7 +194,10 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
-      if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
+      if (cached
+        && cached.revisionKey === observedRevisionKey
+        && cached.overlayVersion === userCostOverlayVersion()
+        && now < cached.expiresAt) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
@@ -208,6 +212,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       };
       setUsageSummaryCacheEntry(cacheKey, {
         revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
+        overlayVersion: userCostOverlayVersion(),
         expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
         revisionReadAt,
         summary,

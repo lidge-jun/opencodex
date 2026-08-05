@@ -837,4 +837,29 @@ describe("provider cost overlay (user-configured)", () => {
     // Without the overlay, deepseek-v4-flash falls back to its jawcode vendor price.
     expect(resolveMatchedPrice("blsc", "deepseek-v4-flash")?.source).toBe("jawcode");
   });
+
+  test("refresh with identical rows is a no-op for the version and memo", () => {
+    const config = {
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid",
+          modelCosts: {
+            "deepseek-v4-flash": USER_PRICE,
+          },
+        },
+      },
+    } as unknown as OcxConfig;
+    refreshUserCostOverlays(config);
+    const versionAfterFirst = userCostOverlayVersion();
+    const rowsAfterFirst = activeUserCostOverlays();
+    // Config reloads (server start, persist paths) pass the same rows again;
+    // they must not churn the version or replace the active array identity.
+    refreshUserCostOverlays(config);
+    expect(userCostOverlayVersion()).toBe(versionAfterFirst);
+    expect(activeUserCostOverlays()).toBe(rowsAfterFirst);
+    expect(resolveMatchedPrice("blsc", "deepseek-v4-flash")?.source).toBe("user");
+    // Leave the registry empty for the rest of the file.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+  });
 });
