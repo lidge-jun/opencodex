@@ -121,7 +121,7 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
 }
 
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const all = getRequestLogEntries();

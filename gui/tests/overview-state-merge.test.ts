@@ -20,6 +20,7 @@ function sources(overrides: Partial<OverviewSources> = {}): OverviewSources {
     clientsSettled: true,
     codex: null,
     keyCount: null,
+    keyPhase: "settled",
     claude: { enabled: false, authMode: "subscription" },
     claudeDesktop: null,
     grok: { present: false, models: [] },
@@ -30,7 +31,7 @@ function sources(overrides: Partial<OverviewSources> = {}): OverviewSources {
 }
 
 function row(overrides: Partial<OverviewSources>, id: "claude" | "grok") {
-  const found = buildOverviewRows(sources(overrides)).find(candidate => candidate.id === id);
+  const found = buildOverviewRows(sources(overrides)).rows.find(candidate => candidate.id === id);
   if (!found) throw new Error(`missing ${id} row`);
   return found;
 }

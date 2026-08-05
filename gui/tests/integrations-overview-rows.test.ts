@@ -31,6 +31,7 @@ function sources(overrides: Partial<OverviewSources> = {}): OverviewSources {
     clientsSettled: true,
     codex: null,
     keyCount: null,
+    keyPhase: "settled",
     claude: null,
     claudeDesktop: null,
     grok: null,
@@ -38,21 +39,22 @@ function sources(overrides: Partial<OverviewSources> = {}): OverviewSources {
   };
 }
 
-function rowById(rows: ReturnType<typeof buildOverviewRows>, id: string) {
-  const found = rows.find(row => row.id === id);
+function rowById(built: ReturnType<typeof buildOverviewRows>, id: string) {
+  const found = built.rows.find(row => row.id === id);
   if (!found) throw new Error(`no row for ${id}`);
   return found;
 }
 
 test("a null source is unknown, never absent, and is counted in neither total", () => {
-  const rows = buildOverviewRows(sources());
-  for (const id of ["codex", "keys", "claude", "claudeDesktop", "grok"]) {
-    expect(rowById(rows, id).state).toBe("unknown");
+  const built = buildOverviewRows(sources());
+  for (const id of ["codex", "claude", "claudeDesktop", "grok"]) {
+    expect(rowById(built, id).state).toBe("unknown");
   }
-  const counts = countOverviewRows(rows);
+  const counts = countOverviewRows(built.rows);
   expect(counts.detected).toBe(0);
   expect(counts.applied).toBe(0);
-  expect(counts.unknown).toBe(5);
+  // Four, not five: keys is a credential surface and never a client row.
+  expect(counts.unknown).toBe(4);
 });
 
 test("Codex reads routingInjected, not status", () => {
@@ -119,7 +121,7 @@ test("file clients keep their existing badge and applied semantics", () => {
   expect(rowById(rows, "kimi").installed).toBe(false);
   expect(rowById(rows, "gajae").state).toBe("unsafe");
 
-  const counts = countOverviewRows(rows);
+  const counts = countOverviewRows(rows.rows);
   expect(counts.detected).toBe(5);
   expect(counts.applied).toBe(2);
   expect(counts.stale).toBe(1);
@@ -134,27 +136,28 @@ test("every client counts toward the summary, not just the file six", () => {
     claudeDesktop: { applied: true, stale: true, activeProfile: true },
     grok: { present: true, models: [{}, {}] },
   }));
-  const counts = countOverviewRows(rows);
-  // codex + keys + claude + desktop + grok + opencode
-  expect(counts.applied).toBe(6);
+  const counts = countOverviewRows(rows.rows);
+  // codex + claude + desktop + grok + opencode. Keys are deliberately absent:
+  // an issued credential is not an applied client.
+  expect(counts.applied).toBe(5);
   expect(counts.stale).toBe(1);
   expect(counts.unknown).toBe(0);
 });
 
 test("an unsettled file list renders unknown rows instead of dropping them", () => {
-  const rows = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
-  expect(rows).toHaveLength(11);
-  expect(rowById(rows, "kimi").state).toBe("unknown");
+  const built = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
+  expect(built.rows).toHaveLength(10);
+  expect(rowById(built, "kimi").state).toBe("unknown");
 
   // Once settled, a client the server omitted is genuinely gone.
   const settled = buildOverviewRows(sources({ clients: [], clientsSettled: true }));
-  expect(settled).toHaveLength(5);
+  expect(settled.rows).toHaveLength(4);
+  expect(settled.rows.some(row => row.hash === "integrations/keys")).toBe(false);
 });
 
 test("each row points at its own tab", () => {
   const rows = buildOverviewRows(sources({ clientsSettled: false }));
   expect(rowById(rows, "codex").hash).toBe("integrations/codex");
-  expect(rowById(rows, "keys").hash).toBe("integrations/keys");
   expect(rowById(rows, "claude").hash).toBe("integrations/claude");
   expect(rowById(rows, "claudeDesktop").hash).toBe("integrations/claude/desktop");
   expect(rowById(rows, "grok").hash).toBe("integrations/grok");

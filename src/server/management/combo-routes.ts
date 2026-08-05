@@ -66,7 +66,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/combos" && req.method === "GET") {
     const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
@@ -195,9 +195,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       clearComboSelectionState(renameFrom);
       clearComboTargetCooldowns(renameFrom);
     }
-    await refreshCodexCatalogBestEffort();
+    const catalogRefresh = await convergeCodexCatalog();
     if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
-    return jsonResponse({ success: true, id, model: newPublicModel, combo: normalized });
+    return jsonResponse({ success: true, id, model: newPublicModel, combo: normalized, catalogRefresh });
   }
 
   if (url.pathname === "/api/combos" && req.method === "DELETE") {
@@ -213,8 +213,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, id });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, id, catalogRefresh });
   }
   return null;
 }

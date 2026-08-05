@@ -28,6 +28,7 @@ import {
 } from "../src/codex/routing";
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -343,7 +344,7 @@ async function management(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return handleManagementAPI(request, new URL(request.url), config, {
-    refreshCodexCatalog: async () => {},
+    createManagementConvergeCodex: catalogConvergenceFactory(),
   });
 }
 

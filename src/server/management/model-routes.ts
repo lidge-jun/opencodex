@@ -121,7 +121,7 @@ function summarizeExportedModels(client: ExportClientId, document: unknown): { m
 }
 
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   // A handler persists the exact config object passed in. Production defaults to
   // the real store; tests that pass an in-memory fixture inject a no-op/spy. Do not
   // bypass this seam with a dynamic config import — doing so replaced a user's
@@ -211,8 +211,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const disabled = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
     config.disabledModels = disabled;
     persistConfig(config);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ ok: true, disabled });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, disabled, catalogRefresh });
   }
 
   // One user-facing visibility switch spans two persisted filters: a provider allowlist and the
@@ -310,8 +310,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
     config.disabledModels = disabled;
     persistConfig(config);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled, catalogRefresh });
   }
 
   if (url.pathname === "/api/custom-models" && req.method === "GET") {
@@ -349,8 +349,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     };
     config.customModels = [...existing, entry];
     persistConfig(config);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse(entry, 201);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ...entry, catalogRefresh }, 201);
   }
 
   const customPutMatch = url.pathname.match(/^\/api\/custom-models\/([^/]+)$/);
@@ -387,8 +387,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     list[idx] = cm;
     config.customModels = list;
     persistConfig(config);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse(cm);
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ...cm, catalogRefresh });
   }
 
   const customDelMatch = url.pathname.match(/^\/api\/custom-models\/([^/]+)$/);
@@ -401,8 +401,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     list.splice(idx, 1);
     config.customModels = list.length > 0 ? list : undefined;
     persistConfig(config);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ ok: true });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, catalogRefresh });
   }
 
   // Per-provider catalog allowlist (issue #52): when a provider has a non-empty selectedModels list,
@@ -437,8 +437,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (models.length > 0) config.providers[provider].selectedModels = models;
     else delete config.providers[provider].selectedModels;
     persistConfig(config);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ ok: true, provider, selected: models });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ ok: true, provider, selected: models, catalogRefresh });
   }
   return null;
 }

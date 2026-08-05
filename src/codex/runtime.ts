@@ -13,32 +13,38 @@ export type CodexRuntimeSource =
   | "path"
   | "fallback";
 
+export type DeepReadonly<T> =
+  T extends (...args: never[]) => unknown ? T
+    : T extends readonly (infer U)[] ? readonly DeepReadonly<U>[]
+      : T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+        : T;
+
 export interface ResolvedCodexRuntime {
-  command: string;
-  version: string | null;
-  source: CodexRuntimeSource;
+  readonly command: string;
+  readonly version: string | null;
+  readonly source: CodexRuntimeSource;
 }
 
 export interface RuntimeProbeFailure {
-  command: string;
-  source: CodexRuntimeSource;
-  reason: string;
+  readonly command: string;
+  readonly source: CodexRuntimeSource;
+  readonly reason: string;
 }
 
 export interface EffortClampDiagnostic {
-  runtimePath: string;
-  runtimeVersion: string | null;
-  removedEfforts: string[];
-  affectedModels: string[];
+  readonly runtimePath: string;
+  readonly runtimeVersion: string | null;
+  readonly removedEfforts: readonly string[];
+  readonly affectedModels: readonly string[];
 }
 
 export interface ResolveCodexRuntimeResult {
-  runtime: ResolvedCodexRuntime;
-  failures: RuntimeProbeFailure[];
-  replacedConfigured?: { from: ResolvedCodexRuntime; reason: string };
-  newerAvailable?: ResolvedCodexRuntime;
+  readonly runtime: ResolvedCodexRuntime;
+  readonly failures: readonly RuntimeProbeFailure[];
+  readonly replacedConfigured?: Readonly<{ from: ResolvedCodexRuntime; reason: string }>;
+  readonly newerAvailable?: ResolvedCodexRuntime;
   /** Set when the selected runtime could not be written to codex-runtime.json. */
-  persistError?: string;
+  readonly persistError?: string;
 }
 
 export type RuntimeExecFile = (
@@ -70,16 +76,42 @@ export interface ResolveCodexRuntimeDeps {
   discoverAlternatives?: boolean;
 }
 
-interface PersistedRuntimeState {
-  version: 1;
-  command: string;
-  source: CodexRuntimeSource;
-  selectedVersion: string | null;
-  updatedAt: string;
+export interface PersistedCodexRuntimeState {
+  readonly version: 1;
+  readonly command: string;
+  readonly source: CodexRuntimeSource;
+  readonly selectedVersion?: string | null;
+  readonly updatedAt: string;
 }
 
 const PERSIST_FILE = "codex-runtime.json";
 const CLAMP_PERSIST_FILE = "codex-runtime-clamp.json";
+
+function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
+  const clone = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(clone);
+    if (current && typeof current === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(current)) out[key] = clone(child);
+      return out;
+    }
+    return current;
+  };
+  const freeze = (current: unknown): unknown => {
+    if (!current || typeof current !== "object" || Object.isFrozen(current)) return current;
+    for (const child of Object.values(current)) freeze(child);
+    return Object.freeze(current);
+  };
+  return freeze(clone(value)) as DeepReadonly<T>;
+}
+
+function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
+  return value === "environment"
+    || value === "configured"
+    || value === "shim"
+    || value === "path"
+    || value === "fallback";
+}
 
 export function codexRuntimeStatePath(configDir: string = getConfigDir()): string {
   return join(configDir, PERSIST_FILE);
@@ -94,9 +126,16 @@ interface PersistedClampState extends EffortClampDiagnostic {
   updatedAt: string;
 }
 
+interface LoadedEffortClampDiagnostic {
+  runtimePath: string;
+  runtimeVersion: string | null;
+  removedEfforts: string[];
+  affectedModels: string[];
+}
+
 export function loadLastEffortClamp(
   deps: ResolveCodexRuntimeDeps = {},
-): EffortClampDiagnostic | null {
+): LoadedEffortClampDiagnostic | null {
   const configDir = deps.configDir ?? getConfigDir();
   const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
   try {
@@ -196,15 +235,31 @@ export function compareCodexVersions(a: string | null, b: string | null): number
   return 0;
 }
 
+/** Parse already-observed runtime-selection bytes without consulting the filesystem. */
+export function parsePersistedCodexRuntime(
+  bytes: string | Uint8Array,
+): DeepReadonly<PersistedCodexRuntimeState> | null {
+  try {
+    const text = typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8");
+    const raw = JSON.parse(text) as Partial<PersistedCodexRuntimeState>;
+    if (raw.version !== 1 || typeof raw.command !== "string" || !raw.command.trim()) return null;
+    if (!isCodexRuntimeSource(raw.source) || typeof raw.updatedAt !== "string") return null;
+    if (raw.selectedVersion !== undefined
+      && raw.selectedVersion !== null
+      && typeof raw.selectedVersion !== "string") return null;
+    return cloneAndDeepFreeze(raw as PersistedCodexRuntimeState);
+  } catch {
+    return null;
+  }
+}
+
 export function loadPersistedCodexRuntime(
   deps: ResolveCodexRuntimeDeps = {},
-): PersistedRuntimeState | null {
+): DeepReadonly<PersistedCodexRuntimeState> | null {
   const configDir = deps.configDir ?? getConfigDir();
   const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
   try {
-    const raw = JSON.parse(read(codexRuntimeStatePath(configDir), "utf8")) as PersistedRuntimeState;
-    if (raw?.version !== 1 || typeof raw.command !== "string" || !raw.command.trim()) return null;
-    return raw;
+    return parsePersistedCodexRuntime(read(codexRuntimeStatePath(configDir), "utf8"));
   } catch {
     return null;
   }
@@ -216,16 +271,16 @@ export function persistCodexRuntime(
 ): void {
   const configDir = deps.configDir ?? getConfigDir();
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  const payload: PersistedRuntimeState = {
+  const payload: PersistedCodexRuntimeState = {
     version: 1,
     command: runtime.command,
     source: runtime.source,
     selectedVersion: runtime.version,
     updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
   };
+  // Invalidate process authority before the persisted replacement is visible.
+  clearCodexRuntimeResolveCache();
   atomicWriteFile(codexRuntimeStatePath(configDir), `${JSON.stringify(payload, null, 2)}\n`);
-  // Same-process consumers must re-resolve; catalog cache is keyed by runtime identity.
-  resolveCache = null;
 }
 
 function probeVersion(
@@ -360,15 +415,68 @@ export function effortClampAppliesToRuntime(
 }
 
 const RESOLVE_CACHE_MS = 15_000;
-let resolveCache: { key: string; at: number; value: ResolveCodexRuntimeResult } | null = null;
+interface ResolveCacheMemo {
+  readonly key: string;
+  readonly at: number;
+  readonly epoch: number;
+  readonly valueIdentity: string;
+  readonly value: DeepReadonly<ResolveCodexRuntimeResult>;
+}
+
+export type CodexRuntimeProcessCachePeek =
+  | Readonly<{
+      kind: "available";
+      epoch: number;
+      valueIdentity: string;
+      value: DeepReadonly<ResolveCodexRuntimeResult>;
+    }>
+  | Readonly<{ kind: "unavailable"; epoch: number }>;
+
+let resolveCacheEpoch = 0;
+let resolveCache: ResolveCacheMemo | null = null;
+
+function publishResolveCache(key: string, at: number, value: ResolveCodexRuntimeResult): void {
+  const epoch = ++resolveCacheEpoch;
+  resolveCache = {
+    key,
+    at,
+    epoch,
+    valueIdentity: `runtime:${epoch}`,
+    value: cloneAndDeepFreeze(value),
+  };
+}
+
+function clearResolveCache(): void {
+  resolveCacheEpoch += 1;
+  resolveCache = null;
+}
+
+/** Clear process-local runtime authority without resolving a replacement. */
+export function clearCodexRuntimeResolveCache(): void {
+  clearResolveCache();
+}
+
+/** Observe only an unexpired successful process memo; never resolves or probes. */
+export function peekCodexRuntimeProcessCache(): CodexRuntimeProcessCachePeek {
+  const memo = resolveCache;
+  if (!memo || Date.now() - memo.at >= RESOLVE_CACHE_MS) {
+    return Object.freeze({ kind: "unavailable" as const, epoch: resolveCacheEpoch });
+  }
+  return Object.freeze({
+    kind: "available" as const,
+    epoch: memo.epoch,
+    valueIdentity: memo.valueIdentity,
+    value: cloneAndDeepFreeze(memo.value),
+  });
+}
 
 function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
   // Include on-disk selection so doctor --fix in another process busts this memo.
   const configDir = deps.configDir ?? getConfigDir();
   const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
   try {
-    const raw = JSON.parse(read(codexRuntimeStatePath(configDir), "utf8")) as PersistedRuntimeState;
-    if (raw?.version !== 1 || typeof raw.command !== "string") return "";
+    const raw = parsePersistedCodexRuntime(read(codexRuntimeStatePath(configDir), "utf8"));
+    if (!raw) return "";
     return `${raw.command}|${raw.selectedVersion ?? ""}|${raw.updatedAt ?? ""}`;
   } catch {
     return "";
@@ -397,17 +505,30 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
 export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): ResolveCodexRuntimeResult {
   const cacheKey = resolveCacheKey(deps);
   if (cacheKey && resolveCache && resolveCache.key === cacheKey && Date.now() - resolveCache.at < RESOLVE_CACHE_MS) {
-    return resolveCache.value;
+    return cloneAndDeepFreeze(resolveCache.value);
   }
 
   const result = resolveCodexRuntimeUncached(deps);
-  if (cacheKey) resolveCache = { key: cacheKey, at: Date.now(), value: result };
-  return result;
+  if (cacheKey) {
+    publishResolveCache(cacheKey, Date.now(), result);
+    return cloneAndDeepFreeze(resolveCache!.value);
+  }
+  return cloneAndDeepFreeze(result);
 }
 
 /** Test-only: drop the short-lived process resolve cache. */
 export function resetCodexRuntimeResolveCacheForTests(): void {
-  resolveCache = null;
+  clearCodexRuntimeResolveCache();
+}
+
+/** Test-only owner mutation seam; input is cloned and frozen before publication. */
+export function setCodexRuntimeResolveCacheForTests(
+  value: ResolveCodexRuntimeResult,
+  deps: ResolveCodexRuntimeDeps = {},
+): void {
+  const key = resolveCacheKey(deps);
+  if (!key) throw new TypeError("Injected runtime dependencies cannot populate the process memo.");
+  publishResolveCache(key, Date.now(), value);
 }
 
 function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): ResolveCodexRuntimeResult {
@@ -468,7 +589,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
       replacedConfigured = {
         from: {
           command: persisted.command,
-          version: persisted.selectedVersion,
+          version: persisted.selectedVersion ?? null,
           source: "configured",
         },
         reason: failures.find(item => sameRuntimeCommand(item.command, persisted.command))?.reason
@@ -518,7 +639,7 @@ export function resolveAndPersistCodexRuntime(
       const message = error instanceof Error ? error.message : String(error);
       const persistError = redactUserPath(redactSecretString(message)).slice(0, 200);
       console.warn(`[opencodex] Failed to persist Codex runtime selection: ${persistError}`);
-      return { ...result, persistError };
+      return cloneAndDeepFreeze({ ...result, persistError });
     }
   }
   return result;

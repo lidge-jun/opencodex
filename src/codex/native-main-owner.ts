@@ -144,7 +144,13 @@ async function prepareOwnerDatabase(entry: OwnerEntry): Promise<void> {
   try {
     file = openStableLockFile(entry.lockPath, entry.options.platform);
     database = new Database(entry.lockPath, { create: true });
-    await (entry.options.hardenPath ?? hardenStableLockFile)(entry.lockPath);
+    // The resolved platform is threaded into the DEFAULT hardener for the same
+    // reason the claim path does it: otherwise a test that forces `platform`
+    // here still exercises the host's branch, and the production default — the
+    // thing that actually hardens the owner's lock file — stays unproved. An
+    // audit replaced this fallback with a no-op and 91 tests stayed green.
+    await (entry.options.hardenPath
+      ?? ((target: string) => hardenStableLockFile(target, entry.options.platform)))(entry.lockPath);
     assertStableLockFile(entry.lockPath, file);
     entry.file = file;
     file = undefined;

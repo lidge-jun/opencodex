@@ -4,7 +4,7 @@ import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, OAuthMutationBusyError } from "./store";
+import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
@@ -55,6 +55,20 @@ export interface OAuthAccessSnapshot {
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
+
+export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
+  /** Allowlisted provider API origin consumed by GitHub Copilot model discovery. */
+  apiBaseUrl?: string;
+}
+
+export type OAuthActiveTokenObservation =
+  | { readonly kind: "available"; readonly snapshot: ObservedOAuthAccessSnapshot }
+  | { readonly kind: "missing" }
+  | { readonly kind: "malformed" }
+  | { readonly kind: "needs-reauth" }
+  | { readonly kind: "expired" }
+  | { readonly kind: "near-expiry" }
+  | { readonly kind: "unsupported" };
 
 const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
@@ -275,6 +289,38 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
             : environmentKiroRoutingMetadata() ?? {},
         }
       : {}),
+  };
+}
+
+/**
+ * Observe the active OAuth token from an auth-store buffer supplied by its filesystem owner.
+ * Missing, malformed, reauth-required, and expiring credentials are typed no-token outcomes;
+ * this path never refreshes, locks, hardens, backs up, or persists credentials.
+ */
+export function observeActiveOAuthAccessToken(
+  provider: string,
+  authStoreBuffer: Uint8Array | null,
+  now = Date.now(),
+): OAuthActiveTokenObservation {
+  const authStore = normalizeAuthStoreBuffer(authStoreBuffer);
+  if (authStore.kind === "absent") return { kind: "missing" };
+  if (authStore.kind === "malformed") return { kind: "malformed" };
+  if (!isOAuthProvider(provider)) return { kind: "unsupported" };
+
+  const accountSet = authStore.store[provider];
+  const account = accountSet?.accounts.find(candidate => candidate.id === accountSet.activeAccountId);
+  if (!account) return { kind: "missing" };
+  if (account.needsReauth) return { kind: "needs-reauth" };
+  if (account.credential.expires <= now) return { kind: "expired" };
+  if (account.credential.expires <= now + REFRESH_SKEW_MS) return { kind: "near-expiry" };
+
+  const apiBaseUrl = validateCopilotApiBaseUrl(account.credential.apiBaseUrl);
+  return {
+    kind: "available",
+    snapshot: {
+      ...accessSnapshot(provider, account.id, account.credential),
+      ...(apiBaseUrl ? { apiBaseUrl } : {}),
+    },
   };
 }
 
@@ -583,13 +629,25 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
  * Everyone else uses the OpenAI-style `/models` + Bearer with a `{ data: [{ id, owned_by? }] }`
  * response.
  */
-export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | undefined, providerName = ""): { url: string; headers: Record<string, string> } {
+export interface ModelsRequestObservedAuth {
+  readonly oauthApiBaseUrl?: string;
+}
+
+export function buildModelsRequest(
+  prov: OcxProviderConfig,
+  apiKey: string | undefined,
+  providerName = "",
+  observedAuth?: ModelsRequestObservedAuth,
+): { url: string; headers: Record<string, string> } {
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
+  const copilotApiBaseUrl = observedAuth === undefined
+    ? (providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined)
+    : observedAuth.oauthApiBaseUrl;
   const effectiveProvider = resolveProviderTransport(
     providerName,
     transportSeed,
     undefined,
-    providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
+    copilotApiBaseUrl,
   );
   const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
   const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(

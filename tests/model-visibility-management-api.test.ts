@@ -5,6 +5,7 @@ import { nativeModelRows } from "../src/codex/catalog";
 import { loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-model-visibility-management-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -52,7 +53,7 @@ async function putWithConfig(body: unknown, config = loadConfig()): Promise<Resp
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
-  }), url, config, { refreshCodexCatalog: async () => { refreshes += 1; } });
+  }), url, config, { createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshes += 1; }) });
   if (!response) throw new Error("model visibility route was not handled");
   return response;
 }

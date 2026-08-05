@@ -23,11 +23,38 @@ import type { NativeStatus } from "./native-api";
 
 export type OverviewClientId =
   | "codex"
-  | "keys"
   | "claude"
   | "claudeDesktop"
   | "grok"
   | FileIntegrationClientId;
+
+/** How far the `/api/keys` read has got, since the count alone cannot say. */
+export type ApiKeyReadPhase = "checking" | "unavailable" | "settled";
+
+/**
+ * The credential row, deliberately NOT an `OverviewRow`.
+ *
+ * API keys cannot be installed, toggled, or drift from a config file, so they
+ * have no `installed`, `applied`, `toggle`, or `status`. Re-adding one would
+ * recreate the semantic leak this shape removes.
+ *
+ * `state` uses credential vocabulary rather than the client
+ * `unknown|absent|current` triple, because those words carry "applied" —
+ * `IntegrationStateBadge` renders them as "Applied" and "Not applied" in all
+ * six locales, which is exactly the claim a credential row must never make.
+ */
+export interface ApiKeysOverviewRow {
+  hash: "integrations/keys";
+  labelKey: TKey;
+  state: "checking" | "unavailable" | "none-issued" | "issued";
+  detailKey: TKey | null;
+  detailVars: Record<string, string> | null;
+}
+
+export interface OverviewRows {
+  keysRow: ApiKeysOverviewRow;
+  rows: OverviewRow[];
+}
 
 export interface OverviewRow {
   id: OverviewClientId;
@@ -85,6 +112,11 @@ export interface OverviewSources {
   clientsSettled: boolean;
   codex: CodexRoutingPayload | null;
   keyCount: number | null;
+  /**
+   * Read phase for `keyCount`. Separate because a settled zero and a failed
+   * read are both null-adjacent facts that must not render the same way.
+   */
+  keyPhase: ApiKeyReadPhase;
   claude: ClaudeCodePayload | null;
   claudeDesktop: ClaudeDesktopPayload | null;
   grok: GrokPayload | null;
@@ -120,7 +152,7 @@ function codexRow(payload: CodexRoutingPayload | null): OverviewRow {
     id: "codex" as const,
     hash: "integrations/codex",
     labelKey: "integrations.tab.codex" as TKey,
-    toggle: null,
+    toggle: "codex" as const,
     toggleBlocked: null,
     togglePath: null,
     status: null,
@@ -151,25 +183,26 @@ function codexRow(payload: CodexRoutingPayload | null): OverviewRow {
 }
 
 /** API keys are issued or not; there is no config file to drift. */
-function keysRow(count: number | null): OverviewRow {
+function keysRow(phase: ApiKeyReadPhase, count: number | null): ApiKeysOverviewRow {
   const base = {
-    id: "keys" as const,
-    hash: "integrations/keys",
+    hash: "integrations/keys" as const,
     labelKey: "integrations.tab.keys" as TKey,
-    toggle: null,
-    toggleBlocked: null,
-    togglePath: null,
-    status: null,
-    detail: null,
   };
-  if (count === null) {
-    return { ...base, state: "unknown", installed: false, applied: false, detailKey: null, detailVars: null };
+  // Every branch names a detail key. The detail line is the ONLY state
+  // expression — there is no badge — so a null one would render a row with no
+  // state at all.
+  if (phase === "checking") {
+    return { ...base, state: "checking", detailKey: "integrations.detail.keyChecking", detailVars: null };
+  }
+  // `count === null` is defensive: a failed read is already `unavailable`, and
+  // claiming "no keys issued" because a request failed is a statement about the
+  // account of the user that we cannot support.
+  if (phase === "unavailable" || count === null) {
+    return { ...base, state: "unavailable", detailKey: "integrations.detail.keyUnavailable", detailVars: null };
   }
   return {
     ...base,
-    state: count > 0 ? "current" : "absent",
-    installed: true,
-    applied: count > 0,
+    state: count > 0 ? "issued" : "none-issued",
     detailKey: count > 0 ? "integrations.detail.keyCount" : "integrations.detail.keyNone",
     detailVars: count > 0 ? { count: String(count) } : null,
   };
@@ -354,14 +387,13 @@ function fileRow(status: IntegrationStatus): OverviewRow {
  * clients, then the file clients in their existing order. It matches the tab
  * strip above the grid, so the eye moves the same way in both.
  */
-export function buildOverviewRows(sources: OverviewSources): OverviewRow[] {
+export function buildOverviewRows(sources: OverviewSources): OverviewRows {
   const nativeClaude = sources.native?.find(status => status.clientId === "claude");
   const nativeGrok = sources.native?.find(status => status.clientId === "grok");
   // One lookup table, not a find per client (react-doctor js-index-maps).
   const statusByClient = new Map(sources.clients.map(status => [status.clientId, status]));
   const rows: OverviewRow[] = [
     codexRow(sources.codex),
-    keysRow(sources.keyCount),
     claudeRow(sources.claude, nativeClaude, sources.nativeSettled),
     claudeDesktopRow(sources.claudeDesktop),
     grokRow(sources.grok, nativeGrok, sources.nativeSettled),
@@ -393,7 +425,7 @@ export function buildOverviewRows(sources: OverviewSources): OverviewRow[] {
       });
     }
   }
-  return rows;
+  return { keysRow: keysRow(sources.keyPhase, sources.keyCount), rows };
 }
 
 export interface OverviewCounts {

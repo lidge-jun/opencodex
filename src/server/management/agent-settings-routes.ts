@@ -125,7 +125,7 @@ export function setGrokApplyFlightTestHooks(
 import type { ManagementContext } from "./context";
 
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   /** Best-effort Desktop 3P config auto-reconcile when providers change. */
   async function autoApplyDesktopBestEffort(): Promise<void> {
@@ -277,7 +277,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (getAgentsEnabled() === false && isMultiAgentV2Enabled()) {
       warnings.push("agents.enabled = false has no effect while features.multi_agent_v2 is enabled; upstream keeps V2 active.");
     }
-    await refreshCodexCatalogBestEffort();
+    const catalogRefresh = await convergeCodexCatalog();
     if (requestedFlag !== undefined) warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the ladder change.");
     const enabled = isMultiAgentV2Enabled();
     return jsonResponse({
@@ -291,6 +291,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
       agentsMaxDepthAppliesWhenV2Disabled: !enabled,
       warnings,
+      catalogRefresh,
     });
   }
 
@@ -522,10 +523,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     config.subagentModels = chosen;
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     save(config);
-    await refreshCodexCatalogBestEffort();
+    const catalogRefresh = await convergeCodexCatalog();
     await syncClaudeAgentDefsBestEffort();
     await autoApplyDesktopBestEffort();
-    return jsonResponse({ ok: true, applied: chosen });
+    return jsonResponse({ ok: true, applied: chosen, catalogRefresh });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.

@@ -44,7 +44,7 @@ import {
   codexAccountPickerIsEnabled,
   defaultCodexAccountNamespaces,
 } from "../../codex/account-namespaces";
-import { refreshCodexCatalogWithRetry } from "../../codex/catalog-refresh-status";
+import { catalogRefreshIsPending } from "../../codex/catalog-refresh-status";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -84,8 +84,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     url,
     config,
     deps,
-    refreshCodexCatalogStrict,
-    refreshCodexCatalogBestEffort,
+    convergeCodexCatalog,
     syncClaudeAgentDefsBestEffort,
   } = ctx;
   if (url.pathname === "/api/config" && req.method === "GET") {
@@ -316,9 +315,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(body.appOwnedMemoryBudgetMb));
       enforceAppOwnedMemoryBudget();
     }
-    const catalogRefreshPending = pickerWasEnabled !== pickerIsEnabled
-      ? await refreshCodexCatalogWithRetry(refreshCodexCatalogStrict)
-      : false;
+    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled
+      ? await convergeCodexCatalog()
+      : undefined;
+    const catalogRefreshPending = catalogRefresh !== undefined
+      && catalogRefreshIsPending(catalogRefresh);
     invalidateStartupHealthCache();
     return jsonResponse({
       ok: true,
@@ -327,6 +328,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
       catalogRefreshPending,
+      ...(catalogRefresh ? { catalogRefresh } : {}),
       startupHealth: await getCachedStartupHealth(config),
     });
   }

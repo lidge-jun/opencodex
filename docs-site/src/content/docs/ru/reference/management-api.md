@@ -243,9 +243,10 @@ Management-аутентификация доказывает доступ к п�
 
 `PUT /api/settings` принимает boolean `codexAccountPickerEnabled`. При включении, если binding ещё нет,
 он создаёт privacy-safe selector binding; при отключении binding и exact route сохраняются. Изменения
-settings, account add/delete и login сохраняются до catalog refresh. Если обе попытки refresh неудачны,
-изменение всё равно завершается успешно с `catalogRefreshPending: true`; для повтора выполните `ocx sync`.
-Response и warning не раскрывают исходные failure detail.
+settings, account add/delete и login сохраняются до одного bounded catalog convergence через общий writer.
+Если convergence пропущен или завершается ошибкой, изменение всё равно успешно и возвращает
+`catalogRefreshPending: true`; для повтора выполните `ocx sync`. Response и warning не раскрывают
+исходные failure detail.
 
 Если внутри этого delegated family writer конфигурации или refresh credential'ов не получает lock
 в разумное время, возвращается HTTP 503 с кодом `CONFIG_MUTATION_LOCK_UNAVAILABLE`. Клиенту нужно

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -154,5 +154,33 @@ describe("native-main shared and exclusive claims", () => {
     while (successor.snapshot().status !== "held" && Date.now() < deadline) await Bun.sleep(10);
     expect(successor.snapshot().status).toBe("held");
     await successor.release();
+  });
+});
+
+describe("the default hardener is actually reached from a claim", () => {
+  /**
+   * Nearly every test in this file injects `hardenPath: noHardening`, which is
+   * right for the behavior they are testing and wrong as a whole: an audit
+   * deleted the hardening call from `openClaimDatabase` and 89 tests across
+   * three files stayed green. The primitive had 77 tests; the edge that reaches
+   * it from a claim had none.
+   *
+   * So this one runs a claim with the DEFAULT hardener and inspects the file it
+   * left behind. On POSIX that is the mode; the Windows branch is proven
+   * separately in tests/windows-secret-acl.test.ts, where the ACL runner can be
+   * observed.
+   */
+  test("a shared claim narrows a permissive claim database to 0600", async () => {
+    const context = fixture();
+    const path = nativeMainClaimPath(context);
+    mkdirSync(join(context.codexHome), { recursive: true });
+    writeFileSync(path, "");
+    chmodSync(path, 0o644);
+    expect(statSync(path).mode & 0o777).toBe(0o644);
+
+    // No hardenPath override: this is the production default.
+    await withNativeMainSharedClaim(context, async () => undefined);
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });

@@ -34,28 +34,121 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
-import { resolveAndPersistCodexRuntime } from "../runtime";
-import type { EffortClampDiagnostic } from "../runtime";
+import {
+  parsePersistedCodexRuntime,
+  peekCodexRuntimeProcessCache,
+  resolveAndPersistCodexRuntime,
+} from "../runtime";
+import type {
+  DeepReadonly,
+  EffortClampDiagnostic,
+  ResolvedCodexRuntime,
+} from "../runtime";
+import type {
+  CatalogGatherEvidenceSession,
+  CatalogGatherReadableSourceRole,
+} from "./filesystem-evidence";
 
 export { isSpawnableCodexCandidate, codexExecInvocation } from "../exec-invocation";
+export type {
+  CatalogGatherEvidenceSession,
+  CatalogGatherReadableSourceRole,
+} from "./filesystem-evidence";
 
 export const BUNDLED_CATALOG_CACHE_MS = 60_000;
 
-export let bundledCatalogCache: {
+export type ReadonlyRawCatalog = DeepReadonly<RawCatalog>;
+
+interface BundledCatalogMemo {
   /** Selected runtime identity; must change when doctor/sync picks a different binary. */
-  key: string;
-  expiresAt: number;
-  value: RawCatalog | null;
-} | null = null;
+  readonly key: string;
+  readonly expiresAt: number;
+  readonly epoch: number;
+  readonly valueIdentity: string;
+  readonly value: ReadonlyRawCatalog | null;
+}
+
+export interface BundledCatalogCacheState {
+  readonly epoch: number;
+  readonly valueIdentity: string | null;
+}
+
+let bundledCatalogEpoch = 0;
+let bundledCatalogCache: BundledCatalogMemo | null = null;
+
+function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
+  const clone = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(clone);
+    if (current && typeof current === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(current)) out[key] = clone(child);
+      return out;
+    }
+    return current;
+  };
+  const freeze = (current: unknown): unknown => {
+    if (!current || typeof current !== "object" || Object.isFrozen(current)) return current;
+    for (const child of Object.values(current)) freeze(child);
+    return Object.freeze(current);
+  };
+  return freeze(clone(value)) as DeepReadonly<T>;
+}
+
+function bundledRuntimeKey(
+  runtime: Pick<ResolvedCodexRuntime, "command" | "version">,
+  opencodexHome: string = process.env.OPENCODEX_HOME ?? "",
+): string {
+  return [runtime.command, runtime.version ?? "", opencodexHome].join("\0");
+}
+
+function publishBundledCatalogCache(
+  key: string,
+  expiresAt: number,
+  value: RawCatalog | null,
+): void {
+  const epoch = ++bundledCatalogEpoch;
+  bundledCatalogCache = {
+    key,
+    expiresAt,
+    epoch,
+    valueIdentity: `bundled:${epoch}`,
+    value: value === null ? null : cloneAndDeepFreeze(value),
+  };
+}
+
+function clearBundledCatalogCache(): void {
+  bundledCatalogEpoch += 1;
+  bundledCatalogCache = null;
+}
+
+export function bundledCatalogCacheState(): Readonly<BundledCatalogCacheState> {
+  return Object.freeze({
+    epoch: bundledCatalogEpoch,
+    valueIdentity: bundledCatalogCache?.valueIdentity ?? null,
+  });
+}
 
 /** Test-only: clear the bundled-catalog cache (owned here; sync.ts calls this instead of assigning the import). */
 export function resetBundledCatalogCacheForTests(): void {
-  bundledCatalogCache = null;
+  clearBundledCatalogCache();
 }
 
 /** Drop the process-local bundled catalog memo (e.g. after runtime selection changes). */
 export function invalidateBundledCatalogCache(): void {
-  bundledCatalogCache = null;
+  clearBundledCatalogCache();
+}
+
+/** Test-only owner mutation seam; input is cloned and frozen before publication. */
+export function setBundledCatalogCacheForTests(
+  runtime: Pick<ResolvedCodexRuntime, "command" | "version">,
+  value: RawCatalog | null,
+  options: Readonly<{ expiresAt?: number; opencodexHome?: string }> = {},
+): void {
+  publishBundledCatalogCache(
+    bundledRuntimeKey(runtime, options.opencodexHome),
+    options.expiresAt ?? Date.now() + BUNDLED_CATALOG_CACHE_MS,
+    value,
+  );
 }
 
 export type ExecFile = (
@@ -143,7 +236,7 @@ export function runCodexDebugModels(
   });
 }
 
-export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatalog | null {
+export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): ReadonlyRawCatalog | null {
   const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.configDir && !deps.env;
   const execFile = deps.execFileSync ?? (execFileSync as unknown as ExecFile);
   // Prefer the single resolved runtime so sync/clamp never probe a different binary
@@ -168,11 +261,7 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatal
       discoverAlternatives: deps.discoverAlternatives ?? false,
     });
     if (useCache) {
-      cacheKey = [
-        resolved.runtime.command,
-        resolved.runtime.version ?? "",
-        process.env.OPENCODEX_HOME ?? "",
-      ].join("\0");
+      cacheKey = bundledRuntimeKey(resolved.runtime);
     }
     return [resolved.runtime.command];
   })();
@@ -183,31 +272,191 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): RawCatal
     && bundledCatalogCache.key === cacheKey
     && bundledCatalogCache.expiresAt > Date.now()
   ) {
-    return bundledCatalogCache.value;
+    return bundledCatalogCache.value === null
+      ? null
+      : cloneAndDeepFreeze(bundledCatalogCache.value);
   }
   for (const command of unique(candidates)) {
     try {
       const catalog = parseCatalogJson(runCodexDebugModels(command, execFile, deps));
       if (catalog && findNativeTemplate(catalog)) {
         if (useCache && cacheKey) {
-          bundledCatalogCache = {
-            key: cacheKey,
-            expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS,
-            value: catalog,
-          };
+          publishBundledCatalogCache(
+            cacheKey,
+            Date.now() + BUNDLED_CATALOG_CACHE_MS,
+            catalog,
+          );
+          return cloneAndDeepFreeze(bundledCatalogCache!.value!);
         }
-        return catalog;
+        return cloneAndDeepFreeze(catalog);
       }
     } catch { /* try next candidate */ }
   }
   if (useCache && cacheKey) {
-    bundledCatalogCache = {
-      key: cacheKey,
-      expiresAt: Date.now() + BUNDLED_CATALOG_CACHE_MS,
-      value: null,
-    };
+    publishBundledCatalogCache(
+      cacheKey,
+      Date.now() + BUNDLED_CATALOG_CACHE_MS,
+      null,
+    );
   }
   return null;
+}
+
+export type CatalogGatherProcessLocalObservation =
+  | Readonly<{ state: "unused" }>
+  | Readonly<{ state: "used"; epoch: number; valueIdentity: string }>;
+
+export type CodexRuntimeForCatalogGather =
+  | Readonly<{
+      kind: "available";
+      origin: "process-cache" | "persisted";
+      runtime: DeepReadonly<ResolvedCodexRuntime>;
+      processLocal: CatalogGatherProcessLocalObservation;
+    }>
+  | Readonly<{
+      kind: "runtime-unavailable";
+      processLocal: Readonly<{ state: "unused" }>;
+    }>;
+
+export type CatalogSourceForGather =
+  | Readonly<{
+      kind: "available";
+      source:
+        | "bundled-catalog-template"
+        | "active-catalog-merge"
+        | "hashed-backup-fallback"
+        | "legacy-backup-fallback"
+        | "models-cache-fallback";
+      catalog: ReadonlyRawCatalog;
+      processLocal: Readonly<{
+        runtime: CatalogGatherProcessLocalObservation;
+        bundledCatalog: CatalogGatherProcessLocalObservation;
+      }>;
+    }>
+  | Readonly<{
+      kind: "catalog-unavailable";
+      processLocal: Readonly<{
+        runtime: Readonly<{ state: "unused" }>;
+        bundledCatalog: Readonly<{ state: "unused" }>;
+      }>;
+    }>;
+
+const UNUSED_PROCESS_LOCAL = Object.freeze({ state: "unused" as const });
+
+function sameRuntimeIdentity(
+  left: Pick<ResolvedCodexRuntime, "command" | "version">,
+  right: Pick<ResolvedCodexRuntime, "command" | "version">,
+): boolean {
+  return left.command === right.command && (left.version ?? null) === (right.version ?? null);
+}
+
+/**
+ * Observe an already-resolved runtime only. The evidence owner supplies the
+ * exact persisted bytes (or observed absence); this path never probes or writes.
+ */
+export function peekCodexRuntimeForCatalogGather(
+  evidenceSession: CatalogGatherEvidenceSession,
+): CodexRuntimeForCatalogGather {
+  const persistedBytes = evidenceSession.readSource("runtime-selection");
+  const persisted = persistedBytes === null
+    ? null
+    : parsePersistedCodexRuntime(persistedBytes);
+  const processMemo = peekCodexRuntimeProcessCache();
+
+  if (processMemo.kind === "available") {
+    const runtime = processMemo.value.runtime;
+    if (persistedBytes === null || (persisted && sameRuntimeIdentity(runtime, {
+      command: persisted.command,
+      version: persisted.selectedVersion ?? null,
+    }))) {
+      return cloneAndDeepFreeze({
+        kind: "available" as const,
+        origin: "process-cache" as const,
+        runtime,
+        processLocal: {
+          state: "used" as const,
+          epoch: processMemo.epoch,
+          valueIdentity: processMemo.valueIdentity,
+        },
+      });
+    }
+  }
+
+  if (persisted) {
+    return cloneAndDeepFreeze({
+      kind: "available" as const,
+      origin: "persisted" as const,
+      runtime: {
+        command: persisted.command,
+        version: persisted.selectedVersion ?? null,
+        source: persisted.source,
+      },
+      processLocal: UNUSED_PROCESS_LOCAL,
+    });
+  }
+
+  return Object.freeze({
+    kind: "runtime-unavailable" as const,
+    processLocal: UNUSED_PROCESS_LOCAL,
+  });
+}
+
+/**
+ * Resolve only already-observed catalog sources. A cold process cache falls
+ * through to evidence-owned persisted sources and never becomes probe authority.
+ */
+export function resolveCatalogSourceForGather(
+  evidenceSession: CatalogGatherEvidenceSession,
+): CatalogSourceForGather {
+  const bundledMemo = bundledCatalogCache;
+  if (bundledMemo?.value && bundledMemo.expiresAt > Date.now()) {
+    const runtime = peekCodexRuntimeForCatalogGather(evidenceSession);
+    if (runtime.kind === "available" && bundledMemo.key === bundledRuntimeKey(runtime.runtime)) {
+      return cloneAndDeepFreeze({
+        kind: "available" as const,
+        source: "bundled-catalog-template" as const,
+        catalog: bundledMemo.value,
+        processLocal: {
+          runtime: runtime.processLocal,
+          bundledCatalog: {
+            state: "used" as const,
+            epoch: bundledMemo.epoch,
+            valueIdentity: bundledMemo.valueIdentity,
+          },
+        },
+      });
+    }
+  }
+
+  const roles = [
+    "active-catalog-merge",
+    "hashed-backup-fallback",
+    "legacy-backup-fallback",
+    "models-cache-fallback",
+  ] as const;
+  for (const role of roles) {
+    const bytes = evidenceSession.readSource(role);
+    if (bytes === null) continue;
+    const catalog = parseCatalogJson(Buffer.from(bytes).toString("utf8"));
+    if (!catalog || !findNativeTemplate(catalog)) continue;
+    return cloneAndDeepFreeze({
+      kind: "available" as const,
+      source: role,
+      catalog,
+      processLocal: {
+        runtime: UNUSED_PROCESS_LOCAL,
+        bundledCatalog: UNUSED_PROCESS_LOCAL,
+      },
+    });
+  }
+
+  return Object.freeze({
+    kind: "catalog-unavailable" as const,
+    processLocal: Object.freeze({
+      runtime: UNUSED_PROCESS_LOCAL,
+      bundledCatalog: UNUSED_PROCESS_LOCAL,
+    }),
+  });
 }
 
 export function materializeBundledCodexCatalog(path: string, deps: BundledCatalogDeps = {}): RawCatalog | null {
@@ -219,7 +468,7 @@ export function materializeBundledCodexCatalog(path: string, deps: BundledCatalo
   } catch {
     return null;
   }
-  return catalog;
+  return JSON.parse(JSON.stringify(catalog)) as RawCatalog;
 }
 
 export function loadCatalogForSync(path: string): RawCatalog | null {
@@ -236,16 +485,17 @@ export function loadCatalogForSync(path: string): RawCatalog | null {
 
 export function readCurrentCatalogOrCache(): RawCatalog | null {
   const path = readCodexCatalogPath();
-  return (isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null)
-    ?? readCatalog(path)
-    ?? readCatalog(activeCodexModelsCachePath());
+  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
+  if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
+  return readCatalog(path) ?? readCatalog(activeCodexModelsCachePath());
 }
 
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
+  const bundled = loadBundledCodexCatalog();
   const native = findNativeTemplate(readCatalog(catalogPath))
     ?? findNativeTemplate(readCatalogBackup(catalogPath))
     ?? findNativeTemplate(readCatalog(activeCodexModelsCachePath()))
-    ?? findNativeTemplate(loadBundledCodexCatalog());
+    ?? findNativeTemplate(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
   return native ? JSON.parse(JSON.stringify(native)) : null;
 }

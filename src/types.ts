@@ -539,6 +539,22 @@ export interface OcxApiKeyEntry {
   createdAt: string;
 }
 
+/**
+ * Durable per-client intent. One key today, deliberately.
+ *
+ * A top-level `codexEnabled` would force every later client to invent an
+ * unrelated name and its own helpers; a ten-key union recreated the coupling
+ * that failed two audits, because every phase then had to touch every client's
+ * write path. A one-key object keeps the extension point without letting this
+ * phase claim ownership over a client it does not implement.
+ */
+export interface OcxClientIntegrationsConfig {
+  /** Durable desired state for native Codex. MISSING MEANS ON. */
+  codex?: boolean;
+  /** Durable desired state for Grok Build. MISSING MEANS ON. */
+  grok?: boolean;
+}
+
 export interface OcxConfig {
   port: number;
   /** Maximum usage-log bytes read for one management snapshot. */
@@ -551,6 +567,11 @@ export interface OcxConfig {
   googleAntigravityStaticCatalogVersion?: 1;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /**
+   * Per-client durable intent. This phase owns only `codex`; later phases extend
+   * one key at a time rather than widening a shared union.
+   */
+  clientIntegrations?: OcxClientIntegrationsConfig;
   /**
    * Up to 5 Codex-facing catalog ids to feature first. Values may be bare catalog ids,
    * exact account-qualified "<selector>/<native-openai-model>" ids, or routed

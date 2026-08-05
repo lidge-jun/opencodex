@@ -22,7 +22,7 @@ describe("ocx restore back", () => {
     expect(restoreCase.indexOf("if (!synced.ok)")).toBeLessThan(restoreCase.indexOf("target.effectiveCodexHome"));
     expect(restoreCase).toContain("target.effectiveCodexHome");
     // The forward switch reports incomplete marker cleanup instead of claiming native success.
-    expect(restoreCase).toContain("restoreNativeCodex()");
+    expect(restoreCase).toContain("restoreNativeCodexAsync()");
     expect(restoreCase).toContain("process.exitCode = 1");
     expect(restoreCase).toContain("was not fully restored");
   });

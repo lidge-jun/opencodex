@@ -5,12 +5,12 @@ import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
 import type { injectGrokConfig } from "../../grok/inject";
 import type { RuntimePortState } from "../../config";
-import type { CodexCatalogRefreshCompletion } from "../../codex/catalog-refresh-status";
+import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
 
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
-  refreshCodexCatalog?: () => Promise<void | CodexCatalogRefreshCompletion>;
+  createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
   /**
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config
@@ -64,14 +64,8 @@ export interface ManagementContext {
    * anything running as the user, so a token holder can forge any header a route
    * might otherwise treat as browser evidence. Undefined only in direct-dispatch
    * tests, which are treated as the untrusted `admin-token` case.
-   */
+  */
   principal?: ManagementPrincipal;
-  /**
-   * Refresh the Codex catalog and propagate failures to the owning route.
-   * Mutations that need recoverable pending-state reporting use this surface;
-   * ordinary management writes keep using the best-effort wrapper below.
-   */
-  refreshCodexCatalogStrict: () => Promise<void>;
-  refreshCodexCatalogBestEffort: () => Promise<void>;
+  convergeCodexCatalog: () => Promise<CatalogDisposition>;
   syncClaudeAgentDefsBestEffort: () => Promise<void>;
 }

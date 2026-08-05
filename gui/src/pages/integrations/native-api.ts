@@ -1,6 +1,14 @@
 import { readJsonIfOk } from "../../fetch-json";
 
-export type NativeIntegrationClientId = "claude" | "grok";
+/**
+ * Kept in step with the server, which has accepted `codex` since the Codex
+ * toggle shipped (`src/server/management/native-integration-routes.ts`).
+ *
+ * The GUI type lagged behind the call site that already passed `"codex"`, and
+ * nothing caught it locally because GUI typecheck runs from its own tsconfig —
+ * `bun x tsc --noEmit` at the repository root does not read this file. CI did.
+ */
+export type NativeIntegrationClientId = "claude" | "grok" | "codex";
 export type NativeIntegrationState = "absent" | "current" | "unsafe";
 export type NativeRefusalReason =
   | "not_installed"
@@ -48,7 +56,9 @@ export interface NativeErrorEnvelope {
 
 export type NativeErrorBody = NativeErrorEnvelope | NativeRefusalEnvelope;
 
-const NATIVE_CLIENTS: ReadonlySet<string> = new Set<NativeIntegrationClientId>(["claude", "grok"]);
+// Widening the type alone would leave this guard rejecting a `codex` response at
+// runtime, so the set moves with it.
+const NATIVE_CLIENTS: ReadonlySet<string> = new Set<NativeIntegrationClientId>(["claude", "grok", "codex"]);
 const NATIVE_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "native_integration_refused",
   "native_integration_failed",

@@ -1,54 +1,91 @@
-import { debugProviderDiagnostic } from "../lib/debug";
+import type { CatalogDisposition, CatalogNotice } from "./convergence-types";
 
-export type CodexCatalogRefreshCompletion = {
-  catalogExists: boolean;
-  catalogWritten?: boolean;
-  cacheSynced?: boolean;
-};
+const INVALID_CATALOG_DISPOSITION_FIELD = Symbol("invalid-catalog-disposition-field");
 
-type CodexCatalogRefreshFailureReason = "missing" | "unwritten" | "cache_unsynced";
-
-class CodexCatalogRefreshIncompleteError extends Error {
-  constructor(readonly reason: CodexCatalogRefreshFailureReason) {
-    super("Codex catalog was not refreshed");
-    this.name = "CodexCatalogRefreshIncompleteError";
-  }
+function ownDataProperty(value: object, key: PropertyKey): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor
+    ? descriptor.value
+    : INVALID_CATALOG_DISPOSITION_FIELD;
 }
 
-/** Treat an incomplete catalog rewrite or cache invalidation as a refresh failure. */
-export function assertCodexCatalogRefreshComplete(
-  result: void | CodexCatalogRefreshCompletion,
-): void {
-  if (result?.catalogExists === false) throw new CodexCatalogRefreshIncompleteError("missing");
-  if (result?.catalogWritten === false) throw new CodexCatalogRefreshIncompleteError("unwritten");
-  if (result?.cacheSynced === false) throw new CodexCatalogRefreshIncompleteError("cache_unsynced");
+function isCatalogNotice(value: unknown): value is CatalogNotice {
+  return value === "provider-auth" || value === "provider-network" || value === "fallback";
+}
+
+function normalizeCatalogNotices(value: unknown): CatalogNotice[] | null {
+  if (!Array.isArray(value)) return null;
+  const length = ownDataProperty(value, "length");
+  if (typeof length !== "number" || !Number.isInteger(length) || length < 0 || length > 3) {
+    return null;
+  }
+  const notices: CatalogNotice[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const notice = ownDataProperty(value, String(index));
+    if (!isCatalogNotice(notice)) return null;
+    notices.push(notice);
+  }
+  return notices;
 }
 
 /**
- * Refresh the Codex catalog, retrying once after a failure.
+ * Rebuild a catalog disposition from a strict set of own data properties.
  *
- * Returns true only when both attempts fail. The mutation that requested the
- * refresh has already been persisted, so callers can report a recoverable
- * pending state instead of rolling back durable configuration.
+ * Management callbacks are internal today, but this response is a privacy
+ * boundary. Avoid coercion, accessors, custom iterators, and `toJSON` hooks so a
+ * malformed callback cannot smuggle private provider or account detail into a
+ * management response.
  */
-export async function refreshCodexCatalogWithRetry(
-  refresh: () => Promise<void>,
-): Promise<boolean> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (attempt > 0) await Bun.sleep(50);
-    try {
-      await refresh();
-      return false;
-    } catch (error) {
-      // Log only an internal classification. Raw failures can contain credentials,
-      // account identifiers, provider URLs, or filesystem paths.
-      debugProviderDiagnostic("codex", "catalog-refresh-failed", {
-        attempt: attempt + 1,
-        reason: error instanceof CodexCatalogRefreshIncompleteError ? error.reason : "exception",
-      });
+export function normalizeCatalogDisposition(value: unknown): CatalogDisposition | null {
+  if (value === null || typeof value !== "object") return null;
+  try {
+    if (Array.isArray(value)) return null;
+    const status = ownDataProperty(value, "status");
+    if (status === "committed") {
+      const changed = ownDataProperty(value, "changed");
+      const degraded = ownDataProperty(value, "degraded");
+      const notices = normalizeCatalogNotices(ownDataProperty(value, "notices"));
+      if (typeof changed !== "boolean" || typeof degraded !== "boolean" || notices === null) {
+        return null;
+      }
+      return { status, changed, degraded, notices };
     }
+    if (status === "skipped") {
+      const reason = ownDataProperty(value, "reason");
+      const retryable = ownDataProperty(value, "retryable");
+      if ((reason !== "not-requested"
+        && reason !== "catalog-unavailable"
+        && reason !== "busy"
+        && reason !== "stale"
+        && reason !== "refused")
+        || typeof retryable !== "boolean") return null;
+      return { status, reason, retryable };
+    }
+    if (status === "failed") {
+      const reason = ownDataProperty(value, "reason");
+      const phase = ownDataProperty(value, "phase");
+      const retryable = ownDataProperty(value, "retryable");
+      const partialWrite = ownDataProperty(value, "partialWrite");
+      if ((reason !== "provider-auth" && reason !== "provider-network" && reason !== "disk")
+        || (phase !== "gather" && phase !== "commit")
+        || typeof retryable !== "boolean"
+        || typeof partialWrite !== "boolean") return null;
+      return { status, reason, phase, retryable, partialWrite };
+    }
+    return null;
+  } catch {
+    return null;
   }
+}
 
-  console.warn("[opencodex] Codex catalog refresh is pending; run `ocx sync` to retry.");
-  return true;
+/**
+ * Preserve the legacy `catalogRefreshPending` response flag while the richer,
+ * privacy-safe catalog disposition is adopted by management clients.
+ *
+ * A committed disposition means the requested catalog state reached disk,
+ * including a no-change commit. Every skipped or failed disposition leaves the
+ * persisted mutation ahead of the catalog and therefore pending.
+ */
+export function catalogRefreshIsPending(disposition: CatalogDisposition): boolean {
+  return disposition.status !== "committed";
 }

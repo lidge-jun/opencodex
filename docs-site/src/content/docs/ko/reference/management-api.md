@@ -220,9 +220,10 @@ Authorization: Bearer <admin-token>
 
 `PUT /api/settings`는 boolean `codexAccountPickerEnabled`를 받습니다. 활성화할 때 binding이 없으면
 개인정보를 노출하지 않는 selector binding을 초기화하고, 비활성화할 때는 그 binding과 exact route를
-유지합니다. settings, account add/delete, login 변경은 catalog refresh보다 먼저 저장됩니다. refresh가
-두 번 모두 실패해도 변경은 성공하고 `catalogRefreshPending: true`를 반환합니다. `ocx sync`로 다시
-시도하세요. 응답과 경고는 원래의 실패 세부 정보를 노출하지 않습니다.
+유지합니다. settings, account add/delete, login 변경은 공유 writer를 통한 한 번의 bounded catalog
+convergence보다 먼저 저장됩니다. convergence가 건너뛰어지거나 실패해도 변경은 성공하고
+`catalogRefreshPending: true`를 반환합니다. `ocx sync`로 다시 시도하세요. 응답과 경고는 원래의 실패
+세부 정보를 노출하지 않습니다.
 
 이 위임된 계열에서 configuration-writer 또는 credential-refresh lock timeout이 발생하면 HTTP 503과 `CONFIG_MUTATION_LOCK_UNAVAILABLE` 코드가 반환됩니다. 클라이언트는 이를 영구적인 계정 실패로 보지 말고 곧바로 다시 시도해야 합니다.
 

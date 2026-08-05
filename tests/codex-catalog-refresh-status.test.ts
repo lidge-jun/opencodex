@@ -1,60 +1,174 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
-  assertCodexCatalogRefreshComplete,
-  refreshCodexCatalogWithRetry,
+  catalogRefreshIsPending,
+  normalizeCatalogDisposition,
 } from "../src/codex/catalog-refresh-status";
-import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
-import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
+import type { CatalogDisposition } from "../src/codex/convergence-types";
 
-afterEach(() => {
-  resetDebugSettingsForTests();
-  resetDebugLogBufferForTests();
+describe("catalogRefreshIsPending", () => {
+  test.each([
+    {
+      status: "committed",
+      changed: false,
+      degraded: false,
+      notices: [],
+    },
+    {
+      status: "committed",
+      changed: true,
+      degraded: true,
+      notices: ["provider-network"],
+    },
+  ] satisfies CatalogDisposition[])("committed catalog state is not pending", disposition => {
+    expect(catalogRefreshIsPending(disposition)).toBe(false);
+  });
+
+  test.each([
+    { status: "skipped", reason: "not-requested", retryable: false },
+    { status: "skipped", reason: "catalog-unavailable", retryable: false },
+    { status: "skipped", reason: "busy", retryable: true },
+    { status: "skipped", reason: "stale", retryable: true },
+    { status: "skipped", reason: "refused", retryable: false },
+  ] satisfies CatalogDisposition[])("skipped catalog state remains pending", disposition => {
+    expect(catalogRefreshIsPending(disposition)).toBe(true);
+  });
+
+  test.each([
+    {
+      status: "failed",
+      reason: "provider-auth",
+      phase: "gather",
+      retryable: true,
+      partialWrite: false,
+    },
+    {
+      status: "failed",
+      reason: "provider-network",
+      phase: "gather",
+      retryable: true,
+      partialWrite: false,
+    },
+    {
+      status: "failed",
+      reason: "disk",
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+    },
+  ] satisfies CatalogDisposition[])("failed catalog state remains pending", disposition => {
+    expect(catalogRefreshIsPending(disposition)).toBe(true);
+  });
+
+  test("projects only a boolean and never exposes unexpected private detail", () => {
+    const privateDetail = "https://alice:horse-battery@example.test/home/example/acct-123456";
+    const disposition = {
+      status: "failed",
+      reason: "disk",
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+      privateDetail,
+    } as CatalogDisposition & { privateDetail: string };
+    const errorLog = spyOn(console, "error").mockImplementation(() => {});
+    const warningLog = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const projection = { catalogRefreshPending: catalogRefreshIsPending(disposition) };
+
+      expect(projection).toEqual({ catalogRefreshPending: true });
+      expect(JSON.stringify(projection)).not.toContain(privateDetail);
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
+  });
 });
 
-test.each([
-  ["missing", { catalogExists: false }],
-  ["unwritten", { catalogExists: true, catalogWritten: false }],
-  ["cache_unsynced", { catalogExists: true, catalogWritten: true, cacheSynced: false }],
-] as const)("catalog refresh records only the internal %s classification", async (reason, result) => {
-  setDebugSettings({ debug: true });
-  const errorLog = spyOn(console, "error").mockImplementation(() => {});
-  const warning = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    const pending = await refreshCodexCatalogWithRetry(async () => {
-      assertCodexCatalogRefreshComplete(result);
+describe("normalizeCatalogDisposition", () => {
+  test("rebuilds only the public disposition fields", () => {
+    const privateDetail = "Bearer private-token acct-private /private/catalog/path";
+    const disposition = {
+      status: "failed",
+      reason: "disk",
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+      privateDetail,
+      toJSON: () => ({ privateDetail }),
+    };
+
+    const normalized = normalizeCatalogDisposition(disposition);
+
+    expect(normalized).toEqual({
+      status: "failed",
+      reason: "disk",
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+    });
+    expect(JSON.stringify(normalized)).not.toContain(privateDetail);
+    expect(JSON.stringify(normalized)).not.toContain("private-token");
+  });
+
+  test("rejects coercive and accessor-backed fields without invoking user code", () => {
+    let coercions = 0;
+    const coerciveReason = {
+      privateDetail: "Bearer private-token",
+      toString: () => {
+        coercions += 1;
+        return "disk";
+      },
+    };
+    expect(normalizeCatalogDisposition({
+      status: "failed",
+      reason: coerciveReason,
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+    })).toBeNull();
+    expect(coercions).toBe(0);
+
+    let getterReads = 0;
+    const accessorDisposition: Record<string, unknown> = {
+      status: "failed",
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+    };
+    Object.defineProperty(accessorDisposition, "reason", {
+      enumerable: true,
+      get: () => {
+        getterReads += 1;
+        return "disk";
+      },
+    });
+    expect(normalizeCatalogDisposition(accessorDisposition)).toBeNull();
+    expect(getterReads).toBe(0);
+  });
+
+  test("copies notice data without trusting a custom iterator", () => {
+    let iteratorCalls = 0;
+    const notices = ["provider-auth", "fallback"];
+    Object.defineProperty(notices, Symbol.iterator, {
+      value: () => {
+        iteratorCalls += 1;
+        throw new Error("private iterator detail");
+      },
     });
 
-    expect(pending).toBe(true);
-    const lines = getDebugLogEntries().map(entry => entry.line);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain(`"attempt":1`);
-    expect(lines[1]).toContain(`"attempt":2`);
-    expect(lines.every(line => line.includes(`"reason":"${reason}"`))).toBe(true);
-  } finally {
-    warning.mockRestore();
-    errorLog.mockRestore();
-  }
-});
-
-test("catalog refresh diagnostics never retain raw exception details", async () => {
-  setDebugSettings({ debug: true });
-  const errorLog = spyOn(console, "error").mockImplementation(() => {});
-  const warning = spyOn(console, "warn").mockImplementation(() => {});
-  const privateDetail = "https://alice:horse-battery@example.test/home/example/acct-123456";
-  try {
-    const pending = await refreshCodexCatalogWithRetry(async () => {
-      throw new Error(privateDetail);
+    expect(normalizeCatalogDisposition({
+      status: "committed",
+      changed: true,
+      degraded: true,
+      notices,
+    })).toEqual({
+      status: "committed",
+      changed: true,
+      degraded: true,
+      notices: ["provider-auth", "fallback"],
     });
-
-    expect(pending).toBe(true);
-    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
-    expect(lines).toContain(`"reason":"exception"`);
-    expect(lines).not.toContain(privateDetail);
-    expect(lines).not.toContain("horse-battery");
-    expect(lines).not.toContain("alice");
-    expect(lines).not.toContain("acct-123456");
-  } finally {
-    warning.mockRestore();
-    errorLog.mockRestore();
-  }
+    expect(iteratorCalls).toBe(0);
+  });
 });

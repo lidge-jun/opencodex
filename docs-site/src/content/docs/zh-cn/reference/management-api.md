@@ -220,8 +220,9 @@ Authorization: Bearer <admin-token>
 
 `PUT /api/settings` 接受布尔值 `codexAccountPickerEnabled`。启用时，如果尚无 binding，它会初始化
 隐私安全的 selector binding；禁用时会保留这些 binding 和 exact route。settings、account add/delete
-与 login 变更都会在 catalog refresh 之前持久化。如果两次 refresh 均失败，变更仍成功，并返回
-`catalogRefreshPending: true`；运行 `ocx sync` 重试。响应和警告不会暴露底层失败详情。
+与 login 变更都会在通过共享 writer 执行一次有界 catalog convergence 之前持久化。如果 convergence
+被跳过或失败，变更仍成功，并返回 `catalogRefreshPending: true`；运行 `ocx sync` 重试。响应和警告不会
+暴露底层失败详情。
 
 此委托家族下的配置写入器或凭证刷新锁超时，会返回 HTTP 503，代码为 `CONFIG_MUTATION_LOCK_UNAVAILABLE`。客户端应稍后重试，而不是把该响应视为永久性的账户失败。
 

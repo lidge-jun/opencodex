@@ -35,6 +35,7 @@ import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import * as destinationPolicy from "../src/lib/destination-policy";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -684,7 +685,7 @@ describe("provider management validation", () => {
       }),
       requestUrl,
       cfg,
-      { refreshCodexCatalog: async () => {} },
+      { createManagementConvergeCodex: catalogConvergenceFactory() },
     );
 
     expect(response?.status).toBe(409);
@@ -1364,7 +1365,7 @@ describe("provider management validation", () => {
           body: JSON.stringify(body),
         });
         return handleManagementAPI(request, new URL(request.url), liveConfig, {
-          refreshCodexCatalog: async () => undefined,
+          createManagementConvergeCodex: catalogConvergenceFactory(),
         });
       };
       const canonical = await post({ name: "openai", provider: canonicalDirect });
@@ -1419,7 +1420,7 @@ describe("provider management validation", () => {
         body: JSON.stringify({ name: "openai", provider: canonicalDirect }),
       });
       const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
-        refreshCodexCatalog: async () => undefined,
+        createManagementConvergeCodex: catalogConvergenceFactory(),
       });
       expect(response?.status).toBe(400);
       expect(await response?.json()).toMatchObject({
@@ -1573,7 +1574,7 @@ describe("provider management validation", () => {
         body: JSON.stringify({ disabled: false }),
       });
       const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
-        refreshCodexCatalog: async () => undefined,
+        createManagementConvergeCodex: catalogConvergenceFactory(),
       });
       expect(response?.status).toBe(200);
       expect(resolvedError).toHaveBeenCalledTimes(1);
@@ -1629,7 +1630,7 @@ describe("provider management validation", () => {
           body: JSON.stringify({ disabled: false }),
         });
         const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
-          refreshCodexCatalog: async () => undefined,
+          createManagementConvergeCodex: catalogConvergenceFactory(),
         });
         expect(response?.status).toBe(400);
         expect(await response?.json()).toMatchObject({ error });
@@ -1688,7 +1689,7 @@ describe("provider management validation", () => {
         body: JSON.stringify({ disabled: false }),
       });
       const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
-        refreshCodexCatalog: async () => undefined,
+        createManagementConvergeCodex: catalogConvergenceFactory(),
       });
       expect(response?.status).toBe(400);
       expect(liveConfig.providers.openai).toMatchObject({
@@ -1740,7 +1741,7 @@ describe("provider management validation", () => {
         body: JSON.stringify({ disabled: false }),
       });
       const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
-        refreshCodexCatalog: async () => undefined,
+        createManagementConvergeCodex: catalogConvergenceFactory(),
       });
       expect(response?.status).toBe(200);
       expect(liveConfig.providers.openai).toEqual({
@@ -1835,7 +1836,7 @@ describe("provider management validation", () => {
     const deps = {
       clearThreadAccountMap: () => { affinityClears += 1; },
       clearProviderQuotaCache: () => { quotaCacheClears += 1; },
-      refreshCodexCatalog: async () => { catalogRefreshes += 1; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogRefreshes += 1; }),
       primeCodexPoolQuotas: (_config: OcxConfig, reason: string) => { primes.push(reason); },
     };
     const patch = async (name: string, body: unknown) => {
@@ -1913,7 +1914,7 @@ describe("provider management validation", () => {
         body: JSON.stringify(body),
       });
       return handleManagementAPI(req, new URL(req.url), liveConfig, {
-        refreshCodexCatalog: async () => { catalogRefreshes += 1; },
+        createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogRefreshes += 1; }),
       });
     };
 
@@ -1995,7 +1996,10 @@ describe("provider management validation", () => {
         body: JSON.stringify(body),
       });
       return handleManagementAPI(req, new URL(req.url), liveConfig, {
-        refreshCodexCatalog: async () => { catalogRefreshes += 1; },
+        // This branch replaced the best-effort `refreshCodexCatalog` dep with the
+        // convergence entry point; every other test in this file already wires it
+        // that way, and this one arrived from dev still using the old shape.
+        createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogRefreshes += 1; }),
       });
     };
 

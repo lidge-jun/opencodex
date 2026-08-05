@@ -14,7 +14,14 @@ import { atomicWriteFile, getConfigDir } from "../config";
 export const MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 
 const STATE_DB_PATH = join(CODEX_HOME, "state_5.sqlite");
-function historyBackupPathFor(stateDbPath: string): string {
+/**
+ * The manifest that shadows one state database.
+ *
+ * Exported because the history job must resolve it at CALL time for a Worker
+ * that does not inherit this module's load-time constants — and must resolve it
+ * the same way, since a manifest addressed differently is a different manifest.
+ */
+export function historyBackupPathFor(stateDbPath: string): string {
   const normalized = process.platform === "win32" ? resolve(stateDbPath).toLowerCase() : resolve(stateDbPath);
   const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
   return join(getConfigDir(), `codex-history-backup-${id}.json`);
@@ -157,7 +164,7 @@ function patchFirstLineProviderInPlace(path: string, expectedId: string, provide
   }
 }
 
-type CodexHistoryProvider = "openai" | "opencodex";
+export type CodexHistoryProvider = "openai" | "opencodex";
 
 export interface CodexHistorySyncResult {
   rows: number;

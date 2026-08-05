@@ -112,7 +112,7 @@ function validateKeyName(
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
   // Which providers support real OAuth login (drives the GUI's "Log in with …" buttons).
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {

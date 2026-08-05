@@ -18,10 +18,8 @@ import {
   appendDefaultCodexAccountNamespace,
   codexAccountPickerIsEnabled,
 } from "./account-namespaces";
-import {
-  assertCodexCatalogRefreshComplete,
-  refreshCodexCatalogWithRetry,
-} from "./catalog-refresh-status";
+import { catalogRefreshIsPending, normalizeCatalogDisposition } from "./catalog-refresh-status";
+import type { CatalogDisposition } from "./convergence-types";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
 import {
   claimDueCodexQuotaRecoveryProbes,
@@ -427,12 +425,36 @@ function persistNewCodexAccount(
   }
 }
 
-async function refreshAccountNamespaceCatalog(config: OcxConfig, changed: boolean): Promise<boolean> {
-  if (!changed || !codexAccountPickerIsEnabled(config)) return false;
-  return refreshCodexCatalogWithRetry(async () => {
-    const { refreshCodexModelCatalog } = await import("./refresh");
-    assertCodexCatalogRefreshComplete(await refreshCodexModelCatalog(config));
-  });
+export type CodexAuthCatalogConvergence = () => Promise<CatalogDisposition>;
+
+interface AccountNamespaceCatalogRefresh {
+  catalogRefreshPending: boolean;
+  catalogRefresh?: CatalogDisposition;
+}
+
+async function convergeAccountNamespaceCatalog(
+  config: OcxConfig,
+  changed: boolean,
+  convergeCodexCatalog?: CodexAuthCatalogConvergence,
+): Promise<AccountNamespaceCatalogRefresh> {
+  if (!changed || !codexAccountPickerIsEnabled(config)) {
+    return { catalogRefreshPending: false };
+  }
+  if (!convergeCodexCatalog) {
+    return { catalogRefreshPending: true };
+  }
+  try {
+    const catalogRefresh = normalizeCatalogDisposition(await convergeCodexCatalog());
+    if (!catalogRefresh) return { catalogRefreshPending: true };
+    return {
+      catalogRefresh,
+      catalogRefreshPending: catalogRefreshIsPending(catalogRefresh),
+    };
+  } catch {
+    // The management boundary supplies a sanitized, non-throwing callback. Keep
+    // direct callers fail-closed without reflecting unexpected private details.
+    return { catalogRefreshPending: true };
+  }
 }
 
 async function mapWithConcurrency<T, R>(
@@ -1241,6 +1263,7 @@ export async function handleCodexAuthAPI(
   req: Request,
   url: URL,
   config: OcxConfig,
+  convergeCodexCatalog?: CodexAuthCatalogConvergence,
 ): Promise<Response | null> {
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
@@ -1297,11 +1320,12 @@ export async function handleCodexAuthAPI(
       addedAccount,
     );
     reconcileLiveStateStores();
-    const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+    const catalogRefresh = await convergeAccountNamespaceCatalog(
       latestConfig,
       pickerVisibilityChanged,
+      convergeCodexCatalog,
     );
-    return jsonResponse({ ok: true, catalogRefreshPending });
+    return jsonResponse({ ok: true, ...catalogRefresh });
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "DELETE") {
@@ -1316,11 +1340,12 @@ export async function handleCodexAuthAPI(
     const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
     reconcileLiveStateStores();
-    const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+    const catalogRefresh = await convergeAccountNamespaceCatalog(
       runtimeConfig,
       pickerVisibilityChanged,
+      convergeCodexCatalog,
     );
-    return jsonResponse({ ok: true, catalogRefreshPending });
+    return jsonResponse({ ok: true, ...catalogRefresh });
   }
 
   if (url.pathname === "/api/codex-auth/accounts/alias" && req.method === "PUT") {
@@ -1803,9 +1828,10 @@ export async function handleCodexAuthAPI(
                   ));
                 }
                 reconcileLiveStateStores();
-                const catalogRefreshPending = await refreshAccountNamespaceCatalog(
+                const { catalogRefreshPending } = await convergeAccountNamespaceCatalog(
                   latestConfig,
                   pickerVisibilityChanged,
+                  convergeCodexCatalog,
                 );
                 setCodexLoginState(flowId, {
                   status: "done",

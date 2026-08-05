@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
-import { restoreNativeCodex } from "./codex/inject";
+import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime } from "./codex/home";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./lib/bun-runtime";
@@ -174,6 +174,58 @@ function readServiceInstallState(): ServiceInstallState | null {
   return null;
 }
 
+/** What ONE state path said. Absent, unreadable and invalid are different answers. */
+export type ServiceStateEvidence =
+  | { readonly path: string; readonly kind: "absent" }
+  | { readonly path: string; readonly kind: "unreadable"; readonly reason: string }
+  | { readonly path: string; readonly kind: "invalid" }
+  | { readonly path: string; readonly kind: "valid"; readonly state: ServiceInstallState };
+
+/**
+ * Every state path, with what each one said.
+ *
+ * `readServiceInstallState` returns the FIRST path that parsed and discards the
+ * rest, so a valid mirror beside a corrupt one reads as clean. That is the right
+ * behavior for callers that just need the install state; it is the wrong input
+ * for deciding ownership, where a disagreement between mirrors is exactly the
+ * evidence that matters.
+ */
+export function inspectServiceStateEvidence(
+  paths: readonly string[] = serviceStatePaths(),
+): readonly ServiceStateEvidence[] {
+  return paths.map((path): ServiceStateEvidence => {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+      // ENOENT is an answer. EACCES, ENOTDIR and the rest are a failure to ask,
+      // and collapsing them into absence is how a locked-down state file would
+      // become permission to write.
+      if (code === "ENOENT") return { path, kind: "absent" };
+      return { path, kind: "unreadable", reason: code || String(error) };
+    }
+    let parsed: ServiceInstallState | null;
+    try {
+      parsed = parseServiceInstallState(JSON.parse(raw));
+    } catch {
+      return { path, kind: "invalid" };
+    }
+    return parsed ? { path, kind: "valid", state: parsed } : { path, kind: "invalid" };
+  });
+}
+
+/** The homes this process is actually using, for comparison against a claim. */
+export function currentServiceHomes(): { codexHome: string; opencodexHome: string } {
+  return { codexHome: currentCodexHome(), opencodexHome: currentOpenCodexHome() };
+}
+
+export function serviceHomeMatches(a: string, b: string): boolean {
+  return normalizePathForCompare(a) === normalizePathForCompare(b);
+}
+
 /** Single accessor for backend-sensitive service code — v1/legacy state maps to scheduler. */
 export function readServiceBackend(): ServiceBackend {
   return readServiceInstallState()?.backend === "native" ? "native" : "scheduler";
@@ -248,6 +300,7 @@ export function assertServiceEnvironmentMatchesInstall(): void {
     );
   }
 }
+
 
 function plistString(value: string): string {
   return value
@@ -581,16 +634,28 @@ function sh(cmd: string): string {
 export function runLaunchctl(
   args: string[],
   deps: { run?: typeof spawnSync } = {},
-): { ok: boolean; stdout: string; stderr: string } {
+): { ok: boolean; stdout: string; stderr: string; status: number | null } {
   const run = deps.run ?? spawnSync;
   const result = run("/bin/launchctl", args, { encoding: "utf8", windowsHide: true });
   // `error` is set when the spawn itself failed (ENOENT off macOS) and `status` is
   // null for a signalled child; neither may be reported as success.
-  if (result.error) return { ok: false, stdout: "", stderr: String(result.error.message ?? "") };
+  if (result.error) {
+    return { ok: false, stdout: "", stderr: String(result.error.message ?? ""), status: null };
+  }
   return {
     ok: result.status === 0,
     stdout: String(result.stdout ?? "").trim(),
     stderr: String(result.stderr ?? "").trim(),
+    /*
+     * The NUMBER, not just its zero-ness.
+     *
+     * `launchctl print` distinguishes "that domain does not exist" (112) from
+     * "the domain answered and has no such service" (113), and an ownership
+     * probe needs that difference: the second proves absence, the first only
+     * proves we could not look. Collapsing both into `ok: false` forced callers
+     * to parse stderr, which Apple does not treat as a stable interface.
+     */
+    status: result.status ?? null,
   };
 }
 
@@ -2619,7 +2684,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
           process.exitCode = 1;
           break;
         }
-        const restore = restoreNativeCodex();
+        const restore = await restoreNativeCodexAsync();
         if (restore.success) console.log("✅ service stopped + native Codex restored.");
         else console.error(`⚠️ service stopped, but native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` (or check $CODEX_HOME/config.toml) before using native Codex.`);
         // The Grok fence is the other managed config this command owns. Leaving it behind
@@ -2657,7 +2722,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         process.exit(1);
       }
       {
-        const restore = restoreNativeCodex();
+        const restore = await restoreNativeCodexAsync();
         if (!restore.success) {
           console.error(`⚠️ native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` before using native Codex.`);
         }

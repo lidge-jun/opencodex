@@ -241,9 +241,10 @@ manager. Its routes are:
 
 `PUT /api/settings` accepts boolean `codexAccountPickerEnabled`. Enabling it initializes
 privacy-safe selector bindings when none exist; disabling it keeps those bindings and exact routes.
-Settings, account-add, account-delete, and login mutations are persisted before catalog refresh.
-If both refresh attempts fail, the mutation still returns success with `catalogRefreshPending: true`;
-run `ocx sync` to retry. The response and warning do not expose the underlying failure detail.
+Settings, account-add, account-delete, and login mutations are persisted before one bounded catalog
+convergence through the shared writer. If convergence is skipped or fails, the mutation still returns
+success with `catalogRefreshPending: true`; run `ocx sync` to retry. The response and warning do not
+expose the underlying failure detail.
 
 Configuration-writer or credential-refresh lock timeouts under this delegated family return HTTP
 503 with code `CONFIG_MUTATION_LOCK_UNAVAILABLE`. Clients should retry shortly rather than treating

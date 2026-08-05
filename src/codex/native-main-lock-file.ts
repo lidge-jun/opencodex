@@ -124,9 +124,35 @@ export function assertStableLockFile(path: string, handle: StableLockFile): void
   }
 }
 
-export async function hardenStableLockFile(path: string): Promise<void> {
-  try { chmodSync(path, 0o600); } catch { /* Windows ACL below is authoritative there. */ }
-  if (process.platform === "win32") {
-    await hardenSecretPathAsync(path, { required: true, timeoutMemoKey: path });
+/**
+ * Harden the stable lock file: chmod everywhere, per-user NTFS ACLs on Windows.
+ *
+ * The platform is a parameter rather than a direct `process.platform` read so the
+ * Windows branch is reachable from a test. It was not, and an audit deleted the
+ * whole ACL delegation without a single test noticing — the primitive underneath
+ * had 73 tests while the call edge that activates it had none. That is the same
+ * absence-as-guarantee defect one layer up: proving a mechanism works says nothing
+ * about whether production still calls it.
+ *
+ * `required: true` is deliberate: a failure to apply the ACL must reject rather
+ * than leave a coordinator database readable by other accounts.
+ */
+export async function hardenStableLockFile(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  if (platform === "win32") {
+    // Best-effort here: POSIX modes are not authoritative on NTFS, and the
+    // required ACL hardening below is what actually decides.
+    try { chmodSync(path, 0o600); } catch { /* ACL below is authoritative. */ }
+    await hardenSecretPathAsync(path, { required: true });
+    return;
   }
+  // On POSIX the mode IS the mechanism, so a failure may not be swallowed.
+  //
+  // The previous unconditional catch was a real fail-open: a coordinator
+  // database that already existed with permissive bits stayed permissive, and
+  // the caller was told the lock file had been hardened. Creation mode 0600 does
+  // not repair an existing file, and there is no ACL fallback outside Windows.
+  chmodSync(path, 0o600);
 }

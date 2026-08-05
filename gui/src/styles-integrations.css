@@ -18,6 +18,15 @@
    down while a one-line one did not. Reserving the detail line's height keeps
    the switches on one baseline across the row. */
 .integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
+/*
+  One full-width row, not a wide card: no grid cell, no hover border, no
+  stretched title. `flex-wrap` is what keeps long German/Russian action copy
+  moving below the label at 320-390px instead of clipping.
+*/
+.integration-api-keys-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; margin: 14px 0 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.integration-api-keys-copy { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.integration-api-keys-copy h4 { margin: 0; }
+.integration-api-keys-row .integration-meta { margin: 0; min-height: 0; }
 .integration-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
 .integration-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .integration-card-head h4 { margin: 0; }

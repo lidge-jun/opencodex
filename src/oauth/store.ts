@@ -29,7 +29,14 @@ import {
 import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
-type AuthStore = Record<string, ProviderAccountSet>;
+export type AuthStore = Record<string, ProviderAccountSet>;
+
+export type AuthStoreBufferSnapshot =
+  | { readonly kind: "ready"; readonly store: AuthStore }
+  | { readonly kind: "absent" }
+  | { readonly kind: "malformed" };
+
+const authStoreDecoder = new TextDecoder("utf-8", { fatal: true });
 let lastReconciledGeneration = 0;
 let liveOAuthAccountKeys = new Set<string>();
 
@@ -143,17 +150,35 @@ export function loadAuthStore(): AuthStore {
 }
 
 /**
+ * Pure normalization for auth-store bytes already read by another owner.
+ * This function performs no filesystem consultation, hardening, backup, or persistence.
+ */
+export function normalizeAuthStoreBuffer(buffer: Uint8Array | null): AuthStoreBufferSnapshot {
+  if (buffer === null) return { kind: "absent" };
+  try {
+    const parsed: unknown = JSON.parse(authStoreDecoder.decode(buffer));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { kind: "malformed" };
+    }
+    const { store } = normalizeAuthStore(parsed);
+    if (Object.keys(parsed).length > 0 && Object.keys(store).length === 0) {
+      return { kind: "malformed" };
+    }
+    return { kind: "ready", store };
+  } catch {
+    return { kind: "malformed" };
+  }
+}
+
+/**
  * Observe-only auth store read for diagnostics (`ocx doctor` / status).
  * Does not chmod paths or backup invalid JSON — corrupt files are treated as empty.
  */
 export function peekAuthStore(): AuthStore {
   const path = getAuthStorePath();
   if (!existsSync(path)) return {};
-  try {
-    return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8"))).store;
-  } catch {
-    return {};
-  }
+  const snapshot = normalizeAuthStoreBuffer(readFileSync(path));
+  return snapshot.kind === "ready" ? snapshot.store : {};
 }
 
 function persist(store: AuthStore): void {

@@ -19,7 +19,9 @@ import {
   websocketsEnabled,
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
-import { invalidateCodexModelsCache } from "../codex/catalog";
+import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
+import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
+import { getCodexHome } from "../codex/paths";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
 import { startMemoryWatchdog } from "./memory-watchdog";
 import {
@@ -398,7 +400,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       if (migrated) saveConfig(config);
     }
   }
-  invalidateCodexModelsCache();
+  // Startup cache invalidation is best-effort and must never block the server from
+  // serving. It now takes K so it cannot race a convergence commit, but both the
+  // home resolution and the acquisition can fail on a machine with no Codex home —
+  // `getCodexHome()` THROWS when CODEX_HOME names a missing directory, which would
+  // otherwise turn "no Codex installed" into "proxy will not start".
+  try {
+    const startupCodexHome = getCodexHome();
+    withCatalogWriteSerialization(startupCodexHome, permit =>
+      invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
+  } catch { /* no readable Codex home: nothing to invalidate */ }
   // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
   // the server can serve a request, and AFTER the startup migrations above — those run
   // against a config nobody else holds and are the documented exception to the save

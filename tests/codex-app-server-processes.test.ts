@@ -363,12 +363,18 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
       cliSource.indexOf('case "sync-cache":'),
       cliSource.indexOf('case "gui":'),
     );
-    expect(syncCacheCase).toContain("invalidateCodexModelsCache()");
-    expect(syncCacheCase).toContain("if (invalidateCodexModelsCache())");
+    // The cache write now happens under the catalog serialization lock K, so the
+    // gate reads the permitted writer's outcome instead of a bare boolean call.
+    // The property under test is unchanged: app-servers are touched only after a
+    // write actually landed, never on a refused/failed serialization attempt.
+    expect(syncCacheCase).toContain("withCatalogWriteSerialization");
+    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome)");
+    const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
+    expect(syncCacheCase).toContain(gate);
     expect(syncCacheCase).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"))
+    expect(syncCacheCase.indexOf(gate))
       .toBeLessThan(syncCacheCase.indexOf("afterCatalogWriteHandleAppServers"));
-    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"));
+    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf(gate));
     expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });

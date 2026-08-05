@@ -49,7 +49,7 @@ describe("Grok fence lifecycle wiring", () => {
 
     const gateAt = stopFn.indexOf("if (!ownershipBlocked)");
     const stripAt = stopFn.indexOf("stripGrokConfig()");
-    const restoreAt = stopFn.indexOf("restoreNativeCodex()");
+    const restoreAt = stopFn.indexOf("restoreNativeCodexAsync()");
     const revertAt = stopFn.indexOf("revertSystemEnv()");
 
     expect(gateAt).toBeGreaterThan(-1);

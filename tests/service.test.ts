@@ -643,9 +643,9 @@ describe("service lifecycle cleanup ordering", () => {
 
     expect(stopCase).toContain("ops.stop();");
     expect(stopCase).toContain("await stopTrackedProxyForServiceCommand();");
-    expect(stopCase).toContain("restoreNativeCodex();");
+    expect(stopCase).toContain("restoreNativeCodexAsync();");
     expect(stopCase.indexOf("ops.stop();")).toBeLessThan(stopCase.indexOf("stopTrackedProxyForServiceCommand();"));
-    expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodex();"));
+    expect(stopCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(stopCase.indexOf("restoreNativeCodexAsync();"));
   });
 
   test("direct service uninstall kills the tracked proxy before deleting service assets", async () => {
@@ -655,10 +655,10 @@ describe("service lifecycle cleanup ordering", () => {
     expect(uninstallCase).toContain("ops.stop();");
     expect(uninstallCase).toContain("await stopTrackedProxyForServiceCommand();");
     expect(uninstallCase).toContain("ops.uninstall();");
-    expect(uninstallCase).toContain("restoreNativeCodex();");
+    expect(uninstallCase).toContain("restoreNativeCodexAsync();");
     expect(uninstallCase.indexOf("ops.stop();")).toBeLessThan(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();"));
     expect(uninstallCase.indexOf("stopTrackedProxyForServiceCommand();")).toBeLessThan(uninstallCase.indexOf("ops.uninstall();"));
-    expect(uninstallCase.indexOf("ops.uninstall();")).toBeLessThan(uninstallCase.indexOf("restoreNativeCodex();"));
+    expect(uninstallCase.indexOf("ops.uninstall();")).toBeLessThan(uninstallCase.indexOf("restoreNativeCodexAsync();"));
   });
 
   test("Windows service install ends the running task before rewriting its assets, with write retry", async () => {
@@ -982,7 +982,9 @@ describe("launchctl load verification", () => {
       const out = runLaunchctl(["print", "gui/501/x"], {
         run: (() => ({ status: 0, stdout: "  ok  ", stderr: "" })) as never,
       });
-      expect(out).toEqual({ ok: true, stdout: "ok", stderr: "" });
+      // `status` is carried through now: a boolean cannot tell "no such service"
+      // (113) from "no such domain" (112), and only the first is an answer.
+      expect(out).toEqual({ ok: true, stdout: "ok", stderr: "", status: 0 });
     });
 
     /**

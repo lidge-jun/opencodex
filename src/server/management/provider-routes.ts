@@ -233,7 +233,7 @@ function applyProviderPatchFields(
 }
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
@@ -308,8 +308,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, name });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, name, catalogRefresh });
   }
 
   if (url.pathname === "/api/providers" && req.method === "PATCH") {
@@ -429,12 +429,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
     }
-    await refreshCodexCatalogBestEffort();
+    const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+      catalogRefresh,
     });
   }
 
@@ -578,8 +579,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}) });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}), catalogRefresh });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
@@ -591,7 +592,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const { clearModelCache } = await import("../../codex/model-cache");
-    const respond = () => jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
+    const respond = (catalogRefresh: Awaited<ReturnType<typeof convergeCodexCatalog>>) => jsonResponse({
+      ok: true,
+      cap: DEFAULT_PROVIDER_CONTEXT_CAP,
+      value: globalContextCapValue(config),
+      caps: providerContextCaps(config),
+      catalogRefresh,
+    });
 
     // Branch 1: set the global cap value and re-point every enabled provider to it.
     if (body.value !== undefined) {
@@ -603,8 +610,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       save(config);
       reconcileLiveStateStores();
       for (const provider of affected) clearModelCache(provider);
-      await refreshCodexCatalogBestEffort();
-      return respond();
+      const catalogRefresh = await convergeCodexCatalog();
+      return respond(catalogRefresh);
     }
 
     // Branch 2: enable/clear the cap for every provider at once.
@@ -618,8 +625,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       save(config);
       reconcileLiveStateStores();
       for (const provider of new Set([...before, ...names])) clearModelCache(provider);
-      await refreshCodexCatalogBestEffort();
-      return respond();
+      const catalogRefresh = await convergeCodexCatalog();
+      return respond(catalogRefresh);
     }
 
     // Branch 3: existing per-provider toggle (enable writes the current global value).
@@ -637,8 +644,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     save(config);
     reconcileLiveStateStores();
     clearModelCache(provider);
-    await refreshCodexCatalogBestEffort();
-    return respond();
+    const catalogRefresh = await convergeCodexCatalog();
+    return respond(catalogRefresh);
   }
 
   // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a

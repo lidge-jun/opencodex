@@ -11,6 +11,7 @@ import { handleResponses, isShadowSourceModel } from "../src/server/responses";
 import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const originalFetch = globalThis.fetch;
 
@@ -197,7 +198,9 @@ async function shadowApi(config: OcxConfig, method: string, body?: unknown): Pro
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const res = await handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog: async () => {} });
+  const res = await handleManagementAPI(req, new URL(req.url), config, {
+    createManagementConvergeCodex: catalogConvergenceFactory(),
+  });
   expect(res).not.toBeNull();
   expect(res!.status).toBe(200);
   return await res!.json() as Record<string, unknown>;

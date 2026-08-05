@@ -220,9 +220,10 @@ Authorization: Bearer <admin-token>
 
 `PUT /api/settings` は boolean `codexAccountPickerEnabled` を受け付けます。有効にすると、binding が
 ない場合に privacy-safe な selector binding を初期化します。無効にしても binding と exact route は
-保持されます。settings、account add/delete、login の変更は catalog refresh より先に保存されます。
-2 回の refresh がともに失敗した場合も変更自体は成功し、`catalogRefreshPending: true` を返します。
-`ocx sync` で再試行してください。response と warning は元の failure detail を公開しません。
+保持されます。settings、account add/delete、login の変更は、共有 writer を使う 1 回の bounded catalog
+convergence より先に保存されます。convergence が skip または失敗した場合も変更自体は成功し、
+`catalogRefreshPending: true` を返します。`ocx sync` で再試行してください。response と warning は元の
+failure detail を公開しません。
 
 この委任されたファミリーでの構成ライターまたは資格情報の更新ロックのタイムアウトは、コード `CONFIG_MUTATION_LOCK_UNAVAILABLE` の HTTP 503 を返します。クライアントは、その応答を永久的なアカウント障害として扱うのではなく、すぐに再試行する必要があります。
 

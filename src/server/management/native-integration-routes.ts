@@ -28,7 +28,7 @@ import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 
-export type NativeIntegrationClientId = "claude" | "grok";
+export type NativeIntegrationClientId = "claude" | "grok" | "codex";
 
 /** Every reason this module can decline, in one place (audit r3 #6). */
 export type NativeRefusalReason =
@@ -191,6 +191,108 @@ const ORPHANED_MARKER_MESSAGE =
 const NOT_INSTALLED_MESSAGE =
   "Grok home was not found, so there is nothing to change. Install Grok Build first.";
 
+/**
+ * One Codex change at a time, for the same reason Grok has this: the guard
+ * stands BEFORE the first await, or two concurrent PUTs both pass it while their
+ * bodies are still parsing.
+ */
+let codexToggleFlight: Promise<Response> | null = null;
+
+/**
+ * Turn native Codex routing on or off.
+ *
+ * THE PROXY STAYS UP. Turning Codex off is not `ocx stop`: other clients keep
+ * routing through this process, `/healthz` keeps answering, and only Codex goes
+ * back to its own path. That is the entire point of having a per-client switch
+ * rather than a kill switch, and it is why this route restores rather than
+ * stopping anything.
+ *
+ * Two writes, in this order:
+ *   1. persist the desired state, so the decision survives the next `ocx start`;
+ *   2. converge the artifacts to match it.
+ *
+ * Intent first is deliberate. If the process dies between them, the next start
+ * reads the persisted intent and converges — whereas converging first and dying
+ * would leave artifacts the next start silently undoes.
+ */
+async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
+  const { req } = ctx;
+  if (codexToggleFlight) {
+    return refusal(409, "codex", "config_busy",
+      "Another Codex change is already in flight. Nothing was written — try again in a moment.");
+  }
+  codexToggleFlight = (async (): Promise<Response> => {
+    let body: { enabled?: unknown };
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    }
+    const enabled = body.enabled;
+
+    const { setCodexIntegrationEnabled } = await import("../../codex/desired-state");
+    const persisted = setCodexIntegrationEnabled(enabled);
+    /*
+     * `missing` does not block the switch — see the Grok route for the reasoning.
+     * A user with no config file yet still gets the artifact change; what they
+     * lose is durability across a restart, and the envelope says so rather than
+     * implying the switch failed.
+     */
+    if (!persisted.ok && persisted.reason !== "missing") {
+      return refusal(
+        persisted.retryable ? 409 : 500,
+        "codex",
+        persisted.retryable ? "config_busy" : "write_failed",
+        persisted.message,
+      );
+    }
+    const durable = persisted.ok;
+
+    if (enabled) {
+      // The port this process actually BOUND, not what config.json last recorded.
+      // A stale config port would inject a base_url pointing at nothing — the
+      // same trap `runGrokApplyFlight` documents below.
+      const runtime = (ctx.deps.readRuntimePort ?? readRuntimePort)(process.pid);
+      const port = runtime?.port ?? ctx.config.port;
+      const { syncModelsToCodex } = await import("../../codex/sync");
+      const applied = await syncModelsToCodex(port);
+      return jsonResponse({
+        ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
+        state: applied.ok ? "current" : "absent",
+        message: applied.ok
+          ? "Codex now routes through opencodex"
+          : `Codex intent saved, but applying it did not complete: ${applied.message}`,
+        ...(applied.ok
+          ? (durable ? {} : { reason: "not_durable" })
+          : { reason: "apply_incomplete" }),
+      } satisfies NativeToggleEnvelope);
+    }
+
+    // OFF. Restore the native path; the proxy keeps serving every other client.
+    const { restoreNativeCodexAsync } = await import("../../codex/inject");
+    const restored = await restoreNativeCodexAsync();
+    return jsonResponse({
+      ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
+      state: restored.success ? "absent" : "unsafe",
+      message: restored.success
+        ? "Codex restored to its native path; the proxy is still serving other clients"
+        : `Codex intent saved, but restoring the native path did not complete: ${restored.message}`,
+      ...(restored.success
+        ? (durable ? {} : { reason: "not_durable" })
+        : { reason: "restore_incomplete" }),
+    } satisfies NativeToggleEnvelope);
+  })();
+  try {
+    return await codexToggleFlight;
+  } finally {
+    codexToggleFlight = null;
+  }
+}
+
 async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
   const { req, config, deps } = ctx;
   /*
@@ -224,6 +326,41 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
     const seen = inspectGrokConfig();
     if (seen.kind === "not_installed") return refusal(404, "grok", "not_installed", NOT_INSTALLED_MESSAGE);
     if (seen.kind === "orphaned_marker") return refusal(409, "grok", "orphaned_marker", ORPHANED_MARKER_MESSAGE);
+
+    /*
+     * Persist the DECISION before touching the fence.
+     *
+     * This route shipped without it, which is the whole bug: stripping the fence
+     * records nothing, so the next `ocx start` calls syncGrokConfig
+     * unconditionally and writes it straight back. The switch worked and lasted
+     * exactly one restart.
+     *
+     * Intent first, artifacts second, for the same reason as the Codex route: a
+     * process that dies between them leaves a decision the next start can act
+     * on, where the other order leaves artifacts the next start undoes.
+     */
+    const { setGrokIntegrationEnabled } = await import("../../codex/desired-state");
+    const persisted = setGrokIntegrationEnabled(enabled);
+    /*
+     * `missing` does NOT block the toggle here.
+     *
+     * A config file that does not exist yet is a normal state for someone who
+     * has never saved settings, and refusing their switch because of it would
+     * make the button dead for exactly the users least able to diagnose why.
+     * The fence change is still worth performing and still reports honestly;
+     * what they lose is durability across a restart, which is what the reason
+     * on the envelope says. `conflict` and `invalid` are different: another
+     * writer won, or the file is malformed and must not be overwritten.
+     */
+    if (!persisted.ok && persisted.reason !== "missing") {
+      return refusal(
+        persisted.retryable ? 409 : 500,
+        "grok",
+        persisted.retryable ? "config_busy" : "write_failed",
+        persisted.message,
+      );
+    }
+    const durable = persisted.ok;
 
     if (!enabled) {
       /*
@@ -440,6 +577,10 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
 
   if (url.pathname === "/api/native-integrations/grok" && req.method === "PUT") {
     return handleGrokToggle(ctx);
+  }
+
+  if (url.pathname === "/api/native-integrations/codex" && req.method === "PUT") {
+    return handleCodexToggle(ctx);
   }
 
   return null;
