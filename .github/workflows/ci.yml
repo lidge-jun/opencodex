@@ -382,21 +382,21 @@ jobs:
   # which would also match every push to dev — most of the traffic this change
   # exists to speed up.
   platform-windows:
-    name: windows
+    name: windows ${{ matrix.shard }}/4
     needs: select-windows-runner
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' &&
        (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview'))
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
-    # After the 2026-08-01 state-store admission merge, Windows under
-    # `bun test --isolate` on #827 hit the 20-minute kill while still green
-    # mid-suite (~19m of tests). 30 minutes is the margin for that tip — not a
-    # licence to absorb hung tests (see the oauth mutation waitMs unref fix).
-    # The suite has grown past that margin: a green run now reaches the
-    # post-checkout cleanup at 30:06 and is killed there, which is not a hung
-    # test, just a suite that takes longer than the budget it was given.
-    timeout-minutes: 40
+    # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
+    # green suite and was killed in cleanup; four shards put each leg inside the
+    # same budget the Linux shards already hold.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Show selected runner
         shell: bash
@@ -446,7 +446,7 @@ jobs:
           bun run build
 
       - name: Test
-        run: bun test --isolate tests
+        run: bun test --isolate tests --shard=${{ matrix.shard }}/4
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help

@@ -81,15 +81,15 @@ describe("GitHub Actions hardening", () => {
     };
 
     // Job-scoped: a global count still passes if values are swapped between jobs.
-    // Pin ownership explicitly. `platform-windows` keeps the 30m Windows isolate
-    // margin from #827 after state-store admission — do not raise again; fix hung
-    // tests instead (unref'd oauth waitMs / shell kill-grace). A `test` shard runs
-    // a quarter of the suite, so 15m there means wedged rather than slow.
+    // Pin ownership explicitly. The Windows leg is sharded like the Linux ones
+    // since 8034cd7c0 — a single leg reached 30m on a green suite and was killed
+    // in cleanup, so each shard now holds the same 15m a Linux shard holds. A
+    // shard that needs longer is wedged, not slow.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(30);
-    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
@@ -161,12 +161,13 @@ describe("GitHub Actions hardening", () => {
     expect(windowsIf).toContain("github.ref == 'refs/heads/preview'");
     expect(windowsIf).not.toContain("refs/heads/dev");
 
-    // Windows runs the same full suite, and keeps the self-hosted workspace wipe.
-    // Without the wipe a deleted file survives on the runner's disk and the suite
-    // passes against a tree that no longer exists in git.
+    // Windows runs the same suite, sharded like the Linux legs, and keeps the
+    // self-hosted workspace wipe. Without the wipe a deleted file survives on
+    // the runner's disk and the suite passes against a tree that no longer
+    // exists in git.
     const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
     expect(winSteps.some(step => step.run?.includes("bun test --isolate tests"))).toBe(true);
-    expect(winSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    expect(winSteps.some(step => step.run?.includes("--shard=${{ matrix.shard }}/4"))).toBe(true);
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
