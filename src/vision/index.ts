@@ -275,6 +275,66 @@ function renderDescription(out: { text: string; error?: string }): OcxTextConten
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Keep the native Responses passthrough body aligned with image replacements made in the parsed
+ * message graph. The passthrough adapter serializes `_rawBody`, while translated adapters serialize
+ * `context.messages`; updating only the latter would send the original pixels to a text-only
+ * Responses upstream even after the vision sidecar produced a caption.
+ *
+ * Rewrites only image-bearing user/developer messages and tool outputs. All other native Responses
+ * items (reasoning, calls, ids, compaction, and provider-specific metadata) remain byte-structurally
+ * untouched.
+ */
+function syncRawBodyImageDescriptions(parsed: OcxParsedRequest, descriptions: readonly string[]): void {
+  const rawBody = parsed._rawBody;
+  if (!isPlainRecord(rawBody) || !Array.isArray(rawBody.input) || descriptions.length === 0) return;
+
+  let nextDescription = 0;
+  const rewriteImages = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      let changed = false;
+      const rewritten = value.map(entry => {
+        const next = rewriteImages(entry);
+        if (next !== entry) changed = true;
+        return next;
+      });
+      return changed ? rewritten : value;
+    }
+    if (!isPlainRecord(value)) return value;
+    if (value.type === "input_image" && typeof value.image_url === "string") {
+      const description = descriptions[nextDescription++];
+      return description === undefined ? value : { type: "input_text", text: description };
+    }
+    return value;
+  };
+
+  let changed = false;
+  const input = rawBody.input.map(item => {
+    if (!isPlainRecord(item)) return item;
+    const type = typeof item.type === "string" ? item.type : (typeof item.role === "string" ? "message" : "");
+    const role = typeof item.role === "string" ? item.role : "";
+    const field = (
+      (type === "message" && (role === "user" || role === "developer"))
+      || type === "agent_message"
+    )
+      ? "content"
+      : (type === "function_call_output" || type === "custom_tool_call_output")
+        ? "output"
+        : undefined;
+    if (!field) return item;
+    const rewritten = rewriteImages(item[field]);
+    if (rewritten === item[field]) return item;
+    changed = true;
+    return { ...item, [field]: rewritten };
+  });
+
+  if (changed) rawBody.input = input;
+}
+
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -425,6 +485,7 @@ export async function describeImagesInPlace(
 
   // 3. Rebuild each message, replacing image parts with their descriptions in order.
   let oi = 0;
+  const descriptions: string[] = [];
   for (const { msg, parts } of targets) {
     const newParts: OcxContentPart[] = [];
     for (const p of parts) {
@@ -433,6 +494,7 @@ export async function describeImagesInPlace(
         continue;
       }
       const replacement = renderDescription(outcomes[oi++]);
+      descriptions.push(replacement.text);
       const reservation = translatorBudget?.reserveTransient(
         descriptionEncoder.encode(replacement.text).byteLength,
         { kind: "request_copies" },
@@ -442,6 +504,7 @@ export async function describeImagesInPlace(
     }
     msg.content = newParts;
   }
+  syncRawBodyImageDescriptions(parsed, descriptions);
 }
 
 /**
@@ -452,6 +515,7 @@ export async function describeImagesInPlace(
  */
 export function stripImagesInPlace(parsed: OcxParsedRequest, translatorBudget?: TranslatorBudget): boolean {
   let stripped = false;
+  const descriptions: string[] = [];
   for (const msg of parsed.context.messages) {
     if (!carriesImages(msg.role) || !Array.isArray(msg.content)) continue;
     const parts = msg.content as OcxContentPart[];
@@ -459,6 +523,7 @@ export function stripImagesInPlace(parsed: OcxParsedRequest, translatorBudget?: 
     msg.content = parts.map(p => {
       if (p.type !== "image") return p;
       const replacement = { type: "text", text: "[image omitted: this model is text-only and the vision sidecar is unavailable (no ChatGPT login)]" } as OcxContentPart;
+      descriptions.push((replacement as OcxTextContent).text);
       const reservation = translatorBudget?.reserveTransient(
         descriptionEncoder.encode((replacement as OcxTextContent).text).byteLength,
         { kind: "request_copies" },
@@ -468,5 +533,6 @@ export function stripImagesInPlace(parsed: OcxParsedRequest, translatorBudget?: 
     });
     stripped = true;
   }
+  if (stripped) syncRawBodyImageDescriptions(parsed, descriptions);
   return stripped;
 }
