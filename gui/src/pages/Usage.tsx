@@ -231,7 +231,7 @@ function UsageFilters({
                 <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
               )}
               {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude.svg" alt="" aria-hidden="true" />
+                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
               )}
               {choice === "grok" && (
                 <img className="usage-source-mark" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />

@@ -43,7 +43,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "qwen-cloud": "qwen-portal-color.svg",
   "vercel-ai-gateway": "vercel-ai-gateway-color.svg",
   vllm: "vllm-color.svg",
-  xai: "grok-color.svg",
+  xai: "grok.svg",
   "mimo-free": "xiaomi-color.svg",
   xiaomi: "xiaomi-color.svg",
 };
