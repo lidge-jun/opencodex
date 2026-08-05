@@ -19,6 +19,7 @@ import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { identifyRoutedModel } from "./identity";
+import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
@@ -241,6 +242,43 @@ function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): 
   if (typeof signature !== "string" || signature.length < 16) return false;
   if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(signature)) return false;
   return /^[A-Za-z0-9+/_=-]+$/.test(signature);
+}
+
+/**
+ * Bridge error fidelity (web-search/images loops): extract a display-safe summary from an
+ * Anthropic JSON error envelope so `Provider error <status>` carries the upstream reason.
+ * JSON-only extraction — HTML/non-JSON bodies yield "" so raw markup is never echoed.
+ */
+export function formatAnthropicErrorBody(status: number, _headers: Headers, payloadText: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payloadText);
+  } catch {
+    return "";
+  }
+  const detail = extractAnthropicErrorDetail(parsed);
+  if (!detail) return "";
+  return redactSecretString(detail).slice(0, 400);
+}
+
+function extractAnthropicErrorDetail(parsed: unknown): string | undefined {
+  if (typeof parsed === "string") return parsed.trim() || undefined;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const obj = parsed as Record<string, unknown>;
+  // Anthropic envelope: { type: "error", error: { type, message } }; tolerate a bare
+  // { error: { message } } and a string error field.
+  const err = obj.error;
+  if (typeof err === "string" && err.trim()) return err.trim();
+  if (err !== null && typeof err === "object" && !Array.isArray(err)) {
+    const e = err as Record<string, unknown>;
+    const msg = e.message;
+    if (typeof msg !== "string" || !msg.trim()) return undefined;
+    const type = e.type;
+    return typeof type === "string" && type.trim()
+      ? `${type.trim()}: ${msg.trim()}`
+      : msg.trim();
+  }
+  return undefined;
 }
 
 function usesNativeAnthropicEndpoint(provider: OcxProviderConfig): boolean {
@@ -776,6 +814,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
   const toolNames = buildToolNameTransforms(provider);
   return {
     name: "anthropic",
+
+    formatErrorBody: formatAnthropicErrorBody,
 
     async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {

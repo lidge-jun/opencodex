@@ -34,6 +34,32 @@ describe("redactSecretString", () => {
   test("preserves non-secret diagnostic text", () => {
     expect(redactSecretString("status=429 model=gpt-5.5")).toBe("status=429 model=gpt-5.5");
   });
+
+  test("masks colon-labelled credentials echoed back by an upstream error", () => {
+    // #1020 review: upstream 4xx bodies quote the offending header at us. The
+    // `=` rules never fire for `header: value`, so a custom credential used to
+    // survive into the client-visible error text.
+    const input = [
+      "x-api-key: customcredential123456",
+      "X-Goog-Api-Key: another-live-credential",
+      "client_secret: not-a-sk-shaped-value",
+      "token: opaque-session-value",
+    ].join("\n");
+
+    const redacted = redactSecretString(input);
+    expect(redacted).toContain(`x-api-key: ${REDACTED_SECRET}`);
+    expect(redacted).toContain(`X-Goog-Api-Key: ${REDACTED_SECRET}`);
+    expect(redacted).not.toContain("customcredential123456");
+    expect(redacted).not.toContain("another-live-credential");
+    expect(redacted).not.toContain("not-a-sk-shaped-value");
+    expect(redacted).not.toContain("opaque-session-value");
+  });
+
+  test("leaves non-credential colon labels readable", () => {
+    // The colon rule must not swallow ordinary diagnostics.
+    expect(redactSecretString("model: gpt-5.5\nstatus: 429\nrequest: ocx-abc123"))
+      .toBe("model: gpt-5.5\nstatus: 429\nrequest: ocx-abc123");
+  });
 });
 
 describe("redactSecrets", () => {
