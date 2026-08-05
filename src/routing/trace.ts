@@ -83,7 +83,6 @@ export interface RouteCostEvidence {
   priceSource?: string;
   incomplete?: boolean;
   limitUsd?: number;
-  excludedByLimit?: boolean;
 }
 
 export interface RouteScoreEvidence {
@@ -533,7 +532,6 @@ function parseCost(raw: unknown, caps: ParseCaps): RouteCostEvidence | undefined
   }
   if (typeof raw.incomplete === "boolean") out.incomplete = raw.incomplete;
   if (finiteNumber(raw.limitUsd)) out.limitUsd = raw.limitUsd;
-  if (typeof raw.excludedByLimit === "boolean") out.excludedByLimit = raw.excludedByLimit;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 

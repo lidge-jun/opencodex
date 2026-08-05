@@ -23,6 +23,7 @@ import {
 import { getRoutingProfile, policyModelId, type NormalizedRoutingProfile } from "./profile";
 import { healthScore } from "./health";
 import { quotaScore } from "./quota";
+import { costScore } from "./cost";
 
 /** Unknown health under "penalize": a low-but-not-zero deterministic floor. */
 export const HEALTH_UNKNOWN_PENALTY_SCORE = 0.3;
@@ -30,6 +31,8 @@ export const HEALTH_UNKNOWN_PENALTY_SCORE = 0.3;
 export const HEALTH_UNKNOWN_NEUTRAL_SCORE = 0.5;
 /** Unknown quota under "penalize": deterministic low floor. */
 export const QUOTA_UNKNOWN_PENALTY_SCORE = 0.3;
+/** Unknown cost under "penalize": deterministic low floor. */
+export const COST_UNKNOWN_PENALTY_SCORE = 0.3;
 
 export interface PolicyRequestEvidence {
   /** Required context window for this request (tokens). */
@@ -342,17 +345,30 @@ export function evaluatePolicyProfile(
       }
     }
 
+    // Cost scoring (RI-08): the hard per-request ceiling was already checked
+    // above; unknown cost follows the profile's unknownEvidence policy.
+    const cost = evidence.cost;
+    let costValue = cost ? costScore(cost) : null;
+    if (costValue === null && profile.unknownEvidence.cost === "exclude") {
+      exclusions.push({ code: "unknown-price" });
+      eligible = false;
+    } else if (costValue === null && profile.unknownEvidence.cost === "penalize") {
+      costValue = COST_UNKNOWN_PENALTY_SCORE;
+    }
+
     const priorityScore = configuredPriorityScore(index, profile.candidates.length);
     const healthWeight = profile.optimize.health;
     const quotaWeight = profile.optimize.quota;
+    const costWeight = profile.optimize.cost;
     // Only spend a dimension's weight when a value is actually present:
-    // "allow" leaves missing health/quota components null, so subtracting
+    // "allow" leaves missing health/quota/cost components null, so subtracting
     // their weights would shrink the priority share for evidence the profile
     // explicitly permits to be absent. Renormalize those weights back into
     // priority instead of silently changing the ranking semantics.
     const spentHealth = healthValue !== null ? healthWeight : 0;
     const spentQuota = quotaValue !== null ? quotaWeight : 0;
-    const priorityWeight = Math.max(0, 1 - spentHealth - spentQuota);
+    const spentCost = costValue !== null ? costWeight : 0;
+    const priorityWeight = Math.max(0, 1 - spentHealth - spentQuota - spentCost);
     const components: RouteScoreEvidence["components"] = { configuredPriority: priorityScore };
     let total = priorityWeight * priorityScore;
     if (healthWeight > 0 && healthValue !== null) {
@@ -362,6 +378,10 @@ export function evaluatePolicyProfile(
     if (quotaWeight > 0 && quotaValue !== null) {
       total += quotaWeight * quotaValue;
       components.quota = quotaValue;
+    }
+    if (costWeight > 0 && costValue !== null) {
+      total += costWeight * costValue;
+      components.cost = costValue;
     }
     const score: RouteScoreEvidence = { total, components };
     const evaluated: PolicyEvaluationCandidate = {

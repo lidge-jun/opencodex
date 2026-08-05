@@ -106,7 +106,7 @@ namespace, or reserved bare native families (`gpt-*`, `o1-*`, `o3-*`, `o4-*`, `c
 | `candidates` | `{ provider: string; model: string }[]` | required | Explicit allowlist of `provider/model` refs. No implicit expansion. |
 | `alias?` | `string` | — | Optional public model id in place of `policy/<id>`. |
 | `require?` | object | `{}` | Hard capability requirements evaluated before scoring (see below). |
-| `optimize?` | object | latency 0.55, health 0.25, cost 0.10, quota 0.10 | Scoring weights, normalized deterministically. Only `health` and `quota` have score dimensions; the configured-priority share is `1 - health - quota` (default 0.65), and `latency`/`cost` fold into that priority share rather than scoring independently. |
+| `optimize?` | object | latency 0.55, health 0.25, cost 0.10, quota 0.10 | Scoring weights, normalized deterministically. `health`, `quota`, and `cost` have score dimensions; the configured-priority share is `1 - health - quota - cost` (default 0.55), and `latency` folds into that priority share rather than scoring independently. |
 | `limits?` | object | — | Hard limits, e.g. `maxEstimatedCostUsd` (enforced by the dry-run evaluator when candidate cost evidence is known). |
 | `unknownEvidence?` | object | capability `exclude`, health/quota/cost `penalize` | How unknown evidence is treated per dimension: `allow`, `penalize`, or `exclude`. Unknown never becomes zero. |
 
@@ -173,11 +173,11 @@ candidate evidence: `candidates[].codexAccountId` (Codex pool, provider `openai`
   requirements filter first, then deterministic scoring ranks the survivors.
 
 Both are virtual namespaces with aliases and collision validation; they differ in *how* a candidate
-is chosen. Profile scoring combines the configured-priority component with the health (RI-06) and
-quota (RI-07) score dimensions where evidence is present; the `latency` and `cost` weights fold into
-the priority share rather than scoring independently, and cost is also enforced through the
-`limits.maxEstimatedCostUsd` cap. Per-request route-decision traces are recorded when a policy
-profile executes.
+is chosen. Profile scoring combines the configured-priority component with the health (RI-06),
+quota (RI-07), and cost (RI-08) score dimensions where evidence is present; the `latency` weight
+folds into the priority share rather than scoring independently. Cost is also enforced through the
+`limits.maxEstimatedCostUsd` cap (a candidate whose estimated cost exceeds the cap is excluded).
+Per-request route-decision traces are recorded when a policy profile executes.
 
 ### Catalog eligibility
 

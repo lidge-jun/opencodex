@@ -35,6 +35,7 @@ import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/eva
 import { candidateCapabilityEvidence } from "./routing/capability";
 import { policyCandidateHealthEvidence } from "./routing/health";
 import { quotaEvidenceForCandidate } from "./routing/quota";
+import { costEvidenceForCandidate } from "./routing/cost";
 
 export class NoEligiblePolicyCandidateError extends Error {
   /** Evaluation trace (with per-candidate exclusions) when nothing qualified. */
@@ -530,6 +531,11 @@ function routeModelInternal(
         accountRef: candidate.provider === "anthropic"
           ? getAccountSet("anthropic")?.activeAccountId
           : undefined,
+      }),
+      cost: costEvidenceForCandidate({
+        provider: candidate.provider,
+        model: candidate.model,
+        limitUsd: profile.limits.maxEstimatedCostUsd,
       }),
     }));
     const evaluation = evaluatePolicyProfile(config, policyId, policyEvidence ?? {}, candidateEvidence, now);

@@ -194,8 +194,7 @@ Evidence shapes:
   incompleteStreamRate?, recentLatencyMs?, sampleCount?, recencyWeight? }`.
 - `quota`: `{ known, headroomTokens?, exhausted?, resetAtMs?,
   reauthOrCooling?, reservedHeadroomTokens?, source }`.
-- `cost`: `{ estimatedUsd?, priceSource?, incomplete?, limitUsd?,
-  excludedByLimit? }`.
+- `cost`: `{ estimatedUsd?, priceSource?, incomplete?, limitUsd? }`.
 - `score`: `{ total, components: { capability?, health?, quota?, cost?,
   latency?, configuredPriority? } }`.
 
