@@ -13,6 +13,8 @@ const USAGE = `Usage:
   ocx route policy list [--json]
   ocx route policy show <id> [--json]
   ocx route policy dry-run <id> [--model-context <tokens>] [--tools]
+      [--image] [--structured-output] [--json]
+  ocx route policy evaluate <id> [--model-context <tokens>] [--tools]
       [--image] [--structured-output] [--json]`;
 
 interface ProfileRow {
@@ -40,7 +42,7 @@ async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const id = args.shift();
   const wantsJson = takeFlag(args, "--json");
-  if (!id) throw new CliUsageError("profile id is required", USAGE);
+  if (!id || id.startsWith("-")) throw new CliUsageError("profile id is required", USAGE);
   rejectArgs(args, USAGE);
   const result = await runtimeRequest<{ profiles?: ProfileRow[] }>("/api/routing-profiles", {}, deps);
   const profile = (result.profiles ?? []).find(candidate => candidate.id === id);
@@ -52,7 +54,7 @@ async function dryRun(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const id = args.shift();
   const wantsJson = takeFlag(args, "--json");
-  if (!id) throw new CliUsageError("profile id is required", USAGE);
+  if (!id || id.startsWith("-")) throw new CliUsageError("profile id is required", USAGE);
   const modelContext = takeIntegerOption(args, "--model-context", { min: 1 });
   const tools = takeFlag(args, "--tools");
   const image = takeFlag(args, "--image");
@@ -81,10 +83,10 @@ async function dryRun(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 export async function handleRoutePolicyCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const [sub, ...rest] = argv;
-    if (!sub) throw new CliUsageError("route policy requires a subcommand (list, show, dry-run)", USAGE);
+    if (!sub) throw new CliUsageError("route policy requires a subcommand (list, show, dry-run, evaluate)", USAGE);
     if (sub === "list") await list(rest, deps);
     else if (sub === "show") await show(rest, deps);
-    else if (sub === "dry-run") await dryRun(rest, deps);
+    else if (sub === "dry-run" || sub === "evaluate") await dryRun(rest, deps);
     else throw new CliUsageError(`unknown route policy command: ${sub}`, USAGE);
   });
 }

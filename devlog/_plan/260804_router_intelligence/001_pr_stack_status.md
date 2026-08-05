@@ -46,9 +46,9 @@ other; closing one is a maintainer decision and neither is stale.
 | RI-04 | `feat/ri-04-policy-profile-core` | `dev` (post-#1005 merge) | `31c9f0b28` | #1011 | https://github.com/lidge-jun/opencodex/pull/1011 | MERGED |
 | RI-05 | `feat/ri-05-capability-aware-routing` | `dev` (post-#1011 merge) | `088194a3a` | #1012 | https://github.com/lidge-jun/opencodex/pull/1012 | MERGED |
 | RI-06 | `feat/ri-06-health-aware-routing` | `dev` (post-#1012 merge) | `af692bb7a` | #1013 | https://github.com/lidge-jun/opencodex/pull/1013 | MERGED |
-| RI-07 | `feat/ri-07-quota-aware-routing` | `dev` (post-#1013 merge) | `0c5100271` (pre-restack) | #1014 | https://github.com/lidge-jun/opencodex/pull/1014 | in progress |
-| RI-08 | `feat/ri-08-cost-aware-routing` | `feat/ri-07` head | pending | pending | pending | queued |
-| RI-09 | `feat/ri-09-route-explainability-api` | `feat/ri-08` head | pending | pending | pending | queued |
+| RI-07 | `feat/ri-07-quota-aware-routing` | `dev` (post-#1013 merge) | `1f07c00b8` | #1014 | https://github.com/lidge-jun/opencodex/pull/1014 | MERGED |
+| RI-08 | `feat/ri-08-cost-aware-routing` | `dev` (post-#1014 merge) | `410db97e4` | #1015 | https://github.com/lidge-jun/opencodex/pull/1015 | MERGED |
+| RI-09 | `feat/ri-09-route-explainability-api` | `dev` (post-#1015 merge) | `d887c1202` | #1016 | https://github.com/lidge-jun/opencodex/pull/1016 | rebased / review in progress |
 | RI-10 | `feat/ri-10-routing-intelligence-ui` | `feat/ri-09` head | pending | pending | pending | queued |
 
 ## Per-PR acceptance log
@@ -257,6 +257,30 @@ other; closing one is a maintainer decision and neither is stale.
   the routing set); `privacy:scan` passed.
 - Base sync deferred: waiting for RI-05 (#1012) to merge before updating
   these branches from `dev`.
+
+### RI-09 - feat/ri-09-route-explainability-api
+
+- Base SHA: `410db97e4cd9e9b4f8aba60682d20946e211d6dd` (`dev` after #1015 merge)
+- Reviewed commit: `d887c120282c8d381f92cd11c1eebe2373a27281`
+- Findings (self-review / full-review): fixed on this head -
+  (1) dry-run preserves `parseCandidateEvidence(...) === null` as
+  `400 invalid_candidates`; (2) combo explanations report the physical last
+  attempt; (3) absent providers leave `encryptedCodexTasks` unknown;
+  (4) CLI USAGE documents `evaluate` and rejects option-like profile ids;
+  (5) assembleCandidateEvidence typed as `OcxConfig` after the RI-08 health/
+  quota/cost merge.
+- Final commit: `d887c120282c8d381f92cd11c1eebe2373a27281`
+- PR: #1016 https://github.com/lidge-jun/opencodex/pull/1016
+- Verification:
+  - `bun x tsc --noEmit`: PASSED (0 errors)
+  - `bun run test tests/route-explainability.test.ts`: 10/10 pass -
+    trace+attempts+outcome merge, 404 unknown ids, pre-trace rows, combo
+    physical final attempt, dry-run auto-evidence, malformed candidates 400,
+    absent-provider encryptedCodexTasks unknown, CLI logs explain encode/json,
+    CLI logs explain missing-id, CLI route policy evaluate dry-run + id guard
+  - Focused regression suites: cost/quota/routing-profile + explainability green
+  - `bun run privacy:scan`: passed
+- Remaining Low findings: none
 
 ## Baseline note
 

@@ -3,6 +3,8 @@
  *
  * - `GET /api/request-history` - keyset-paginated rows with filters
  * - `GET /api/request-history/:requestId` - one canonical row
+ * - `GET /api/request-history/:requestId/route-decision` - why-this-route
+ *   explanation (RI-09): durable trace + attempts + outcome
  *
  * The index is a derived projection of `usage.jsonl`; every response carries
  * an `index` status block so callers can see schema version, indexed rows and
@@ -19,6 +21,7 @@ import { requestLogEntryFromPersistedUsage } from "../request-log";
 import { requestLogDto } from "./shared";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
+import type { PersistedUsageEntry } from "../../usage/log";
 
 function parseQueryInt(raw: string | null): number | undefined | "invalid" {
   if (raw === null) return undefined;
@@ -26,6 +29,17 @@ function parseQueryInt(raw: string | null): number | undefined | "invalid" {
   if (trimmed.length === 0) return "invalid";
   const value = Number(trimmed);
   return Number.isInteger(value) ? value : "invalid";
+}
+
+function finalAttemptTarget(entry: PersistedUsageEntry): { provider: string; model: string } {
+  const attempts = entry.attempts;
+  if (Array.isArray(attempts) && attempts.length > 0) {
+    const last = attempts[attempts.length - 1];
+    if (last && typeof last.provider === "string" && typeof last.model === "string") {
+      return { provider: last.provider, model: last.model };
+    }
+  }
+  return { provider: entry.provider, model: entry.model };
 }
 
 export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -113,6 +127,50 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
   }
 
   if (url.pathname.startsWith("/api/request-history/") && req.method === "GET") {
+    // Why-this-route explanation (RI-09): trace + attempts + outcome.
+    if (url.pathname.endsWith("/route-decision")) {
+      let requestId: string;
+      try {
+        requestId = decodeURIComponent(
+          url.pathname.slice("/api/request-history/".length, -"/route-decision".length),
+        );
+      } catch {
+        return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
+      }
+      if (!requestId || requestId.includes("/")) {
+        return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
+      }
+      const entry = await requestHistoryRowById(requestId);
+      if (!entry) {
+        return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
+      }
+      const trace = entry.routeDecision ?? null;
+      const final = finalAttemptTarget(entry);
+      return jsonResponse({
+        requestId,
+        routeDecision: trace,
+        attemptSequence: entry.attempts ?? [],
+        outcome: {
+          status: entry.status,
+          ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
+          ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
+          ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+          ...(entry.durationMs !== undefined ? { durationMs: entry.durationMs } : {}),
+          ...(entry.usageStatus ? { usageStatus: entry.usageStatus } : {}),
+        },
+        summary: {
+          requestedModel: entry.requestedModel ?? entry.model,
+          routeKind: trace?.routeKind ?? null,
+          ...(trace?.profile ? { profileId: trace.profile.id, revision: trace.profile.revision } : {}),
+          selected: trace?.selected
+            ? { provider: trace.selected.provider, model: trace.selected.model }
+            : null,
+          finalProvider: final.provider,
+          finalModel: final.model,
+        },
+      }, 200, req, config);
+    }
+
     let requestId: string;
     try {
       requestId = decodeURIComponent(url.pathname.slice("/api/request-history/".length));

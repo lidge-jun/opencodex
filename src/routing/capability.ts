@@ -185,9 +185,12 @@ export function candidateCapabilityEvidence(
     : tierSupport === false ? "unsupported" : "unknown";
 
   const localRemote = localRemoteEvidence(provider?.baseUrl);
-  const encryptedCodexTasks = isCanonicalOpenAiForwardProvider(
-    provider ?? { adapter: "", authMode: undefined, baseUrl: undefined },
-  );
+  // Only emit a definitive encryptedCodexTasks value when the provider is
+  // present. An absent/unconfigured provider must stay unknown so
+  // require.encryptedCodexTasks does not fail closed on missing config.
+  const encryptedCodexTasks = provider === undefined
+    ? undefined
+    : isCanonicalOpenAiForwardProvider(provider);
 
   return {
     ...(typeof contextWindow === "number" ? { contextWindow } : {}),
@@ -196,6 +199,6 @@ export function candidateCapabilityEvidence(
     ...(reasoningEfforts !== undefined && reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
     ...(serviceTier !== "unknown" ? { serviceTier } : {}),
     ...localRemote,
-    encryptedCodexTasks,
+    ...(typeof encryptedCodexTasks === "boolean" ? { encryptedCodexTasks } : {}),
   };
 }

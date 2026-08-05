@@ -14,6 +14,7 @@ import {
 const USAGE = `Usage:
   ocx observe logs [--provider <name>] [--model <id>] [--status <code>]
       [--limit <n>] [--follow] [--json|--jsonl]
+  ocx logs explain <request-id> [--json]
   ocx logs rebuild-index
   ocx logs index-status
   ocx observe usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
@@ -81,6 +82,17 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   } while (true);
 }
 
+async function explain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const requestId = args.shift();
+  const wantsJson = takeFlag(args, "--json");
+  if (!requestId) throw new CliUsageError("request id is required", USAGE);
+  rejectArgs(args, USAGE);
+  const encoded = encodeURIComponent(requestId);
+  const result = await runtimeRequest(`/api/request-history/${encoded}/route-decision`, {}, deps);
+  printData(result, wantsJson, wantsJson ? undefined : [JSON.stringify(result, null, 2)]);
+}
+
 async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -140,7 +152,8 @@ export async function handleObserveCommand(argv: string[], deps: RuntimeApiDeps 
     const [sub = "logs", ...rest] = argv;
     if (sub === "logs") {
       const action = rest[0];
-      if (action === "rebuild-index") await rebuildIndex(rest.slice(1), deps);
+      if (action === "explain") await explain(rest.slice(1), deps);
+      else if (action === "rebuild-index") await rebuildIndex(rest.slice(1), deps);
       else if (action === "index-status") await indexStatus(rest.slice(1), deps);
       else await logs(rest, deps);
     }

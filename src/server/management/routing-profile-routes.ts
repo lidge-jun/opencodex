@@ -11,6 +11,7 @@ import { evaluatePolicyProfile, type PolicyCandidateEvidence, type PolicyRequest
 import { candidateCapabilityEvidence } from "../../routing/capability";
 import { policyCandidateHealthEvidence } from "../../routing/health";
 import { quotaEvidenceForCandidate } from "../../routing/quota";
+import { costEvidenceForCandidate } from "../../routing/cost";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { getEffectiveActiveCodexAccountId } from "../../codex/routing";
 import { getAccountSet } from "../../oauth/store";
@@ -19,6 +20,7 @@ import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
+import type { OcxConfig } from "../../types";
 
 function profileDto(config: Parameters<typeof getRoutingProfile>[0], id: string): Record<string, unknown> | null {
   const profile = getRoutingProfile(config, id);
@@ -86,6 +88,49 @@ function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null 
   return out;
 }
 
+function assembleCandidateEvidence(
+  config: OcxConfig,
+  profile: NonNullable<ReturnType<typeof getRoutingProfile>>,
+): PolicyCandidateEvidence[] {
+  // Match execution: fill the same candidate evidence the router would
+  // assemble, so dry-run/evaluate reports the same eligibility as real routing
+  // instead of treating every capability as unknown. Cost is always present so
+  // evaluate mode can surface the profile limit even without a usage estimate.
+  return profile.candidates.map(candidate => ({
+    provider: candidate.provider,
+    model: candidate.model,
+    capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
+    health: policyCandidateHealthEvidence(config, candidate),
+    quota: quotaEvidenceForCandidate({
+      provider: candidate.provider,
+      model: candidate.model,
+      ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
+        && providerCodexAccountMode(
+          OPENAI_CODEX_PROVIDER_ID,
+          config.providers[OPENAI_CODEX_PROVIDER_ID],
+        ) === "pool"
+        ? (() => {
+            const codexAccountId = getEffectiveActiveCodexAccountId(config);
+            return {
+              codexAccountId,
+              codexAccountPlan: codexAccountId
+                ? config.codexAccounts?.find(account => account.id === codexAccountId)?.plan
+                : undefined,
+            };
+          })()
+        : {}),
+      accountRef: candidate.provider === "anthropic"
+        ? getAccountSet("anthropic")?.activeAccountId
+        : undefined,
+    }),
+    cost: costEvidenceForCandidate({
+      provider: candidate.provider,
+      model: candidate.model,
+      limitUsd: profile.limits.maxEstimatedCostUsd,
+    }),
+  }));
+}
+
 export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config } = ctx;
 
@@ -119,37 +164,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
       return jsonResponse({ error: { code: "invalid_evidence", message: "evidence must be an object" } }, 400, req, config);
     }
     const candidateEvidence = body.candidates === undefined
-      // Match execution: fill the same candidate evidence the router would
-      // assemble, so dry-run reports the same eligibility as real routing
-      // instead of treating every capability as unknown.
-      ? resolvedProfile.candidates.map(candidate => ({
-          provider: candidate.provider,
-          model: candidate.model,
-          capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
-          health: policyCandidateHealthEvidence(config, candidate),
-          quota: quotaEvidenceForCandidate({
-            provider: candidate.provider,
-            model: candidate.model,
-            ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
-              && providerCodexAccountMode(
-                OPENAI_CODEX_PROVIDER_ID,
-                config.providers[OPENAI_CODEX_PROVIDER_ID],
-              ) === "pool"
-              ? (() => {
-                  const codexAccountId = getEffectiveActiveCodexAccountId(config);
-                  return {
-                    codexAccountId,
-                    codexAccountPlan: codexAccountId
-                      ? config.codexAccounts?.find(account => account.id === codexAccountId)?.plan
-                      : undefined,
-                  };
-                })()
-              : {}),
-            accountRef: candidate.provider === "anthropic"
-              ? getAccountSet("anthropic")?.activeAccountId
-              : undefined,
-          }),
-        }))
+      ? assembleCandidateEvidence(config, resolvedProfile)
       : parseCandidateEvidence(body.candidates);
     if (candidateEvidence === null) {
       return jsonResponse({ error: { code: "invalid_candidates", message: "candidates must be an array of evidence objects" } }, 400, req, config);
