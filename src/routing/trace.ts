@@ -180,6 +180,10 @@ export interface TraceCandidateInput {
   eligible: boolean;
   exclusions: RouteExclusionReason[];
   score?: RouteScoreEvidence;
+  capability?: RouteCapabilityEvidence;
+  health?: RouteHealthEvidence;
+  quota?: RouteQuotaEvidence;
+  cost?: RouteCostEvidence;
 }
 
 export interface TraceBuildInput {
@@ -204,6 +208,14 @@ export interface TraceBuildInput {
 function buildCandidate(input: TraceCandidateInput, budget: { strings?: true; exclusions?: true }): RouteCandidateTrace {
   const exclusions = input.exclusions.slice(0, MAX_EXCLUSIONS_PER_CANDIDATE);
   if (exclusions.length < input.exclusions.length) budget.exclusions = true;
+  // Evidence reaches the builder from internal producers (bounded) or from
+  // caller-supplied dry-run input (unbounded). Whitelist + bound it through
+  // the same parsers the persisted-row normalizer uses so no unknown nested
+  // field or oversized string survives into the trace.
+  const capability = input.capability ? parseCapability(input.capability, budget) : undefined;
+  const health = input.health ? parseHealth(input.health) : undefined;
+  const quota = input.quota ? parseQuota(input.quota, budget) : undefined;
+  const cost = input.cost ? parseCost(input.cost, budget) : undefined;
   return {
     provider: capString(input.provider, budget),
     model: capString(input.model, budget),
@@ -218,6 +230,10 @@ function buildCandidate(input: TraceCandidateInput, budget: { strings?: true; ex
         : {}),
     })),
     ...(input.score ? { score: input.score } : {}),
+    ...(capability ? { capability } : {}),
+    ...(health ? { health } : {}),
+    ...(quota ? { quota } : {}),
+    ...(cost ? { cost } : {}),
   };
 }
 

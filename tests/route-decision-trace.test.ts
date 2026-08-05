@@ -274,6 +274,34 @@ describe("route decision traces (RI-01)", () => {
     expect(trace.truncated?.strings).toBe(true);
   });
 
+  test("caller-supplied evidence is whitelisted and bounded in the trace", () => {
+    const trace = buildRouteDecisionTrace({
+      requestedModel: "policy/p",
+      routeKind: "policy",
+      candidates: [{
+        provider: "a",
+        model: "m1",
+        eligible: true,
+        exclusions: [],
+        capability: {
+          serviceTier: "x".repeat(500),
+          reasoningEfforts: ["y".repeat(500)],
+          unknownNested: { z: "should-not-survive" },
+        },
+        quota: { known: true, source: "s".repeat(300) },
+        cost: { estimatedUsd: 0.5, priceSource: "p".repeat(300) },
+      }],
+      selected: { provider: "a", model: "m1", reason: "policy-selected" },
+    });
+    const candidate = trace.candidates[0]!;
+    expect(candidate.capability?.serviceTier?.length).toBe(MAX_TRACE_STRING);
+    expect(candidate.capability?.reasoningEfforts?.[0]?.length).toBe(MAX_TRACE_STRING);
+    expect(candidate.capability && "unknownNested" in candidate.capability).toBe(false);
+    expect(candidate.quota?.source?.length).toBe(MAX_TRACE_STRING);
+    expect(candidate.cost?.priceSource?.length).toBe(MAX_TRACE_STRING);
+    expect(trace.truncated?.strings).toBe(true);
+  });
+
   test("trace never contains credentials or prompt content", () => {
     const config = baseConfig();
     // Built at runtime so the privacy scanner's key-pattern grep does not

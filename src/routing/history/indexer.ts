@@ -215,7 +215,10 @@ function parsedEntryFromLine(line: string): PersistedUsageEntry | null {
     if (parsed && typeof parsed === "object"
       && typeof parsed.requestId === "string"
       && typeof parsed.timestamp === "number"
-      && typeof parsed.provider === "string") {
+      && typeof parsed.provider === "string"
+      && typeof parsed.model === "string"
+      && typeof parsed.status === "number"
+      && typeof parsed.durationMs === "number") {
       return parsed;
     }
   } catch {
@@ -408,7 +411,7 @@ function fullRebuild(dbHandle: Database, reason: string): void {
   setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
 }
 
-async function refreshLocked(): Promise<RequestHistoryIndexMeta> {
+function refreshLockedSync(): RequestHistoryIndexMeta {
   openIndexDb();
   const state = ensureSchemaAndIdentity(db!);
   const handle = db!;
@@ -429,10 +432,18 @@ async function refreshLocked(): Promise<RequestHistoryIndexMeta> {
     fullRebuild(handle, "source truncated; index rebuilt");
     return metaFor(handle);
   }
-  if (tailNextOffset < Number(revision.size)) {
-    ingestSourceTail(handle, revision.path, tailNextOffset);
-  }
+    if (tailNextOffset < Number(revision.size)) {
+      const inserted = ingestSourceTail(handle, revision.path, tailNextOffset);
+      // A clean tail ingest proves the index is healthy: clear any earlier
+      // rebuild marker so status readers can distinguish rebuilds from tails.
+      if (inserted > 0) setMeta(handle, HISTORY_META_KEYS.lastError, "");
+    }
   return metaFor(handle);
+}
+
+/** Synchronous refresh for routing-time evidence reads (RI-06+). */
+export function openRequestHistoryIndexSync(): RequestHistoryIndexMeta {
+  return refreshLockedSync();
 }
 
 /**
@@ -442,7 +453,7 @@ async function refreshLocked(): Promise<RequestHistoryIndexMeta> {
  */
 export function openRequestHistoryIndex(): Promise<RequestHistoryIndexMeta> {
   if (!openPromise) {
-    openPromise = refreshLocked().finally(() => {
+    openPromise = Promise.resolve(refreshLockedSync()).finally(() => {
       openPromise = null;
     });
   }

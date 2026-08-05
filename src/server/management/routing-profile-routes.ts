@@ -8,6 +8,8 @@
 
 import { listRoutingProfileIds, getRoutingProfile, policyPublicModelId } from "../../routing/profile";
 import { evaluatePolicyProfile, type PolicyCandidateEvidence, type PolicyRequestEvidence } from "../../routing/evaluator";
+import { candidateCapabilityEvidence } from "../../routing/capability";
+import { policyCandidateHealthEvidence } from "../../routing/health";
 import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { jsonResponse } from "../auth-cors";
@@ -93,7 +95,8 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     if (!profile) {
       return jsonResponse({ error: { code: "missing_profile", message: "profile is required" } }, 400, req, config);
     }
-    if (!getRoutingProfile(config, profile)) {
+    const resolvedProfile = getRoutingProfile(config, profile);
+    if (!resolvedProfile) {
       return jsonResponse({ error: { code: "unknown_profile", message: `unknown routing profile: ${profile}` } }, 404, req, config);
     }
     const { evidence, ok } = parseEvidence(body.evidence);
@@ -101,7 +104,15 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
       return jsonResponse({ error: { code: "invalid_evidence", message: "evidence must be an object" } }, 400, req, config);
     }
     const candidateEvidence = body.candidates === undefined
-      ? []
+      // Match execution: fill the same candidate evidence the router would
+      // assemble, so dry-run reports the same eligibility as real routing
+      // instead of treating every capability as unknown.
+      ? resolvedProfile.candidates.map(candidate => ({
+          provider: candidate.provider,
+          model: candidate.model,
+          capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
+          health: policyCandidateHealthEvidence(config, candidate),
+        }))
       : parseCandidateEvidence(body.candidates);
     if (candidateEvidence === null) {
       return jsonResponse({ error: { code: "invalid_candidates", message: "candidates must be an array of evidence objects" } }, 400, req, config);

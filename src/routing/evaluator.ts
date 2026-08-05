@@ -21,6 +21,12 @@ import {
   type Unknownable,
 } from "./trace";
 import { getRoutingProfile, policyModelId, type NormalizedRoutingProfile } from "./profile";
+import { healthScore } from "./health";
+
+/** Unknown health under "penalize": a low-but-not-zero deterministic floor. */
+export const HEALTH_UNKNOWN_PENALTY_SCORE = 0.3;
+/** Unknown health under "allow": neutral midpoint of the [0,1] health scale. */
+export const HEALTH_UNKNOWN_NEUTRAL_SCORE = 0.5;
 
 export interface PolicyRequestEvidence {
   /** Required context window for this request (tokens). */
@@ -238,6 +244,7 @@ export function evaluatePolicyProfile(
   profileId: string,
   requestEvidence: PolicyRequestEvidence,
   candidateEvidence: PolicyCandidateEvidence[],
+  now = Date.now(),
 ): PolicyEvaluationResult {
   const profile = getRoutingProfile(config, profileId);
   if (!profile) throw new Error(`Unknown routing profile: ${profileId}`);
@@ -279,13 +286,36 @@ export function evaluatePolicyProfile(
     if (overCostLimit) {
       exclusions.push({ code: "cost-limit", detail: "maxEstimatedCostUsd" });
     }
-    const eligible = !unsatisfied && !excludedByUnknown && !overCostLimit;
+    let eligible = !unsatisfied && !excludedByUnknown && !overCostLimit;
+
+    // Health scoring (RI-06): live hard cooldown is authoritative and
+    // excludes; unknown health follows the profile's unknownEvidence policy;
+    // historical health never overrides explicit ineligibility.
+    const health = evidence.health;
+    let healthValue = health ? healthScore(health, now) : null;
+    if (health?.cooldownUntilMs !== undefined && health.cooldownUntilMs > now) {
+      exclusions.push({ code: "cooldown" });
+      eligible = false;
+    } else if (healthValue === null && profile.unknownEvidence.health === "exclude") {
+      exclusions.push({ code: "unknown-health" });
+      eligible = false;
+    } else if (healthValue === null && profile.unknownEvidence.health === "penalize") {
+      healthValue = HEALTH_UNKNOWN_PENALTY_SCORE;
+    } else if (healthValue === null && profile.unknownEvidence.health === "allow") {
+      // Neutral midpoint: blending keeps an unknown candidate from outranking
+      // a measured one with the same configured priority.
+      healthValue = HEALTH_UNKNOWN_NEUTRAL_SCORE;
+    }
 
     const priorityScore = configuredPriorityScore(index, profile.candidates.length);
-    const score: RouteScoreEvidence = {
-      total: priorityScore,
-      components: { configuredPriority: priorityScore },
-    };
+    const healthWeight = profile.optimize.health;
+    const components: RouteScoreEvidence["components"] = { configuredPriority: priorityScore };
+    let total = priorityScore;
+    if (healthWeight > 0 && healthValue !== null) {
+      total = priorityScore * (1 - healthWeight) + healthValue * healthWeight;
+      components.health = healthValue;
+    }
+    const score: RouteScoreEvidence = { total, components };
     const evaluated: PolicyEvaluationCandidate = {
       provider: evidence.provider,
       model: evidence.model,
@@ -321,6 +351,10 @@ export function evaluatePolicyProfile(
       eligible: candidate.eligible,
       exclusions: candidate.exclusions,
       ...(candidate.score ? { score: candidate.score } : {}),
+      ...(candidate.capability ? { capability: candidate.capability } : {}),
+      ...(candidate.health ? { health: candidate.health } : {}),
+      ...(candidate.quota ? { quota: candidate.quota } : {}),
+      ...(candidate.cost ? { cost: candidate.cost } : {}),
     })),
     selected: selectedIndex === null
       ? { provider: candidates[0]?.provider ?? "", model: candidates[0]?.model ?? "", reason: "no-eligible-candidate" }

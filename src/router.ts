@@ -31,6 +31,7 @@ import {
 import { getRoutingProfile, resolvePolicyProfileId } from "./routing/profile";
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
 import { candidateCapabilityEvidence } from "./routing/capability";
+import { policyCandidateHealthEvidence } from "./routing/health";
 
 export class NoEligiblePolicyCandidateError extends Error {
   /** Evaluation trace (with per-candidate exclusions) when nothing qualified. */
@@ -489,17 +490,24 @@ function routeModelInternal(
   const slash = modelId.indexOf("/");
   // Policy namespace is system-reserved: an explicit `policy/<id>` or a
   // configured profile alias executes the policy evaluator and routes the
-  // selected candidate. Only explicit requests reach this branch.
-  const policyId = resolvePolicyProfileId(config, modelId);
-  if (policyId) {
-    const profile = getRoutingProfile(config, policyId);
-    if (!profile) throw new Error(`Unknown routing profile: ${policyId}`);
+  // selected candidate. Only explicit requests reach this branch; concrete
+  // recursive targets skip policy resolution entirely (bypassCombos) so an
+  // alias matching a selected candidate can never recurse, and a
+  // `policy/<id>` without a configured profile falls through to normal
+  // provider/default resolution instead of failing.
+  const policyId = !bypassCombos ? resolvePolicyProfileId(config, modelId) : null;
+  const profile = policyId ? getRoutingProfile(config, policyId) : undefined;
+  if (profile && policyId) {
+    // One clock read per decision keeps candidate evidence, exclusions, and
+    // scores mutually consistent and reproducible.
+    const now = Date.now();
     const candidateEvidence = profile.candidates.map(candidate => ({
       provider: candidate.provider,
       model: candidate.model,
       capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
+      health: policyCandidateHealthEvidence(config, candidate, now),
     }));
-    const evaluation = evaluatePolicyProfile(config, policyId, policyEvidence ?? {}, candidateEvidence);
+    const evaluation = evaluatePolicyProfile(config, policyId, policyEvidence ?? {}, candidateEvidence, now);
     if (evaluation.selectedIndex === null) {
       throw new NoEligiblePolicyCandidateError(policyId, evaluation.trace);
     }

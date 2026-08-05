@@ -43,9 +43,9 @@ other; closing one is a maintainer decision and neither is stale.
 | RI-01 | `feat/ri-01-route-decision-traces` | `e44d234f0` | `b5a8e7c4c` | #1003 | https://github.com/lidge-jun/opencodex/pull/1003 | MERGED |
 | RI-02 | `feat/ri-02-request-history-index` | `dev` (post-#1003 merge) | `2a72aa4a9` | #1004 | https://github.com/lidge-jun/opencodex/pull/1004 | MERGED |
 | RI-03 | `feat/ri-03-routing-analytics` | `dev` (post-#1004 merge) | `a594938c5` | #1005 | https://github.com/lidge-jun/opencodex/pull/1005 | MERGED |
-| RI-04 | `feat/ri-04-policy-profile-core` | `dev` (post-#1005 merge) | `31c9f0b28` | #1011 | https://github.com/lidge-jun/opencodex/pull/1011 | OPEN (resync) |
-| RI-05 | `feat/ri-05-capability-aware-routing` | `feat/ri-04` head | pending | pending | pending | queued |
-| RI-06 | `feat/ri-06-health-aware-routing` | `feat/ri-05` head | pending | pending | pending | queued |
+| RI-04 | `feat/ri-04-policy-profile-core` | `dev` (post-#1005 merge) | `31c9f0b28` | #1011 | https://github.com/lidge-jun/opencodex/pull/1011 | MERGED |
+| RI-05 | `feat/ri-05-capability-aware-routing` | `dev` (post-#1011 merge) | `088194a3a` | #1012 | https://github.com/lidge-jun/opencodex/pull/1012 | MERGED |
+| RI-06 | `feat/ri-06-health-aware-routing` | `dev` (post-#1012 merge) | `af692bb7a` | #1013 | https://github.com/lidge-jun/opencodex/pull/1013 | in progress |
 | RI-07 | `feat/ri-07-quota-aware-routing` | `feat/ri-06` head | pending | pending | pending | queued |
 | RI-08 | `feat/ri-08-cost-aware-routing` | `feat/ri-07` head | pending | pending | pending | queued |
 | RI-09 | `feat/ri-09-route-explainability-api` | `feat/ri-08` head | pending | pending | pending | queued |
@@ -179,3 +179,38 @@ other; closing one is a maintainer decision and neither is stale.
     identically on the pristine base (Windows symlink EPERM, environmental)
 - Remaining Low findings: none (B3/B5 residual: no-eligible trace names
   candidate 0 as `selected`; API evidence fields are permissively dropped)
+
+### RI-05 - feat/ri-05-capability-aware-routing
+
+- PR: #1012 (MERGED) https://github.com/lidge-jun/opencodex/pull/1012
+- Merged on `dev` at `088194a3a` (2026-08-05). Includes the RI-05 execution
+  wiring, request-evidence hardening, no-eligible trace persistence, and
+  policy-namespace reservation.
+
+### RI-06 - feat/ri-06-health-aware-routing
+
+- Base SHA: `56f17f45c` (RI-05 head); PR #1013 https://github.com/lidge-jun/opencodex/pull/1013.
+- Findings (self-review): 4 fixed pre-push - (1) route-time health evidence
+  needed synchronous index access (`openRequestHistoryIndexSync`); (2)
+  unknown-health "penalize" folds a deterministic 0.3 floor; (3) trace
+  candidates carry capability/health/quota/cost evidence; (4) score
+  assertions updated for the health component.
+- Full-review round (verdict `changes-requested`, all items fixed):
+  1. indexer: dev/ino identity (already on dev) + row validation + clean-tail
+     `lastError`; appends are a tail, never a rebuild;
+  2. router: live Codex pool cooldown/soft-avoid evidence for `openai`
+     targets (`codexPoolHealthEvidence` + active account);
+  3. health: combo/failover `attempts[]` expand into per-target samples;
+  4. request evidence: nested message `content` arrays walked for images
+     (already on dev via #1012);
+  5. evaluator: request-side `contextWindow`/`structuredOutputRequired`/
+     `encryptedCodexTask` enforced (already on dev via #1012);
+  6. dry-run API: omitted `candidates` populate execution-equivalent
+     evidence;
+  7. alias validation rejects first-segment provider aliases;
+  8. `policy/<id>` without a profile falls through to normal resolution;
+  9. capability: adapter-level tool inference for tool-capable adapters.
+- 8 bot threads fixed + resolved; `tsc --noEmit` 0 errors; routing suites
+  green; `privacy:scan` passed.
+- Sync: merged `dev` (post-#1012, `088194a3a`) into the branch so the head is
+  mergeable and CI can run; base sync of the stack continues with RI-07.
