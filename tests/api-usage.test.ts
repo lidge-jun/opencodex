@@ -181,6 +181,10 @@ describe("GET /api/usage", () => {
       expect(changed.summary.requests).toBe(first.summary.requests);
       expect(usageReadCacheStatsForTests().fullReads).toBe(2);
     } finally {
+      // This test installs a module-level blsc overlay; clear it even when an
+      // assertion or shutdown fails so later tests cannot resolve
+      // user-configured prices unexpectedly.
+      refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
       await server.stop(true);
     }
   });
