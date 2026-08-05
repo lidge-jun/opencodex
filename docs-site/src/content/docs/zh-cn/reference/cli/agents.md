@@ -145,7 +145,7 @@ ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-不使用 `--json` 时，JSON 会先输出，随后是规范目标路径、合并警告、环境变量导出行，以及一个模型计数，并标明有多少行省略了上下文限制（客户端会对这些项应用自己的默认值）。
+不使用 `--json` 时，JSON 会先输出，随后是规范目标路径、合并警告、客户端专属的启动前提示，以及一个模型计数，并标明有多少行省略了上下文限制（客户端会对这些项应用自己的默认值）。
 
 | 客户端 | 规范目标路径 | 下载文件名 | 环境变量 |
 | --- | --- | --- | --- |
