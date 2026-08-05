@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { OcxTool } from "../src/types";
 import {
   AgentServerMessageSchema,
+  ExecServerMessageSchema,
   InteractionUpdateSchema,
   McpArgsSchema,
   McpToolCallSchema,
@@ -17,6 +18,7 @@ import {
   mapSyntheticMcpExecToToolEvents,
   translateStructuredEditCall,
 } from "../src/adapters/cursor/protobuf-events";
+import { planMcpArgsHandling } from "../src/adapters/cursor/live-transport";
 import {
   applyCursorToolBudget,
 } from "../src/adapters/cursor/request-builder";
@@ -311,6 +313,52 @@ describe("cursor protobuf event translation", () => {
         }),
       },
       { type: "tool_call_end", id: "call_2" },
+    ]);
+  });
+
+  test("native-exec mcpArgs path (planMcpArgsHandling) emits the translated apply_patch call", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: [CURSOR_EDIT_FILE_TOOL, "apply_patch"],
+      toolSchemas: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_INPUT_SCHEMA]]),
+      cursorToolNameMap: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_TOOL]]),
+    });
+    const execMsg = create(ExecServerMessageSchema, {
+      id: 7,
+      execId: "exec_7",
+      message: {
+        case: "mcpArgs",
+        value: create(McpArgsSchema, {
+          name: CURSOR_EDIT_FILE_TOOL,
+          toolName: CURSOR_EDIT_FILE_TOOL,
+          toolCallId: "call_3",
+          providerIdentifier: "opencodex-responses",
+          args: {
+            file_path: encoder.encode(JSON.stringify("src/h.ts")),
+            old_string: encoder.encode(JSON.stringify("before")),
+            new_string: encoder.encode(JSON.stringify("after")),
+          },
+        }),
+      },
+    });
+    const plan = planMcpArgsHandling(execMsg, state);
+    expect(plan.handledByResponsesBridge).toBe(true);
+    expect(plan.cancelCursorRun).toBe(false);
+    expect(plan.events).toEqual([
+      { type: "tool_call_start", id: "call_3", name: "apply_patch" },
+      {
+        type: "tool_call_delta",
+        arguments: JSON.stringify({
+          input: [
+            "*** Begin Patch",
+            "*** Update File: src/h.ts",
+            "@@",
+            "-before",
+            "+after",
+            "*** End Patch",
+          ].join("\n"),
+        }),
+      },
+      { type: "tool_call_end", id: "call_3" },
     ]);
   });
 });
