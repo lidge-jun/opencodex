@@ -560,7 +560,9 @@ function validRate(value: unknown): value is number {
  */
 function sanitizeModelCosts(costs: unknown): Record<string, ProviderCostOverlay> | undefined {
   if (!costs || typeof costs !== "object" || Array.isArray(costs)) return undefined;
-  const out: Record<string, ProviderCostOverlay> = {};
+  // Null prototype so a model id like "__proto__" becomes an own row instead
+  // of mutating the map's prototype and vanishing from Object.keys().
+  const out: Record<string, ProviderCostOverlay> = Object.create(null) as Record<string, ProviderCostOverlay>;
   for (const [modelId, entry] of Object.entries(costs)) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const rates = entry as Record<string, unknown>;

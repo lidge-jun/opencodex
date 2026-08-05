@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   calculateCost,
   estimateAttemptCost,
@@ -700,6 +700,12 @@ describe("provider cost overlay (user-configured)", () => {
     verifiedAt: "user-configured",
     status: "verified",
   }];
+
+  afterEach(() => {
+    // The registry is module-level; reset it even when a test fails early so
+    // rows cannot leak into other files in a shared-process run.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+  });
 
   test("user overlay beats the jawcode price and reads verified (not estimated)", () => {
     const price = resolveMatchedPrice("deepseek", "deepseek-chat", undefined, USER_ROWS);
