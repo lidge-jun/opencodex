@@ -168,8 +168,10 @@ Codex ログインは catalog refresh が保留中でも保存済みです。通
 { error: string } // stderr, exit 1
 ```
 
-`catalogRefreshPending` は Codex の削除でのみ存在します。`true` でも削除自体は保存済みです。
-通常出力では `ocx sync` で catalog update を再試行するよう警告します。
+Codex の削除結果には、`false` の場合も `catalogRefreshPending` が必ず含まれます。OAuth と
+API-key の削除結果では省略されます。`true` でも削除自体は保存済みで、通常出力では
+`ocx sync` で catalog update を再試行するよう警告します。完了した Codex login-status response は
+別の形式を使用し、`catalogRefreshPending` は `true` の場合にのみ含まれます。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

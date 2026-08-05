@@ -168,8 +168,10 @@ Codex 로그인은 catalog refresh가 보류 중이어도 이미 저장된 상�
 { error: string } // stderr, exit 1
 ```
 
-`catalogRefreshPending`은 Codex 제거 결과에만 있습니다. 값이 `true`여도 제거 자체는 이미 저장되었으며,
-일반 출력은 `ocx sync`로 catalog update를 다시 시도하라고 경고합니다.
+Codex 제거 결과에는 값이 `false`인 경우를 포함해 `catalogRefreshPending`이 항상 있습니다. OAuth와
+API-key 제거 결과에서는 이 필드가 생략됩니다. 값이 `true`여도 제거 자체는 이미 저장되었으며, 일반 출력은
+`ocx sync`로 catalog update를 다시 시도하라고 경고합니다. 완료된 Codex login-status 응답은 별도의 형태를
+사용하며, `catalogRefreshPending`은 값이 `true`일 때만 포함됩니다.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

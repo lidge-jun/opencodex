@@ -196,8 +196,9 @@ token，也不是简单重读账号列表。`--json` 返回
 { error: string } // stderr, exit 1
 ```
 
-`catalogRefreshPending` 只会出现在 Codex 删除结果中。即使该值为 `true`，删除也已经持久化；
-普通输出会警告使用 `ocx sync` 重试 catalog 更新。
+Codex 删除结果始终包含 `catalogRefreshPending`，即使其值为 `false`；OAuth 和 API-key 删除结果会省略
+该字段。即使其值为 `true`，删除也已经持久化，普通输出会警告使用 `ocx sync` 重试 catalog 更新。
+已完成的 Codex login-status 响应使用另一种结构，仅在值为 `true` 时包含 `catalogRefreshPending`。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

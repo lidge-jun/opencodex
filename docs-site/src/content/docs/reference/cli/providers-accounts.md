@@ -213,8 +213,10 @@ success and failure shapes are:
 { error: string } // stderr, exit 1
 ```
 
-`catalogRefreshPending` is present only for Codex removals. The removal is already persisted when
-it is `true`; non-JSON output warns to retry the catalog update with `ocx sync`.
+For a Codex removal, `catalogRefreshPending` is always present, including when it is `false`;
+OAuth and API-key removal results omit it. The removal is already persisted when it is `true`, and
+non-JSON output warns to retry the catalog update with `ocx sync`. Completed Codex login-status
+responses use a separate shape and include `catalogRefreshPending` only when it is `true`.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

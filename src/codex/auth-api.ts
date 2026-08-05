@@ -408,11 +408,11 @@ function persistNewCodexAccount(
       && Object.values(runtimeConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
     accounts.push(addedAccount);
     runtimeConfig.codexAccounts = accounts;
-    if (runtimeConfig.codexAccountPickerEnabled !== undefined
-      && runtimeConfig.codexAccountNamespaces) {
+    const tracksPickerNamespaces = runtimeConfig.codexAccountPickerEnabled !== undefined;
+    if (tracksPickerNamespaces && runtimeConfig.codexAccountNamespaces) {
       runtimeConfig.codexAccountNamespaces = { ...runtimeConfig.codexAccountNamespaces };
     }
-    const namespaceAdded = runtimeConfig.codexAccountPickerEnabled !== undefined
+    const namespaceAdded = tracksPickerNamespaces
       && appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
     saveRuntimeConfig(sourceConfig, runtimeConfig);
     return { pickerVisibilityChanged: namespaceAdded || retainedPickerBindingRestored };

@@ -217,8 +217,11 @@ provider-specific формы команды используйте `ocx account 
 { error: string } // stderr, exit 1
 ```
 
-`catalogRefreshPending` присутствует только для удаления Codex. При значении `true` удаление уже
-сохранено; обычный вывод предупреждает повторить обновление catalog через `ocx sync`.
+В результате удаления Codex поле `catalogRefreshPending` присутствует всегда, в том числе при
+значении `false`; в результатах удаления OAuth и API-key оно отсутствует. При значении `true`
+удаление уже сохранено, а обычный вывод предупреждает повторить обновление catalog через `ocx sync`.
+Завершённый ответ Codex login-status имеет отдельный формат и содержит `catalogRefreshPending`
+только при значении `true`.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
