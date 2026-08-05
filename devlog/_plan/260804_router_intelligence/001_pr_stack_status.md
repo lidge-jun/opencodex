@@ -48,8 +48,8 @@ other; closing one is a maintainer decision and neither is stale.
 | RI-06 | `feat/ri-06-health-aware-routing` | `dev` (post-#1012 merge) | `af692bb7a` | #1013 | https://github.com/lidge-jun/opencodex/pull/1013 | MERGED |
 | RI-07 | `feat/ri-07-quota-aware-routing` | `dev` (post-#1013 merge) | `1f07c00b8` | #1014 | https://github.com/lidge-jun/opencodex/pull/1014 | MERGED |
 | RI-08 | `feat/ri-08-cost-aware-routing` | `dev` (post-#1014 merge) | `410db97e4` | #1015 | https://github.com/lidge-jun/opencodex/pull/1015 | MERGED |
-| RI-09 | `feat/ri-09-route-explainability-api` | `dev` (post-#1015 merge) | `d887c1202` | #1016 | https://github.com/lidge-jun/opencodex/pull/1016 | rebased / review in progress |
-| RI-10 | `feat/ri-10-routing-intelligence-ui` | `feat/ri-09` head | pending | pending | pending | queued |
+| RI-09 | `feat/ri-09-route-explainability-api` | `dev` (post-#1015 merge) | `68d3aa083` | #1016 | https://github.com/lidge-jun/opencodex/pull/1016 | MERGED |
+| RI-10 | `feat/ri-10-routing-intelligence-ui` | `dev` (post-#1016 merge; rebasing) | pending | #1018 | https://github.com/lidge-jun/opencodex/pull/1018 | OPEN |
 
 ## Per-PR acceptance log
 
@@ -270,7 +270,7 @@ other; closing one is a maintainer decision and neither is stale.
   (5) assembleCandidateEvidence typed as `OcxConfig` after the RI-08 health/
   quota/cost merge.
 - Final commit: `d887c120282c8d381f92cd11c1eebe2373a27281`
-- PR: #1016 https://github.com/lidge-jun/opencodex/pull/1016
+- PR: #1016 https://github.com/lidge-jun/opencodex/pull/1016 (MERGED)
 - Verification:
   - `bun x tsc --noEmit`: PASSED (0 errors)
   - `bun run test tests/route-explainability.test.ts`: 10/10 pass -
@@ -280,6 +280,39 @@ other; closing one is a maintainer decision and neither is stale.
     CLI logs explain missing-id, CLI route policy evaluate dry-run + id guard
   - Focused regression suites: cost/quota/routing-profile + explainability green
   - `bun run privacy:scan`: passed
+- Remaining Low findings: none
+
+### RI-10 - feat/ri-10-routing-intelligence-ui
+
+- Base SHA: `68d3aa0836648ae1d7b592fc5aa3b30146c0886d` (`dev` after #1016 merge)
+- Reviewed commit: same as final (author self-review before push)
+- Findings (self-review): 4 fixed pre-push -
+  1. GUI lint: hardcoded "profiles" in an error literal (i18n rule) - now a
+     key-less status code;
+  2. GUI lint: setState-in-effect for the initial load - deferred via
+     setTimeout(0);
+  3. missing `.checkbox` CSS class - added to styles.css; dry-run/analytics
+     tables reuse the existing `.tbl` grammar;
+  4. dev-mode GUI session bootstrap cannot authenticate through the Vite
+     proxy - the screenshot is captured same-origin against the production
+     GUI served by the backend instead.
+- Final commit: pending (recorded after commit)
+- PR: #1018 https://github.com/lidge-jun/opencodex/pull/1018
+- Verification:
+  - `bun x tsc --noEmit`: PASSED (0 errors)
+  - `bun run lint:gui`: PASSED (0 errors)
+  - `bun run build:gui`: PASSED (production build + prepare:package)
+  - `bun run test` (12 routing suites): 258/258 pass
+  - `bun run privacy:scan`: passed
+  - docs-site `bun run build`: 216 pages built, PASSED
+  - Locale parity: compile-checked TKey set (all six locales updated)
+  - Screenshot: live same-origin capture of `#routing` (profiles + dry-run +
+    analytics) against a temporary config; uploaded to the PR via comment
+    attachment
+- Environment note: the temporary screenshot backend briefly rewrote the
+  Codex/Grok fence to port 10200; restored with `ocx ensure` to the live
+  proxy (10100) and verified. Test processes and temp files cleaned up.
+- Remaining Low findings: none
 - Remaining Low findings: none
 
 ## Baseline note

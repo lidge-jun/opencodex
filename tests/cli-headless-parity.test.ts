@@ -89,6 +89,11 @@ describe("headless GUI parity CLI", () => {
       ["/api/logs", "ocx observe"],
       ["/api/config", "ocx config"],
       ["/api/settings", "ocx system"],
+      // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
+      // `ocx route policy`. Analytics is GUI-first for now; the same request
+      // history remains available through observe/index tooling.
+      ["/api/routing-profiles", "ocx route policy"],
+      ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
       ["/api/shadow", "ocx models"],
       ["/api/sidecar", "ocx agent"],
       ["/api/startup", "ocx system"],

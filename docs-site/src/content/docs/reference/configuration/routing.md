@@ -191,3 +191,36 @@ Codex picker list it only when every target exposes capabilities that can be int
 A bare relay id with no context metadata or targets with disjoint modalities removes the combo from
 the catalog. Sync emits a summary warning and the dashboard marks it **Needs attention**. Add context
 metadata, align modalities, or target models with discoverable compatible capabilities.
+
+## Request history and routing analytics
+
+- `GET /api/request-history` - cursor-paginated full history from the derived
+  index (`routing-history.sqlite`), with filters (`provider`, `model`,
+  `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`,
+  `apiKeyId`, `profileId`, `fallback`, `from`, `to`) and opaque `cursor`
+  pagination. `GET /api/request-history/:requestId` returns one canonical row.
+- `GET /api/request-history/:requestId/route-decision` - the why-this-route
+  explanation: trace (candidates, exclusions, score components, profile +
+  revision), execution attempt sequence, and final outcome.
+- `GET /api/routing-analytics` - success/failure/cancelled/fallback rates,
+  p50/p95/p99 duration and TTFT, incomplete-stream rate, cooldown-triggering
+  failures, cost per successful request, coverage, confidence, and an
+  explicit truncation flag.
+- `GET /api/routing-profiles`, `POST /api/routing-profiles/dry-run` - profile
+  inspection and dry-run evaluation (no upstream dispatch).
+
+Returned history and route-decision payloads expose only masked request metadata
+(for example opaque `apiKeyId` labels). They do not include credentials, raw
+prompt bodies, or provider secrets.
+
+CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
+`ocx logs index-status`, `ocx route policy list | show | dry-run | evaluate`.
+
+## Migration
+
+`routingProfiles` is optional and additive: existing config files load
+unchanged. Old `usage.jsonl` rows without `routeDecision` parse unchanged.
+The history index is disposable - deleting `routing-history.sqlite` triggers
+an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
+rebuild-index` forces one. Nothing in this system auto-tunes weights,
+budgets, or candidate sets.

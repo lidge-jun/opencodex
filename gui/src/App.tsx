@@ -7,13 +7,14 @@ import Combos from "./pages/Combos";
 import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
+import RoutingProfiles from "./pages/RoutingProfiles";
 import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconTerminal, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconTerminal, IconX, IconRoute } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -38,6 +39,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   storage: "nav.storage",
   "codex-auth": "nav.codexAuth",
   integrations: "nav.integrations",
+  routing: "nav.routing",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -66,6 +68,7 @@ const NAV: NavEntry[] = [
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
+  { id: "routing", tkey: "nav.routing", Icon: IconRoute },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   /*
    * Claude sits directly above Integrations because it is a shortcut into that
@@ -338,6 +341,7 @@ export default function App() {
             {page === "subagents" && <Subagents key={API_BASE} apiBase={API_BASE} />}
             {page === "logs" && <Logs apiBase={API_BASE} />}
             {page === "usage" && <Usage apiBase={API_BASE} />}
+            {page === "routing" && <RoutingProfiles key={API_BASE} apiBase={API_BASE} />}
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "integrations" && <Integrations apiBase={API_BASE} />}

@@ -960,6 +960,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 .tbl tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
 .tbl tbody tr:last-child td { border-bottom: none; }
 .tbl tbody tr:hover td { background: var(--hover); }
+
+.checkbox { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .tbl .num { text-align: right; font-family: var(--font-code); font-variant-numeric: tabular-nums; }
 .tbl-wrap {
   border: 1px solid var(--border);

@@ -17,6 +17,10 @@ import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydo
 import { speedLabel } from "./logs-speed-label";
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
+import {
+  sanitizeLogEntryRouteDecision,
+  validCachedRouteDecision,
+} from "./log-route-decision";
 
 function logsCacheKey(apiBase: string): string {
   return `ocx.logs.list.v1:${apiBase}`;
@@ -139,9 +143,15 @@ export interface LogEntry {
   firstOutputMs?: number;
   attempts?: LogAttempt[];
   displayMetrics?: LogDisplayMetrics;
+  /** Bounded route-decision trace (RI-01); absent for pre-trace rows. */
+  routeDecision?: {
+    routeKind?: string;
+    profile?: { id?: string; revision?: string };
+    selected?: { provider?: string; model?: string; reason?: string };
+    candidates?: Array<{ provider?: string; model?: string; eligible?: boolean; exclusions?: Array<{ code?: string }> }>;
+  };
 }
 
-/** Session-cache entries are arbitrary JSON — reject shapes that would crash the table. */
 function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
   if (!Array.isArray(cached)) return null;
   for (const entry of cached) {
@@ -153,6 +163,7 @@ function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
       || typeof entry.provider !== "string"
       || typeof entry.status !== "number"
       || typeof entry.durationMs !== "number"
+      || !validCachedRouteDecision(entry.routeDecision)
     ) {
       return null;
     }
@@ -457,7 +468,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
     const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const next = Array.isArray(body) ? body : (body.logs ?? []);
+    const raw = Array.isArray(body) ? body : (body.logs ?? []);
+    const next = raw.map(sanitizeLogEntryRouteDecision);
     writeSessionListCache(resourceKey, next);
     return next;
   }, [apiBase, resourceKey]);
@@ -919,6 +931,45 @@ function LogDetailDialog({
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
           </div>
+        </section>
+
+        <section className="log-detail-section" aria-labelledby="log-detail-route">
+          <h4 id="log-detail-route" className="log-detail-section-title">{t("logs.detail.route.section")}</h4>
+          {detail.routeDecision ? (
+            <div className="log-detail-grid">
+              <span className="muted">{t("logs.detail.route.kind")}</span><span className="mono">{detail.routeDecision.routeKind ?? "–"}</span>
+              {detail.routeDecision.profile?.id && (
+                <><span className="muted">{t("logs.detail.route.profile")}</span>
+                  <span className="mono">{detail.routeDecision.profile.id} ({detail.routeDecision.profile.revision})</span></>
+              )}
+              {detail.routeDecision.selected?.provider && (
+                <><span className="muted">{t("logs.detail.route.selected")}</span>
+                  <span className="mono">
+                    {detail.routeDecision.selected.provider}/{detail.routeDecision.selected.model}
+                    {detail.routeDecision.selected.reason ? ` — ${detail.routeDecision.selected.reason}` : ""}
+                  </span></>
+              )}
+              <span className="muted">{t("logs.detail.route.candidates")}</span>
+              <span className="mono">
+                {(detail.routeDecision.candidates ?? []).map(candidate => {
+                  const provider = typeof candidate.provider === "string" && candidate.provider.length > 0
+                    ? candidate.provider
+                    : "–";
+                  const model = typeof candidate.model === "string" && candidate.model.length > 0
+                    ? candidate.model
+                    : "–";
+                  const mark = candidate.eligible === true
+                    ? " ✓"
+                    : candidate.eligible === false
+                      ? " ✗"
+                      : " ?";
+                  return `${provider}/${model}${mark}`;
+                }).join("  ") || "–"}
+              </span>
+            </div>
+          ) : (
+            <p className="log-detail-notes-line muted">{t("logs.detail.route.unknown")}</p>
+          )}
         </section>
 
         <section className="log-detail-section" aria-labelledby="log-detail-performance">

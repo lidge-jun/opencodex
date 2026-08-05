@@ -127,10 +127,18 @@ describe("GitHub Actions hardening", () => {
     // Sharding is only safe while the shards tile the suite exactly. If the
     // matrix and the divisor drift apart, some files stop running and CI stays
     // green — the worst failure available here. Pin them to each other.
-    const shards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
+    const linuxShards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
       ?.strategy?.matrix?.shard ?? [];
-    expect(shards).toEqual([1, 2, 3, 4]);
-    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${shards.length}`);
+    expect(linuxShards).toEqual([1, 2, 3, 4]);
+    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${linuxShards.length}`);
+
+    // Windows uses the same shard matrix after the single-leg isolate budget was
+    // replaced. Keep the two matrices equal so a future edit cannot reintroduce
+    // a partial Windows suite while Linux stays fully tiled.
+    const windowsShards = (ci.jobs?.["platform-windows"] as {
+      strategy?: { matrix?: { shard?: number[] } };
+    })?.strategy?.matrix?.shard ?? [];
+    expect(windowsShards).toEqual(linuxShards);
 
     // The aggregate gate is the check a human trusts. Three ways to break it
     // silently: drop `if: always()` so it skips (and a skipped job reports
@@ -168,8 +176,7 @@ describe("GitHub Actions hardening", () => {
     // the runner's disk and the suite passes against a tree that no longer
     // exists in git.
     const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
-    expect(winSteps.some(step => step.run?.includes("bun test --isolate tests"))).toBe(true);
-    expect(winSteps.some(step => step.run?.includes("--shard=${{ matrix.shard }}/4"))).toBe(true);
+    expect(winSteps.some(step => step.run?.includes(`--shard=\${{ matrix.shard }}/${windowsShards.length}`))).toBe(true);
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
