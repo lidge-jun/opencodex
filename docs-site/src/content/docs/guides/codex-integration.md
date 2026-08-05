@@ -23,6 +23,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
 
+# only when fastMode is set; unset adds no [features] table
 [features]
 fast_mode = true
 ```

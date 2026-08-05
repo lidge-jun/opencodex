@@ -24,6 +24,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
 
+# только если fastMode задан; без него таблица [features] не создаётся
 [features]
 fast_mode = true
 ```
