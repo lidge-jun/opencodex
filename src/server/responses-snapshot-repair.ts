@@ -368,6 +368,18 @@ export function createResponsesSnapshotBlockRewrite(
       && isPlainObject(event.part)) {
       if (outputIndex !== undefined) {
         const open = openItems.get(outputIndex);
+        // A PRESENT-but-mismatched item_id is contradictory lifecycle evidence,
+        // exactly like output_item.done and output_text.done: the stream is
+        // telling us our identity model for this index is wrong. Merely
+        // ignoring it left the item open and let the terminal fabricate a full
+        // closure sequence (content_part.added → output_text.done →
+        // content_part.done → output_item.done) on top of a stream we do not
+        // understand. Go fail-closed instead. An OMITTED item_id stays
+        // legitimate and is still correlated by output_index.
+        if (open && itemId !== undefined && itemId !== open.itemId) {
+          taintAndRelease();
+          return [changed ? jsonBlock(nextEvent) : block];
+        }
         // Correlate by item_id when present: a mismatched event must not
         // mutate (or suppress injections for) the tracked item (#893 review).
         if (open && (itemId === undefined || itemId === open.itemId)) {
@@ -398,6 +410,14 @@ export function createResponsesSnapshotBlockRewrite(
     }
     if (type === "response.output_text.delta" && typeof event.delta === "string" && outputIndex !== undefined) {
       const open = openItems.get(outputIndex);
+      // Same identity contract as the *.done terminals: a present-but-foreign
+      // item_id on a tracked index means our model of this index is wrong, and
+      // reconstructing from the text we DID accept would ship a message the
+      // upstream never assembled that way.
+      if (open && itemId !== undefined && itemId !== open.itemId) {
+        taintAndRelease();
+        return [changed ? jsonBlock(nextEvent) : block];
+      }
       if (open && (itemId === undefined || itemId === open.itemId)) {
         const deltaBytes = Buffer.byteLength(event.delta, "utf8");
         open.text += event.delta;

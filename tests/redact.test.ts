@@ -60,6 +60,30 @@ describe("redactSecretString", () => {
     expect(redactSecretString("model: gpt-5.5\nstatus: 429\nrequest: ocx-abc123"))
       .toBe("model: gpt-5.5\nstatus: 429\nrequest: ocx-abc123");
   });
+
+  test("masks the WHOLE colon-labelled value, including delimiter-bearing forms", () => {
+    // Re-review of the first fix: tokenizing the value on quotes, spaces, and
+    // semicolons leaked every variant that contains one. A credential header's
+    // value is the rest of the line, so that is what must be masked.
+    expect(redactSecretString('x-api-key: "quotedcredential123456"'))
+      .toBe(`x-api-key: ${REDACTED_SECRET}`);
+    expect(redactSecretString("Authorization: Basic dXNlcjpwYXNz"))
+      .toBe(`Authorization: ${REDACTED_SECRET}`);
+    expect(redactSecretString("Cookie: session=secret-one; csrf=secret-two"))
+      .toBe(`Cookie: ${REDACTED_SECRET}`);
+  });
+
+  test("keeps the Bearer scheme readable while masking its token", () => {
+    // An auth scheme is diagnostically useful; the credential after it is not.
+    expect(redactSecretString("Authorization: Bearer abcdefgh12345678"))
+      .toBe(`Authorization: Bearer ${REDACTED_SECRET}`);
+  });
+
+  test("masks each credential line independently without eating the next", () => {
+    // End-of-line, not end-of-string: a multi-line error body must not collapse.
+    expect(redactSecretString("x-api-key: one-secret\nmodel: gpt-5.5\ncookie: two=secret"))
+      .toBe(`x-api-key: ${REDACTED_SECRET}\nmodel: gpt-5.5\ncookie: ${REDACTED_SECRET}`);
+  });
 });
 
 describe("redactSecrets", () => {

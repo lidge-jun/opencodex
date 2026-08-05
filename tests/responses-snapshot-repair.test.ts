@@ -227,6 +227,61 @@ describe("createResponsesSnapshotBlockRewrite", () => {
     expect(Object.hasOwn(terminal.response as Record<string, unknown>, "output")).toBe(false);
   });
 
+  test("a mismatched item_id on content_part.done also goes fail-closed", () => {
+    // Re-review: fixing output_text.done alone left the sibling terminal open.
+    // A foreign content_part.done was ignored, the item stayed open, and the
+    // completed terminal fabricated the whole closure sequence
+    // (content_part.added → output_text.done → content_part.done →
+    // output_item.done) on a stream whose identity model was already wrong.
+    const rewrite = createResponsesSnapshotBlockRewrite();
+    rewrite(dataBlock(ISSUE_FIXTURE.itemAdded));
+    rewrite(dataBlock({
+      type: "response.content_part.done",
+      item_id: "msg_OTHER",
+      output_index: 0,
+      part: { type: "output_text", text: "foreign" },
+    }));
+    rewrite(dataBlock(ISSUE_FIXTURE.delta));
+    const out = rewrite(dataBlock(ISSUE_FIXTURE.completed));
+    expect(typesOf(out)).not.toContain("response.content_part.added");
+    expect(typesOf(out)).not.toContain("response.content_part.done");
+    expect(typesOf(out)).not.toContain("response.output_text.done");
+    expect(typesOf(out)).not.toContain("response.output_item.done");
+    const terminal = eventsOf(out).find(event => event.type === "response.completed")!;
+    expect(Object.hasOwn(terminal.response as Record<string, unknown>, "output")).toBe(false);
+  });
+
+  test("a mismatched item_id on a text delta goes fail-closed instead of being dropped", () => {
+    // Reconstructing from only the deltas we accepted would ship a message the
+    // upstream never assembled that way.
+    const rewrite = createResponsesSnapshotBlockRewrite();
+    rewrite(dataBlock(ISSUE_FIXTURE.itemAdded));
+    rewrite(dataBlock({
+      type: "response.output_text.delta",
+      item_id: "msg_OTHER",
+      output_index: 0,
+      delta: "foreign",
+    }));
+    const out = rewrite(dataBlock(ISSUE_FIXTURE.completed));
+    expect(typesOf(out)).not.toContain("response.output_item.done");
+    const terminal = eventsOf(out).find(event => event.type === "response.completed")!;
+    expect(Object.hasOwn(terminal.response as Record<string, unknown>, "output")).toBe(false);
+  });
+
+  test("an omitted item_id stays legitimate on every correlated event", () => {
+    // The taint must fire on a PRESENT-but-wrong id only. A gateway that omits
+    // item_id is common and correlates by output_index alone; breaking that
+    // would fail closed on healthy streams.
+    const rewrite = createResponsesSnapshotBlockRewrite();
+    rewrite(dataBlock(ISSUE_FIXTURE.itemAdded));
+    rewrite(dataBlock({ type: "response.content_part.added", output_index: 0, part: { type: "output_text", text: "" } }));
+    rewrite(dataBlock({ type: "response.output_text.delta", output_index: 0, delta: "hello" }));
+    const out = rewrite(dataBlock(ISSUE_FIXTURE.completed));
+    expect(typesOf(out)).toContain("response.output_item.done");
+    const injected = eventsOf(out).filter(event => event.type === "response.output_text.done");
+    expect(injected.some(event => event.text === "hello")).toBe(true);
+  });
+
   test("a completed terminal with absent output and zero items gets the canonical empty list", () => {
     const rewrite = createResponsesSnapshotBlockRewrite();
     const out = rewrite(dataBlock({ type: "response.completed", response: { id: "r" } }));
