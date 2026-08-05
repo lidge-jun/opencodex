@@ -804,6 +804,49 @@ describe("server combo failover 030 activation matrix", () => {
     }
   });
 
+  test("redacts the serving Codex Pool account id from a combo failure", async () => {
+    const rawAccountId = "raw-private-combo-account";
+    const physicalAccountId = "acct-private-combo-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "pool@example.test",
+      isMain: false,
+      logLabel: "psecure1",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: physicalAccountId,
+    });
+    customTransientResponse = async () => Response.json({
+      error: {
+        message: `request rejected for ${physicalAccountId}`,
+        code: `code-${physicalAccountId}`,
+      },
+    }, { status: 418 });
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(418);
+    const serialized = await response.text();
+    expect(serialized).toContain("[REDACTED]");
+    expect(serialized).not.toContain(physicalAccountId);
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    expect(JSON.stringify(log)).not.toContain(physicalAccountId);
+    expect(JSON.stringify(usage)).not.toContain(physicalAccountId);
+  });
+
   test("lets a same-provider combo try its next model after a reset-derived 429", async () => {
     const rawAccountId = "combo-reset-account";
     const config = comboConfig({

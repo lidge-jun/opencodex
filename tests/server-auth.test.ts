@@ -1866,6 +1866,33 @@ describe("server local API auth", () => {
     }
   });
 
+  test("pool retry redacts the physical id of the account that produced the final error", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? rejectionResponse(unsupportedModelBody())
+      : new Response(JSON.stringify({ account_id: accountId, detail: `rejected ${accountId}` }), {
+          status: 418,
+          statusText: `Rejected ${accountId}`,
+          headers: {
+            "content-type": "application/json",
+            "chatgpt-account-id": accountId,
+            "x-upstream-debug": `selected=${accountId}`,
+          },
+        }));
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(418);
+      expect(response.headers.has("chatgpt-account-id")).toBe(false);
+      expect(response.headers.has("x-upstream-debug")).toBe(false);
+      expect(await response.json()).toEqual({
+        account_id: "[REDACTED]",
+        detail: "rejected [REDACTED]",
+      });
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
   test.each([400, 402, 429])("exact account selector preserves the original %d without switching accounts", async status => {
     const body = status === 400
       ? unsupportedModelBody()
@@ -1902,6 +1929,48 @@ describe("server local API auth", () => {
       for (const privateValue of ["pool-a", "acct-pool-a", "pool-a-token", "pool-a-refresh"]) {
         expect(serialized).not.toContain(privateValue);
       }
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("exact account upstream errors never expose the selected physical account id", async () => {
+    const privateAccountId = "acct-pool-a";
+    const harness = await startPoolRetryHarness(accountId => new Response(JSON.stringify({
+      account_id: accountId,
+      detail: `request rejected\nChatGPT-Account-Id:\r\n ${accountId}`,
+    }), {
+      status: 418,
+      statusText: `Rejected ${accountId}`,
+      headers: {
+        "content-type": "application/json",
+        "chatgpt-account-id": accountId,
+        "x-upstream-debug": `selected=${accountId}`,
+        "x-exact-response": "original",
+        etag: '"private-body"',
+      },
+    }), {
+      accountMode: "direct",
+      activeAccountId: "pool-b",
+      accountNamespaces: { side: "pool-a" },
+    });
+    try {
+      const response = await harness.request({ model: `side/${POOL_RETRY_MODEL}`, callerBearer: false });
+      expect(response.status).toBe(418);
+      expect(response.headers.get("x-exact-response")).toBe("original");
+      expect(response.headers.has("chatgpt-account-id")).toBe(false);
+      expect(response.headers.has("x-upstream-debug")).toBe(false);
+      expect(response.headers.has("etag")).toBe(false);
+      for (const value of response.headers.values()) expect(value).not.toContain(privateAccountId);
+      const json = await response.json() as { account_id: string; detail: string };
+      expect(json).toEqual({
+        account_id: "[REDACTED]",
+        detail: "request rejected\nChatGPT-Account-Id:\r\n [REDACTED]",
+      });
+      expect(harness.dispatches).toEqual([privateAccountId]);
+
+      const entry = getRequestLogEntries().findLast(log => log.requestedModel === `side/${POOL_RETRY_MODEL}`);
+      expect(JSON.stringify(entry)).not.toContain(privateAccountId);
     } finally {
       await stopPoolRetryHarness(harness);
     }
@@ -2346,7 +2415,7 @@ describe("server local API auth", () => {
     try {
       const response = await harness.request();
       expect(response.status).toBe(400);
-      expect(response.headers.get("x-pool-retry-test")).toBe("acct-pool-b");
+      expect(response.headers.get("x-pool-retry-test")).toBeNull();
       expect(await response.text()).toBe(bodyB);
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
@@ -2703,6 +2772,7 @@ describe("server local API auth", () => {
     // The upstream answers 307 -> dead.invalid. Manual redirects must relay it
     // (with Location) instead of following into a dead-host rejection.
     const redirectTarget = "https://dead.invalid/x";
+    let redirectBody = "redirecting acct-pool-a";
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const url = new URL(requestUrl);
@@ -2710,7 +2780,15 @@ describe("server local API auth", () => {
         // The test would only reach this branch if the proxy wrongly followed
         // the redirect itself — fail loudly instead of hanging on dead.invalid.
         expect(url.hostname).not.toBe("dead.invalid");
-        return new Response(null, { status: 307, headers: { location: redirectTarget } });
+        return new Response(redirectBody, {
+          status: 307,
+          statusText: "Redirect acct-pool-a",
+          headers: {
+            location: redirectTarget,
+            "x-upstream-debug": "selected=acct-pool-a",
+            etag: '"redirect-validator"',
+          },
+        });
       }
       return originalGlobalFetch(input, init);
     }) as typeof fetch;
@@ -2755,6 +2833,39 @@ describe("server local API auth", () => {
 
       expect(response.status).toBe(307);
       expect(response.headers.get("location")).toBe(redirectTarget);
+      expect(response.headers.has("x-upstream-debug")).toBe(false);
+      expect(response.headers.has("etag")).toBe(false);
+      expect(await response.text()).toBe("redirecting [REDACTED]");
+
+      redirectBody = "redirecting without identity";
+      const unchanged = await originalGlobalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer inbound-main-token",
+        },
+        body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
+        redirect: "manual",
+      });
+      expect(unchanged.status).toBe(307);
+      expect(unchanged.headers.get("location")).toBe(redirectTarget);
+      expect(unchanged.headers.has("etag")).toBe(false);
+      expect(await unchanged.text()).toBe("redirecting without identity");
+
+      redirectBody = "x".repeat(65_537);
+      const oversized = await originalGlobalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer inbound-main-token",
+        },
+        body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
+        redirect: "manual",
+      });
+      expect(oversized.status).toBe(307);
+      expect(oversized.headers.get("location")).toBe(redirectTarget);
+      expect(oversized.headers.has("etag")).toBe(false);
+      expect(await oversized.text()).toBe("");
       // Neutral class: no account streak, no soft-avoid, no rotation, and the
       // real response cleared the seeded host streak.
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();

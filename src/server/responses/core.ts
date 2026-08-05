@@ -1,6 +1,10 @@
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
-import { formatPassthroughUpstreamError } from "./passthrough-error";
+import {
+  formatPassthroughUpstreamError,
+  redactPassthroughResponseBody,
+  stripPassthroughBodyRepresentationHeaders,
+} from "./passthrough-error";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
   getConfigPath,
@@ -115,7 +119,7 @@ import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
-import { redactSecretString } from "../../lib/redact";
+import { redactExactSecretOccurrences, redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
@@ -240,6 +244,13 @@ export function usesCodexForwardPoolAuth(
 ): authCtx is Extract<CodexAuthContext, { kind: "pool" | "main-pool" }> {
   return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
+}
+
+function codexForwardRedactExactValues(
+  authCtx: CodexAuthContext,
+  provider: OcxProviderConfig,
+): string[] {
+  return usesCodexForwardPoolAuth(authCtx, provider) ? [authCtx.chatgptAccountId] : [];
 }
 
 function normalizeCodexUnsupportedModelDetail(value: string): string {
@@ -625,6 +636,7 @@ export async function consumeComboFailure(
   response: Response,
   signal?: AbortSignal,
   now = Date.now(),
+  redactExactValues: readonly string[] = [],
 ): Promise<ConsumedComboFailure> {
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
@@ -634,12 +646,17 @@ export async function consumeComboFailure(
     const body = await readBoundedResponseBody(response, { signal });
     usage = usageFromComboFailureText(body.text);
     if (body.displaySafe) {
-      const safeText = redactSecretString(body.text).slice(0, 500);
+      const safeText = redactExactSecretOccurrences(
+        redactSecretString(body.text),
+        redactExactValues,
+      ).slice(0, 500);
       if (safeText) classificationText = safeText;
       try {
         const parsed = JSON.parse(body.text) as { error?: { code?: unknown } | string };
         const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error.code : undefined;
-        if (typeof nested === "string" && nested.length > 0) upstreamCode = nested;
+        if (typeof nested === "string" && nested.length > 0) {
+          upstreamCode = redactExactSecretOccurrences(nested, redactExactValues);
+        }
       } catch {
         /* non-JSON upstream body — message-only classification */
       }
@@ -1933,7 +1950,8 @@ async function handleResponsesInner(
         }
       }
     }
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
+    const redactExactValues = codexForwardRedactExactValues(authCtx, route.provider);
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, { redactExactValues });
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) logCtx.resolvedModel = resolvedModel;
     if (isUsageDebugEnabled()) {
@@ -2004,22 +2022,52 @@ async function handleResponsesInner(
 
     // Non-2xx passthrough failures must never reach Codex as an empty body —
     // Codex renders that as the opaque "Unknown error" (#452). Combo attempts
-    // keep their typed failure envelope. Non-empty bodies are relayed verbatim
-    // (headers included) so pool-retry Activation B/D and client diagnostics stay intact.
-    // Manual-redirect policy (#914): a 3xx is relayed as-is (Location preserved
-    // through sanitizePassthroughHeaders) so a redirect to a dead host can never
-    // masquerade as a pre-connection failure after the credential was seen.
+    // keep their typed failure envelope. Non-empty error bodies preserve their wire
+    // shape except for the exact physical account id injected by Pool auth.
+    // Manual-redirect policy (#914): status and a safe Location are preserved so a
+    // redirect to a dead host cannot masquerade as a pre-connection failure. Pool-auth
+    // redirect bodies are read under error-body bounds and dropped on unsafe input.
     // The numeric outcome above already classified it neutral — no streak.
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
-      return new Response(upstreamResponse.body, {
+      let responseBody: BodyInit | null = upstreamResponse.body;
+      let responseHeaders = headers;
+      if (redactExactValues.length > 0 && upstreamResponse.body) {
+        try {
+          const bounded = await readBoundedResponseBody(upstreamResponse, {
+            signal: options.abortSignal,
+            fatalUtf8: true,
+          });
+          if (bounded.displaySafe) {
+            const client = redactPassthroughResponseBody(bounded.text, headers, redactExactValues);
+            responseBody = client.bodyText || null;
+            // The bounded UTF-8 decode/re-encode may change representation bytes even
+            // when no private value matched (for example, a leading BOM).
+            responseHeaders = stripPassthroughBodyRepresentationHeaders(client.headers ?? headers);
+          } else {
+            responseBody = null;
+            responseHeaders = stripPassthroughBodyRepresentationHeaders(headers);
+          }
+        } catch {
+          if (options.abortSignal?.aborted) return clientCancelledResponse();
+          responseBody = null;
+          responseHeaders = stripPassthroughBodyRepresentationHeaders(headers);
+        }
+      }
+      const statusText = redactExactSecretOccurrences(upstreamResponse.statusText, redactExactValues);
+      return new Response(responseBody, {
         status: upstreamResponse.status,
-        statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+        statusText,
+        headers: responseHeaders,
       });
     }
     if (!upstreamResponse.ok) {
       if (options.comboAttempt) {
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        const failure = await consumeComboFailure(
+          upstreamResponse,
+          options.abortSignal,
+          Date.now(),
+          redactExactValues,
+        );
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
@@ -2027,6 +2075,7 @@ async function handleResponsesInner(
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
+        redactExactValues,
       });
     }
 
@@ -2955,7 +3004,12 @@ async function handleResponsesInner(
     }
     if (!upstreamResponse.ok) {
       if (options.comboAttempt) {
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
+        const failure = await consumeComboFailure(
+          upstreamResponse,
+          options.abortSignal,
+          Date.now(),
+          codexForwardRedactExactValues(authCtx, route.provider),
+        )
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;

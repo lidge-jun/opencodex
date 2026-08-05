@@ -443,6 +443,72 @@ export function redactSecretString(value: string): string {
   return redacted;
 }
 
+/**
+ * Replace only explicitly supplied private values, without interpreting the surrounding wire format.
+ * Unlike `redactSecretString`, this preserves JSON structure and unrelated account identifiers.
+ */
+export function redactExactSecretOccurrences(
+  value: string,
+  exactValues: readonly (string | null | undefined)[] = [],
+): string {
+  const exact = new Set<string>();
+  for (const exactValue of exactValues) {
+    if (!exactValue) continue;
+    exact.add(exactValue);
+  }
+  const privateValues = [...exact].sort((a, b) => b.length - a.length);
+
+  let redacted = value;
+  for (const exactValue of privateValues) {
+    redacted = redacted.replaceAll(exactValue, REDACTED_SECRET);
+    const jsonEscaped = JSON.stringify(exactValue).slice(1, -1);
+    if (jsonEscaped !== exactValue) {
+      redacted = redacted.replaceAll(jsonEscaped, REDACTED_SECRET);
+    }
+  }
+
+  // JSON permits semantically identical spellings such as `\u002d` for `-`.
+  // Rewrite only affected string tokens so whitespace, key order, and all sibling
+  // bytes remain untouched when a body contains no private value.
+  let output = "";
+  let copiedThrough = 0;
+  for (let index = 0; index < redacted.length; index++) {
+    if (redacted[index] !== '"') continue;
+    const start = index;
+    index += 1;
+    while (index < redacted.length) {
+      const char = redacted[index];
+      if (char === "\\") {
+        index += 2;
+        continue;
+      }
+      if (char !== '"') {
+        index += 1;
+        continue;
+      }
+
+      const token = redacted.slice(start, index + 1);
+      try {
+        const decoded = JSON.parse(token) as unknown;
+        if (typeof decoded === "string") {
+          let safeDecoded = decoded;
+          for (const exactValue of privateValues) {
+            safeDecoded = safeDecoded.replaceAll(exactValue, REDACTED_SECRET);
+          }
+          if (safeDecoded !== decoded) {
+            output += redacted.slice(copiedThrough, start) + JSON.stringify(safeDecoded);
+            copiedThrough = index + 1;
+          }
+        }
+      } catch {
+        // Not a valid standalone JSON string token; literal replacement above still applies.
+      }
+      break;
+    }
+  }
+  return copiedThrough === 0 ? redacted : output + redacted.slice(copiedThrough);
+}
+
 export function redactSecrets(value: unknown): unknown {
   if (typeof value === "string") return redactSecretString(value);
   if (Array.isArray(value)) return value.map(item => redactSecrets(item));

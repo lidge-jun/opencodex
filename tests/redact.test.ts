@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   REDACTED_SECRET,
+  redactExactSecretOccurrences,
   redactHeaders,
   redactSecretString,
   redactSecrets,
@@ -513,6 +514,36 @@ describe("redactHeaders", () => {
     expect(redacted["x-goog-api-key"]).toBe(REDACTED_SECRET);
     expect(redacted.accept).toBe("application/json");
     expect(redacted).not.toHaveProperty("x-extra");
+  });
+});
+
+describe("redactExactSecretOccurrences", () => {
+  test("replaces only supplied literal values and preserves surrounding JSON", () => {
+    const selected = "acct-private-123456";
+    const input = JSON.stringify({ account_id: selected, unrelated_account_id: "cloudflare-tenant" });
+    const redacted = redactExactSecretOccurrences(input, [selected]);
+
+    expect(JSON.parse(redacted)).toEqual({
+      account_id: REDACTED_SECRET,
+      unrelated_account_id: "cloudflare-tenant",
+    });
+    expect(redacted).not.toContain(selected);
+  });
+
+  test("handles repeated, JSON-escaped, and empty exact values", () => {
+    const selected = 'acct-"quoted"';
+    const input = `${selected}\n${JSON.stringify(selected)}\nunchanged`;
+    expect(redactExactSecretOccurrences(input, [undefined, "", selected])).toBe(
+      `${REDACTED_SECRET}\n"${REDACTED_SECRET}"\nunchanged`,
+    );
+  });
+
+  test("redacts semantic JSON Unicode-escape aliases without rewriting siblings", () => {
+    const input = '{ "account_id" : "acct\\u002dprivate\\u002d123456", "detail" : "keep spacing" }';
+    const redacted = redactExactSecretOccurrences(input, ["acct-private-123456"]);
+
+    expect(redacted).toBe('{ "account_id" : "[REDACTED]", "detail" : "keep spacing" }');
+    expect(JSON.parse(redacted)).toEqual({ account_id: REDACTED_SECRET, detail: "keep spacing" });
   });
 });
 

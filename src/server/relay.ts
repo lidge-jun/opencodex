@@ -1,5 +1,6 @@
 import type { ResponsesTerminalStatus } from "../bridge";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { redactExactSecretOccurrences } from "../lib/redact";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
   addRequestLog,
@@ -1138,9 +1139,13 @@ export function consumeForResponseLogMetadata(
  * Bun's fetch auto-decompresses the response body but leaves the upstream `content-encoding`
  * (and a now-stale `content-length`) on `response.headers`. Relaying those with the already-decoded
  * body makes the caller (Codex) double-decode / truncate → "stream error" on every gpt passthrough.
- * Drop encoding + hop-by-hop headers; relay everything else (content-type, etc.) verbatim.
+ * Drop encoding, proxy-owned identity, and hop-by-hop headers. When a caller supplies
+ * exact private values, omit any other upstream metadata that echoes one of them.
  */
-export function sanitizePassthroughHeaders(upstream: Headers): Headers {
+export function sanitizePassthroughHeaders(
+  upstream: Headers,
+  options: { redactExactValues?: readonly string[] } = {},
+): Headers {
   const DROP = new Set([
     "content-encoding",
     "content-length",
@@ -1149,15 +1154,22 @@ export function sanitizePassthroughHeaders(upstream: Headers): Headers {
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
+    "chatgpt-account-id",
     "set-cookie",
     "set-cookie2",
     "te",
     "trailer",
     "upgrade",
   ]);
+  const redactExactValues = options.redactExactValues?.filter(value => value.length > 0) ?? [];
   const out = new Headers();
   upstream.forEach((value, key) => {
-    if (!DROP.has(key.toLowerCase())) out.set(key, value);
+    if (DROP.has(key.toLowerCase())) return;
+    const safeValue = redactExactSecretOccurrences(value, redactExactValues);
+    // Dropping the whole field avoids turning structured values (signatures, validators,
+    // redirect URIs) into malformed metadata when they contain a private account id.
+    if (safeValue !== value) return;
+    out.set(key, value);
   });
   return out;
 }

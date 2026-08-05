@@ -42,4 +42,29 @@ describe("passthrough header sanitization (RC5 / F4)", () => {
     expect(sanitized.has("set-cookie2")).toBe(false);
     expect(sanitized.get("content-type")).toBe("text/event-stream");
   });
+
+  test("drops proxy-owned account identity and any header value that echoes it", () => {
+    const selectedAccountId = "acct-private-123456";
+    const sanitized = sanitizePassthroughHeaders(new Headers({
+      "chatgpt-account-id": selectedAccountId,
+      "x-upstream-debug": `selected=${selectedAccountId}`,
+      "x-unrelated-account": "cloudflare-tenant",
+      "content-type": "application/problem+json",
+    }), { redactExactValues: [selectedAccountId] });
+
+    expect(sanitized.has("chatgpt-account-id")).toBe(false);
+    expect(sanitized.has("x-upstream-debug")).toBe(false);
+    expect(sanitized.get("x-unrelated-account")).toBe("cloudflare-tenant");
+    expect(sanitized.get("content-type")).toBe("application/problem+json");
+  });
+
+  test("preserves unrelated header behavior when no private value is supplied", () => {
+    const sanitized = sanitizePassthroughHeaders(new Headers({
+      "chatgpt-account-id": "caller-owned",
+      "x-upstream-debug": "account_id=cloudflare-tenant",
+    }));
+
+    expect(sanitized.has("chatgpt-account-id")).toBe(false);
+    expect(sanitized.get("x-upstream-debug")).toBe("account_id=cloudflare-tenant");
+  });
 });

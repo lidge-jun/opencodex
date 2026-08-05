@@ -634,7 +634,11 @@ describe("compact alternate-account attempt (#913)", () => {
           if (bearers.length === 1) {
             return Response.json({ error: { message: "pool exhausted" } }, { status: rejection });
           }
-          return Response.json({ error: { message: "upstream busy" } }, { status: 503 });
+          return Response.json({ error: { message: "upstream busy pool_acc_b" } }, {
+            status: 503,
+            statusText: "Busy pool_acc_b",
+            headers: { location: "https://example.test/accounts/pool_acc_b" },
+          });
         }) as typeof fetch;
 
         const res = await handleResponsesCompact(
@@ -646,6 +650,11 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(bearers).toHaveLength(2);
         expect(bearers[0]).not.toBe(bearers[1]);
         expect(res.status).toBe(503);
+        expect(res.statusText).toBe("Busy [REDACTED]");
+        expect(res.headers.get("location")).toBeNull();
+        const serialized = await res.text();
+        expect(serialized).toContain("[REDACTED]");
+        expect(serialized).not.toContain("pool_acc_b");
       });
     });
 
@@ -654,17 +663,19 @@ describe("compact alternate-account attempt (#913)", () => {
         config.codexAccountNamespaces = { side: "pool-a" };
         const bearers: string[] = [];
         const accountIds: string[] = [];
-        const body = JSON.stringify({ error: { message: "selected account exhausted" } });
+        const body = JSON.stringify({ error: { message: "selected account pool_acc_a exhausted" } });
         globalThis.fetch = (async (_url: string, init?: RequestInit) => {
           const headers = new Headers(init?.headers);
           bearers.push(headers.get("authorization") ?? "");
           accountIds.push(headers.get("chatgpt-account-id") ?? "");
           return new Response(body, {
             status: rejection,
+            statusText: "Rejected pool_acc_a",
             headers: {
               "content-type": "application/json",
               "retry-after": "42",
               "x-codex-primary-reset-at": "1900000000",
+              location: "https://example.test/accounts/pool_acc_a",
             },
           });
         }) as typeof fetch;
@@ -680,7 +691,9 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(res.status).toBe(rejection);
         expect(res.headers.get("retry-after")).toBe("42");
         expect(res.headers.get("x-codex-primary-reset-at")).toBe("1900000000");
-        expect(await res.text()).toBe(body);
+        expect(res.headers.get("location")).toBeNull();
+        expect(res.statusText).toBe("Rejected [REDACTED]");
+        expect(await res.text()).toBe(JSON.stringify({ error: { message: "selected account [REDACTED] exhausted" } }));
         expect(config.activeCodexAccountId).toBe("pool-a");
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       });

@@ -8,6 +8,7 @@ import { saveConfig } from "../src/config";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
+import { REDACTED_SECRET } from "../src/lib/redact";
 import { setDraining } from "../src/server/lifecycle";
 import { startServer } from "../src/server";
 import { formatPassthroughUpstreamError } from "../src/server/responses/passthrough-error";
@@ -112,6 +113,88 @@ describe("formatPassthroughUpstreamError (#452)", () => {
     expect(response.status).toBe(400);
     expect(response.headers.get("x-pool-retry-test")).toBe("original");
     expect(await response.text()).toBe(body);
+  });
+
+  test("redacts only the exact physical account id without changing quota classification", async () => {
+    const selectedAccountId = "acct-private-123456";
+    const body = `{"account_id":"${selectedAccountId}","escaped_account_id":"acct\\u002dprivate\\u002d123456","unrelated_account_id":"cloudflare-tenant","error":{"type":"insufficient_quota","message":"You exceeded your current quota"}}`;
+    const headers = new Headers({
+      "content-type": "application/problem+json",
+      "retry-after": "not-a-delay",
+      "content-length": String(body.length),
+      etag: '"original-etag"',
+      digest: "sha-256=original",
+      "content-md5": "original-md5",
+      "last-modified": "Tue, 04 Aug 2026 12:00:00 GMT",
+      "x-pool-retry-test": "original",
+    });
+    const response = formatPassthroughUpstreamError(
+      429,
+      body,
+      { headers, redactExactValues: [selectedAccountId] },
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("content-type")).toBe("application/problem+json");
+    expect(response.headers.get("x-pool-retry-test")).toBe("original");
+    expect(response.headers.get("retry-after")).toBeNull();
+    for (const header of ["content-length", "etag", "digest", "content-md5", "last-modified"]) {
+      expect(response.headers.has(header)).toBe(false);
+    }
+    const parsed = await response.json() as {
+      account_id: string;
+      escaped_account_id: string;
+      unrelated_account_id: string;
+      error: { type: string; message: string };
+    };
+    expect(parsed).toEqual({
+      account_id: REDACTED_SECRET,
+      escaped_account_id: REDACTED_SECRET,
+      unrelated_account_id: "cloudflare-tenant",
+      error: { type: "insufficient_quota", message: "You exceeded your current quota" },
+    });
+  });
+
+  test("redacts repeated raw echoes, status text, and header values", async () => {
+    const selectedAccountId = "acct-private-123456";
+    const headers = new Headers({
+      "content-type": "text/plain",
+      "chatgpt-account-id": selectedAccountId,
+      "x-upstream-debug": `selected=${selectedAccountId}`,
+      "x-pool-retry-test": "original",
+    });
+    const response = formatPassthroughUpstreamError(
+      418,
+      `${selectedAccountId}\nChatGPT-Account-Id:\r\n ${selectedAccountId}`,
+      {
+        statusText: `Rejected ${selectedAccountId}`,
+        headers,
+        redactExactValues: [selectedAccountId],
+      },
+    );
+
+    expect(response.statusText).toBe(`Rejected ${REDACTED_SECRET}`);
+    expect(response.headers.has("chatgpt-account-id")).toBe(false);
+    expect(response.headers.has("x-upstream-debug")).toBe(false);
+    expect(response.headers.get("x-pool-retry-test")).toBe("original");
+    expect(await response.text()).toBe(`${REDACTED_SECRET}\nChatGPT-Account-Id:\r\n ${REDACTED_SECRET}`);
+  });
+
+  test("unchanged bodies retain validators and unrelated account identifiers", async () => {
+    const body = JSON.stringify({ account_id: "cloudflare-tenant", detail: "unchanged" });
+    const headers = new Headers({
+      "content-type": "application/json",
+      etag: '"stable-etag"',
+      digest: "sha-256=stable",
+    });
+    const response = formatPassthroughUpstreamError(400, body, {
+      headers,
+      redactExactValues: ["acct-private-123456"],
+    });
+
+    expect(await response.text()).toBe(body);
+    expect(response.headers.get("etag")).toBe('"stable-etag"');
+    expect(response.headers.get("digest")).toBe("sha-256=stable");
   });
 });
 

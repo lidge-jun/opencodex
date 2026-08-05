@@ -3,6 +3,56 @@ import {
   resolveClientRetryAfter,
   validateClientRetryAfterHeader,
 } from "../../lib/retry-after";
+import { redactExactSecretOccurrences } from "../../lib/redact";
+
+const BODY_REPRESENTATION_HEADERS = [
+  "accept-ranges",
+  "content-encoding",
+  "content-length",
+  "content-range",
+  "content-md5",
+  "digest",
+  "content-digest",
+  "repr-digest",
+  "etag",
+  "last-modified",
+] as const;
+
+export function stripPassthroughBodyRepresentationHeaders(headers: Headers): Headers {
+  const clientHeaders = new Headers(headers);
+  for (const header of BODY_REPRESENTATION_HEADERS) clientHeaders.delete(header);
+  return clientHeaders;
+}
+
+export function redactPassthroughResponseBody(
+  bodyText: string,
+  headers: Headers | undefined,
+  redactExactValues: readonly string[] = [],
+): { bodyText: string; headers: Headers | undefined } {
+  const clientBodyText = redactExactSecretOccurrences(bodyText, redactExactValues);
+  const bodyChanged = clientBodyText !== bodyText;
+  let clientHeaders = headers;
+
+  if (headers && (bodyChanged || redactExactValues.length > 0)) {
+    clientHeaders = new Headers(headers);
+    if (redactExactValues.length > 0) {
+      clientHeaders.delete("chatgpt-account-id");
+      for (const [key, value] of [...clientHeaders.entries()]) {
+        if (redactExactSecretOccurrences(value, redactExactValues) !== value) {
+          clientHeaders.delete(key);
+        }
+      }
+    }
+    if (bodyChanged) {
+      clientHeaders = stripPassthroughBodyRepresentationHeaders(clientHeaders);
+    }
+  }
+
+  return {
+    bodyText: clientBodyText,
+    headers: clientHeaders,
+  };
+}
 
 /**
  * Passthrough adapters historically relayed upstream non-2xx bodies verbatim.
@@ -10,8 +60,10 @@ import {
  * (UnexpectedResponseError) — issue #452. Only empty bodies need wrapping.
  *
  * Non-empty bodies (including ChatGPT `{detail: ...}` account-model 400s and
- * HTML/text errors) must keep their original bytes and headers so pool-retry
- * activation and client diagnostics stay honest.
+ * HTML/text errors) keep their original bytes and headers unless they contain the
+ * exact physical account id injected into the upstream request. Pool-retry activation
+ * happens before this formatter, so redacting the client-facing copy cannot change
+ * the routing decision.
  *
  * Retry-After is validated independently of the body path:
  * - valid upstream values are preserved
@@ -26,6 +78,7 @@ export function formatPassthroughUpstreamError(
     statusText?: string;
     headers?: Headers;
     now?: number;
+    redactExactValues?: readonly string[];
   },
 ): Response {
   const trimmed = bodyText.trim();
@@ -38,6 +91,15 @@ export function formatPassthroughUpstreamError(
     upstreamRetryAfter,
     now,
   });
+  const client = redactPassthroughResponseBody(
+    bodyText,
+    options?.headers,
+    options?.redactExactValues,
+  );
+  const statusText = redactExactSecretOccurrences(
+    options?.statusText ?? "",
+    options?.redactExactValues,
+  );
 
   if (trimmed) {
     const needsSet = resolved !== undefined && upstreamRetryAfter !== resolved;
@@ -46,21 +108,21 @@ export function formatPassthroughUpstreamError(
       && originalValid === undefined;
 
     if (!needsSet && !needsDelete) {
-      return new Response(bodyText, {
+      return new Response(client.bodyText, {
         status,
-        ...(options?.statusText ? { statusText: options.statusText } : {}),
-        ...(options?.headers ? { headers: options.headers } : { headers: { "Content-Type": "application/json" } }),
+        ...(statusText ? { statusText } : {}),
+        ...(client.headers ? { headers: client.headers } : { headers: { "Content-Type": "application/json" } }),
       });
     }
 
-    const headers = options?.headers
-      ? new Headers(options.headers)
+    const headers = client.headers
+      ? new Headers(client.headers)
       : new Headers({ "Content-Type": "application/json" });
     if (needsSet) headers.set("Retry-After", resolved!);
     else headers.delete("Retry-After");
-    return new Response(bodyText, {
+    return new Response(client.bodyText, {
       status,
-      ...(options?.statusText ? { statusText: options.statusText } : {}),
+      ...(statusText ? { statusText } : {}),
       headers,
     });
   }

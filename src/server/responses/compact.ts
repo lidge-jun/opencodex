@@ -85,7 +85,7 @@ import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
 import type { AdmissionLease } from "../../lib/admission";
-import { redactSecretString } from "../../lib/redact";
+import { redactExactSecretOccurrences, redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { supportedLadderFor } from "../effort-policy";
 import {
@@ -198,19 +198,31 @@ const COMPACT_PASSTHROUGH_HEADERS = [
   "location",
 ];
 
-function compactResponseHeaders(upstream: Response): Headers {
-  const headers = new Headers({ "Content-Type": upstream.headers.get("content-type") ?? "application/json" });
+function compactResponseHeaders(upstream: Response, redactExactValues: readonly string[] = []): Headers {
+  const upstreamContentType = upstream.headers.get("content-type") ?? "application/json";
+  const contentType = redactExactSecretOccurrences(upstreamContentType, redactExactValues) === upstreamContentType
+    ? upstreamContentType
+    : "application/json";
+  const headers = new Headers({ "Content-Type": contentType });
   for (const name of COMPACT_PASSTHROUGH_HEADERS) {
     const value = upstream.headers.get(name);
-    if (value) headers.set(name, value);
+    if (value && redactExactSecretOccurrences(value, redactExactValues) === value) {
+      headers.set(name, value);
+    }
   }
   return headers;
 }
 
-export async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
+export async function bufferCompactResponse(
+  upstream: Response,
+  signal: AbortSignal,
+  options: { redactExactValues?: readonly string[] } = {},
+): Promise<Response> {
+  const redactExactValues = options.redactExactValues ?? [];
   const reader = upstream.body?.getReader();
-  const headers = compactResponseHeaders(upstream);
-  if (!reader) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
+  const headers = compactResponseHeaders(upstream, redactExactValues);
+  const statusText = redactExactSecretOccurrences(upstream.statusText, redactExactValues);
+  if (!reader) return new Response(null, { status: upstream.status, statusText, headers });
   const declaredLength = Number(upstream.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
     await reader.cancel("compact_response_too_large").catch(() => undefined);
@@ -243,7 +255,19 @@ export async function bufferCompactResponse(upstream: Response, signal: AbortSig
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new Response(body, { status: upstream.status, statusText: upstream.statusText, headers });
+  let clientBody = body;
+  if (redactExactValues.length > 0) {
+    let bodyText: string;
+    try {
+      bodyText = new TextDecoder("utf-8", { fatal: true }).decode(body);
+    } catch {
+      if (upstream.ok) return formatErrorResponse(502, "upstream_error", "Failed to read compact response");
+      return new Response(null, { status: upstream.status, statusText, headers });
+    }
+    const clientBodyText = redactExactSecretOccurrences(bodyText, redactExactValues);
+    if (clientBodyText !== bodyText) clientBody = new TextEncoder().encode(clientBodyText);
+  }
+  return new Response(clientBody, { status: upstream.status, statusText, headers });
 }
 
 
@@ -533,7 +557,10 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
-    const buffered = await bufferCompactResponse(upstream, req.signal);
+    const redactExactValues = usesCodexForwardPoolAuth(outcomeCtx, route.provider)
+      ? [outcomeCtx.chatgptAccountId]
+      : [];
+    const buffered = await bufferCompactResponse(upstream, req.signal, { redactExactValues });
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
