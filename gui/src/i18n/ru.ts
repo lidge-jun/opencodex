@@ -267,6 +267,8 @@ export const ru: Record<TKey, string> = {
   "dash.updateStatus.running": "Обновление opencodex.",
   "dash.updateStatus.restarting": "Обновление установлено. Перезапуск прокси.",
   "dash.updateStatus.succeeded": "Обновление завершено.",
+  "dash.updateVersionTransition": "{currentVersion} -> {latestVersion}.",
+
   "dash.updateStatus.failed": "Обновление не удалось.",
 
   // providers

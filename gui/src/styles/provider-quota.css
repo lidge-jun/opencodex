@@ -1,7 +1,9 @@
 /* Quota rows: stacked overview layout + warn/exhausted states (WP070). */
 
+/* Flat warn tone, not a gradient: gradients on data bars read as an AI tell and break the
+   flat-surface grammar (FE-GRADIENT-02). Warn matches the amber label/value tones. */
 .bar-warn {
-  background: linear-gradient(90deg, var(--green), var(--amber));
+  background: var(--amber);
 }
 
 .quota-row--warn .quota-label {

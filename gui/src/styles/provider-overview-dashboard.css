@@ -1,6 +1,9 @@
 /* ProviderOverviewDashboard — aggregate overview (Phase 010) */
 
 .pws-dashboard {
+  /* Muted labels here must clear WCAG 4.5:1 in both themes; the old `var(--fg-muted, #888)`
+     fallback only reached ~3.5:1 on white. Alias the design-system muted token instead. */
+  --fg-muted: var(--muted);
   display: flex;
   flex-direction: column;
   gap: 14px;

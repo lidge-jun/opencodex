@@ -267,6 +267,8 @@ export const ja: Record<TKey, string> = {
   "dash.updateStatus.running": "opencodex を更新しています。",
   "dash.updateStatus.restarting": "更新をインストールしました。プロキシを再起動中。",
   "dash.updateStatus.succeeded": "更新が完了しました。",
+  "dash.updateVersionTransition": "{currentVersion} -> {latestVersion}.",
+
   "dash.updateStatus.failed": "更新に失敗しました。",
 
   // providers

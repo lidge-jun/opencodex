@@ -262,6 +262,8 @@ export const zh: Record<TKey, string> = {
   "dash.updateStatus.running": "正在更新 opencodex。",
   "dash.updateStatus.restarting": "更新已安装。正在重启代理。",
   "dash.updateStatus.succeeded": "更新完成。",
+  "dash.updateVersionTransition": "{currentVersion} -> {latestVersion}.",
+
   "dash.updateStatus.failed": "更新失败。",
 
   // providers

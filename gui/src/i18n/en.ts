@@ -273,6 +273,8 @@ export const en = {
   "dash.updateStatus.running": "Updating opencodex.",
   "dash.updateStatus.restarting": "Update installed. Restarting proxy.",
   "dash.updateStatus.succeeded": "Update finished.",
+  "dash.updateVersionTransition": "{currentVersion} -> {latestVersion}.",
+
   "dash.updateStatus.failed": "Update failed.",
 
   // providers

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
-import { IconChevron, IconBoxes, IconInfo, IconShuffle } from "../icons";
+import { IconChevron, IconBoxes, IconInfo, IconShuffle, IconCheck, IconAlert } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
@@ -81,6 +81,25 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const needsDefaultCollapseRef = useRef(initialCollapsed === null);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
+  // Feedback generation: a repeated identical message (same success string, same validation
+  // error) must still re-arm the toast timer. Clearing `status` alone is not enough — a
+  // second identical value bails out of React's state diff, so the old timer would dismiss
+  // the new toast early. Every publish bumps the generation.
+  const [feedbackGen, setFeedbackGen] = useState(0);
+  const publishFeedback = (nextOk: boolean, message: string) => {
+    setOk(nextOk);
+    setStatus(message);
+    setFeedbackGen(g => g + 1);
+  };
+  // Transient action feedback as a fixed toast: appearing or auto-clearing it never shifts
+  // the workspace below (the old inline Notice pushed the whole model grid down by its
+  // height on every apply). The timer itself just clears the status again.
+  useEffect(() => {
+    if (!status) return;
+    const holdMs = ok ? 6000 : 8000;
+    const timer = setTimeout(() => setStatus(""), holdMs);
+    return () => clearTimeout(timer);
+  }, [status, ok, feedbackGen]);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const loadGenerationRef = useRef(0);
@@ -430,7 +449,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const applyCustomCap = () => {
     const value = Number(customCap.replace(/[_,\s]/g, ""));
-    if (!Number.isFinite(value) || value <= 0) { setOk(false); setStatus(t("models.capSaveFailed")); return; }
+    if (!Number.isFinite(value) || value <= 0) { publishFeedback(false, t("models.capSaveFailed")); return; }
     setShowCustom(false);
     setGlobalCap(value);
   };
@@ -496,7 +515,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     // (setMaxConcurrentThreads no-ops on equal value), so a re-selected current
     // value or a double click can never double-write config.toml.
     if (!v2 || v2BusyRef.current) return;
-    if (!Number.isInteger(value) || value < 1) { setOk(false); setStatus(t("models.v2ThreadsInvalid")); return; }
+    if (!Number.isInteger(value) || value < 1) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
     if (v2.maxConcurrentThreadsPerSession === value) return;
     setV2Busy(true);
     v2BusyRef.current = true;
@@ -581,8 +600,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       try {
         await readJsonOrThrow(r, t("models.customSaveFailed"));
         setCustomModalOpen(false);
-        setOk(true);
-        setStatus(t("models.customAdded"));
+        publishFeedback(true, t("models.customAdded"));
         await load(true);
       } catch (e) {
         setCustomError(e instanceof Error ? e.message : t("models.customSaveFailed"));
@@ -606,8 +624,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       try {
         await readJsonOrThrow(r, t("models.customSaveFailed"));
         setCustomModalOpen(false);
-        setOk(true);
-        setStatus(t("models.customUpdated"));
+        publishFeedback(true, t("models.customUpdated"));
         await load(true);
       } catch (e) {
         setCustomError(e instanceof Error ? e.message : t("models.customSaveFailed"));
@@ -623,16 +640,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
     try {
       const r = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (r.ok) {
-        setOk(true);
-        setStatus(t("models.customDeleted"));
+        publishFeedback(true, t("models.customDeleted"));
         await load(true);
       } else {
-        setOk(false);
-        setStatus(t("models.customSaveFailed"));
+        publishFeedback(false, t("models.customSaveFailed"));
       }
     } catch {
-      setOk(false);
-      setStatus(t("models.networkError"));
+      publishFeedback(false, t("models.networkError"));
     }
   };
 
@@ -1343,7 +1357,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
         </div>
       </div>
       <p className="page-sub">{t("models.subtitle")}</p>
-      {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
+      {status && (
+        <div className={`action-toast notice ${ok ? "notice-ok" : "notice-err"}`} role="status" aria-live="polite">
+          {ok ? <IconCheck /> : <IconAlert />}
+          <span>{status}</span>
+        </div>
+      )}
       {/* Keep the last-good catalog interactive but make a failed revalidation explicit. */}
       {catalogState.showError && <Notice tone="err">{t("models.loadFail")}</Notice>}
       <div className="models-workspace-root" aria-busy={catalogState.refreshing || undefined}>

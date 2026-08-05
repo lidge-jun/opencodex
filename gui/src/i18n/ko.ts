@@ -265,6 +265,8 @@ export const ko: Record<TKey, string> = {
   "dash.updateStatus.running": "opencodex 업데이트 중입니다.",
   "dash.updateStatus.restarting": "업데이트 설치 완료. 프록시를 재시작하는 중입니다.",
   "dash.updateStatus.succeeded": "업데이트가 완료됐습니다.",
+  "dash.updateVersionTransition": "{currentVersion} -> {latestVersion}.",
+
   "dash.updateStatus.failed": "업데이트에 실패했습니다.",
 
   // providers
