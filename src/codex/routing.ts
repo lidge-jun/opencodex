@@ -836,6 +836,11 @@ function threadAffinityEntryCount(): number {
   return count;
 }
 
+/** Test-only bounded-state observation; never serializes routing identities. */
+export function getCodexThreadAffinityEntryCountForTests(): number {
+  return threadAffinityEntryCount();
+}
+
 function isThreadAffinityExpired(entry: ThreadAffinityEntry, now: number): boolean {
   return now - entry.lastUsedAt > CODEX_THREAD_AFFINITY_IDLE_TTL_MS;
 }

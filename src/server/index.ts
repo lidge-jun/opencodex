@@ -349,6 +349,8 @@ function attachLiveSidebandUpstream(
 export interface StartServerDeps {
   /** Test-only seam; production always initializes its own management credential state. */
   managementAuthState?: ManagementAuthState;
+  /** Test-only seam; production always starts best-effort Codex Pool quota priming. */
+  suppressStartupCodexQuotaPrime?: boolean;
   /** Test-only route dependencies, forwarded only after management admission succeeds. */
   managementApi?: ManagementApiDeps;
   /** Test-only native-main recovery dependencies; production constructs the normal manager. */
@@ -1284,7 +1286,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   // listener, and a blocked network silently no-ops (see Phase 30 diagnostics).
   const openAiProvider = config.providers.openai;
   if (
-    openAiProvider
+    !deps.suppressStartupCodexQuotaPrime
+    && openAiProvider
     && openAiProvider.disabled !== true
     && isCanonicalOpenAiForwardProvider(openAiProvider)
     && providerCodexAccountMode("openai", openAiProvider) === "pool"
