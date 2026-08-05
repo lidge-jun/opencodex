@@ -22,6 +22,8 @@ import {
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
+import { getEffectiveActiveCodexAccountId } from "./codex/routing";
+import { getAccountSet } from "./oauth/store";
 import {
   buildRouteDecisionTrace,
   type RouteDecisionKind,
@@ -32,6 +34,7 @@ import { getRoutingProfile, resolvePolicyProfileId } from "./routing/profile";
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
 import { candidateCapabilityEvidence } from "./routing/capability";
 import { policyCandidateHealthEvidence } from "./routing/health";
+import { quotaEvidenceForCandidate } from "./routing/quota";
 
 export class NoEligiblePolicyCandidateError extends Error {
   /** Evaluation trace (with per-candidate exclusions) when nothing qualified. */
@@ -506,6 +509,28 @@ function routeModelInternal(
       model: candidate.model,
       capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
       health: policyCandidateHealthEvidence(config, candidate, now),
+      quota: quotaEvidenceForCandidate({
+        provider: candidate.provider,
+        model: candidate.model,
+        ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
+          && providerCodexAccountMode(
+            OPENAI_CODEX_PROVIDER_ID,
+            config.providers[OPENAI_CODEX_PROVIDER_ID],
+          ) === "pool"
+          ? (() => {
+              const codexAccountId = getEffectiveActiveCodexAccountId(config);
+              return {
+                codexAccountId,
+                codexAccountPlan: codexAccountId
+                  ? config.codexAccounts?.find(account => account.id === codexAccountId)?.plan
+                  : undefined,
+              };
+            })()
+          : {}),
+        accountRef: candidate.provider === "anthropic"
+          ? getAccountSet("anthropic")?.activeAccountId
+          : undefined,
+      }),
     }));
     const evaluation = evaluatePolicyProfile(config, policyId, policyEvidence ?? {}, candidateEvidence, now);
     if (evaluation.selectedIndex === null) {

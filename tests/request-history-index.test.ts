@@ -126,6 +126,28 @@ describe("request-history index (RI-02)", () => {
     expect(third.meta.lastError).toBe("");
   });
 
+  test("rows missing mandatory columns are skipped, not rejected", async () => {
+    for (const row of seedRows(3)) appendUsageEntry(row);
+    const { appendFileSync } = await import("node:fs");
+    const { usageLogPath } = await import("../src/usage/log");
+    // A complete row is indexable even with no usage details.
+    appendFileSync(
+      usageLogPath(),
+      JSON.stringify({ requestId: "lean", timestamp: 9000, provider: "a", model: "m1", status: 200, durationMs: 5 }) + "\n",
+      "utf-8",
+    );
+    // A row missing mandatory NOT NULL columns (model/status/durationMs) must
+    // be skipped by the parser instead of throwing during the insert.
+    appendFileSync(
+      usageLogPath(),
+      JSON.stringify({ requestId: "broken", timestamp: 9001, provider: "a" }) + "\n",
+      "utf-8",
+    );
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.some(row => row.requestId === "lean")).toBe(true);
+    expect(page.rows.some(row => row.requestId === "broken")).toBe(false);
+  });
+
   test("large history indexes fully and paginates without duplicates or misses", async () => {
     const rows = seedRows(1500, 10_000);
     for (const row of rows) appendUsageEntry(row);

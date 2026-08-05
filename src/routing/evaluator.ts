@@ -22,11 +22,14 @@ import {
 } from "./trace";
 import { getRoutingProfile, policyModelId, type NormalizedRoutingProfile } from "./profile";
 import { healthScore } from "./health";
+import { quotaScore } from "./quota";
 
 /** Unknown health under "penalize": a low-but-not-zero deterministic floor. */
 export const HEALTH_UNKNOWN_PENALTY_SCORE = 0.3;
 /** Unknown health under "allow": neutral midpoint of the [0,1] health scale. */
 export const HEALTH_UNKNOWN_NEUTRAL_SCORE = 0.5;
+/** Unknown quota under "penalize": deterministic low floor. */
+export const QUOTA_UNKNOWN_PENALTY_SCORE = 0.3;
 
 export interface PolicyRequestEvidence {
   /** Required context window for this request (tokens). */
@@ -43,6 +46,8 @@ export interface PolicyCandidateEvidence {
   provider: string;
   model: string;
   accountRef?: string;
+  /** Codex pool account id (provider "openai"); used to derive account-scoped quota evidence. */
+  codexAccountId?: string;
   capability?: RouteCapabilityEvidence;
   health?: RouteHealthEvidence;
   quota?: RouteQuotaEvidence;
@@ -93,6 +98,7 @@ function booleanRequirement(
 function requirementFor(
   require: NormalizedRoutingProfile["require"],
   capability: RouteCapabilityEvidence | undefined,
+  quota: RouteQuotaEvidence | undefined,
 ): RouteRequirementEvidence[] {
   const requirements: RouteRequirementEvidence[] = [];
   if (require.minContextWindow !== undefined) {
@@ -106,6 +112,22 @@ function requirementFor(
       });
     } else {
       requirements.push({ id: "min-context-window", expected: require.minContextWindow, outcome: "unknown" });
+    }
+  }
+  // minQuotaHeadroom gates only KNOWN quota via the normalized score, which
+  // maps exhaustion to zero and unknown/incomplete evidence to null. Unknown
+  // quota is governed by the profile's `unknownEvidence.quota` policy
+  // (exclude / penalize / allow) via the quota score path - never by the
+  // capability unknown policy.
+  if (require.minQuotaHeadroom !== undefined) {
+    const quotaHeadroom = quotaScore(quota);
+    if (quotaHeadroom !== null) {
+      requirements.push({
+        id: "min-quota-headroom",
+        expected: require.minQuotaHeadroom,
+        actual: quotaHeadroom,
+        outcome: quotaHeadroom >= require.minQuotaHeadroom ? "satisfied" : "unsatisfied",
+      });
     }
   }
   const tools = booleanRequirement("tools", require.tools, capability?.tools);
@@ -258,7 +280,7 @@ export function evaluatePolicyProfile(
       candidate => candidate.provider === declared.provider && candidate.model === declared.model,
     ) ?? { provider: declared.provider, model: declared.model };
     const requirements = [
-      ...requirementFor(profile.require, evidence.capability),
+      ...requirementFor(profile.require, evidence.capability, evidence.quota),
       ...requestRequirementFor(requestEvidence, evidence.capability),
     ];
     const exclusions: RouteExclusionReason[] = [];
@@ -307,13 +329,39 @@ export function evaluatePolicyProfile(
       healthValue = HEALTH_UNKNOWN_NEUTRAL_SCORE;
     }
 
+    // Quota scoring (RI-07): unknown quota follows the profile policy;
+    // exhausted or low-headroom evidence lowers the score.
+    const quota = evidence.quota;
+    let quotaValue = quota ? quotaScore(quota) : null;
+    if (quotaValue === null) {
+      if (profile.unknownEvidence.quota === "exclude") {
+        exclusions.push({ code: "unknown-quota" });
+        eligible = false;
+      } else if (profile.unknownEvidence.quota === "penalize") {
+        quotaValue = QUOTA_UNKNOWN_PENALTY_SCORE;
+      }
+    }
+
     const priorityScore = configuredPriorityScore(index, profile.candidates.length);
     const healthWeight = profile.optimize.health;
+    const quotaWeight = profile.optimize.quota;
+    // Only spend a dimension's weight when a value is actually present:
+    // "allow" leaves missing health/quota components null, so subtracting
+    // their weights would shrink the priority share for evidence the profile
+    // explicitly permits to be absent. Renormalize those weights back into
+    // priority instead of silently changing the ranking semantics.
+    const spentHealth = healthValue !== null ? healthWeight : 0;
+    const spentQuota = quotaValue !== null ? quotaWeight : 0;
+    const priorityWeight = Math.max(0, 1 - spentHealth - spentQuota);
     const components: RouteScoreEvidence["components"] = { configuredPriority: priorityScore };
-    let total = priorityScore;
+    let total = priorityWeight * priorityScore;
     if (healthWeight > 0 && healthValue !== null) {
-      total = priorityScore * (1 - healthWeight) + healthValue * healthWeight;
+      total += healthWeight * healthValue;
       components.health = healthValue;
+    }
+    if (quotaWeight > 0 && quotaValue !== null) {
+      total += quotaWeight * quotaValue;
+      components.quota = quotaValue;
     }
     const score: RouteScoreEvidence = { total, components };
     const evaluated: PolicyEvaluationCandidate = {

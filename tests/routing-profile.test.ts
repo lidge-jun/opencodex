@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfigCandidate } from "../src/config";
+import { updateAccountQuota } from "../src/codex/quota";
+import { clearAccountQuotaCache } from "../src/providers/quota";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
@@ -28,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearAccountQuotaCache();
   closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -318,8 +321,8 @@ describe("routing profiles (RI-04)", () => {
     // RI-06: unknown health under the default "penalize" policy folds a
     // penalized health floor into the score.
     expect(result.trace.candidates[0]!.score).toMatchObject({
-      total: 0.825,
-      components: { configuredPriority: 1, health: 0.3 },
+      total: 0.755,
+      components: { configuredPriority: 1, health: 0.3, quota: 0.3 },
     });
   });
 
@@ -435,5 +438,34 @@ describe("routing profiles (RI-04)", () => {
     const body = await response!.json() as { candidates?: Array<{ eligible?: boolean; exclusions?: Array<{ code: string }> }> };
     expect(body.candidates?.[0]?.eligible).toBe(false);
     expect(body.candidates?.[0]?.exclusions?.some(exclusion => exclusion.code === "cooldown")).toBe(true);
+  });
+
+  test("API dry-run derives quota evidence from candidates[].codexAccountId", async () => {
+    updateAccountQuota("pool-a", 30, 1_800_000_000_000, 20, 1_900_000_000_000);
+    const config = baseConfig({
+      providers: {
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+      routingProfiles: {
+        only: { candidates: [{ provider: "openai", model: "gpt-5.6" }] },
+      },
+    });
+    const req = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        profile: "only",
+        evidence: {},
+        candidates: [{ provider: "openai", model: "gpt-5.6", codexAccountId: "pool-a" }],
+      }),
+    });
+    const response = await handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog: async () => {} });
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    const body = await response!.json() as { candidates?: Array<{ quota?: { known?: boolean; headroom?: number } }> };
+    // The documented candidates[].codexAccountId ref derives the cached pool
+    // quota (30% weekly / 20% monthly => 0.7 headroom) instead of unknown.
+    expect(body.candidates?.[0]?.quota?.known).toBe(true);
+    expect(body.candidates?.[0]?.quota?.headroom).toBeCloseTo(0.7, 2);
   });
 });

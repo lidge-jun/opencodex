@@ -829,6 +829,8 @@ export interface OcxRoutingProfileCandidate {
 export interface OcxRoutingProfileRequirements {
   /** Minimum model context window in tokens. */
   minContextWindow?: number;
+  /** Minimum remaining quota headroom fraction (0..1). */
+  minQuotaHeadroom?: number;
   tools?: boolean;
   imageInput?: boolean;
   structuredOutput?: boolean;

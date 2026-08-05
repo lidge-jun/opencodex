@@ -45,8 +45,8 @@ other; closing one is a maintainer decision and neither is stale.
 | RI-03 | `feat/ri-03-routing-analytics` | `dev` (post-#1004 merge) | `a594938c5` | #1005 | https://github.com/lidge-jun/opencodex/pull/1005 | MERGED |
 | RI-04 | `feat/ri-04-policy-profile-core` | `dev` (post-#1005 merge) | `31c9f0b28` | #1011 | https://github.com/lidge-jun/opencodex/pull/1011 | MERGED |
 | RI-05 | `feat/ri-05-capability-aware-routing` | `dev` (post-#1011 merge) | `088194a3a` | #1012 | https://github.com/lidge-jun/opencodex/pull/1012 | MERGED |
-| RI-06 | `feat/ri-06-health-aware-routing` | `dev` (post-#1012 merge) | `af692bb7a` | #1013 | https://github.com/lidge-jun/opencodex/pull/1013 | in progress |
-| RI-07 | `feat/ri-07-quota-aware-routing` | `feat/ri-06` head | pending | pending | pending | queued |
+| RI-06 | `feat/ri-06-health-aware-routing` | `dev` (post-#1012 merge) | `af692bb7a` | #1013 | https://github.com/lidge-jun/opencodex/pull/1013 | MERGED |
+| RI-07 | `feat/ri-07-quota-aware-routing` | `dev` (post-#1013 merge) | `0c5100271` (pre-restack) | #1014 | https://github.com/lidge-jun/opencodex/pull/1014 | in progress |
 | RI-08 | `feat/ri-08-cost-aware-routing` | `feat/ri-07` head | pending | pending | pending | queued |
 | RI-09 | `feat/ri-09-route-explainability-api` | `feat/ri-08` head | pending | pending | pending | queued |
 | RI-10 | `feat/ri-10-routing-intelligence-ui` | `feat/ri-09` head | pending | pending | pending | queued |
@@ -214,3 +214,55 @@ other; closing one is a maintainer decision and neither is stale.
   green; `privacy:scan` passed.
 - Sync: merged `dev` (post-#1012, `088194a3a`) into the branch so the head is
   mergeable and CI can run; base sync of the stack continues with RI-07.
+
+### RI-07 - feat/ri-07-quota-aware-routing
+
+- Base SHA: `909ce21d4ffe4dbcad9c9baa2efb1c94e1e7dcd6` (RI-06 head)
+- Reviewed commit: same as final (author self-review before push)
+- Findings (self-review): 2 fixed pre-push - (1) `minQuotaHeadroom` was
+  missing from the schema REQUIRE_KEYS so normalization silently dropped it;
+  (2) `minQuotaHeadroom` was missing from `OcxRoutingProfileRequirements`
+  (types.ts) - typecheck caught it.
+- Final commit: `480f1578` (review-thread fixes; earlier commits `b562fdb9`,
+  `288dd8a9`, `e74a211a`, `7aebbd36`)
+- PR: #1014
+- Verification:
+  - `bun x tsc --noEmit`: PASSED (0 errors)
+  - `bun run test tests/quota-scoring.test.ts`: 9/9 pass - codex-pool and
+    anthropic evidence, unknown-stays-unknown, unknown-quota policy
+    (exclude/penalize/allow), headroom preference, minQuotaHeadroom gating,
+    account-selection boundary, plan-aware window selection
+  - Focused regression suites: 203/203 pass across 9 files
+  - `bun run privacy:scan`: passed
+- Remaining Low findings: none
+
+### RI-07 review round (full-review #1014 + simplify)
+
+- Base SHA: `909ce21d4` (RI-06 head) -> rebased onto the reviewed RI-06 head
+  `a9c6f8e8` so the stack stays aligned; PR head `9dbdce2ab` before fixes.
+- Simplify (approved): misindented `require.minContextWindow` check fixed in
+  `profile.ts`; shared RI-06 simplify carried in by the rebase.
+- Bot-thread + own findings fixed in this PR:
+  1. evaluator: `minQuotaHeadroom` now gates only KNOWN headroom; unknown
+     quota is governed by `unknownEvidence.quota` (labeled `unknown-quota`,
+     never `unknown-capability`);
+  2. router: quota evidence receives the active codex account id so runtime
+     quota scoring reflects cached quota when a deterministic account exists;
+  3. dry-run API: omitted `candidates` populate quota evidence alongside
+     capability + health;
+  4. shared RI-06 review-round fixes (indexer tail, nested image evidence,
+     request-side requirements, alias namespace collision, policy fallthrough,
+     adapter tool inference) land here via the rebase.
+- Verification: `tsc --noEmit` 0 errors; focused suites green (252/252 across
+  the routing set); `privacy:scan` passed.
+- Base sync deferred: waiting for RI-05 (#1012) to merge before updating
+  these branches from `dev`.
+
+## Baseline note
+
+The full-suite baseline on this Windows machine did not complete within the
+available window (background run, >3h, no summary emitted; the suite is
+~8k tests and this machine is heavily loaded). Focused suites, typecheck and
+privacy:scan pass per PR; the upstream PR #966 verification report records
+~7941 pass / 10 environmental failures on clean dev. A final full-suite
+attempt is scheduled at stack end.

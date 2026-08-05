@@ -102,13 +102,31 @@ describe("policy execution (RI-05)", () => {
     // RI-06: unknown health under the default "penalize" policy folds a
     // penalized health floor into the score.
     expect(trace.candidates[0]!.score).toMatchObject({
-      total: 0.825,
-      components: { configuredPriority: 1, health: 0.3 },
+      total: 0.755,
+      components: { configuredPriority: 1, health: 0.3, quota: 0.3 },
     });
   });
 
   test("profile alias executes the same policy", () => {
     const route = routeModel(baseConfig(), "ocx/fast");
+    expect(route.routeKind).toBe("policy");
+    expect(route.providerName).toBe("a");
+    expect(route.modelId).toBe("m1");
+  });
+
+  test("concrete selection never re-enters policy lookup (alias recursion guard)", () => {
+    // A profile whose winning candidate is a plain provider/model reference
+    // must not re-resolve policy aliases on the recursion, otherwise an alias
+    // that shadows the target would recurse until stack overflow.
+    const config = baseConfig({
+      routingProfiles: {
+        direct: {
+          alias: "direct/a",
+          candidates: [{ provider: "a", model: "m1" }],
+        },
+      },
+    });
+    const route = routeModel(config, "policy/direct");
     expect(route.routeKind).toBe("policy");
     expect(route.providerName).toBe("a");
     expect(route.modelId).toBe("m1");

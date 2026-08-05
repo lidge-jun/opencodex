@@ -66,6 +66,8 @@ export interface RouteHealthEvidence {
 
 export interface RouteQuotaEvidence {
   known: boolean;
+  /** Remaining headroom as a fraction 0..1 (larger is better). */
+  headroom?: number;
   headroomTokens?: number;
   exhausted?: boolean;
   resetAtMs?: number;
@@ -507,6 +509,7 @@ function parseQuota(raw: unknown, caps: ParseCaps): RouteQuotaEvidence | undefin
   if (!isPlainRecord(raw)) return undefined;
   if (typeof raw.known !== "boolean") return undefined;
   const out: RouteQuotaEvidence = { known: raw.known };
+  if (finiteNumber(raw.headroom)) out.headroom = Math.max(0, Math.min(1, raw.headroom));
   if (finiteNumber(raw.headroomTokens)) out.headroomTokens = raw.headroomTokens;
   if (typeof raw.exhausted === "boolean") out.exhausted = raw.exhausted;
   if (finiteNumber(raw.resetAtMs)) out.resetAtMs = raw.resetAtMs;
