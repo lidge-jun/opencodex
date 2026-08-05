@@ -44,7 +44,15 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
         rows.push({
           provider: providerName,
           modelId,
-          cost4: { ...cost4 },
+          // Copy ONLY the four validated rate fields: a hand-edited row may
+          // carry extra properties (e.g. a misplaced apiKey) that must never
+          // reach display estimates or /api/logs through the registry.
+          cost4: {
+            input: cost4.input,
+            output: cost4.output,
+            cacheRead: cost4.cacheRead,
+            cacheWrite: cost4.cacheWrite,
+          },
           source: `config:providers.${providerName}.modelCosts[${modelId}]`,
           verifiedAt: "user-configured",
           status: "verified",

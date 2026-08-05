@@ -106,6 +106,72 @@ describe("modelCosts config persistence and registry refresh", () => {
     saveConfig(reloaded);
     expect(activeUserCostOverlays()).toHaveLength(0);
   });
+
+  test("loadConfig degrades a malformed modelCosts row instead of falling back to defaults", () => {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      defaultProvider: "blsc",
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          modelCosts: {
+            "deepseek-v4-flash": VALID_COSTS["deepseek-v4-flash"],
+            "broken-model": { input: "0.14", output: 0.28, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      },
+    }));
+
+    const config = loadConfig();
+    // The provider and the valid row survive; only the malformed row is dropped.
+    expect(config.providers.blsc).toBeDefined();
+    expect(config.providers.blsc.modelCosts).toEqual({
+      "deepseek-v4-flash": VALID_COSTS["deepseek-v4-flash"],
+    });
+    const rows = activeUserCostOverlays().map(row => row.modelId);
+    expect(rows).toContain("deepseek-v4-flash");
+    expect(rows).not.toContain("broken-model");
+  });
+
+  test("loadConfig drops a non-object modelCosts field without failing the parse", () => {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      defaultProvider: "blsc",
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          modelCosts: "oops",
+        },
+      },
+    }));
+
+    const config = loadConfig();
+    expect(config.providers.blsc).toBeDefined();
+    expect(config.providers.blsc.modelCosts).toBeUndefined();
+    expect(activeUserCostOverlays()).toHaveLength(0);
+  });
+
+  test("overlay registry keeps only the four rate fields of a modelCosts row", () => {
+    refreshUserCostOverlays({
+      providers: {
+        blsc: {
+          modelCosts: {
+            "deepseek-v4-flash": {
+              ...VALID_COSTS["deepseek-v4-flash"],
+              apiKey: "sekret-value",
+            },
+          },
+        },
+      },
+    } as unknown as OcxConfig);
+
+    const rows = activeUserCostOverlays();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cost4).toEqual(VALID_COSTS["deepseek-v4-flash"]);
+    expect(Object.keys(rows[0].cost4).sort()).toEqual(["cacheRead", "cacheWrite", "input", "output"]);
+  });
 });
 
 describe("modelCosts management validation and DTO", () => {

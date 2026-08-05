@@ -1586,6 +1586,54 @@ export function retryOn429PolicyConfigError(policy: unknown): string | null {
 }
 
 /**
+ * Load-time degradation for `providers.<name>.modelCosts`, mirroring
+ * {@link sanitizeRetryOn429ForLoad}. A hand-edited malformed display-price row
+ * must not fail the whole config parse — that would back up config.json and
+ * fall back to defaults, dropping otherwise valid providers and the default
+ * route for a typo in a non-runtime display field. Invalid rows are dropped
+ * with a warning; strict rejection stays at the management/write boundary
+ * (providerManagementConfigError).
+ */
+function sanitizeModelCostsForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const root = parsed as Record<string, unknown>;
+  const providers = root.providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    // Runs before schema validation, so the provider name is untrusted: redact
+    // secret-shaped names and JSON-escape control characters for the warning.
+    const safeProviderName = JSON.stringify(redactSecretString(name));
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    const costs = p.modelCosts;
+    if (costs === undefined) continue;
+    if (!costs || typeof costs !== "object" || Array.isArray(costs)) {
+      delete p.modelCosts;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts (${typeof costs}) is invalid — ignoring the overlay`);
+      continue;
+    }
+    const costsRecord = costs as Record<string, unknown>;
+    const hadEntries = Object.keys(costsRecord).length > 0;
+    let kept = 0;
+    for (const [modelId, entry] of Object.entries(costsRecord)) {
+      // Reuse the shared per-row shape contract so the load-time sanitizer
+      // cannot drift from the schema and the write boundary.
+      if (providerModelCostsConfigError({ [modelId]: entry }) === null) {
+        kept++;
+        continue;
+      }
+      delete costsRecord[modelId];
+      // Redact the model id: a hand-edit can place a secret in a key name.
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts.${JSON.stringify(redactSecretString(modelId))} is invalid — ignoring the row`);
+    }
+    if (hadEntries && kept === 0) {
+      delete p.modelCosts;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
+    }
+  }
+}
+
+/**
  * Companion to {@link warnDegradedStreamMode} for a blank persisted `hostname`. The bind
  * falls back to loopback, which is the safe direction but not what the file asked for —
  * say so once instead of silently ignoring the field.
@@ -1858,6 +1906,7 @@ export function loadConfig(): OcxConfig {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);
@@ -2143,6 +2192,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);
