@@ -49,7 +49,7 @@ function respondError(id: string | number, message: string): void {
 }
 
 function notify(method: string, params: Record<string, unknown>): void {
-  send({ method, params, emittedAtMs: Date.now() });
+  send({ jsonrpc: "2.0", method, params, emittedAtMs: Date.now() });
 }
 
 let threadSeq = 0;
@@ -102,6 +102,22 @@ function turnOf(id: string, status: string, error: Record<string, unknown> | nul
   };
 }
 
+/** Terminal payload shared by every terminal-event mode so payloads stay identical. */
+function completedTurn(
+  turnId: string,
+  status: string | undefined,
+  turnError: string | undefined,
+): Record<string, unknown> {
+  const resolved = status ?? "completed";
+  return turnOf(
+    turnId,
+    resolved,
+    resolved === "failed"
+      ? { message: turnError ?? "fake failure", codexErrorInfo: null, additionalDetails: null }
+      : null,
+  );
+}
+
 const rl = createInterface({ input: process.stdin, crlfDelay: 100 });
 
 rl.on("line", (line) => {
@@ -131,16 +147,16 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
   const params = (msg["params"] ?? {}) as Record<string, unknown>;
   if (id === undefined) {
     if (method === "shutdownRequested") {
-      process.stdout.write("fake-exit-ack\n");
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "shutdownAck", params: {} }) + "\n");
       setTimeout(() => process.exit(0), 10);
     }
     return;
   }
 
-  if (script.startupDelayMs) {
-    await wait(script.startupDelayMs);
-  }
   if (method === "initialize") {
+    if (script.startupDelayMs) {
+      await wait(script.startupDelayMs);
+    }
     if (script.exitAtStartup) {
       await wait(50);
       process.exit(script.exitCode ?? 0);
@@ -208,13 +224,7 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
         await wait(5);
         notify("turn/completed", {
           threadId,
-          turn: turnOf(
-            turnId,
-            scripted?.status ?? "completed",
-            (scripted?.status ?? "completed") === "failed"
-              ? { message: scripted?.turnError ?? "fake failure", codexErrorInfo: null, additionalDetails: null }
-              : null,
-          ),
+          turn: completedTurn(turnId, scripted?.status, scripted?.turnError),
         });
       }
       for (const n of scripted?.notifications ?? []) {
@@ -249,25 +259,18 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
         await wait(5);
         notify("turn/completed", {
           threadId,
-          turn: turnOf(turnId, scripted?.status ?? "completed", null),
+          turn: completedTurn(turnId, scripted?.status, scripted?.turnError),
         });
       }
-      await wait(5);
-      const status = scripted?.status ?? "completed";
-      notify("turn/completed", {
-        threadId,
-        turn: turnOf(
-          turnId,
-          status,
-          status === "failed"
-            ? {
-                message: scripted?.turnError ?? "fake failure",
-                codexErrorInfo: null,
-                additionalDetails: null,
-              }
-            : null,
-        ),
-      });
+      // emitTerminalFirst already delivered the terminal; the trailing terminal
+      // belongs to the normal/duplicate modes only (modes stay separate).
+      if (!scripted?.emitTerminalFirst) {
+        await wait(5);
+        notify("turn/completed", {
+          threadId,
+          turn: completedTurn(turnId, scripted?.status, scripted?.turnError),
+        });
+      }
       for (const late of scripted?.lateEvents ?? []) {
         await wait(5);
         notify(late.method, { threadId, turnId, ...late.params });
