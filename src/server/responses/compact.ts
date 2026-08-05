@@ -68,6 +68,8 @@ import {
   applyUpstreamRecoveryInit,
   type UpstreamSendRecovery,
 } from "../../lib/upstream-retry";
+import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
+import { recordUpstreamHostFailure, resetUpstreamHostHealth, upstreamHostHealthKey } from "../../codex/upstream-host-health";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
@@ -110,7 +112,7 @@ import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { decodeRequestErrorResponse, handleResponses, usesCodexForwardPoolAuth } from "./core";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -191,6 +193,8 @@ const COMPACT_PASSTHROUGH_HEADERS = [
   "x-codex-primary-reset-at",
   "x-codex-secondary-reset-at",
   "x-codex-tertiary-reset-at",
+  // A relayed 3xx keeps its Location so the client can follow it (#914).
+  "location",
 ];
 
 function compactResponseHeaders(upstream: Response): Headers {
@@ -398,7 +402,15 @@ export async function handleResponsesCompact(
         connectMs,
         false,
         providerFetch(sendProvider),
-      );
+        // Every credential-bearing forward send gets manual redirects, not only
+        // pool sends: direct mode carries the caller's credential too (#914).
+        sendProvider.authMode === "forward",
+      ).then(res => {
+        // Every real attempt response — including an intermediate 5xx the retry
+        // wrapper replaces — proves the host was reached (#914 review).
+        resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(compactUrl)));
+        return res;
+      });
       return recovery === "single"
         ? doFetch()
         : fetchWithTransientRetry(doFetch, { abortSignal: req.signal, label: safeHostLabel(compactUrl) });
@@ -417,7 +429,14 @@ export async function handleResponsesCompact(
         recordCompactPoolOutcome(outcomeCtx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+      const outcome = classifyTransportFailureKind(err);
+      // Host-level evidence stands regardless of pool membership (#914 review).
+      if (outcome === "connect_neutral") {
+        recordUpstreamHostFailure(
+          upstreamHostHealthKey(route.providerName, safeOriginLabel(compactUrl)),
+          { code: transportErrorCode(err) },
+        );
+      }
       recordCompactPoolOutcome(outcomeCtx, outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
@@ -485,7 +504,14 @@ export async function handleResponsesCompact(
             recordCompactPoolOutcome(outcomeCtx, 499);
             return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
           }
-          const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+          const outcome = classifyTransportFailureKind(err);
+          // Host-level evidence stands regardless of pool membership (#914 review).
+          if (outcome === "connect_neutral") {
+            recordUpstreamHostFailure(
+              upstreamHostHealthKey(route.providerName, safeOriginLabel(compactUrl)),
+              { code: transportErrorCode(err) },
+            );
+          }
           recordCompactPoolOutcome(outcomeCtx, outcome);
           return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
         }

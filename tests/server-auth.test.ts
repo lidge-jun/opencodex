@@ -14,9 +14,11 @@ import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
   getCodexUpstreamHealth,
+  isCodexAccountSoftAvoided,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import { loadConfig, saveConfig } from "../src/config";
+import { clearUpstreamHostHealth, getUpstreamHostHealth, recordUpstreamHostFailure, upstreamHostHealthKey } from "../src/codex/upstream-host-health";
 import { deriveProviderPresets } from "../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
@@ -2678,10 +2680,86 @@ describe("server local API auth", () => {
       });
 
       expect(response.status).toBe(502);
-      expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
-        consecutiveFailures: 1,
-        lastFailureStatus: 0,
+      // #914: a dead-port refusal is pre-connection — host-wide, not account
+      // evidence. Account health stays untouched; the (provider, host) ledger
+      // records the failure instead.
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getUpstreamHostHealth(upstreamHostHealthKey("openai", "https://chatgpt.com")))
+        .toMatchObject({ consecutiveFailures: 1, lastFailureCode: "ConnectionRefused" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("passthrough pool send relays a 307 with Location and records no health evidence (#914)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    clearCodexUpstreamHealth();
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("pool-a");
+    clearUpstreamHostHealth();
+
+    // The upstream answers 307 -> dead.invalid. Manual redirects must relay it
+    // (with Location) instead of following into a dead-host rejection.
+    const redirectTarget = "https://dead.invalid/x";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(requestUrl);
+      if (url.hostname === "chatgpt.com") {
+        // The test would only reach this branch if the proxy wrongly followed
+        // the redirect itself — fail loudly instead of hanging on dead.invalid.
+        expect(url.hostname).not.toBe("dead.invalid");
+        return new Response(null, { status: 307, headers: { location: redirectTarget } });
+      }
+      return originalGlobalFetch(input, init);
+    }) as typeof fetch;
+
+    saveConfig({
+      port: 0,
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: poolProviders(),
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      ],
+      activeCodexAccountId: "pool-a",
+      upstreamFailoverThreshold: 3,
+      connectTimeoutMs: 200,
+    } as OcxConfig);
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-pool-a",
+    });
+    updateAccountQuota("pool-a", 10, 5);
+
+    // Seed a pre-connection streak: the 307 is also a real HTTP response and
+    // must clear it.
+    const hostKey = upstreamHostHealthKey("openai", "https://chatgpt.com");
+    recordUpstreamHostFailure(hostKey, { code: "ECONNREFUSED" });
+
+    const server = startServer(0);
+    try {
+      const response = await originalGlobalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer inbound-main-token",
+        },
+        body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
+        redirect: "manual",
       });
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toBe(redirectTarget);
+      // Neutral class: no account streak, no soft-avoid, no rotation, and the
+      // real response cleared the seeded host streak.
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(isCodexAccountSoftAvoided("pool-a")).toBe(false);
+      expect(getUpstreamHostHealth(hostKey)).toBeNull();
     } finally {
       await server.stop(true);
     }

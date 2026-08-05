@@ -22,6 +22,7 @@ import type { OcxConfig } from "../types";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { retainedUtf8Bytes } from "../lib/admission";
+import { recordUpstreamHostFailure } from "./upstream-host-health";
 
 type ThreadAffinityEntry = {
   accountId: string;
@@ -122,8 +123,8 @@ const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHeal
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
-export type CodexUpstreamOutcome = number | "connect_error" | "timeout";
-export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "unknown";
+export type CodexUpstreamOutcome = number | "connect_error" | "timeout" | "connect_neutral";
+export type CodexUpstreamOutcomeClass = "success" | "credential" | "quota" | "transient" | "caller" | "neutral" | "unknown";
 export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
 /**
  * Native Codex quota groups known to be independent upstream. Keep the mapping
@@ -187,6 +188,10 @@ export type CodexUpstreamOutcomeMeta = {
   retryAfter?: string | null;
   resetAt?: unknown | unknown[];
   now?: number;
+  /** (provider, host) ledger key for account-neutral reachability failures (#914). */
+  hostKey?: string;
+  /** Stable transport code recorded alongside a neutral host failure. */
+  lastFailureCode?: string;
   /** Native model selected for this request; used only for confirmed scoped quotas. */
   modelId?: string;
   /** When set, clears affinity for this thread immediately on transient failure. */
@@ -321,9 +326,15 @@ export function computeCodexUsageScore(quota: {
 }
 
 export function classifyCodexUpstreamOutcome(outcome: CodexUpstreamOutcome): CodexUpstreamOutcomeClass {
+  if (outcome === "connect_neutral") return "neutral";
   if (outcome === "connect_error" || outcome === "timeout") return "transient";
   if (!Number.isFinite(outcome)) return "unknown";
   if (outcome >= 200 && outcome < 300) return "success";
+  // Explicit 3xx policy (#914): a redirect response is relayed as-is and is
+  // never account or host health evidence — it proves the host is reachable
+  // and says nothing about the credential. Relayed as the neutral class so a
+  // stray 3xx cannot increment an account's transient streak.
+  if (outcome >= 300 && outcome < 400) return "neutral";
   if (outcome === 401 || outcome === 403) return "credential";
   // 402 Payment Required is treated as quota exhaustion for pool cooldown/failover
   // (same-request alternate retry records this outcome for the depleted account).
@@ -1442,6 +1453,13 @@ export function recordCodexUpstreamOutcome(
   outcome: CodexUpstreamOutcome,
   meta: CodexUpstreamOutcomeMeta = {},
 ): void {
+  // Host-level evidence is account-independent (#914): a pre-connection
+  // reachability failure is recorded in the (provider, host) ledger even when
+  // there is no account to attribute, or the account's writer generation is
+  // stale — the early returns below must not gate it.
+  if (outcome === "connect_neutral" && meta.hostKey) {
+    recordUpstreamHostFailure(meta.hostKey, { code: meta.lastFailureCode, now: meta.now ?? Date.now() });
+  }
   if (!accountId) return;
   const writerGeneration = meta.writerGeneration ?? captureConfigGeneration();
   if (writerGeneration < lastReconciledGeneration && !liveHealthAccountIds.has(accountId)) return;
@@ -1493,6 +1511,25 @@ export function recordCodexUpstreamOutcome(
   if (outcomeClass === "caller") {
     // A 4xx does not change account health, but it does conclude an in-flight
     // probe — otherwise the lease would never be handed back.
+    const current = upstreamHealth.get(accountId);
+    const scopedProbe = meta.probeQuotaScope
+      ? scopedHealthFor(accountId, meta.probeQuotaScope)
+      : undefined;
+    if (scopedProbe && meta.probeQuotaScope && ownsProbeLease(scopedProbe, meta)) {
+      setScopedHealth(accountId, meta.probeQuotaScope, withProbeLeaseReleased(scopedProbe, now));
+    }
+    if (ownsProbeLease(current, meta)) {
+      upstreamHealth.set(accountId, withProbeLeaseReleased(current!, now));
+    }
+    return;
+  }
+
+  if (outcomeClass === "neutral") {
+    // A proven pre-connection reachability failure (DNS / TCP refusal) or a
+    // relayed 3xx is host-level, not account evidence: rotation cannot repair
+    // it and must not happen (#914). Conclude any owned probe lease, record the
+    // failure under the (provider, host) ledger when one is named, and leave
+    // account health, thread affinity, and the active account untouched.
     const current = upstreamHealth.get(accountId);
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)

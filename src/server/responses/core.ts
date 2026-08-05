@@ -174,7 +174,9 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
+import { recordUpstreamHostFailure, resetUpstreamHostHealth, upstreamHostHealthKey } from "../../codex/upstream-host-health";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /**
@@ -436,7 +438,12 @@ async function retryCodexPoolOnAlternateAccount(
       connectMs,
       stream,
       providerFetch(route.provider),
+      // Credential-bearing forward send: never follow a redirect into a
+      // dead-host rejection after the credential was seen (#914).
+      route.provider.authMode === "forward",
     );
+    // A real HTTP response proves the host was reached (#914).
+    resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
     return {
       kind: "retried",
       authCtx: retryAuthCtx,
@@ -1742,7 +1749,16 @@ async function handleResponsesInner(
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
       if (options.abortSignal?.aborted) return clientCancelledResponse();
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+      const outcome = classifyTransportFailureKind(err);
+      // Host-level evidence stands regardless of pool membership: a direct
+      // forward send has no pool accounting, but the reachability failure is
+      // still host-wide, not account evidence (#914 review).
+      if (outcome === "connect_neutral") {
+        recordUpstreamHostFailure(
+          upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)),
+          { code: transportErrorCode(err) },
+        );
+      }
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
@@ -1769,7 +1785,14 @@ async function handleResponsesInner(
             method: request.method,
             headers: request.headers,
             body: request.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+            route.provider.authMode === "forward")
+            // Every real attempt response — including an intermediate 5xx the
+            // retry wrapper replaces — proves the host was reached (#914 review).
+            .then(res => {
+              resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+              return res;
+            });
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
@@ -1823,7 +1846,12 @@ async function handleResponsesInner(
               method: request.method,
               headers: request.headers,
               body: request.body,
-            }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+            }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+              route.provider.authMode === "forward")
+              .then(res => {
+                resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+                return res;
+              });
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
         );
@@ -1948,6 +1976,17 @@ async function handleResponsesInner(
     // Codex renders that as the opaque "Unknown error" (#452). Combo attempts
     // keep their typed failure envelope. Non-empty bodies are relayed verbatim
     // (headers included) so pool-retry Activation B/D and client diagnostics stay intact.
+    // Manual-redirect policy (#914): a 3xx is relayed as-is (Location preserved
+    // through sanitizePassthroughHeaders) so a redirect to a dead host can never
+    // masquerade as a pre-connection failure after the credential was seen.
+    // The numeric outcome above already classified it neutral — no streak.
+    if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        statusText: upstreamResponse.statusText,
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+      });
+    }
     if (!upstreamResponse.ok) {
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
