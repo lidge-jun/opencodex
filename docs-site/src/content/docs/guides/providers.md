@@ -216,7 +216,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 69 built-in presets: 58 key-based, seven OAuth, three local, and one default
+opencodex ships 70 built-in presets: 59 key-based, seven OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific, and Command Code's public
 catalog reports keys as unverifiable. Notable entries:
@@ -249,6 +249,7 @@ free-experimentation model.
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Apertis | `https://api.apertis.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
@@ -269,6 +270,12 @@ free-experimentation model.
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**Apertis discovery.** Apertis exposes an OpenAI-compatible API at
+[`https://api.apertis.ai/v1`](https://docs.apertis.ai/api/), uses Bearer API keys, and returns a
+key/plan-scoped live catalog from [`GET /v1/models`](https://docs.apertis.ai/api/utilities/models/).
+Do not freeze a model id from the catalog; availability can vary by key type and plan. Apertis's
+public site identifies the operator as STIMA AI LLC and publishes its [Terms of Service](https://apertis.ai/terms).
 
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).

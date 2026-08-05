@@ -71,6 +71,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   xiaomi: "Xiaomi",
   cursor: "Cursor",
   deepseek: "DeepSeek",
+  apertis: "Apertis",
   github: "GitHub",
   "github-copilot": "GitHub Copilot",
   "gitlab-duo": "GitLab Duo",

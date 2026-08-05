@@ -1,0 +1,21 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4.1",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "OpenAI",
+      "root": "gpt-4.1",
+      "parent": null
+    },
+    {
+      "id": "claude-sonnet-4.5",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "Anthropic",
+      "root": "claude-sonnet-4.5",
+      "parent": null
+    }
+  ]
+}
