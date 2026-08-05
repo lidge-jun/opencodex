@@ -170,16 +170,18 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
 Without `--json` the JSON leads, then the canonical destination path, the merge warning, the env
-export line, and a model count with how many rows omit context limits (the client applies its own
-defaults for those).
+export line where the client has one, and a model count with how many rows omit context limits (the
+client applies its own defaults for those).
 
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
 
-The two env var names are different, and each client only interpolates its own. opencode reads
-`{env:OPENCODEX_OPENCODE_API_KEY}`; Pi reads `$OPENCODEX_API_KEY`.
+opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. Pi does not use a variable at all: it
+resolves `apiKey` while building its model list and hides the whole provider when the value is an
+unset env reference, so the exported block carries the literal placeholder `opencodex-loopback`,
+which the proxy never checks on loopback.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by
@@ -187,9 +189,10 @@ hand, and `--out` refuses to overwrite an existing file without `--force`, becau
 config destroys the other providers, agents, and MCP entries already in it.
 :::
 
-No key is ever serialized. The config carries only the client's env reference, so the secret stays
-in your environment. A loopback proxy (`127.0.0.1`, the default) requires no admission key at all —
-the reference is simply unused. Set the variable only when the proxy binds beyond loopback; see
+No key is ever serialized. An opencode config carries only the env reference, so the secret stays
+in your environment, and a Pi config carries a placeholder rather than any credential. A loopback
+proxy (`127.0.0.1`, the default) requires no admission key at all. Set the opencode variable only
+when the proxy binds beyond loopback; see
 [Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).

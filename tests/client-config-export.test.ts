@@ -6,8 +6,7 @@ import {
   EXPORT_CLIENT_IDS,
   OPENCODE_API_KEY_ENV,
   OPENCODE_API_KEY_ENV_REF,
-  PI_API_KEY_ENV,
-  PI_API_KEY_ENV_REF,
+  LOOPBACK_API_KEY_PLACEHOLDER,
   SCHEMA_REQUIRED_OUTPUT_BUDGET,
   buildClientConfig,
   buildClientConfigText,
@@ -160,12 +159,13 @@ describe("Pi serializer (accept criterion 2)", () => {
     ]);
   });
 
-  test("provider envelope names the OpenAI-compatible dialect and the env reference", () => {
+  test("provider envelope names the OpenAI-compatible dialect and the loopback placeholder", () => {
     const provider = piConfig().providers.opencodex!;
     expect(provider.baseUrl).toBe(BASE_URL);
     expect(provider.api).toBe("openai-completions");
-    expect(provider.apiKey).toBe(PI_API_KEY_ENV_REF);
-    expect(provider.apiKey).toBe("$OPENCODEX_API_KEY");
+    // Pi hides the whole provider when apiKey is an unset env reference, so
+    // the loopback-only client carries the placeholder literal instead.
+    expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
   test("cost is omitted on every entry — zeros would assert routed models are free", () => {
@@ -236,7 +236,7 @@ describe("no credential ever reaches the output (accept criterion 3)", () => {
 
   test("each client emits only its own documented env reference", () => {
     expect(JSON.stringify(opencodeConfig())).toContain(OPENCODE_API_KEY_ENV_REF);
-    expect(JSON.stringify(piConfig())).toContain(PI_API_KEY_ENV_REF);
+    expect(JSON.stringify(piConfig())).toContain(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(JSON.stringify(piConfig())).not.toContain("{env:");
   });
 });
@@ -348,7 +348,7 @@ describe("EXPORT_CLIENTS registry", () => {
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -449,8 +449,9 @@ describe("EXPORT_CLIENTS registry", () => {
   test("apiKeyEnv and exportHint name the variable the config references", () => {
     expect(EXPORT_CLIENTS.opencode.apiKeyEnv).toBe(OPENCODE_API_KEY_ENV);
     expect(EXPORT_CLIENTS.opencode.exportHint).toContain(OPENCODE_API_KEY_ENV);
-    expect(EXPORT_CLIENTS.pi.apiKeyEnv).toBe(PI_API_KEY_ENV);
-    expect(EXPORT_CLIENTS.pi.exportHint).toContain(PI_API_KEY_ENV);
+    // Pi reads the placeholder literal from its own file — no env var exists.
+    expect(EXPORT_CLIENTS.pi.apiKeyEnv).toBe("");
+    expect(EXPORT_CLIENTS.pi.exportHint).toContain("loopback");
     for (const id of EXPORT_CLIENT_IDS) {
       expect(EXPORT_CLIENTS[id].exportHint).not.toContain("ocx_");
     }

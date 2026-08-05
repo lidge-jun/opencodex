@@ -139,11 +139,11 @@ describe("ocx export human output (accept criterion 2)", () => {
     expect(result.stdout).toContain("3 models; 1 omit context limits");
   });
 
-  test("Pi names its own destination and env var", async () => {
+  test("Pi names its own destination and needs no env var", async () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "pi"], { baseUrl: proxy.baseUrl });
     expect(result.stdout).toContain(join(".pi", "agent", "models.json"));
-    expect(result.stdout).toContain("export OPENCODEX_API_KEY=");
+    expect(result.stdout).toContain("loopback needs no key");
   });
 });
 
@@ -297,8 +297,8 @@ describe("ocx export never serializes a key (accept criterion 6)", () => {
     for (const [args, envRef] of [
       [["--client", "opencode"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
       [["--client", "opencode", "--json"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
-      [["--client", "pi"], "$OPENCODEX_API_KEY"],
-      [["--client", "pi", "--json"], "$OPENCODEX_API_KEY"],
+      [["--client", "pi"], "opencodex-loopback"],
+      [["--client", "pi", "--json"], "opencodex-loopback"],
     ] as Array<[string[], string]>) {
       logs = [];
       errors = [];

@@ -47,14 +47,14 @@ const PI_ENVELOPE_BASE = {
   client: "pi",
   filename: "pi-models.json",
   destination: "/home/dev/.pi/agent/models.json",
-  apiKeyEnv: "OPENCODEX_PI_API_KEY",
-  exportHint: "export OPENCODEX_PI_API_KEY=<your key>",
+  apiKeyEnv: "",
+  exportHint: "Pi reads credentials from its models.json; loopback needs no key.",
   modelCount: 2,
   modelsWithoutLimits: 1,
   format: "json",
   mediaType: "application/json",
   // Pi keys its models as an ARRAY — the shape swap is what proves a real refetch.
-  config: { providers: { opencodex: { models: [{ id: "gpt-5.4" }, { id: "claude-sonnet-4-6" }] } } },
+  config: { providers: { opencodex: { apiKey: "opencodex-loopback", models: [{ id: "gpt-5.4" }, { id: "claude-sonnet-4-6" }] } } },
 };
 
 /**
@@ -474,6 +474,9 @@ test("no-key state is informational and leaves copy and download enabled", async
   await act(async () => { rowButton(container, "OpenCode", "Details").click(); });
   expect(container.querySelector(".awi-clientconfig-nokey")?.textContent)
     .toContain("OPENCODEX_OPENCODE_API_KEY has no key behind it yet");
+  await act(async () => { button(container, "Close").click(); });
+  await act(async () => { rowButton(container, "Pi", "Details").click(); });
+  expect(container.querySelector(".awi-clientconfig-nokey")).toBeNull();
 
   await act(async () => { root.unmount(); });
 });

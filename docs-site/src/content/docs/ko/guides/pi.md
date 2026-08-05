@@ -5,7 +5,7 @@ description: Pi에서 라우팅된 모델을 그대로 쓸 수 있습니다. `oc
 
 Pi는 provider를 환경 변수 대신 하나의 전역 JSON 파일에서 읽기 때문에,
 opencodex가 Pi를 직접 실행하지 않습니다. 대신 `ocx export`가 `opencodex` provider 블록,
-즉 base URL, 모델 목록, 그리고 Pi가 치환하는 환경 변수 참조를 직렬화해서 사용자가
+즉 base URL, 모델 목록, 그리고 placeholder 인증 키를 직렬화해서 사용자가
 자신의 설정에 병합하도록 합니다.
 
 ## 빠른 시작
@@ -17,8 +17,8 @@ ocx start
 ocx export --client pi
 ```
 
-출력은 JSON으로 시작하고, 이어서 대상 경로, 병합 경고, 환경 변수 export 줄, 그리고
-공식 context limit이 있는 모델 수를 보여줍니다.
+출력은 JSON으로 시작하고, 이어서 대상 경로, 병합 경고, 그리고 공식 context limit이
+있는 모델 수를 보여줍니다.
 
 ```json
 {
@@ -26,7 +26,7 @@ ocx export --client pi
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -70,28 +70,19 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 ## 인증 키
 
-여기서는 서로 헷갈리기 쉬운 키가 두 개 있고, 이 파일에 등장하는 것은 첫 번째뿐입니다.
-
-| 키 | 무엇인지 | 어디에 있는지 |
-| --- | --- | --- |
-| Proxy admission key | opencodex의 자체 인증 정보이며, 대시보드의 **API** 탭에서 생성됩니다 | `apiKey`로 `$OPENCODEX_API_KEY`를 참조하며, 값은 환경 변수에 둡니다 |
-| Provider key | Anthropic / OpenAI / OpenRouter 키입니다 | opencodex의 자체 config에 있으며, [Providers](/guides/providers/)마다 따로 둡니다 |
-
-내보낸 config에는 비밀값이 아니라 참조만 들어갑니다. Pi는 `$NAME` 형태를 그대로
-치환하므로 변수는 다음과 같습니다.
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-이 이름은 Pi 전용입니다. opencode는 다른 변수를 씁니다
-(`OPENCODEX_OPENCODE_API_KEY`, `{env:…}` 형식) - 자세한 내용은 [opencode 가이드](/guides/opencode/)를 보세요.
-
 **루프백 프록시는 키가 전혀 필요 없습니다.** opencodex는 기본적으로 `127.0.0.1`에
-바인드하고 그곳에서는 아무 것도 인증하지 않으므로, `$OPENCODEX_API_KEY` 참조는
-실제로는 비어 있어도 됩니다. 이 값은 `hostname`이 루프백 바깥으로 설정될 때만
-의미가 있으며, 그 경우에는 프록시가 토큰 없이 시작하지 않습니다. 자세한 내용은
-[Remote access](/reference/configuration/#remote-access)를 보세요.
+바인드하고 그곳에서는 아무 것도 인증하지 않으므로, 내보낸 블록에는 실제 인증 정보가
+아니라 리터럴 placeholder인 `opencodex-loopback`이 들어갑니다. 환경 변수는 전혀
+관여하지 않습니다.
+
+이 placeholder는 겉치레가 아니라 필수입니다. Pi는 모델 목록을 만들 때 `apiKey`를
+해석하는데, 값이 설정되지 않은 환경 변수 참조이면 provider 전체를 숨겨 버립니다.
+리터럴이어야 라우팅된 모든 모델이 보이며, 루프백에서 프록시는 이 값을 검사하지
+않습니다.
+
+Provider 키는 별개의 문제입니다. Anthropic / OpenAI / OpenRouter 키는 opencodex의
+자체 config에 있으며([Providers](/guides/providers/) 참조), 이 파일에는 절대
+나타나지 않습니다.
 
 ## 모델 메타데이터
 
@@ -110,9 +101,9 @@ export OPENCODEX_API_KEY=<your key>
 
 ## 스키마 상태
 
-:::note[실제 설치에서 검증하지 않음]
-위의 형태는 Pi가 공개한 custom-provider 문서를 따른 것입니다. Pi가 설치된 머신의
-실제 `~/.pi/agent/models.json`으로는 아직 검증하지 않았습니다. Pi가 내보낸 블록을
+:::note[실제 설치에서 검증됨]
+위의 형태는 Pi 0.83.x가 설치된 머신의 실제 `~/.pi/agent/models.json`으로 검증했습니다.
+블록이 유효하고 라우팅된 모든 모델이 Pi 선택기에 표시됩니다. 더 새로운 Pi가 이 블록을
 거부하면 문제는 우리 쪽에 있습니다. Pi가 무엇을 보고했는지와 함께
 [issue를 열어주세요](https://github.com/lidge-jun/opencodex/issues).
 :::

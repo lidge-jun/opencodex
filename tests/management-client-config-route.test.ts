@@ -4,8 +4,7 @@ import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
   OPENCODE_PROVIDER_ID,
-  PI_API_KEY_ENV,
-  PI_API_KEY_ENV_REF,
+  LOOPBACK_API_KEY_PLACEHOLDER,
   buildClientConfig,
   normalizeExportModels,
   opencodeGlobalConfigPath,
@@ -149,11 +148,11 @@ describe("GET /api/client-config", () => {
 
     expect(body.client).toBe("pi");
     expect(body.filename).toBe("pi-models.json");
-    expect(body.apiKeyEnv).toBe(PI_API_KEY_ENV);
+    expect(body.apiKeyEnv).toBe("");
 
     const provider = (body.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID];
     expect(Array.isArray(provider.models)).toBe(true);
-    expect(provider.apiKey).toBe(PI_API_KEY_ENV_REF);
+    expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(provider.models.map(model => model.id)).toContain("a/m1");
   }, 15_000);

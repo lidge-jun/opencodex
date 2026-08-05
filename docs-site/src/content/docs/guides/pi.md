@@ -5,8 +5,7 @@ description: Use any routed model from Pi — ocx export writes a custom provide
 
 Pi reads its providers from a single global JSON file rather than environment variables, so
 opencodex does not launch it. Instead, `ocx export` serializes the `opencodex` provider block —
-base URL, model list, and the env reference Pi interpolates — and you merge it into your own
-config.
+base URL, model list, and a placeholder admission key — and you merge it into your own config.
 
 ## Quickstart
 
@@ -17,8 +16,8 @@ ocx start
 ocx export --client pi
 ```
 
-The output leads with the JSON, then prints the destination path, the merge warning, the env
-export line, and how many models carry authoritative context limits.
+The output leads with the JSON, then prints the destination path, the merge warning, and how many
+models carry authoritative context limits.
 
 ```json
 {
@@ -26,7 +25,7 @@ export line, and how many models carry authoritative context limits.
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -70,27 +69,16 @@ provider or changing model visibility, and merge the new block over the old one.
 
 ## The admission key
 
-Two different keys are easy to confuse here, and only the first one appears in this file:
-
-| Key | What it is | Where it lives |
-| --- | --- | --- |
-| Proxy admission key | opencodex's own credential, generated on the dashboard's **API** tab | referenced by `apiKey` as `$OPENCODEX_API_KEY`; the value stays in your environment |
-| Provider key | your Anthropic / OpenAI / OpenRouter key | opencodex's own config, per [Providers](/guides/providers/) |
-
-The exported config carries only the reference, never a secret. Pi interpolates a bare `$NAME`, so
-the variable is:
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-That name is Pi's alone. opencode uses a different variable
-(`OPENCODEX_OPENCODE_API_KEY`, in `{env:…}` form) — see the [opencode guide](/guides/opencode/).
-
 **A loopback proxy needs no key at all.** opencodex binds `127.0.0.1` by default and authenticates
-nothing there, so the `$OPENCODEX_API_KEY` reference is inert and you can leave the variable unset.
-It matters only when `hostname` is set beyond loopback, which is also the case where the proxy
-refuses to start without a token — see [Remote access](/reference/configuration/#remote-access).
+nothing there, so the exported block carries the literal placeholder `opencodex-loopback` rather
+than a real credential — no environment variable is involved.
+
+The placeholder is load-bearing, not cosmetic: Pi resolves `apiKey` while building its model list
+and hides the whole provider when the value is an env reference that is not set. A literal keeps
+every routed model visible, and the proxy never checks it on loopback.
+
+Your provider keys are a different matter — the Anthropic / OpenAI / OpenRouter key lives in
+opencodex's own config, per [Providers](/guides/providers/), and never appears in this file.
 
 ## Model metadata
 
@@ -109,9 +97,9 @@ a guess.
 
 ## Schema status
 
-:::note[Unverified against a real install]
-The shape above follows Pi's published custom-provider documentation. It has **not** been verified
-against a real `~/.pi/agent/models.json` on a machine with Pi installed. If Pi rejects the exported
+:::note[Verified against a real install]
+The shape above has been verified against Pi 0.83.x on a real `~/.pi/agent/models.json`: the block
+validates and every routed model appears in Pi's picker. If a newer Pi rejects the exported
 block, the mismatch is on our side — please
 [open an issue](https://github.com/lidge-jun/opencodex/issues) with what Pi reported.
 :::

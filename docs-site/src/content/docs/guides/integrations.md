@@ -9,7 +9,7 @@ file, and removes it again. Six clients work this way, each with a switch:
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
-| Pi | `~/.pi/agent/models.json` | JSON | new sessions | `OPENCODEX_API_KEY` |
+| Pi | `~/.pi/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |

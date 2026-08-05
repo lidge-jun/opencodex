@@ -78,9 +78,11 @@ export default function ClientConfigDialog({
             {t("api.clientConfig.missingLimits", { count: envelope.modelsWithoutLimits, total: envelope.modelCount })}
           </p>
         )}
-        {!hasKeys && (
+        {!hasKeys && envelope.apiKeyEnv !== "" && (
           // Informational, never blocking: an agent may legitimately want the shape
-          // first, so both actions stay enabled.
+          // first, so both actions stay enabled. A client with no env var at all
+          // (Pi, Kimi) reads its credential from its own file, so naming a
+          // variable there would render an empty name.
           <p className="muted small awi-clientconfig-nokey">
             {t("api.clientConfig.noKeyYet", { env: envelope.apiKeyEnv })}
           </p>

@@ -149,15 +149,15 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 |クライアント |正規の宛先 |ダウンロードファイル名 |環境変数 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (設定すると `XDG_CONFIG_HOME` が勝ち) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | なし - ブロックにリテラル `opencodex-loopback` が入ります |
 
-2 つの環境変数名は異なり、各クライアントは独自の名前のみを補間します。 opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を読み取ります。 Pi は `$OPENCODEX_API_KEY` を読み取ります。
+opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。Pi は環境変数をまったく使いません。Pi はモデル リストを構築する際に `apiKey` を解決し、その値が未設定の環境変数参照である場合はプロバイダー全体を隠すため、エクスポートされたブロックにはリテラルのプレースホルダー `opencodex-loopback` が入ります。ループバックではプロキシがこの値を検査することはありません。
 
 :::caution[マージし、決して置き換えないでください]
 `ocx export` は実際のクライアント設定を書き込むことはありません。宛先は手動でマージできるように出力されます。`--out` は、`--force` なしで既存のファイルを上書きすることを拒否します。これは、設定を置き換えると、その中にすでに含まれている他のプロバイダー、エージェント、および MCP エントリが破壊されるためです。
 :::
 
-キーはシリアル化されません。設定にはクライアントの環境参照のみが含まれるため、シークレットは環境内に残ります。ループバック プロキシ (`127.0.0.1`、デフォルト) にはアドミッション キーはまったく必要ありません。参照は単に使用されないだけです。プロキシがループバックを超えてバインドする場合にのみ変数を設定します。アドミッションキーの発行方法については、[リモートアクセス](/reference/configuration/#remote-access) を参照してください。上流プロバイダー自体のキーは完全に別のものであり、[プロバイダー](/guides/providers/) ごとに構成されます。
+キーはシリアル化されません。opencode の設定には環境参照のみが含まれるためシークレットは環境内に残り、Pi の設定には認証情報ではなくプレースホルダーが入ります。ループバック プロキシ (`127.0.0.1`、デフォルト) にはアドミッション キーはまったく必要ありません。opencode の変数は、プロキシがループバックを超えてバインドする場合にのみ設定します。アドミッションキーの発行方法については、[リモートアクセス](/reference/configuration/#remote-access) を参照してください。上流プロバイダー自体のキーは完全に別のものであり、[プロバイダー](/guides/providers/) ごとに構成されます。
 
 同じペイロードが `GET /api/client-config` によって提供され、ダッシュボードの [API] タブにレンダリングされるため、CLI、API、および GUI は同じバイトを使用します。
 

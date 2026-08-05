@@ -150,15 +150,15 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | 客户端 | 规范目标路径 | 下载文件名 | 环境变量 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json`（设置了 `XDG_CONFIG_HOME` 时以其为准） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 无 - 块中携带字面值 `opencodex-loopback` |
 
-这两个环境变量名称不同，而且每个客户端只会插入自己的那个。opencode 读取 `{env:OPENCODEX_OPENCODE_API_KEY}`；Pi 读取 `$OPENCODEX_API_KEY`。
+opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 完全不使用环境变量：它在构建模型列表时会解析 `apiKey`，一旦该值是未设置的环境变量引用，就会隐藏整个 provider，因此导出的块携带的是字面占位值 `opencodex-loopback`，而回环上的代理从不校验这个值。
 
 :::caution[合并，不要替换]
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。配置里只包含客户端的环境引用，因此密钥仍保留在你的环境中。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥——该引用只是不会被使用。只有当代理绑定到环回地址之外时才设置该变量；关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
+任何密钥都不会被序列化。opencode 配置里只包含环境引用，因此密钥仍保留在你的环境中；Pi 配置里携带的是占位值而不是任何凭据。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。只有当代理绑定到环回地址之外时才需要设置 opencode 的那个变量；关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
 
 同一份负载会通过 `GET /api/client-config` 提供，并在仪表盘的 API 选项卡中渲染，因此 CLI、API 和 GUI 使用的是同一字节内容。
 

@@ -3,7 +3,7 @@ title: Pi
 description: 在 Pi 中使用任意已路由模型 - `ocx export` 会为 Pi 的 `models.json` 写入一个自定义 provider 块，并连接到正在运行的代理。
 ---
 
-Pi 从一个全局 JSON 文件而不是环境变量中读取 providers，所以 opencodex 不会启动它。相反，`ocx export` 会序列化 `opencodex` provider 块 - 基础 URL、模型列表，以及 Pi 会插值的 env 引用 - 然后你把它合并到自己的配置中。
+Pi 从一个全局 JSON 文件而不是环境变量中读取 providers，所以 opencodex 不会启动它。相反，`ocx export` 会序列化 `opencodex` provider 块 - 基础 URL、模型列表，以及一个占位准入 key - 然后你把它合并到自己的配置中。
 
 ## 快速开始
 
@@ -14,7 +14,7 @@ ocx start
 ocx export --client pi
 ```
 
-输出会先显示 JSON，然后打印目标路径、合并警告、env 导出行，以及有多少模型带有权威上下文窗口限制。
+输出会先显示 JSON，然后打印目标路径、合并警告，以及有多少模型带有权威上下文窗口限制。
 
 ```json
 {
@@ -22,7 +22,7 @@ ocx export --client pi
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -60,22 +60,11 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 ## 准入密钥
 
-这里有两个很容易混淆的 key，但这个文件里只会出现第一个：
+**回环代理根本不需要 key。** opencodex 默认绑定 `127.0.0.1`，在那里不做任何认证，所以导出的块携带的是字面占位值 `opencodex-loopback`，而不是真实凭据 - 完全不涉及环境变量。
 
-| Key | 它是什么 | 它存放在哪里 |
-| --- | --- | --- |
-| 代理准入密钥 | opencodex 自己的凭据，在仪表盘的 **API** 选项卡中生成 | 通过 `apiKey` 以 `$OPENCODEX_API_KEY` 形式引用；实际值保存在你的环境中 |
-| Provider key | 你的 Anthropic / OpenAI / OpenRouter key | opencodex 自己的配置中，见 [Providers](/guides/providers/) |
+这个占位值不是装饰，而是必需的：Pi 在构建模型列表时会解析 `apiKey`，一旦该值是未设置的环境变量引用，它就会隐藏整个 provider。使用字面值才能让所有已路由模型保持可见，而回环上的代理从不校验这个值。
 
-导出的配置只包含引用，从不包含 secret。Pi 会插值裸的 `$NAME`，所以变量是：
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-这个名字只属于 Pi。opencode 使用不同的变量（`OPENCODEX_OPENCODE_API_KEY`，以 `{env:…}` 形式出现） - 见 [opencode 指南](/guides/opencode/)。
-
-**回环代理根本不需要 key。** opencodex 默认绑定 `127.0.0.1`，在那里不做任何认证，所以 `$OPENCODEX_API_KEY` 引用是无效的，你可以不设置这个变量。它只在 `hostname` 超出回环范围时才有意义，而这也是代理会在没有 token 的情况下拒绝启动的时候 - 见 [远程访问](/reference/configuration/#remote-access)。
+Provider key 是另一回事：你的 Anthropic / OpenAI / OpenRouter key 保存在 opencodex 自己的配置中，见 [Providers](/guides/providers/)，它绝不会出现在这个文件里。
 
 ## 模型元数据
 
@@ -87,8 +76,8 @@ export OPENCODEX_API_KEY=<your key>
 
 ## Schema 状态
 
-:::note[未在真实安装上验证]
-上面的结构遵循了 Pi 已公开的自定义 provider 文档。它**尚未**在一台安装了 Pi 的机器上、针对真实的 `~/.pi/agent/models.json` 进行验证。如果 Pi 拒绝这个导出块，问题在我们这边 - 请带上 Pi 的报错信息[提交 issue](https://github.com/lidge-jun/opencodex/issues)。
+:::note[已在真实安装上验证]
+上面的结构已在安装了 Pi 0.83.x 的机器上、针对真实的 `~/.pi/agent/models.json` 完成验证：该块通过校验，并且所有已路由模型都会出现在 Pi 的模型选择器中。如果更新版本的 Pi 拒绝这个导出块，问题在我们这边 - 请带上 Pi 的报错信息[提交 issue](https://github.com/lidge-jun/opencodex/issues)。
 :::
 
 ## 需求

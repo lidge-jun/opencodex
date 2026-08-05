@@ -5,7 +5,7 @@ import {
   EXPORT_CLIENT_IDS,
   GAJAE_API_KEY_ENV,
   HERMES_API_KEY_ENV_REF,
-  KIMI_LOOPBACK_PLACEHOLDER,
+  LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
   OPENCODE_PROVIDER_ID,
   buildClientConfig,
@@ -235,7 +235,7 @@ describe("kimi", () => {
 
   test("uses the loopback placeholder because Kimi reads no environment", () => {
     const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;
-    expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(KIMI_LOOPBACK_PLACEHOLDER);
+    expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
   test("never emits capabilities it cannot assert", () => {

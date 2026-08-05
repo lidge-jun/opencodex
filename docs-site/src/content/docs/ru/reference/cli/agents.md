@@ -182,10 +182,12 @@ limit'а (для них клиент применяет собственные d
 | Клиент | Канонический путь | Имя скачиваемого файла | Переменная окружения |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` имеет приоритет, если задан) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | нет — блок несёт литерал `opencodex-loopback` |
 
-Имена этих двух env-переменных различаются, и каждый клиент интерполирует только свою. opencode
-читает `{env:OPENCODEX_OPENCODE_API_KEY}`; Pi читает `$OPENCODEX_API_KEY`.
+opencode интерполирует `{env:OPENCODEX_OPENCODE_API_KEY}`. Pi не использует переменную вовсе: он
+разрешает `apiKey`, когда строит список моделей, и прячет провайдера целиком, если значение —
+ссылка на незаданную переменную окружения, поэтому экспортируемый блок несёт литеральную заглушку
+`opencodex-loopback`, которую прокси на loopback никогда не проверяет.
 
 :::caution[Сливать, а не заменять]
 `ocx export` никогда не пишет в ваш реальный клиентский конфиг. Путь назначения лишь
