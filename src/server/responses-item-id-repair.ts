@@ -7,6 +7,7 @@ type RepairableItemType = "message" | "reasoning";
 
 interface ResponsesItemIdRepairState {
   readonly repairMissingTerminalIds: boolean;
+  readonly repairInvalidIds: boolean;
   readonly placeholders: Record<RepairableItemType, ReadonlySet<string>>;
   readonly outputIds: Record<RepairableItemType, Map<number, string>>;
   readonly scope: string;
@@ -53,6 +54,7 @@ function mintCanonicalId(type: RepairableItemType, scope: string, outputIndex: n
 function createRepairState(config: ResponsesItemIdRepairConfig, budget?: TranslatorBudget): ResponsesItemIdRepairState {
   const state = {
     repairMissingTerminalIds: config.repairMissingTerminalIds === true,
+    repairInvalidIds: config.repairInvalidIds === true,
     placeholders: {
       message: new Set(config.message ?? []),
       reasoning: new Set(config.reasoning ?? []),
@@ -85,9 +87,13 @@ function rememberMappedId(
   if (!rawId) return null;
   const mapped = state.placeholders[type].has(rawId)
     ? mintCanonicalId(type, state.scope, outputIndex)
-    : state.repairMissingTerminalIds
-      ? rawId
-      : null;
+    : state.repairInvalidIds && !rawId.startsWith(REPAIRABLE_PREFIXES[type])
+      // An existing id without the canonical msg_/rs_ prefix (bare UUIDs from
+      // DeepSeek's Responses route) leaves Codex stuck on Thinking (#938).
+      ? mintCanonicalId(type, state.scope, outputIndex)
+      : state.repairMissingTerminalIds
+        ? rawId
+        : null;
   if (!mapped) return null;
   state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, rawId, mapped])).byteLength, { kind: "item_ids" });
   state.outputIds[type].set(outputIndex, mapped);
@@ -219,6 +225,29 @@ export function relaySseWithResponsesItemIdRepair(
 
 export function hasResponsesItemIdRepair(config: ResponsesItemIdRepairConfig | undefined): boolean {
   return config?.repairMissingTerminalIds === true
+    || config?.repairInvalidIds === true
     || (config?.message?.length ?? 0) > 0
     || (config?.reasoning?.length ?? 0) > 0;
+}
+
+/**
+ * Client-facing id normalization for a WHOLE bounded-JSON Responses object.
+ *
+ * The bounded-JSON policy (#875) answers a streaming client by synthesizing SSE
+ * from a completed JSON body, and reframes the same body into events for WS
+ * turns. Neither path goes through the SSE relay, so neither picks up the SSE
+ * item-id rewrite — a provider that needs id repair would get it on a streaming
+ * response and silently lose it the moment the reliability policy switched the
+ * upstream to bounded JSON. This applies the same rewrite to the object so all
+ * three paths agree. Raw recorded state is untouched: recording happens before
+ * any normalization.
+ */
+export function repairResponsesJsonItemIds(
+  response: Record<string, unknown>,
+  config: ResponsesItemIdRepairConfig,
+  budget?: TranslatorBudget,
+): Record<string, unknown> {
+  const state = createRepairState(config, budget);
+  const rewritten = rewriteResponseSnapshot(state, response);
+  return rewritten.changed ? rewritten.response : response;
 }

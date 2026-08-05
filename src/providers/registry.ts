@@ -160,7 +160,18 @@ export interface ProviderRegistryEntry {
    * reframes as Responses events. Use only for upstreams whose streaming response
    * can omit or indefinitely delay the terminal event.
    */
-  modelWebsocketUpstreamStreaming?: Record<string, boolean>;
+  modelResponsesUpstreamStreaming?: Record<string, boolean>;
+  /**
+   * Registry-only client-facing item-id repair policy (#938), filled onto the
+   * runtime provider only when the user has no explicit policy (derive.ts);
+   * never seeded into saved config.
+   */
+  responsesItemIdRepair?: {
+    message?: string[];
+    reasoning?: string[];
+    repairMissingTerminalIds?: boolean;
+    repairInvalidIds?: boolean;
+  };
   /**
    * Responses-API resource path for providers whose route is not `/v1/responses`.
    * Unlike `modelWireDefaults` above, this IS seeded into saved config: it describes
@@ -1143,7 +1154,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // DeepSeek's Codex Responses stream can deliver output without closing on the
     // terminal event. Keep Codex on WebSocket, but use the provider's bounded JSON
     // response upstream so the bridge can synthesize a complete WS event sequence.
-    modelWebsocketUpstreamStreaming: { "deepseek-v4-flash": false },
+    modelResponsesUpstreamStreaming: { "deepseek-v4-flash": false },
+    // DeepSeek's Responses route emits bare UUID item ids, which leave Codex
+    // clients stuck on an uncommitted turn (#938). Client-facing only — raw
+    // continuation snapshots keep the upstream ids.
+    responsesItemIdRepair: { repairInvalidIds: true, repairMissingTerminalIds: true },
     // DeepSeek's Responses route is `POST /responses` with no `/v1` segment. Without
     // this the passthrough adapter falls back to its legacy `/v1/responses`
     // construction and the wire above can never route.
@@ -1815,15 +1830,15 @@ export function providerModelWireDefault(
   return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
 }
 
-/** Resolve a registry-only upstream-streaming compatibility hint for WS turns. */
-export function providerModelWebsocketUpstreamStreaming(
+/** Resolve a registry-only upstream-streaming compatibility hint for Responses turns. */
+export function providerModelResponsesUpstreamStreaming(
   id: string,
   provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
   modelId: string,
 ): boolean | undefined {
   const entry = getProviderRegistryEntry(id);
-  if (!entry?.modelWebsocketUpstreamStreaming || !providerMatchesRegistryTransport(id, provider)) return undefined;
-  return entry.modelWebsocketUpstreamStreaming[modelId.trim().toLowerCase()];
+  if (!entry?.modelResponsesUpstreamStreaming || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  return entry.modelResponsesUpstreamStreaming[modelId.trim().toLowerCase()];
 }
 
 /**

@@ -929,6 +929,12 @@ export interface ResponsesItemIdRepairConfig {
   reasoning?: string[];
   /** Backfill missing `output_item.done` / terminal snapshot ids from the matching output_index. */
   repairMissingTerminalIds?: boolean;
+  /**
+   * Treat existing message/reasoning ids without the canonical `msg_`/`rs_` prefix (e.g. bare
+   * UUIDs from DeepSeek's Responses route) as invalid and mint canonical replacements (#938).
+   * function_call ids and call_id pairing are never rewritten.
+   */
+  repairInvalidIds?: boolean;
 }
 
 /**

@@ -276,6 +276,21 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // the entry so an explicit user value stays distinguishable from the default.
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
+  // Registry-only repair policy (#938): fill only when the runtime provider has
+  // no explicit policy, and deep-clone so saved/user values never alias the
+  // registry constant.
+  if (prov.responsesItemIdRepair === undefined && entry.responsesItemIdRepair) {
+    prov.responsesItemIdRepair = {
+      ...(entry.responsesItemIdRepair.message ? { message: [...entry.responsesItemIdRepair.message] } : {}),
+      ...(entry.responsesItemIdRepair.reasoning ? { reasoning: [...entry.responsesItemIdRepair.reasoning] } : {}),
+      ...(entry.responsesItemIdRepair.repairMissingTerminalIds !== undefined
+        ? { repairMissingTerminalIds: entry.responsesItemIdRepair.repairMissingTerminalIds }
+        : {}),
+      ...(entry.responsesItemIdRepair.repairInvalidIds !== undefined
+        ? { repairInvalidIds: entry.responsesItemIdRepair.repairInvalidIds }
+        : {}),
+    };
+  }
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];

@@ -296,6 +296,23 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
       : {}),
+    // Registry-only client-facing repair policy (#938): fill only when the
+    // saved provider has no explicit policy; clone so runtime never aliases
+    // the registry constant.
+    ...(provider.responsesItemIdRepair === undefined && registryEntry.responsesItemIdRepair
+      ? {
+        responsesItemIdRepair: {
+          ...(registryEntry.responsesItemIdRepair.message ? { message: [...registryEntry.responsesItemIdRepair.message] } : {}),
+          ...(registryEntry.responsesItemIdRepair.reasoning ? { reasoning: [...registryEntry.responsesItemIdRepair.reasoning] } : {}),
+          ...(registryEntry.responsesItemIdRepair.repairMissingTerminalIds !== undefined
+            ? { repairMissingTerminalIds: registryEntry.responsesItemIdRepair.repairMissingTerminalIds }
+            : {}),
+          ...(registryEntry.responsesItemIdRepair.repairInvalidIds !== undefined
+            ? { repairInvalidIds: registryEntry.responsesItemIdRepair.repairInvalidIds }
+            : {}),
+        },
+      }
+      : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
     // Backfill the Google wire mode + Vertex project/location from the registry when the user

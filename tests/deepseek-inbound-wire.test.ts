@@ -132,8 +132,177 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(request.body.stream).toBe(false);
   });
 
-  test("ordinary HTTP Responses requests keep streaming upstream", async () => {
-    expect((await drive("responses")).body.stream).toBe(true);
+  test("a Codex WebSocket turn keeps plain JSON downstream (no SSE synthesis)", async () => {
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_deepseek",
+      object: "response",
+      status: "completed",
+      output: [],
+    })) as typeof fetch;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { inboundTransport: "websocket" },
+    );
+    expect(response.headers.get("content-type")).not.toContain("text/event-stream");
+  });
+
+  test("ordinary HTTP Responses requests also use bounded JSON upstream (#875)", async () => {
+    // The reliability policy is transport-neutral: DeepSeek's Responses stream can
+    // deliver output without a terminal, so HTTP turns get the same bounded JSON
+    // upstream as WS turns — and a synthesized terminal SSE back.
+    const request = await drive("responses");
+    expect(request.body.stream).toBe(false);
+  });
+
+  test("an HTTP streaming client receives a synthesized terminal SSE instead of a stall (#875)", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { stream?: boolean };
+      if (body.stream === true) {
+        // Old world: a terminal-less SSE that never closes — the stall the issue
+        // reported. The policy must never send stream:true, so fail loudly here.
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return Response.json({
+        id: "resp_deepseek",
+        object: "response",
+        status: "completed",
+        output: [{
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "search",
+          arguments: "{\"q\":\"docs\"}",
+          status: "completed",
+        }],
+      });
+    }) as typeof fetch;
+
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const deadline = AbortSignal.timeout(5_000);
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { abortSignal: deadline },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await response.text();
+    const sequence = [...text.matchAll(/"type":"(response\.[^"]+)"/g)].map(match => match[1]);
+    expect(sequence).toEqual([
+      "response.created",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    expect(text).toContain("data: [DONE]");
+    // The function-call item survives with id/call_id byte-identical.
+    expect(text).toContain('"fc_1"');
+    expect(text).toContain('"call_1"');
+  });
+
+  /**
+   * Review finding on this layer: the bounded-JSON answer never touches the SSE
+   * relay, so it never picks up the relay's item-id rewrite. Without the
+   * normalization added here, enabling this reliability policy would silently
+   * DISABLE id repair for a provider that has it configured — the client would
+   * get canonical ids while streaming and placeholder ids the moment the policy
+   * switched the upstream to bounded JSON.
+   */
+  function repairingProvider(): OcxProviderConfig {
+    return {
+      ...deepseekProvider(),
+      responsesItemIdRepair: { message: ["msg_placeholder"], reasoning: ["rs_placeholder"] },
+    } as OcxProviderConfig;
+  }
+
+  function completedWithPlaceholderIds(): Response {
+    return Response.json({
+      id: "resp_deepseek",
+      object: "response",
+      status: "completed",
+      output: [
+        { type: "reasoning", id: "rs_placeholder", summary: [] },
+        {
+          type: "message",
+          id: "msg_placeholder",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "hello" }],
+        },
+      ],
+    });
+  }
+
+  test("the synthesized terminal SSE carries repaired item ids, not the upstream placeholders", async () => {
+    globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
+    const config = { providers: { deepseek: repairingProvider() } } as unknown as OcxConfig;
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { abortSignal: AbortSignal.timeout(5_000) },
+    );
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await response.text();
+    expect(text).not.toContain("msg_placeholder");
+    expect(text).not.toContain("rs_placeholder");
+    expect(text).toMatch(/"id":"msg_ocx_[0-9a-f]{8}/);
+    expect(text).toMatch(/"id":"rs_ocx_[0-9a-f]{8}/);
+  });
+
+  test("the WebSocket bounded-JSON reframe carries the same repaired ids", async () => {
+    globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
+    const config = { providers: { deepseek: repairingProvider() } } as unknown as OcxConfig;
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { inboundWire: "responses", inboundTransport: "websocket" },
+    );
+    const text = await response.text();
+    expect(text).not.toContain("msg_placeholder");
+    expect(text).not.toContain("rs_placeholder");
+    expect(text).toMatch(/"id":"msg_ocx_[0-9a-f]{8}/);
+  });
+
+  test("a provider without id repair keeps the bounded-JSON body byte-identical", async () => {
+    globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping" }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { inboundWire: "responses", inboundTransport: "websocket" },
+    );
+    const text = await response.text();
+    expect(text).toContain("msg_placeholder");
+    expect(text).toContain("rs_placeholder");
   });
 
   test("an oversized upstream JSON body fails closed instead of buffering without limit", async () => {
