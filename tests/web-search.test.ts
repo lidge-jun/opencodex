@@ -557,6 +557,74 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
   });
 
+  test("buffered routed iterations keep upstream JSON while downstream remains SSE", async () => {
+    let upstreamBody: Record<string, unknown> | undefined;
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        upstreamBody = await request.json() as Record<string, unknown>;
+        return Response.json({
+          id: "chatcmpl_buffered",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-5.6-luna",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "healthy buffered answer" },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        });
+      },
+    });
+    const fetchStreaming: Array<boolean | undefined> = [];
+    try {
+      const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+      const realAdapter = createOpenAIChatAdapter({
+        adapter: "openai-chat",
+        baseUrl,
+        authMode: "key",
+        apiKey: "local-test-key",
+      });
+      const adapter: ProviderAdapter = {
+        ...realAdapter,
+        async fetchResponse(request, context) {
+          fetchStreaming.push(context?.stream);
+          return fetch(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+            signal: context?.abortSignal,
+          });
+        },
+      };
+
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "gpt-5.6-luna", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter,
+        upstreamStreaming: false,
+        forwardProvider,
+        hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+        settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+        maxSearches: 1,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const frames = await collectSse(response.body!);
+      expect(upstreamBody?.stream).toBe(false);
+      expect(upstreamBody).not.toHaveProperty("stream_options");
+      expect(fetchStreaming).toEqual([false]);
+      expect(frames.some(frame => frame.event === "response.output_text.delta"
+        && frame.data.delta === "healthy buffered answer")).toBe(true);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    } finally {
+      upstream.stop(true);
+    }
+  });
+
   test("fast headers plus raw byte progress can outlive connectTimeoutMs", async () => {
     const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
     let bodyCancelled = 0;

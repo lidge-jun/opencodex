@@ -228,8 +228,11 @@ closes the stream with `response.incomplete` / `upstream_stall_timeout` and canc
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
 the watchdog.
 
-The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
-needed to decide whether to intercept a synthetic search call. Text explicitly phased as
+The web-search loop follows the final route's effective upstream streaming policy for every
+routed-model iteration. Streaming routes use `parseStream`; compatibility routes use bounded
+`parseResponse` while raw-byte progress, cancellation, inactivity limits, and the 32 MiB turn cap
+remain enforced. The client-facing response stays Responses SSE in both cases. The loop buffers the
+events needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
 progress visible. A Kiro stream EOF after user-facing text or reasoning gets one bounded completion
 retry, because neither the upstream text event nor `END_TURN` / `STOP_SEQUENCE` reliably distinguishes
