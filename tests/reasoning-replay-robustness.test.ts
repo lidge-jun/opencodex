@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { parseRequest } from "../src/responses/parser";
 import {
@@ -116,6 +116,53 @@ describe("reasoning replay — opt-in disk spill", () => {
 
     expect(peekReasoningForCall("call_expired", "thread-2")).toBeUndefined();
     expect(getReasoningReplayStats().entries).toBe(0);
+  });
+
+  test("expired spill entries are dropped and the spill file is rewritten after load", () => {
+    let clock = 0;
+    clearReasoningReplayCacheForTests(() => clock);
+    setReasoningReplayPersistenceForTests(true, spillFile);
+    rememberReasoningForCall("call_ttl_rewrite", REASONING, "thread-ttl-rewrite");
+    flushReasoningReplayCache();
+
+    clock = 61 * 60 * 1000; // past the 60-minute TTL
+    setReasoningReplayPersistenceForTests(false);
+    clearReasoningReplayCacheForTests(() => clock);
+    setReasoningReplayPersistenceForTests(true, spillFile);
+
+    expect(peekReasoningForCall("call_ttl_rewrite", "thread-ttl-rewrite")).toBeUndefined();
+    const reloaded = JSON.parse(readFileSync(spillFile, "utf8")) as { entries: unknown[] };
+    expect(reloaded.entries).toHaveLength(0);
+  });
+
+  test("future-dated spill entries are rejected on load and the file is rewritten", () => {
+    const clock = 1_000;
+    const future = clock + 5 * 60 * 1000;
+    clearReasoningReplayCacheForTests(() => clock);
+    writeFileSync(
+      spillFile,
+      JSON.stringify({
+        v: 1,
+        savedAt: future,
+        entries: [{ scope: "thread-future", callId: "call_future", text: REASONING, at: future }],
+      }),
+      "utf8",
+    );
+    setReasoningReplayPersistenceForTests(true, spillFile);
+
+    expect(peekReasoningForCall("call_future", "thread-future")).toBeUndefined();
+    const reloaded = JSON.parse(readFileSync(spillFile, "utf8")) as { entries: unknown[] };
+    expect(reloaded.entries).toHaveLength(0);
+  });
+
+  test("spill writes use a unique temp file and leave no remnants", () => {
+    setReasoningReplayPersistenceForTests(true, spillFile);
+    rememberReasoningForCall("call_tmp", REASONING, "thread-tmp");
+    flushReasoningReplayCache();
+
+    expect(existsSync(spillFile)).toBe(true);
+    const remnants = readdirSync(spillDir).filter(f => f !== basename(spillFile));
+    expect(remnants).toHaveLength(0);
   });
 
   test("corrupt or unreadable spill file loads as an empty cache without throwing", () => {

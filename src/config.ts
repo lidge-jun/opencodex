@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
+import { resolveOpenCodexConfigDir } from "./lib/config-dir";
 import {
   bumpConfigGenerationAtPath,
   bumpCurrentConfigGeneration,
@@ -549,7 +550,7 @@ let resolvedConfigDirCache: { raw: string | undefined; path: string } | null = n
 function resolveConfigDir(): string {
   const raw = process.env["OPENCODEX_HOME"]?.trim() || undefined;
   if (resolvedConfigDirCache && resolvedConfigDirCache.raw === raw) return resolvedConfigDirCache.path;
-  const path = raw ? resolve(expandUserPath(raw)) : join(homedir(), ".opencodex");
+  const path = resolveOpenCodexConfigDir();
   resolvedConfigDirCache = { raw, path };
   return path;
 }

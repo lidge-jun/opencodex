@@ -25,12 +25,15 @@
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveOpenCodexConfigDir } from "../lib/config-dir";
 
 const MAX_ENTRIES = 64;
 const MAX_TOTAL_BYTES = 256 * 1024;
 const TTL_MS = 60 * 60 * 1000;
+// Clock-skew tolerance when validating spilled timestamps: entries dated more
+// than this far in the future are rejected as invalid rather than trusted.
+const MAX_FUTURE_SKEW_MS = 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 750;
 const PERSIST_ENV = "OPENCODEX_REASONING_REPLAY_PERSIST";
 const PERSIST_FILE_ENV = "OPENCODEX_REASONING_REPLAY_FILE";
@@ -75,15 +78,9 @@ function persistFlagFromEnv(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-/** Mirror config.getConfigDir() resolution (OPENCODEX_HOME or ~/.opencodex) without importing config. */
+/** Shared resolution (OPENCODEX_HOME or ~/.opencodex) — see src/lib/config-dir.ts. */
 function defaultPersistPath(): string {
-  const raw = process.env.OPENCODEX_HOME?.trim();
-  let base: string;
-  if (!raw) base = join(homedir(), ".opencodex");
-  else if (raw === "~") base = homedir();
-  else if (raw.startsWith("~/") || raw.startsWith("~\\")) base = join(homedir(), raw.slice(2));
-  else base = raw;
-  return join(base, "reasoning-replay-cache.json");
+  return join(resolveOpenCodexConfigDir(), "reasoning-replay-cache.json");
 }
 
 function persistPathFromEnv(): string {
@@ -199,8 +196,11 @@ function writePersisted(): void {
     try {
       mkdirSync(dirname(persistPath), { recursive: true });
     } catch { /* best-effort */ }
-    const tmpPath = `${persistPath}.tmp`;
-    writeFileSync(tmpPath, JSON.stringify(payload), "utf8");
+    // Unique temp name + 0600 at creation, then atomic rename: a concurrent
+    // reader can never observe a half-written spill, and the final file never
+    // depends on a post-rename chmod that a rename may not preserve.
+    const tmpPath = `${persistPath}.${process.pid}.${Math.random().toString(36).slice(2, 10)}`;
+    writeFileSync(tmpPath, JSON.stringify(payload), { encoding: "utf8", mode: 0o600 });
     renameSync(tmpPath, persistPath);
     try { chmodSync(persistPath, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
     persistWrites += 1;
@@ -226,12 +226,26 @@ function loadPersisted(): void {
   }
   if (data?.v !== 1 || !Array.isArray(data.entries)) return;
   const at = now();
+  // Malformed, expired, or future-dated entries are dropped and the spill is
+  // rewritten so the file cannot accumulate junk that every reload re-parses.
+  let dirty = false;
   for (const entry of data.entries) {
-    if (!entry || typeof entry.callId !== "string" || typeof entry.text !== "string" || entry.text.length === 0) continue;
+    if (!entry || typeof entry.callId !== "string" || typeof entry.text !== "string" || entry.text.length === 0) {
+      dirty = true;
+      continue;
+    }
     const entryAt = typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : at;
-    if (at - entryAt >= TTL_MS) continue;
+    if (entryAt - at > MAX_FUTURE_SKEW_MS) {
+      dirty = true; // future-dated timestamps are invalid
+      continue;
+    }
+    if (at - entryAt >= TTL_MS) {
+      dirty = true; // expired
+      continue;
+    }
     rememberReasoningAt(entry.callId, entry.text, typeof entry.scope === "string" ? entry.scope : undefined, entryAt);
   }
+  if (dirty) writePersisted();
 }
 
 // ── Privacy-safe diagnostics (counters only, never reasoning text) ───────────
