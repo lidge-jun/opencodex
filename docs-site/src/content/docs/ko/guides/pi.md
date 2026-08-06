@@ -68,21 +68,19 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 내보낸 블록은 실시간 뷰가 아니라 고정 스냅샷입니다. provider를 추가하거나 모델
 가시성을 바꾼 뒤에는 `ocx export`를 다시 실행하고, 새 블록을 옛 블록 위에 병합하세요.
 
-## 인증 키
+## Pi의 `apiKey` placeholder
 
-**루프백 프록시는 키가 전혀 필요 없습니다.** opencodex는 기본적으로 `127.0.0.1`에
-바인드하고 그곳에서는 아무 것도 인증하지 않으므로, 내보낸 블록에는 실제 인증 정보가
-아니라 리터럴 placeholder인 `opencodex-loopback`이 들어갑니다. 환경 변수는 전혀
-관여하지 않습니다.
+Pi는 일반적으로 `/chat/completions`를 호출하며, 설정된 `apiKey`를 Bearer 인증 값으로
+보냅니다. 따라서 생성된 블록은 Pi의 일반 `apiKey` 필드에 비밀이 아닌 리터럴
+`opencodex-loopback`을 넣습니다.
 
-이 placeholder는 겉치레가 아니라 필수입니다. Pi는 모델 목록을 만들 때 `apiKey`를
-해석하는데, 값이 설정되지 않은 환경 변수 참조이면 provider 전체를 숨겨 버립니다.
-리터럴이어야 라우팅된 모든 모델이 보이며, 루프백에서 프록시는 이 값을 검사하지
-않습니다.
+이 리터럴은 프록시 admission credential도 upstream provider 키도 아닙니다. 루프백
+프록시는 이 값을 무시하며 credential을 전혀 요구하지 않습니다. 다만 모델 탐색에는
+필수입니다. Pi는 모델 목록을 만들 때 `apiKey`를 해석하고, 값이 설정되지 않은 환경 변수
+참조이면 provider 전체를 숨기므로, 리터럴이어야 라우팅된 모든 모델이 보입니다.
 
-Provider 키는 별개의 문제입니다. Anthropic / OpenAI / OpenRouter 키는 opencodex의
-자체 config에 있으며([Providers](/guides/providers/) 참조), 이 파일에는 절대
-나타나지 않습니다.
+Provider 키는 별개입니다. Anthropic / OpenAI / OpenRouter 키는 opencodex의 자체
+config에 있으며([Providers](/guides/providers/) 참조), 이 파일에는 절대 나타나지 않습니다.
 
 ## 모델 메타데이터
 

@@ -67,18 +67,19 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 The exported block is a static snapshot, not a live view. Re-run `ocx export` after adding a
 provider or changing model visibility, and merge the new block over the old one.
 
-## The admission key
+## The Pi `apiKey` placeholder
 
-**A loopback proxy needs no key at all.** opencodex binds `127.0.0.1` by default and authenticates
-nothing there, so the exported block carries the literal placeholder `opencodex-loopback` rather
-than a real credential — no environment variable is involved.
+Pi normally calls `/chat/completions` and sends its configured `apiKey` as a Bearer authorization
+value. The generated block therefore includes the non-secret literal `opencodex-loopback` in Pi's
+normal `apiKey` field.
 
-The placeholder is load-bearing, not cosmetic: Pi resolves `apiKey` while building its model list
-and hides the whole provider when the value is an env reference that is not set. A literal keeps
-every routed model visible, and the proxy never checks it on loopback.
+That literal is neither a proxy admission credential nor an upstream provider key. The loopback
+proxy ignores it and requires no credential at all. It is still load-bearing for discovery: Pi
+resolves `apiKey` while building its model list and hides the whole provider when the value is an
+unset env reference, so a literal keeps every routed model visible.
 
-Your provider keys are a different matter — the Anthropic / OpenAI / OpenRouter key lives in
-opencodex's own config, per [Providers](/guides/providers/), and never appears in this file.
+Your provider keys are separate — the Anthropic / OpenAI / OpenRouter key lives in opencodex's own
+config, per [Providers](/guides/providers/), and never appears in this file.
 
 ## Model metadata
 

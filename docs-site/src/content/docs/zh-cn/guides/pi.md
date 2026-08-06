@@ -58,11 +58,11 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 导出的块是静态快照，不是实时视图。新增 provider 或更改模型可见性后，请重新运行 `ocx export`，再用新的块覆盖旧块进行合并。
 
-## 准入密钥
+## Pi 的 `apiKey` 占位值
 
-**回环代理根本不需要 key。** opencodex 默认绑定 `127.0.0.1`，在那里不做任何认证，所以导出的块携带的是字面占位值 `opencodex-loopback`，而不是真实凭据 - 完全不涉及环境变量。
+Pi 通常调用 `/chat/completions`，并将配置的 `apiKey` 作为 Bearer 认证值发送。因此，生成的块会在 Pi 的常规 `apiKey` 字段中写入非机密字面值 `opencodex-loopback`。
 
-这个占位值不是装饰，而是必需的：Pi 在构建模型列表时会解析 `apiKey`，一旦该值是未设置的环境变量引用，它就会隐藏整个 provider。使用字面值才能让所有已路由模型保持可见，而回环上的代理从不校验这个值。
+这个字面值既不是代理准入凭据，也不是上游 provider key。回环代理会忽略它，并且完全不需要凭据。不过它对模型发现是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果该值是未设置的环境变量引用，它就会隐藏整个 provider；使用字面值才能让所有已路由模型保持可见。
 
 Provider key 是另一回事：你的 Anthropic / OpenAI / OpenRouter key 保存在 opencodex 自己的配置中，见 [Providers](/guides/providers/)，它绝不会出现在这个文件里。
 
