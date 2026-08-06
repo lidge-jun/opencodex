@@ -14,14 +14,26 @@
  * process-wide key would let one conversation's reasoning bleed into another
  * when ids collide (CodeRabbit P1 on #971).
  *
- * Privacy: entries hold reasoning text in memory only — never logged,
- * serialized, or exported. Bounded by entry count, total bytes, and TTL, so a
- * long-lived proxy cannot grow without limit.
+ * Privacy: entries hold reasoning text. By default they live in memory only —
+ * never logged or exported. Operators may opt into a bounded, TTL'd disk spill
+ * (OPENCODEX_REASONING_REPLAY_PERSIST=1, optional
+ * OPENCODEX_REASONING_REPLAY_FILE override) so a proxy restart mid-round can
+ * still replay a call's reasoning; the spill file is written atomically with
+ * best-effort 0600 permissions. Diagnostics expose counters only, never
+ * reasoning text. The store is bounded by entry count, total bytes, and TTL,
+ * so a long-lived proxy cannot grow without limit.
  */
+
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 const MAX_ENTRIES = 64;
 const MAX_TOTAL_BYTES = 256 * 1024;
 const TTL_MS = 60 * 60 * 1000;
+const PERSIST_DEBOUNCE_MS = 750;
+const PERSIST_ENV = "OPENCODEX_REASONING_REPLAY_PERSIST";
+const PERSIST_FILE_ENV = "OPENCODEX_REASONING_REPLAY_FILE";
 
 interface CacheEntry {
   text: string;
@@ -29,13 +41,55 @@ interface CacheEntry {
   at: number;
 }
 
+interface PersistedEntry {
+  scope: string;
+  callId: string;
+  text: string;
+  at: number;
+}
+
+interface PersistFile {
+  v: 1;
+  savedAt: number;
+  entries: PersistedEntry[];
+}
+
 const entries = new Map<string, CacheEntry>();
 let totalBytes = 0;
 let clockForTests: (() => number) | null = null;
+let hits = 0;
+let misses = 0;
+const bareSerializationsByModel = new Map<string, number>();
+let persistEnabled = persistFlagFromEnv();
+let persistPath = persistPathFromEnv();
+let persistTimer: ReturnType<typeof setTimeout> | undefined;
+let persistWrites = 0;
+let persistLastError: string | undefined;
 
 const now = (): number => clockForTests?.() ?? Date.now();
 const keyFor = (callId: string, scope: string | undefined): string =>
   `${scope ?? "global"}\u0000${callId}`;
+
+function persistFlagFromEnv(): boolean {
+  const raw = process.env[PERSIST_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/** Mirror config.getConfigDir() resolution (OPENCODEX_HOME or ~/.opencodex) without importing config. */
+function defaultPersistPath(): string {
+  const raw = process.env.OPENCODEX_HOME?.trim();
+  let base: string;
+  if (!raw) base = join(homedir(), ".opencodex");
+  else if (raw === "~") base = homedir();
+  else if (raw.startsWith("~/") || raw.startsWith("~\\")) base = join(homedir(), raw.slice(2));
+  else base = raw;
+  return join(base, "reasoning-replay-cache.json");
+}
+
+function persistPathFromEnv(): string {
+  const raw = process.env[PERSIST_FILE_ENV]?.trim();
+  return raw && raw.length > 0 ? raw : defaultPersistPath();
+}
 
 /**
  * Record the raw reasoning text that preceded the given tool call.
@@ -44,11 +98,14 @@ const keyFor = (callId: string, scope: string | undefined): string =>
  * id is never read again.
  */
 export function rememberReasoningForCall(callId: string, text: string, scope?: string): void {
+  rememberReasoningAt(callId, text, scope, now());
+}
+
+function rememberReasoningAt(callId: string, text: string, scope: string | undefined, at: number): void {
   if (!callId || typeof text !== "string" || text.length === 0) return;
   const bytes = Buffer.byteLength(text, "utf8");
   // A single entry larger than the whole budget would immediately evict itself.
   if (bytes > MAX_TOTAL_BYTES) return;
-  const at = now();
   // Delete every due entry first so expired reasoning cannot linger until a
   // later peek or capacity eviction.
   for (const [key, entry] of entries) {
@@ -78,6 +135,7 @@ export function rememberReasoningForCall(callId: string, text: string, scope?: s
     totalBytes -= evicted.bytes;
     entries.delete(oldestKey);
   }
+  if (persistEnabled) schedulePersist();
 }
 
 /**
@@ -88,18 +146,155 @@ export function peekReasoningForCall(callId: string, scope?: string): string | u
   if (!callId) return undefined;
   const key = keyFor(callId, scope);
   const entry = entries.get(key);
-  if (!entry) return undefined;
+  if (!entry) {
+    misses += 1;
+    return undefined;
+  }
   if (now() - entry.at >= TTL_MS) {
     entries.delete(key);
     totalBytes -= entry.bytes;
+    misses += 1;
     return undefined;
   }
+  hits += 1;
   return entry.text;
 }
+
+// ── Opt-in disk spill (issue #950 robustness: survive proxy restarts) ────────
+
+function schedulePersist(): void {
+  if (!persistEnabled) return;
+  if (persistTimer !== undefined) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = undefined;
+    writePersisted();
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+/** Synchronously flush the opt-in spill file (debounced writes call this too). */
+export function flushReasoningReplayCache(): void {
+  if (persistTimer !== undefined) {
+    clearTimeout(persistTimer);
+    persistTimer = undefined;
+  }
+  writePersisted();
+}
+
+function writePersisted(): void {
+  if (!persistEnabled) return;
+  try {
+    const payload: PersistFile = {
+      v: 1,
+      savedAt: now(),
+      entries: [...entries.entries()].map(([key, entry]) => {
+        const sep = key.indexOf("\u0000");
+        return {
+          scope: sep === -1 ? "global" : key.slice(0, sep),
+          callId: sep === -1 ? key : key.slice(sep + 1),
+          text: entry.text,
+          at: entry.at,
+        };
+      }),
+    };
+    try {
+      mkdirSync(dirname(persistPath), { recursive: true });
+    } catch { /* best-effort */ }
+    const tmpPath = `${persistPath}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(payload), "utf8");
+    renameSync(tmpPath, persistPath);
+    try { chmodSync(persistPath, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+    persistWrites += 1;
+    persistLastError = undefined;
+  } catch (err) {
+    persistLastError = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function loadPersisted(): void {
+  if (!persistEnabled || !existsSync(persistPath)) return;
+  let raw: string;
+  try {
+    raw = readFileSync(persistPath, "utf8");
+  } catch {
+    return; // unreadable spill is not worth failing the proxy over
+  }
+  let data: Partial<PersistFile>;
+  try {
+    data = JSON.parse(raw) as Partial<PersistFile>;
+  } catch {
+    return; // corrupt spill file: treat as empty, overwrite on next flush
+  }
+  if (data?.v !== 1 || !Array.isArray(data.entries)) return;
+  const at = now();
+  for (const entry of data.entries) {
+    if (!entry || typeof entry.callId !== "string" || typeof entry.text !== "string" || entry.text.length === 0) continue;
+    const entryAt = typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : at;
+    if (at - entryAt >= TTL_MS) continue;
+    rememberReasoningAt(entry.callId, entry.text, typeof entry.scope === "string" ? entry.scope : undefined, entryAt);
+  }
+}
+
+// ── Privacy-safe diagnostics (counters only, never reasoning text) ───────────
+
+/** Count a bare tool-call continuation serialized for a preserveReasoningContentModels model (#950). */
+export function recordBareToolCallSerialization(modelId: string): void {
+  if (!modelId) return;
+  bareSerializationsByModel.set(modelId, (bareSerializationsByModel.get(modelId) ?? 0) + 1);
+}
+
+export interface ReasoningReplayStats {
+  entries: number;
+  totalBytes: number;
+  hits: number;
+  misses: number;
+  bareSerializationsByModel: Record<string, number>;
+  persistence: {
+    enabled: boolean;
+    path: string;
+    writes: number;
+    lastError?: string;
+  };
+}
+
+/** Counters and bounds only — never reasoning text (issue #950 privacy checklist). */
+export function getReasoningReplayStats(): ReasoningReplayStats {
+  return {
+    entries: entries.size,
+    totalBytes,
+    hits,
+    misses,
+    bareSerializationsByModel: Object.fromEntries(bareSerializationsByModel),
+    persistence: {
+      enabled: persistEnabled,
+      path: persistPath,
+      writes: persistWrites,
+      ...(persistLastError !== undefined ? { lastError: persistLastError } : {}),
+    },
+  };
+}
+
+// Boot-time rehydration when persistence is opted in.
+if (persistEnabled) loadPersisted();
+
+// ── Test seams ────────────────────────────────────────────────────────────────
 
 /** Test-only: reset the cache and optionally pin the clock. */
 export function clearReasoningReplayCacheForTests(clock?: (() => number) | null): void {
   entries.clear();
   totalBytes = 0;
+  hits = 0;
+  misses = 0;
+  bareSerializationsByModel.clear();
   clockForTests = clock ?? null;
+}
+
+/** Test-only: toggle the opt-in spill (loads the file when enabling). */
+export function setReasoningReplayPersistenceForTests(enabled: boolean, path?: string): void {
+  if (persistTimer !== undefined) {
+    clearTimeout(persistTimer);
+    persistTimer = undefined;
+  }
+  persistEnabled = enabled;
+  if (path !== undefined && path.length > 0) persistPath = path;
+  if (enabled) loadPersisted();
 }

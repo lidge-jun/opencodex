@@ -8,7 +8,11 @@ import { isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
 import { identifyRoutedModel } from "./identity";
-import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
+import {
+  getReasoningReplayStats,
+  peekReasoningForCall,
+  recordBareToolCallSerialization,
+} from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import {
@@ -193,6 +197,22 @@ function toolResultImageChatParts(content: string | OcxContentPart[]): unknown[]
   return parts;
 }
 
+// #950 diagnostics: a bare tool-call continuation for a preserveReasoningContentModels
+// provider is the exact 400 shape this fix eliminates. Count every occurrence
+// (privacy-safe) and surface a throttled counter line — never reasoning text.
+let lastBareToolCallWarnAt = 0;
+const BARE_TOOL_CALL_WARN_MIN_INTERVAL_MS = 60_000;
+function noteBareToolCallSerialization(modelId: string): void {
+  recordBareToolCallSerialization(modelId);
+  const at = Date.now();
+  if (at - lastBareToolCallWarnAt < BARE_TOOL_CALL_WARN_MIN_INTERVAL_MS) return;
+  lastBareToolCallWarnAt = at;
+  const stats = getReasoningReplayStats();
+  console.warn(
+    `[opencodex] reasoning replay miss: bare tool-call continuation for preserveReasoningContentModels model="${modelId}" (cache hits=${stats.hits}, misses=${stats.misses}); reasoning text is never logged`,
+  );
+}
+
 function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] {
   const out: unknown[] = [];
   const { context, options } = parsed;
@@ -346,6 +366,8 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           // recorded under every call id — join unique texts only.
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
+          } else {
+            noteBareToolCallSerialization(parsed.modelId);
           }
         }
         if (reasoningContent.length > 0 && modelInList(provider.preserveReasoningContentModels, parsed.modelId)) {
@@ -412,6 +434,13 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
             toolCallId && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
               ? peekReasoningForCall(toolCallId, replayCacheScope)
               : undefined;
+          if (
+            !cachedReasoning
+            && toolCallId
+            && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
+          ) {
+            noteBareToolCallSerialization(parsed.modelId);
+          }
           out.push({
             role: "assistant",
             content: emptyAssistantContent(provider),
