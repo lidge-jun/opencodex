@@ -77,7 +77,7 @@ Provider key 是另一回事：你的 Anthropic / OpenAI / OpenRouter key 保存
 ## Schema 状态
 
 :::note[已在真实安装上验证]
-上面的结构已在安装了 Pi 0.83.x 的机器上、针对真实的 `~/.pi/agent/models.json` 完成验证：该块通过校验，并且所有已路由模型都会出现在 Pi 的模型选择器中。如果更新版本的 Pi 拒绝这个导出块，问题在我们这边 - 请带上 Pi 的报错信息[提交 issue](https://github.com/lidge-jun/opencodex/issues)。
+上面的结构已在安装了 Pi 0.83.x 的机器上、针对真实的 `~/.pi/agent/models.json` 完成验证：该块通过校验，并且所有具有 Pi 所支持输入模态的已导出路由模型都会出现在 Pi 的模型选择器中。如果更新版本的 Pi 拒绝这个导出块，问题在我们这边 - 请带上 Pi 的报错信息[提交 issue](https://github.com/lidge-jun/opencodex/issues)。
 :::
 
 ## 需求

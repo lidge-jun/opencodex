@@ -100,8 +100,8 @@ a guess.
 
 :::note[Verified against a real install]
 The shape above has been verified against Pi 0.83.x on a real `~/.pi/agent/models.json`: the block
-validates and every routed model appears in Pi's picker. If a newer Pi rejects the exported
-block, the mismatch is on our side — please
+validates, and every exported routed model with a Pi-supported input modality appears in Pi's
+picker. If a newer Pi rejects the exported block, the mismatch is on our side — please
 [open an issue](https://github.com/lidge-jun/opencodex/issues) with what Pi reported.
 :::
 

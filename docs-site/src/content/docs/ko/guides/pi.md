@@ -101,8 +101,8 @@ config에 있으며([Providers](/guides/providers/) 참조), 이 파일에는 �
 
 :::note[실제 설치에서 검증됨]
 위의 형태는 Pi 0.83.x가 설치된 머신의 실제 `~/.pi/agent/models.json`으로 검증했습니다.
-블록이 유효하고 라우팅된 모든 모델이 Pi 선택기에 표시됩니다. 더 새로운 Pi가 이 블록을
-거부하면 문제는 우리 쪽에 있습니다. Pi가 무엇을 보고했는지와 함께
+블록이 유효하고 Pi가 지원하는 입력 modality를 가진 내보낸 라우팅 모델이 모두 선택기에
+표시됩니다. 더 새로운 Pi가 이 블록을 거부하면 문제는 우리 쪽에 있습니다. Pi가 무엇을 보고했는지와 함께
 [issue를 열어주세요](https://github.com/lidge-jun/opencodex/issues).
 :::
 
