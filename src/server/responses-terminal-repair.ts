@@ -68,7 +68,7 @@ export function relayResponsesSseWithTerminalRepair(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  const added = new Set<number>();
+  const added = new Map<number, { type?: unknown; id?: unknown }>();
   const completed = new Map<number, { item: Record<string, unknown>; bytes: number }>();
   let created: Record<string, unknown> | null = null;
   let createdBytes = 0;
@@ -78,8 +78,16 @@ export function relayResponsesSseWithTerminalRepair(
   let timer: unknown;
   let timerGeneration = 0;
   let realTerminalSeen = false;
+  let tainted = false;
   let disposed = false;
   let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const onUpstreamAbort = (): void => {
+    if (disposed) return;
+    dispose();
+    reader.cancel(upstream.signal.reason).catch(() => {});
+    try { controllerRef?.close(); } catch { /* already closed */ }
+  };
 
   const releaseRetainedState = (): void => {
     if (createdBytes > 0) budget.releaseRetained(createdBytes, { kind: "retained_collectors" });
@@ -106,6 +114,7 @@ export function relayResponsesSseWithTerminalRepair(
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    upstream.signal.removeEventListener("abort", onUpstreamAbort);
     cancelTimer();
     releaseRetainedState();
     releaseBuffer();
@@ -142,8 +151,8 @@ export function relayResponsesSseWithTerminalRepair(
   };
 
   const completeCandidate = (): boolean => {
-    if (realTerminalSeen || !created || completed.size === 0 || added.size !== completed.size) return false;
-    for (const index of added) {
+    if (realTerminalSeen || tainted || !created || completed.size === 0 || added.size !== completed.size) return false;
+    for (const index of added.keys()) {
       const retained = completed.get(index);
       if (!retained || !isCompleteItem(retained.item)) return false;
     }
@@ -151,30 +160,44 @@ export function relayResponsesSseWithTerminalRepair(
     return true;
   };
 
-  const syntheticTerminal = (): Uint8Array => {
+  const syntheticTerminal = (kind: "completed" | "incomplete"): Uint8Array => {
     const output = [...completed.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, retained]) => retained.item);
     const response = {
-      ...created!,
-      status: "completed",
+      ...(created ?? {}),
+      status: kind,
       completed_at: Math.floor(scheduler.nowMs() / 1_000),
       output,
+      ...(kind === "incomplete"
+        ? { incomplete_details: { reason: "missing_terminal_event" } }
+        : {}),
     };
-    return encoder.encode(`event: response.completed\ndata: ${JSON.stringify({
-      type: "response.completed",
+    const type = `response.${kind}`;
+    return encoder.encode(`event: ${type}\ndata: ${JSON.stringify({
+      type,
       response,
       sequence_number: maxSequence + 1,
     })}\n\n`);
   };
 
+  const emitSynthetic = (
+    kind: "completed" | "incomplete",
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): boolean => {
+    if (disposed || realTerminalSeen) return false;
+    realTerminalSeen = true;
+    cancelTimer();
+    controller.enqueue(syntheticTerminal(kind));
+    releaseRetainedState();
+    return true;
+  };
+
   const commitSynthetic = (generation: number): void => {
     if (disposed || realTerminalSeen || generation !== timerGeneration || !completeCandidate()) return;
     timer = undefined;
-    realTerminalSeen = true;
     try {
-      controllerRef?.enqueue(syntheticTerminal());
-      controllerRef?.close();
+      if (controllerRef && emitSynthetic("completed", controllerRef)) controllerRef.close();
     } catch {
       /* downstream already closed */
     }
@@ -188,15 +211,20 @@ export function relayResponsesSseWithTerminalRepair(
     timer = scheduler.schedule(() => commitSynthetic(generation), policy.graceMs);
   };
 
-  const inspectPayload = (payload: string | null): void => {
-    if (!payload || payload === "[DONE]" || realTerminalSeen) return;
+  const inspectPayload = (payload: string | null): "done" | "ordinary" => {
+    if (payload === "[DONE]") return "done";
+    if (!payload || realTerminalSeen) return "ordinary";
     let parsed: unknown;
     try {
       parsed = JSON.parse(payload);
     } catch {
-      return;
+      tainted = true;
+      return "ordinary";
     }
-    if (!isPlainRecord(parsed)) return;
+    if (!isPlainRecord(parsed)) {
+      tainted = true;
+      return "ordinary";
+    }
     if (Number.isInteger(parsed.sequence_number)) {
       maxSequence = Math.max(maxSequence, parsed.sequence_number as number);
     }
@@ -205,7 +233,7 @@ export function relayResponsesSseWithTerminalRepair(
       realTerminalSeen = true;
       cancelTimer();
       releaseRetainedState();
-      return;
+      return "ordinary";
     }
 
     cancelTimer();
@@ -213,21 +241,42 @@ export function relayResponsesSseWithTerminalRepair(
       retainCreated(parsed.response);
     } else if (type === "response.output_item.added") {
       const index = outputIndex(parsed.output_index);
-      if (index !== null) added.add(index);
+      if (index === null || !isPlainRecord(parsed.item) || added.has(index) || completed.has(index)) {
+        tainted = true;
+      } else {
+        added.set(index, { type: parsed.item.type, id: parsed.item.id });
+      }
     } else if (type === "response.output_item.done") {
       const index = outputIndex(parsed.output_index);
-      if (index !== null && isPlainRecord(parsed.item)) retainCompleted(index, parsed.item);
+      if (index === null || !isPlainRecord(parsed.item) || !added.has(index) || completed.has(index)) {
+        tainted = true;
+      } else {
+        const opened = added.get(index)!;
+        if (opened.type !== parsed.item.type || opened.id !== parsed.item.id) tainted = true;
+        retainCompleted(index, parsed.item);
+      }
     }
     maybeArmTimer();
+    return "ordinary";
   };
 
-  const emitBlocks = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+  const emitBlocks = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     let next: ReturnType<typeof nextSseBlock>;
     while ((next = nextSseBlock(buffer))) {
       replaceBuffer(next.rest);
-      inspectPayload(sseDataPayload(next.block));
+      const kind = inspectPayload(sseDataPayload(next.block));
+      if (kind === "done" && !realTerminalSeen) {
+        emitSynthetic(completeCandidate() ? "completed" : "incomplete", controller);
+      }
       controller.enqueue(encoder.encode(next.block + next.delimiter));
+      if (kind === "done") {
+        reader.cancel("Responses stream ended with DONE").catch(() => {});
+        dispose();
+        controller.close();
+        return true;
+      }
     }
+    return false;
   };
 
   const pump = async (controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> => {
@@ -238,8 +287,14 @@ export function relayResponsesSseWithTerminalRepair(
         if (done) {
           appendBuffer(decoder.decode());
           if (buffer.length > 0) {
-            inspectPayload(sseDataPayload(buffer));
+            const kind = inspectPayload(sseDataPayload(buffer));
+            if (kind === "done" && !realTerminalSeen) {
+              emitSynthetic(completeCandidate() ? "completed" : "incomplete", controller);
+            }
             controller.enqueue(encoder.encode(buffer));
+          }
+          if (!realTerminalSeen) {
+            emitSynthetic(completeCandidate() ? "completed" : "incomplete", controller);
           }
           releaseBuffer();
           dispose();
@@ -247,7 +302,7 @@ export function relayResponsesSseWithTerminalRepair(
           return;
         }
         appendBuffer(decoder.decode(value, { stream: true }));
-        emitBlocks(controller);
+        if (emitBlocks(controller)) return;
       }
     } catch (error) {
       if (disposed) return;
@@ -259,6 +314,11 @@ export function relayResponsesSseWithTerminalRepair(
   return new ReadableStream<Uint8Array>({
     start(controller) {
       controllerRef = controller;
+      if (upstream.signal.aborted) {
+        onUpstreamAbort();
+        return;
+      }
+      upstream.signal.addEventListener("abort", onUpstreamAbort, { once: true });
       void pump(controller);
     },
     cancel(reason) {

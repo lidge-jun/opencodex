@@ -153,6 +153,59 @@ function capturedToolCallLifecycle(): string {
   ].join("");
 }
 
+function completedMessageLifecycle(text = "hello"): string {
+  return [
+    sse({
+      type: "response.created",
+      response: { id: "resp_message", object: "response", status: "in_progress", output: [] },
+      sequence_number: 0,
+    }),
+    sse({
+      type: "response.output_item.added",
+      item: { type: "message", id: "msg_probe", role: "assistant", status: "in_progress", content: [] },
+      output_index: 0,
+      sequence_number: 1,
+    }),
+    sse({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id: "msg_probe",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      },
+      output_index: 0,
+      sequence_number: 2,
+    }),
+  ].join("");
+}
+
+function terminalTypes(text: string): string[] {
+  return [...text.matchAll(/"type":"(response\.(?:completed|failed|incomplete))"/g)]
+    .map(match => match[1]!);
+}
+
+async function repairClosedText(text: string): Promise<{ output: string; cancelled: boolean }> {
+  let cancelled = false;
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+    cancel() { cancelled = true; },
+  });
+  const upstream = new AbortController();
+  const repaired = relayResponsesSseWithTerminalRepair(
+    source,
+    upstream,
+    POLICY,
+    createTestTranslatorBudget(),
+    new ManualScheduler(),
+  );
+  return { output: await readAll(relaySseWithFailedTail(repaired, upstream)), cancelled };
+}
+
 describe("DeepSeek Responses terminal repair", () => {
   test("a healthy stream with a real terminal is relayed byte-identical", async () => {
     const lifecycle = capturedToolCallLifecycle();
@@ -203,6 +256,234 @@ describe("DeepSeek Responses terminal repair", () => {
     expect(output).toContain('"call_id":"call_probe"');
     expect(source.cancelled()).toBe(true);
     expect(scheduler.pending()).toBe(0);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("new activity invalidates the old grace generation and waits after the new item", async () => {
+    const source = controlledSource();
+    const scheduler = new ManualScheduler();
+    const budget = createTestTranslatorBudget();
+    const upstream = new AbortController();
+    const repaired = relayResponsesSseWithTerminalRepair(source.stream, upstream, POLICY, budget, scheduler);
+    let resolved = false;
+    const outputPromise = readAll(relaySseWithFailedTail(repaired, upstream)).then(output => {
+      resolved = true;
+      return output;
+    });
+
+    source.push(completedMessageLifecycle("first"));
+    await settle();
+    scheduler.advance(4_999);
+    source.push([
+      sse({
+        type: "response.output_item.added",
+        item: { type: "message", id: "msg_second", role: "assistant", status: "in_progress", content: [] },
+        output_index: 1,
+        sequence_number: 3,
+      }),
+      sse({
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          id: "msg_second",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "second", annotations: [] }],
+        },
+        output_index: 1,
+        sequence_number: 4,
+      }),
+    ].join(""));
+    await settle();
+    scheduler.advance(1);
+    await settle();
+    expect(resolved).toBe(false);
+
+    scheduler.advance(4_999);
+    const output = await outputPromise;
+    expect(terminalTypes(output)).toEqual(["response.completed"]);
+    expect(output).toContain('"text":"first"');
+    expect(output).toContain('"text":"second"');
+    expect(scheduler.pending()).toBe(0);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("EOF synthesizes completed only for a complete candidate", async () => {
+    const { output } = await repairClosedText(completedMessageLifecycle());
+    expect(terminalTypes(output)).toEqual(["response.completed"]);
+    expect(output.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  test("DONE is replaced by completed then one DONE only for a complete candidate", async () => {
+    const { output } = await repairClosedText(completedMessageLifecycle() + "data: [DONE]\n\n");
+    expect(terminalTypes(output)).toEqual(["response.completed"]);
+    expect(output.match(/data: \[DONE\]/g)?.length).toBe(1);
+    expect(output.indexOf("response.completed")).toBeLessThan(output.indexOf("data: [DONE]"));
+  });
+
+  test("open output items end as incomplete, never completed", async () => {
+    const input = [
+      sse({ type: "response.created", response: { id: "resp_open", status: "in_progress", output: [] }, sequence_number: 0 }),
+      sse({
+        type: "response.output_item.added",
+        item: { type: "message", id: "msg_open", role: "assistant", status: "in_progress", content: [] },
+        output_index: 0,
+        sequence_number: 1,
+      }),
+    ].join("");
+    const { output } = await repairClosedText(input);
+    expect(terminalTypes(output)).toEqual(["response.incomplete"]);
+    expect(output).not.toContain('"type":"response.completed"');
+  });
+
+  test("invalid function arguments end as incomplete, never completed", async () => {
+    const input = capturedToolCallLifecycle().replaceAll('{\\"text\\":\\"OK\\"}', "{broken");
+    const { output } = await repairClosedText(input);
+    expect(terminalTypes(output)).toEqual(["response.incomplete"]);
+  });
+
+  test("unknown output item types taint synthetic success", async () => {
+    const input = [
+      sse({ type: "response.created", response: { id: "resp_unknown", status: "in_progress", output: [] }, sequence_number: 0 }),
+      sse({ type: "response.output_item.added", item: { type: "computer_call", id: "cmp_1", status: "in_progress" }, output_index: 0, sequence_number: 1 }),
+      sse({ type: "response.output_item.done", item: { type: "computer_call", id: "cmp_1", status: "completed" }, output_index: 0, sequence_number: 2 }),
+    ].join("");
+    const { output } = await repairClosedText(input);
+    expect(terminalTypes(output)).toEqual(["response.incomplete"]);
+  });
+
+  test("duplicate or contradictory output indices taint synthetic success", async () => {
+    const input = [
+      sse({ type: "response.created", response: { id: "resp_duplicate", status: "in_progress", output: [] }, sequence_number: 0 }),
+      sse({ type: "response.output_item.added", item: { type: "reasoning", id: "rs_1", status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+      sse({ type: "response.output_item.added", item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] }, output_index: 0, sequence_number: 2 }),
+      sse({
+        type: "response.output_item.done",
+        item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "x" }] },
+        output_index: 0,
+        sequence_number: 3,
+      }),
+    ].join("");
+    const { output } = await repairClosedText(input);
+    expect(terminalTypes(output)).toEqual(["response.incomplete"]);
+  });
+
+  test("real completed failed and incomplete terminals beat the timer", async () => {
+    for (const terminal of ["completed", "failed", "incomplete"] as const) {
+      const scheduler = new ManualScheduler();
+      const suffix = sse({
+        type: `response.${terminal}`,
+        response: { id: `resp_${terminal}`, status: terminal },
+        sequence_number: 3,
+      });
+      const input = completedMessageLifecycle() + suffix + "data: [DONE]\n\n";
+      const budget = createTestTranslatorBudget();
+      const output = await readAll(relayResponsesSseWithTerminalRepair(
+        streamFromText(input),
+        new AbortController(),
+        POLICY,
+        budget,
+        scheduler,
+      ));
+      scheduler.advance(5_000);
+      expect(terminalTypes(output)).toEqual([`response.${terminal}`]);
+      expect(scheduler.pending()).toBe(0);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    }
+  });
+
+  test("a timer racing a real terminal commits exactly one terminal", async () => {
+    const source = controlledSource();
+    const scheduler = new ManualScheduler();
+    const budget = createTestTranslatorBudget();
+    const outputPromise = readAll(relayResponsesSseWithTerminalRepair(
+      source.stream,
+      new AbortController(),
+      POLICY,
+      budget,
+      scheduler,
+    ));
+    source.push(completedMessageLifecycle());
+    await settle();
+    source.push(sse({ type: "response.completed", response: { id: "resp_message", status: "completed" }, sequence_number: 3 }));
+    source.close();
+    scheduler.advance(5_000);
+    const output = await outputPromise;
+    expect(terminalTypes(output)).toEqual(["response.completed"]);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  test("fragmented UTF-8 and SSE delimiters preserve lifecycle state", async () => {
+    const input = completedMessageLifecycle("你好")
+      + sse({ type: "response.completed", response: { id: "resp_message", status: "completed" }, sequence_number: 3 })
+      + "data: [DONE]\n\n";
+    const bytes = encoder.encode(input);
+    const chunks = [bytes.subarray(0, 37), bytes.subarray(37, 91), bytes.subarray(91, 173), bytes.subarray(173)];
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    const output = await readAll(relayResponsesSseWithTerminalRepair(
+      source,
+      new AbortController(),
+      POLICY,
+      createTestTranslatorBudget(),
+      new ManualScheduler(),
+    ));
+    expect(output).toBe(input);
+    expect(terminalTypes(output)).toEqual(["response.completed"]);
+  });
+
+  test("client cancel and upstream abort suppress synthetic completion", async () => {
+    const cancelSource = controlledSource();
+    const cancelScheduler = new ManualScheduler();
+    const cancelUpstream = new AbortController();
+    const cancelled = relayResponsesSseWithTerminalRepair(
+      cancelSource.stream,
+      cancelUpstream,
+      POLICY,
+      createTestTranslatorBudget(),
+      cancelScheduler,
+    );
+    cancelSource.push(completedMessageLifecycle());
+    await settle();
+    await cancelled.cancel("client gone");
+    cancelScheduler.advance(5_000);
+    expect(cancelSource.cancelled()).toBe(true);
+    expect(cancelScheduler.pending()).toBe(0);
+
+    const abortSource = controlledSource();
+    const abortScheduler = new ManualScheduler();
+    const abortUpstream = new AbortController();
+    const aborted = relayResponsesSseWithTerminalRepair(
+      abortSource.stream,
+      abortUpstream,
+      POLICY,
+      createTestTranslatorBudget(),
+      abortScheduler,
+    );
+    abortSource.push(completedMessageLifecycle());
+    await settle();
+    abortUpstream.abort("shutdown");
+    await settle();
+    expect(abortSource.cancelled()).toBe(true);
+    expect(abortScheduler.pending()).toBe(0);
+    await aborted.cancel("test cleanup");
+  });
+
+  test("retained-state overflow throws translation_buffer_limit and releases budget", async () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 128 });
+    const source = streamFromText(completedMessageLifecycle("x".repeat(512)));
+    const repaired = relayResponsesSseWithTerminalRepair(
+      source,
+      new AbortController(),
+      POLICY,
+      budget,
+      new ManualScheduler(),
+    );
+    await expect(readAll(repaired)).rejects.toMatchObject({ code: "translation_buffer_limit" });
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 });
