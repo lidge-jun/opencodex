@@ -250,6 +250,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const switchActionLabel = t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext");
   const pauseBusy = pauseUpdatingId !== null || pausingExhausted;
   const autoSwitchThreshold = autoSwitch.threshold ?? 0;
+  // The standalone Codex Auth page keeps the doctor-copy affordance; the embedded
+  // Providers workspace account surface does not.
+  const showDoctorCopy = !embedded;
 
   return (
     <div>
@@ -290,8 +293,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             pauseUpdatingId={pauseUpdatingId}
             pauseBusy={pauseBusy}
             onOpenReset={openResetPopup}
-            onCopyDoctor={copyDoctor}
-            doctorCopyOutcomeFor={doctorCopy.outcomeFor}
+            onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
+            doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
           />
 
           <div className="section-sep">
@@ -322,8 +325,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             onReauth={openReauth}
             onEditAlias={editAlias}
             onRemove={remove}
-            onCopyDoctor={copyDoctor}
-            doctorCopyOutcomeFor={doctorCopy.outcomeFor}
+            onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
+            doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
           />
         </>
       )}

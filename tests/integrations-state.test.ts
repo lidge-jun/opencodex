@@ -16,7 +16,7 @@ import { createIntegrationStateStore } from "../src/integrations/store";
 import type { OcxConfig } from "../src/types";
 
 /**
- * Activation coverage for devlog/_plan/260802_client_toggle_api/021 §6.
+ * Activation coverage for devlog/_fin/260802_client_toggle_api/021 §6.
  *
  * Every fixture is built DIRECTLY on disk — write a config, write a record,
  * classify — because the writer does not exist until WP3 and a phase that

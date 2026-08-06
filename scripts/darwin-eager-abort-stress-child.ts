@@ -6,7 +6,7 @@
  * Bun#32111 concerns. The parent (scripts/darwin-eager-abort-stress.ts) is
  * the external watchdog; this process only reports readiness and serves.
  *
- * Spec: devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md
+ * Spec: devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md
  * §Abort-stress gate. This is a probe, not a test or CI job. JSON phase
  * markers let the parent prove that every abort happened inside its intended
  * boundary rather than merely counting attempted client requests.

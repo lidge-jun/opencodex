@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ComboWorkspace from "../components/ComboWorkspace";
 import {
   type ComboItem,
@@ -11,7 +11,7 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
 import { useDataSurface } from "../data-surface";
-import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { DataSurfaceSkeleton } from "../components/data-surface";
 
 type ProviderOption = {
   name: string;
@@ -55,7 +55,7 @@ function seedCombos(cacheKey: string): CachedCombosPage | null {
 export default function Combos({ apiBase }: { apiBase: string }) {
   const t = useT();
   const cacheKey = `ocx.combos.workspace.v1:${apiBase}`;
-  const cached = seedCombos(cacheKey);
+  const cached = useMemo(() => seedCombos(cacheKey), [cacheKey]);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -158,10 +158,10 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     cacheKey,
     [apiBase],
     loadCombos,
-    { isEmpty: () => false },
+    { isEmpty: () => false, initialData: cached ?? undefined },
   );
   const { state } = resource;
-  const data = state.data ?? cached;
+  const data = state.data;
   const combos = data?.combos ?? [];
   const providers = data?.providers ?? [];
   const models = data?.models ?? [];
@@ -247,8 +247,12 @@ export default function Combos({ apiBase }: { apiBase: string }) {
           <Notice tone="err">{t("cws.loadFailed")}</Notice>
         </div>
       )}
-      {state.refreshing && <DataSurfaceStatus live={!state.showError}>{t("cws.loading")}</DataSurfaceStatus>}
-      <div className="combos-workspace-shell-body">
+      {/* Revalidation is silent by design: existing combos stay visible, and the
+          shell announces the in-flight refresh to assistive tech only. */}
+      <div className="combos-workspace-shell-body" aria-busy={state.refreshing}>
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {state.refreshing ? t("common.loading") : ""}
+        </span>
         <ComboWorkspace
           combos={combos}
           providers={providers}

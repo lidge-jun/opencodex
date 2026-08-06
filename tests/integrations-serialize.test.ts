@@ -9,7 +9,7 @@ import {
 } from "../src/integrations/serialize";
 
 /**
- * Activation coverage for devlog/_plan/260802_client_toggle_api/011 §1.
+ * Activation coverage for devlog/_fin/260802_client_toggle_api/011 §1.
  *
  * The round-trip assertions are the load-bearing ones: a renderer that emits
  * plausible-looking text a parser then reads differently is worse than one that

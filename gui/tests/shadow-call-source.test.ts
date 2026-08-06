@@ -23,14 +23,14 @@ describe("shadowSourceModelList", () => {
   });
 
   test("falls back when a runtime too old to report sourceModels omits it", () => {
-    expect(shadowSourceModelList(undefined)).toEqual(["gpt-5.4-mini", "gpt-5.6-luna"]);
+    expect(shadowSourceModelList(undefined)).toEqual(["gpt-5.6-luna"]);
   });
 
   // An empty array is what a runtime sends when every configured entry was
   // rejected; showing nothing there would read as "nothing is intercepted",
   // which is the opposite of the truth.
   test("falls back on an empty list instead of rendering nothing", () => {
-    expect(shadowSourceModelList([])).toEqual(["gpt-5.4-mini", "gpt-5.6-luna"]);
+    expect(shadowSourceModelList([])).toEqual(["gpt-5.6-luna"]);
   });
 
   test("drops blank entries and trims the rest", () => {
@@ -39,7 +39,7 @@ describe("shadowSourceModelList", () => {
 
   test("falls back when the field is not an array at all", () => {
     expect(shadowSourceModelList("gpt-5.6-luna" as unknown as string[]))
-      .toEqual(["gpt-5.4-mini", "gpt-5.6-luna"]);
+      .toEqual(["gpt-5.6-luna"]);
   });
 });
 
@@ -59,7 +59,7 @@ describe("shadow source model rendering", () => {
   });
 
   test("both renderings use the fallback when the runtime reported nothing", () => {
-    expect(shadowSourceModelLabel(undefined)).toBe("gpt-5.4-mini, gpt-5.6-luna");
-    expect(shadowSourceModelBadge(undefined)).toBe("5.4-mini, 5.6-luna");
+    expect(shadowSourceModelLabel(undefined)).toBe("gpt-5.6-luna");
+    expect(shadowSourceModelBadge(undefined)).toBe("5.6-luna");
   });
 });

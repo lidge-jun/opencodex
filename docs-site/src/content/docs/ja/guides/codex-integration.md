@@ -17,9 +17,14 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
 
+# fastMode を設定した場合のみ。未設定なら [features] は作られません
 [features]
 fast_mode = true
 ```
+
+注入される `fast_mode` は三値の `fastMode` 設定に従います。`true` は `fast_mode = true` を書き込み、
+`false` は `fast_mode = false` を書き込み、未設定の場合は既存の `fast_mode` を変更せずに
+`[features]` テーブルも追加しません。
 
 プロキシはデフォルトでポート `10100` をリッスンし、`POST /v1/responses`、`POST /v1/responses/compact`、`POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/models`、`GET /healthz`、および `/api/*` 管理サーフェスを提供します。
 

@@ -59,6 +59,9 @@ import { applySystemEnvToggle } from "./system-env";
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
+import { handleRequestHistoryRoutes } from "./management/request-history-routes";
+import { handleRoutingAnalyticsRoutes } from "./management/routing-analytics-routes";
+import { handleRoutingProfileRoutes } from "./management/routing-profile-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
@@ -73,6 +76,7 @@ import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
+import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
 import { managementBodyTooLargeResponse } from "./management/body";
 
 // installed npm version instead of a stale hardcode.
@@ -83,6 +87,33 @@ export const VERSION = (() => {
     return "0.0.0";
   }
 })();
+
+function isCatalogDisposition(value: unknown): value is CatalogDisposition {
+  if (!value || typeof value !== "object" || !("status" in value)) return false;
+  const disposition = value as Record<string, unknown>;
+  if (disposition.status === "committed") {
+    return typeof disposition.changed === "boolean"
+      && typeof disposition.degraded === "boolean"
+      && Array.isArray(disposition.notices)
+      && disposition.notices.every(notice => notice === "provider-auth" || notice === "provider-network" || notice === "fallback");
+  }
+  if (disposition.status === "skipped") {
+    return ["not-requested", "catalog-unavailable", "busy", "stale", "refused"].includes(String(disposition.reason))
+      && typeof disposition.retryable === "boolean";
+  }
+  if (disposition.status === "failed") {
+    return ["provider-auth", "provider-network", "disk"].includes(String(disposition.reason))
+      && (disposition.phase === "gather" || disposition.phase === "commit")
+      && typeof disposition.retryable === "boolean"
+      && typeof disposition.partialWrite === "boolean";
+  }
+  return false;
+}
+
+const managementConvergenceBindings = new WeakMap<object, Readonly<{
+  factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  converge: ConvergeCodex;
+}>>();
 
 export async function handleManagementAPI(
   req: Request,
@@ -102,13 +133,38 @@ export async function handleManagementAPI(
       return jsonResponse({ error: "request body too large" }, 413, req, config);
     }
   }
-  async function refreshCodexCatalogBestEffort(): Promise<void> {
-    if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
+  async function convergeCodexCatalog(): Promise<CatalogDisposition> {
+    let convergenceInvoked = false;
+    let managementConvergeCodex: ConvergeCodex | undefined;
     try {
-      const { refreshCodexModelCatalog } = await import("../codex/refresh");
-      await refreshCodexModelCatalog(config);
+      if (!managementConvergeCodex) {
+        const factory = deps.createManagementConvergeCodex
+          ?? (await import("../codex/management-convergence")).createManagementConvergeCodex;
+        if (typeof factory !== "function") throw new TypeError("Catalog convergence factory is unavailable.");
+        let binding = managementConvergenceBindings.get(config);
+        if (!binding || binding.factory !== factory) {
+          const created = factory(config);
+          if (typeof created !== "function") throw new TypeError("Catalog convergence factory returned no function.");
+          binding = { factory, converge: created };
+          managementConvergenceBindings.set(config, binding);
+        }
+        managementConvergeCodex = binding.converge;
+      }
+      const { createCatalogConvergeRequest } = await import("../codex/catalog-admission");
+      convergenceInvoked = true;
+      const outcome = await managementConvergeCodex(createCatalogConvergeRequest({ deadlineMs: 1_000 }));
+      if (!outcome || outcome.kind !== "catalog-only" || !isCatalogDisposition(outcome.catalogRefresh)) {
+        throw new TypeError("Catalog convergence returned an invalid outcome.");
+      }
+      return outcome.catalogRefresh;
     } catch {
-      /* catalog absent */
+      return {
+        status: "failed",
+        reason: "disk",
+        phase: convergenceInvoked ? "commit" : "gather",
+        retryable: false,
+        partialWrite: convergenceInvoked,
+      };
     }
   }
 
@@ -133,11 +189,14 @@ export async function handleManagementAPI(
       }
     } catch { /* best-effort */ }
   }
-  const ctx: ManagementContext = { req, url, config, deps, principal, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort };
+  const ctx: ManagementContext = { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
+    ??     (await handleRequestHistoryRoutes(ctx))
+    ??     (await handleRoutingAnalyticsRoutes(ctx))
+    ??     (await handleRoutingProfileRoutes(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
@@ -165,7 +224,7 @@ export async function handleManagementAPI(
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { restoreNativeCodex } = await import("../codex/inject");
+    const { restoreNativeCodexAsync } = await import("../codex/inject");
     const { stopServiceIfInstalled, isServiceOwnershipError } = await import("../service");
     try {
       stopServiceIfInstalled();
@@ -178,7 +237,7 @@ export async function handleManagementAPI(
       }
       throw err;
     }
-    const restore = restoreNativeCodex();
+    const restore = await restoreNativeCodexAsync();
     // Both managed configs come down together on an explicit teardown. The daemon's own
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here.

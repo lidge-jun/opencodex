@@ -15,7 +15,7 @@ description: プロバイダー構成、資格情報、クォータ、および�
 | --- | --- | --- |
 | `list` | `--json` |構成されたプロバイダーと残りのレジストリ エントリを一覧表示します。 |
 | `add <name>` | `--adapter <adapter>`、`--base-url <url>`、`--api-key <key>`、`--default-model <model>`、`--set-default`、`--force`、`--json`、`--sync` |レジストリ/カスタムプロバイダーを追加します。 `--force` は上書きします。 `--sync` は、実行中のプロキシを人間出力モードで更新します。 |
-| `edit <name>` |プロバイダーフィールドフラグ、`--json` |キー プールを置き換えずに、検証済みのライブ プロバイダー フィールドを編集します。 |
+| `edit <name>` |プロバイダーフィールドフラグ、`--headers <json>`、`--json` |キー プールを置き換えずに、検証済みのライブ プロバイダー フィールドを編集します。`--headers` はカスタム要求ヘッダーをマージします。`{}` または `-` を渡すとクリアします。 |
 | `test <name>` | `--json` |実際の上流モデルのエンドポイントを調査します。 |
 | `show <name>` | `--json` | API キーをマスクして設定を表示します。 |
 | `remove <name>` | `--json` |デフォルト以外のプロバイダーを削除します。最後のプロバイダーは削除できません。 |
@@ -34,6 +34,23 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+:::caution[カスタムヘッダーは認証情報の経路ではありません]
+`--headers` は秘密ではないリクエストメタデータ用です — ルーティングヒント、テナントや
+プロジェクトのセレクター、トレース ID など。認証情報を入れる場所ではなく、バリデーターは
+標準的な認証ヘッダー名（`Authorization`、`X-Api-Key`、`Cookie` など）を
+`apiKey` / `authMode` を使うよう案内して拒否します。
+
+ただし `X-My-Token` のような任意の名前までは判別できないため、その境界は利用者が守る
+必要があります。理由は 2 つです。
+
+- JSON はコマンドライン引数なので、秘密を入れるとシェル履歴とプロセス一覧に残ります。
+  CLI が何かを伏せるより先に、同じマシンの別プロセスが読み取れます。
+- ヘッダー値は `config.json` に平文で保存されます。専用の保存・マスキング経路を持つ
+  API キーとは異なります。
+
+秘密にあたる値は `--api-key` か OAuth ログインを使ってください。
+:::
 
 ## 認証
 
@@ -212,7 +229,7 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | `provider <name> <on\|off>` | `--json` | 1 つのプロバイダーのすべてのモデルを 1 回の書き込みで有効または無効にします。 |
 | `selected <provider>` | `--set <id,id...>`、`--clear`、`--json` |プロバイダー モデルのホワイトリストを読み取るか置き換えます。 `--clear` はホワイトリストを削除し、すべてのモデルが提供されるようにします。 |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` |コンテキスト ウィンドウ キャップをグローバルに、またはプロバイダーごとに読み取りまたは設定します。 |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、ヘルパースラッグはプロキシをインターセプトします (デフォルト: `gpt-5.4-mini` および `gpt-5.6-luna`)。 |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、プロキシがインターセプトするヘルパースラッグを示します (デフォルト: `gpt-5.6-luna`; 0.144.x 以前のクライアントが使用した `gpt-5.4-mini` は明示的な `sourceModels` オーバーライドで復元できます)。 |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

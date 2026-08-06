@@ -407,7 +407,9 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
   return matched;
 }
 
-export function formatStaleCodexAppServerWarning(processes: readonly CodexAppServerProcess[]): string {
+export function formatStaleCodexAppServerWarning(
+  processes: readonly { pid: number }[],
+): string {
   const pids = processes.map(process => process.pid).join(", ");
   return (
     `WARNING: ${processes.length} Codex app-server process(es) still running (PID${processes.length === 1 ? "" : "s"}: ${pids}). `
@@ -753,4 +755,45 @@ export function afterCatalogWriteHandleAppServers(
     );
   }
   return { processes, warned: false, restart, hint };
+}
+
+/**
+ * Startup-safe counterpart to {@link afterCatalogWriteHandleAppServers} (#1046).
+ *
+ * Service startup rewrites the catalog and the models cache, but an app-server
+ * that booted earlier keeps an in-memory model list — Codex builds a static
+ * manager from the catalog once and never rereads the file — so the picker shows
+ * a roster that no longer exists on disk. Every check a user runs reads the file;
+ * the picker renders memory.
+ *
+ * Two things this deliberately does NOT do, both of which the `--restart-codex`
+ * path does:
+ *
+ * - It never signals anything. Killing an app-server on an unattended boot would
+ *   interrupt whatever turn the user has in flight. A human typing
+ *   `ocx sync --restart-codex` is consenting to that; a login is not.
+ * - It never warns about a merely-running app-server. It asks the mtime
+ *   classifier whether one is actually stale, so a boot with Codex open and a
+ *   current catalog stays quiet.
+ *
+ * Failure is swallowed: startup synchronization is best-effort and must not stop
+ * the proxy from coming up.
+ *
+ * The memoized state is dropped first. {@link collectCodexAppServerCatalogState}
+ * caches for 5s when every io field is defaulted, so a `fresh` reading taken
+ * before the write would otherwise be replayed after it and this would stay
+ * silent about the very staleness it exists to report.
+ */
+export function warnIfStaleCodexAppServersAfterStartupWrite(
+  options: { log?: Pick<Console, "error">; io?: CodexAppServerProcessIo } = {},
+): { warned: boolean } {
+  try {
+    resetCodexAppServerCatalogStateCache();
+    const status = collectCodexAppServerCatalogState(options.io ?? {});
+    if (status.state !== "stale") return { warned: false };
+    options.log?.error(formatStaleCodexAppServerWarning(status.processes));
+    return { warned: true };
+  } catch {
+    return { warned: false };
+  }
 }

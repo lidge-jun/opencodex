@@ -157,7 +157,7 @@ test("concurrent 401s share one token prompt and all retry with the stored token
     const headers = new Headers(init?.headers);
     // Session re-bootstrap probe: this fixture never mints sessions, so fail it fast
     // instead of letting it join the release queue below.
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/") {
+    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
       return new Response("unauthorized", { status: 401 });
     }
     if (headers.get("X-OpenCodex-API-Key") === "shared-token") {
@@ -278,7 +278,7 @@ test("canceling the token prompt once does not reopen it for the rest of the 401
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/") {
+    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
       return new Response("unauthorized", { status: 401 });
     }
     if (headers.get("X-OpenCodex-API-Key")) {
@@ -390,7 +390,7 @@ test("expired session silently re-bootstraps from the served document without pr
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (url.pathname === "/") {
+    if (url.pathname === "/opencodex-session") {
       bootstrapFetches += 1;
       return new Response(sessionDocumentHtml("ocx_session_fresh", "fresh-csrf", "http://localhost"), {
         status: 200,
@@ -427,7 +427,7 @@ test("a session minted for another origin is rejected and the prompt fallback st
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers);
-    if (url.pathname === "/") {
+    if (url.pathname === "/opencodex-session") {
       return new Response(sessionDocumentHtml("ocx_session_foreign", "foreign-csrf", "http://192.0.2.10:10100"), {
         status: 200,
         headers: { "Content-Type": "text/html" },

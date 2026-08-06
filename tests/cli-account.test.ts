@@ -303,6 +303,37 @@ function stdinFrom(value: string, isTTY = false): AccountStdin {
   return input;
 }
 
+test("the login URL reaches piped stdout before the polling window (#1007)", async () => {
+  const child = Bun.spawn({
+    cmd: [process.execPath, "run", new URL("./helpers/account-login-pipe-child.ts", import.meta.url).pathname],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    // Read incrementally with a sub-second deadline: the URL block must
+    // arrive while the child is still polling (still authenticating).
+    const reader = child.stdout.getReader();
+    const deadline = AbortSignal.timeout(5_000);
+    let received = "";
+    while (!received.includes("auth.example/authorize")) {
+      const { value, done } = await Promise.race([
+        reader.read(),
+        Bun.sleep(5_000).then(() => ({ value: undefined, done: true }) as const),
+      ]);
+      if (done) break;
+      if (value) received += new TextDecoder().decode(value);
+    }
+    expect(received).toContain("https://auth.example/authorize?flow=pipe-test");
+    expect(received).toContain("Flow: flow-pipe");
+    // The child is STILL authenticating (the whole point of the flush).
+    expect(child.exitCode).toBeNull();
+    void deadline;
+  } finally {
+    child.kill();
+    await child.exited.catch(() => {});
+  }
+}, 15_000);
+
 async function run(args: string[], deps: AccountDeps = defaultDeps()): Promise<CommandResult> {
   logs.length = 0;
   errors.length = 0;

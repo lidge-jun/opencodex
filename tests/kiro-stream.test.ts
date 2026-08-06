@@ -1096,6 +1096,21 @@ describe("kiro adapter — parseStream", () => {
     expect(errors[0]).not.toContain("{");
   });
 
+  test("an event-stream profileArn-required exception classifies as kiro_profile_required (#993)", async () => {
+    const payload = JSON.stringify({
+      __type: "ValidationException",
+      message: "profileArn is required for this account",
+    });
+    const frame = encodeMessage({ ":message-type": "exception", ":exception-type": "ValidationException" }, enc.encode(payload));
+    const errors: string[] = [];
+    for await (const e of createKiroAdapter(provider).parseStream(new Response(streamOf(frame)))) {
+      if (e.type === "error") errors.push(e.message);
+    }
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("kiro_profile_required");
+    expect(errors[0]).toContain("ocx account login kiro --reauth");
+  });
+
   test("auth and model exceptions become actionable Kiro errors", async () => {
     const authFrame = encodeMessage(
       { ":message-type": "exception", ":exception-type": "AccessDeniedException" },

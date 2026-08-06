@@ -108,5 +108,5 @@ restoring, the command refuses and tells you, because replacing your newer edits
 decision to make.
 
 Client details were verified against each project's own configuration format; see the
-research notes in `devlog/_plan/260802_client_toggle_api/002_client_toggle_matrix.md`
+research notes in `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md`
 for what was checked and when.

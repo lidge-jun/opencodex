@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
+import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
@@ -231,7 +232,7 @@ function UsageFilters({
                 <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
               )}
               {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude.svg" alt="" aria-hidden="true" />
+                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
               )}
               {choice === "grok" && (
                 <img className="usage-source-mark" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
@@ -512,7 +513,7 @@ function UsageModelsTable({
           {models.map(model => (
             <tr key={`${model.provider}/${model.model}`}>
               <td className="mono">{modelLabel(model.model)}</td>
-              <td className="muted">{model.provider}</td>
+              <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
               <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
@@ -572,7 +573,7 @@ function UsageProvidersTable({
         <tbody>
           {providers.map(provider => (
             <tr key={provider.provider}>
-              <td className="mono">{provider.provider}</td>
+              <td className="mono">{formatProviderDisplayName(provider.provider, t)}</td>
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
               <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>

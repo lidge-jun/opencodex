@@ -322,6 +322,11 @@
   margin-bottom: var(--space-3);
 }
 
+/* Invisible stand-in for the empty Combos card while /api/combos loads. */
+.models-combos-card--pending {
+  min-height: var(--space-12);
+}
+
 .models-combos-empty-head {
   padding: var(--space-3);
   justify-content: space-between;

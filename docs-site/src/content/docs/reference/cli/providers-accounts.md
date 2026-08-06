@@ -16,7 +16,7 @@ both `--adapter` and `--base-url`.
 | --- | --- | --- |
 | `list` | `--json` | List configured providers and the remaining registry entries. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Add a registry/custom provider. `--force` overwrites; `--sync` refreshes a running proxy in human-output mode. |
-| `edit <name>` | provider field flags, `--json` | Edit validated live provider fields without replacing key pools. |
+| `edit <name>` | provider field flags, `--headers <json>`, `--json` | Edit validated live provider fields without replacing key pools. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
 | `test <name>` | `--json` | Probe the real upstream model endpoint. |
 | `show <name>` | `--json` | Show config with API keys masked. |
 | `remove <name>` | `--json` | Remove a non-default provider; the last provider cannot be removed. |
@@ -35,6 +35,25 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+:::caution[Custom headers are not a credential channel]
+`--headers` is for non-secret request metadata — routing hints, tenant or
+project selectors, tracing ids. It is **not** a place to put authentication
+material, and the validator rejects the standard credential header names
+(`Authorization`, `X-Api-Key`, `Cookie`, and the rest) with a pointer to
+`apiKey` / `authMode`.
+
+The validator cannot recognize an arbitrary name such as `X-My-Token`, so the
+boundary is yours to respect. Two reasons it matters:
+
+- The JSON is a command-line argument, so a secret in it lands in shell history
+  and in the process list, where any other process on the machine can read it
+  before the CLI ever redacts anything.
+- Header values are persisted in `config.json` in cleartext, unlike API keys,
+  which have their own storage and masking path.
+
+Use `--api-key` or an OAuth login for anything secret.
+:::
 
 ## Authentication
 
@@ -290,7 +309,7 @@ proxy to be running (`ocx start`, or an installed service).
 | `provider <name> <on\|off>` | `--json` | Enable or disable every model of one provider in a single write. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (defaults: `gpt-5.4-mini` and `gpt-5.6-luna`). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

@@ -10,12 +10,10 @@ import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import { displayAccountId } from "../../lib/privacy";
 import {
-  doctorCopyButtonLabel,
   formatOAuthHealthLabel,
   formatOAuthHealthSummary,
   oauthHealthBadgeClass,
   oauthHealthIsCooldown,
-  oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
@@ -26,7 +24,6 @@ import { useCopyFeedback } from "../use-copy-feedback";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
-const DOCTOR_CMD = "ocx doctor";
 const QUOTA_ENRICH_RESERVE_MS = 4_000;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
@@ -56,7 +53,6 @@ export default function ProviderAuthPanel({
   const [keyBusy, setKeyBusy] = useState(false);
   const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
   const deviceCodeCopy = useCopyFeedback<string>();
-  const doctorCopy = useCopyFeedback<string>();
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -206,12 +202,10 @@ export default function ProviderAuthPanel({
                   const switching = switchingAccountId === account.id;
                   const healthStatus = account.health?.status;
                   const showReauth = Boolean(account.needsReauth) || oauthHealthShowsReauth(healthStatus);
-                  const showDoctor = oauthHealthShowsDoctor(healthStatus);
                   const inCooldown = oauthHealthIsCooldown(healthStatus);
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
                   const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
-                  const copyDoctor = () => { doctorCopy.copy(DOCTOR_CMD, account.id); };
                   return (
                   <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
@@ -246,11 +240,6 @@ export default function ProviderAuthPanel({
                         onClick={() => void authHandlers.onReauth(item.name, account.id)}
                       >
                         {t("pws.reauthenticate")}
-                      </button>
-                    )}
-                    {showDoctor && (
-                      <button type="button" className="btn btn-ghost btn-sm codex-auth-action-btn" onClick={copyDoctor}>
-                        <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopy.outcomeFor(account.id))}</span>
                       </button>
                     )}
                     <button type="button" className="btn btn-ghost btn-sm"

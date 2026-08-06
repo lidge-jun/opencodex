@@ -280,9 +280,26 @@ export async function loadCodexRoutingStatus(apiBase: string, signal?: AbortSign
   };
 }
 
-export async function loadApiKeyCount(apiBase: string, signal?: AbortSignal): Promise<number | null> {
-  const body = await readOptional<{ keys?: unknown }>(fetch(`${apiBase}/api/keys`, { signal }));
-  if (!body || !Array.isArray(body.keys)) return null;
+/**
+ * Throws on a failed or malformed read rather than returning null.
+ *
+ * `readOptional` is right for surfaces that treat "no answer" and "empty" the
+ * same. This one cannot: the overview says "Checking…" while a read is in
+ * flight and "Key status unavailable" once it has settled badly, and a
+ * successfully-returned null collapses both into `ready-empty` with no polling
+ * to ever correct it — so the row would claim the user has no keys because a
+ * request failed. Throwing is what produces `failed-cold` / `failed-with-stale`,
+ * which is the signal the row reads. Aborts never reach a state: an aborted
+ * generation is discarded before either data or failure is published.
+ */
+export async function loadApiKeyCount(apiBase: string, signal?: AbortSignal): Promise<number> {
+  const response = await fetch(`${apiBase}/api/keys`, { signal });
+  // These two strings are diagnostics for the failure path, never rendered:
+  // the row shows the localized `integrations.detail.keyUnavailable` instead.
+  // eslint-disable-next-line local-i18n/no-hardcoded-ui-strings -- rejection reason, not UI text
+  if (!response.ok) throw new Error(`/api/keys responded ${response.status}`);
+  const body = await readJsonIfOk<{ keys?: unknown }>(response);
+  if (!body || !Array.isArray(body.keys)) throw new Error("/api/keys returned an unexpected body");
   return body.keys.length;
 }
 

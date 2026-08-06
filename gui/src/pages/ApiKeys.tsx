@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { useI18n, LOCALES } from "../i18n/shared";
+import { formatProviderDisplayName } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import {
   classifyExternalModel,
@@ -320,7 +321,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     if (model.native) return t("api.sourceNative");
     if (model.provider === "combo") return t("api.sourceCombo");
     if (model.custom) return t("api.sourceCustom");
-    return model.provider;
+    return formatProviderDisplayName(model.provider, t);
   };
 
   const protocolLabel = (protocol: GatewayInboundProtocol): string => {

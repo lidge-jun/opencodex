@@ -166,7 +166,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/providers` | 列出已脱敏的 provider 配置和发现状态 | — |
 | `POST /api/providers` | 添加或替换一个已验证的 provider，并可选地将其设为默认 | 400 目标或配置无效/危险；409 命名空间冲突 |
-| `PATCH /api/providers?name=...` | 更新允许的 provider 字段、启用/默认状态，或 OpenAI 账户模式 | 400 字段或转换无效；404 未知 provider |
+| `PATCH /api/providers?name=...` | 更新允许的 provider 字段（包括合并的 `headers` 块）、启用/默认状态，或 OpenAI 账户模式 | 400 字段或转换无效；404 未知 provider |
 | `DELETE /api/providers?name=...` | 删除一个 provider，并在可能时重新分配默认值 | 404 未知 provider；409 `last_provider`；409 `provider_has_dependent_combos` |
 | `POST /api/providers/test?name=...` | 执行一个有上限的在线 provider 连通性/模型发现探测 | 404 未知 provider；失败通常以 `ok: false` 证据返回 |
 | `GET /api/provider-quotas` | 读取 provider 配额报告；`refresh=1` 会强制刷新 | — |

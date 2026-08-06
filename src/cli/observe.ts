@@ -14,6 +14,9 @@ import {
 const USAGE = `Usage:
   ocx observe logs [--provider <name>] [--model <id>] [--status <code>]
       [--limit <n>] [--follow] [--json|--jsonl]
+  ocx logs explain <request-id> [--json]
+  ocx logs rebuild-index
+  ocx logs index-status
   ocx observe usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]
   ocx observe storage [--json]
   ocx observe memory [--json]
@@ -79,6 +82,50 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   } while (true);
 }
 
+async function explain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const requestId = args.shift();
+  const wantsJson = takeFlag(args, "--json");
+  if (!requestId) throw new CliUsageError("request id is required", USAGE);
+  rejectArgs(args, USAGE);
+  const encoded = encodeURIComponent(requestId);
+  const result = await runtimeRequest(`/api/request-history/${encoded}/route-decision`, {}, deps);
+  printData(result, wantsJson, wantsJson ? undefined : [JSON.stringify(result, null, 2)]);
+}
+
+async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  rejectArgs(args, USAGE);
+  const { rebuildRequestHistoryIndex } = await import("../routing/history/indexer");
+  const meta = await rebuildRequestHistoryIndex();
+  if (wantsJson) printData(meta, true);
+  else {
+    console.log(`Request-history index rebuilt (${meta.dbPath})`);
+    console.log(`  schema version: ${meta.schemaVersion}`);
+    console.log(`  indexed rows:   ${meta.indexedRows}`);
+    console.log(`  source size:    ${meta.sourceSize} bytes`);
+    console.log(`  last error:     ${meta.lastError ?? "none"}`);
+  }
+}
+
+async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  rejectArgs(args, USAGE);
+  const { requestHistoryIndexStatus } = await import("../routing/history/indexer");
+  const meta = await requestHistoryIndexStatus();
+  if (wantsJson) printData(meta, true);
+  else {
+    console.log(`Request-history index (${meta.dbPath})`);
+    console.log(`  schema version: ${meta.schemaVersion}`);
+    console.log(`  indexed rows:   ${meta.indexedRows}`);
+    console.log(`  source size:    ${meta.sourceSize} bytes`);
+    console.log(`  indexed offset: ${meta.indexedOffset} bytes`);
+    console.log(`  last error:     ${meta.lastError ?? "none"}`);
+  }
+}
+
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -103,7 +150,13 @@ async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promi
 export async function handleObserveCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const [sub = "logs", ...rest] = argv;
-    if (sub === "logs") await logs(rest, deps);
+    if (sub === "logs") {
+      const action = rest[0];
+      if (action === "explain") await explain(rest.slice(1), deps);
+      else if (action === "rebuild-index") await rebuildIndex(rest.slice(1), deps);
+      else if (action === "index-status") await indexStatus(rest.slice(1), deps);
+      else await logs(rest, deps);
+    }
     else if (sub === "usage") await usage(rest, deps);
     else if (sub === "storage") await simple("/api/storage", rest, deps);
     else if (sub === "memory") await simple("/api/system/memory", rest, deps);

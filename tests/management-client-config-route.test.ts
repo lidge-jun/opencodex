@@ -14,6 +14,7 @@ import {
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
 import type { OcxConfig } from "../src/types";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 /**
  * A key that looks exactly like a real one. Every assertion about `ocx_` absence is
@@ -81,7 +82,7 @@ async function clientConfigApi(config: OcxConfig, query: string): Promise<Respon
     new Request(url, { headers: { Host: url.host } }),
     url,
     config,
-    { saveConfigPreservingClaudeCode: () => {}, refreshCodexCatalog: async () => {} },
+    { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() },
   );
   expect(response).not.toBeNull();
   return response!;
@@ -93,7 +94,7 @@ async function modelRows(config: OcxConfig): Promise<ModelRow[]> {
     new Request(url, { headers: { Host: url.host } }),
     url,
     config,
-    { saveConfigPreservingClaudeCode: () => {}, refreshCodexCatalog: async () => {} },
+    { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() },
   );
   return await response!.json() as ModelRow[];
 }
@@ -243,7 +244,7 @@ describe("GET /api/client-config", () => {
       new Request(url, { headers: { Host: url.host, Origin: "https://evil.example" } }),
       url,
       baseConfig(),
-      { saveConfigPreservingClaudeCode: () => {}, refreshCodexCatalog: async () => {} },
+      { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() },
     );
     expect(response?.status).toBe(403);
   }, 15_000);

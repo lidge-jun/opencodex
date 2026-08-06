@@ -747,6 +747,21 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(row?.slug).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  test("Command Code routed models relabel the picker row with distinguishable slugs", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "command-code", id: "deepseek/deepseek-v4-flash", owned_by: "command-code" },
+      { provider: "commandcode", id: "deepseek/deepseek-v4-pro", owned_by: "commandcode" },
+    ]);
+    const auth = entries.find(e => e.slug === "command-code/deepseek-deepseek-v4-flash");
+    const api = entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-pro");
+
+    // Display-only relabel + redundant vendor-prefix drop: routing slugs stay untouched.
+    expect(auth?.display_name).toBe("commandcode-auth/deepseek-v4-flash");
+    expect(auth?.slug).toBe("command-code/deepseek-deepseek-v4-flash");
+    expect(api?.display_name).toBe("commandcode-api/deepseek-v4-pro");
+    expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4-pro");
+  });
+
   test("empty/whitespace displayName is ignored and falls back to the slug", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "deepseek", id: "deepseek-v4", displayName: "   ", owned_by: "deepseek" },
@@ -1049,7 +1064,7 @@ describe("Codex catalog routed normalization", () => {
     expect(anthropic?.supports_parallel_tool_calls).toBe(false);
   });
 
-  test("routed entries fill auto compact when context already exists on the template", () => {
+  test("routed entries fall to the conservative triple instead of inheriting template context (#992)", () => {
     const template = {
       ...nativeTemplate(),
       context_window: 272_000,
@@ -1060,9 +1075,11 @@ describe("Codex catalog routed normalization", () => {
     ]);
     const routed = entries.find(e => e.slug === "local/qwen3-coder");
 
-    expect(routed?.context_window).toBe(272_000);
-    expect(routed?.max_context_window).toBe(272_000);
-    expect(routed?.auto_compact_token_limit).toBe(244_800);
+    // A routed model is not the native template: without known metadata the
+    // entry falls back to the conservative 128k triple.
+    expect(routed?.context_window).toBe(128_000);
+    expect(routed?.max_context_window).toBe(128_000);
+    expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
   test("native gpt-5.4 uses its 1M context window override", () => {
@@ -1196,7 +1213,7 @@ describe("Codex catalog routed normalization", () => {
     expect(sol?.priority).toBe(1);
   });
 
-  test("routed entries still cap stale native max context to their active context window", () => {
+  test("routed entries drop stale native max context with the template window (#992)", () => {
     const template = {
       ...nativeTemplate(),
       context_window: 272_000,
@@ -1207,9 +1224,9 @@ describe("Codex catalog routed normalization", () => {
     ]);
     const routed = entries.find(e => e.slug === "local/qwen3-coder");
 
-    expect(routed?.context_window).toBe(272_000);
-    expect(routed?.max_context_window).toBe(272_000);
-    expect(routed?.auto_compact_token_limit).toBe(244_800);
+    expect(routed?.context_window).toBe(128_000);
+    expect(routed?.max_context_window).toBe(128_000);
+    expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
   test("buildCatalogEntries preserves native bare GPT template fields", () => {
@@ -2299,6 +2316,35 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.input_modalities).toEqual(["text"]);
     expect(routed?.supports_reasoning_summaries).toBe(false);
     expect(routed?.default_reasoning_summary).toBe("none");
+  });
+
+  test("a routed model never inherits the native template's context window (#992)", () => {
+    // /models returns only the id: the routed entry must fall to the
+    // conservative 128k triple, never the native template's larger window.
+    const entries = buildCatalogEntries({ context_window: 372_000 }, [], [
+      { provider: "relay", id: "relay-model" },
+    ]);
+    const routed = entries.find(e => e.slug === "relay/relay-model");
+    expect(routed?.context_window).toBe(128_000);
+    expect(routed?.max_context_window).toBe(128_000);
+    expect(routed?.auto_compact_token_limit).toBe(115_200);
+  });
+
+  test("a provider context cap never invents routed capacity (#992)", () => {
+    const entries = buildCatalogEntries({ context_window: 372_000 }, [], [
+      { provider: "relay", id: "relay-model", contextCap: 950_000 },
+    ]);
+    const routed = entries.find(e => e.slug === "relay/relay-model");
+    expect(routed?.context_window).toBe(128_000);
+  });
+
+  test("known routed metadata still restores the exact context window (#992)", () => {
+    const entries = buildCatalogEntries({ context_window: 372_000 }, [], [
+      { provider: "relay", id: "relay-model", contextWindow: 256_000 },
+    ]);
+    const routed = entries.find(e => e.slug === "relay/relay-model");
+    expect(routed?.context_window).toBe(256_000);
+    expect(routed?.auto_compact_token_limit).toBe(Math.floor(256_000 * 0.9));
   });
 
   test("model-specific reasoning-summary opt-out reaches the routed catalog (#323)", async () => {

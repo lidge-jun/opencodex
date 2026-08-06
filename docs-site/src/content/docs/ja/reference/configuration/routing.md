@@ -84,3 +84,26 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 - 空ではない `inputModalities` 交差。省略されたメンバー値を `["text"]` として扱います。
 
 コンテキスト メタデータのない裸のリレー ID、または接続されていないモダリティを持つターゲットは、カタログからコンボを削除します。同期によって概要の警告が表示され、ダッシュボードで **注意が必要** とマークされます。コンテキスト メタデータを追加し、モダリティを調整したり、検出可能な互換性のある機能を備えたターゲット モデルを追加したりできます。
+
+## ルーティングポリシープロファイル（`config.routingProfiles`）
+
+明示的に要求された `policy/<id>`（または設定されたエイリアス）が、固定された候補許可リストの中から、ハードな能力要件と決定的で説明可能なスコアリングで選択します。既存のモデル ID が暗黙的にプロファイルを通ることはありません。`candidates`（明示的な許可リスト）、オプションの `alias`、`require`（`minContextWindow`、`minQuotaHeadroom`、`tools`、`imageInput`、`structuredOutput`、`localOnly`、`remoteAllowed`、`encryptedCodexTasks`、`reasoningEffort`、`serviceTier`）、`optimize`（latency/health/cost/quota の重み）、`limits.maxEstimatedCostUsd`、`unknownEvidence`（allow/penalize/exclude）をサポートします。未知はゼロや無料にはなりません。
+
+CLI: `ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
+
+コンボは明示的な順序・重み付きターゲットのルーティングとフェイルオーバーです。ポリシープロファイルは、候補間の証拠に基づく選択です。
+
+## リクエスト履歴とルーティング分析
+
+- `GET /api/request-history` - 派生インデックス（`routing-history.sqlite`）からのカーソルページング付き全履歴。フィルタ: `provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`。
+- `GET /api/request-history/:requestId/route-decision` - このルートが選ばれた理由（トレース、候補、除外、スコア、プロファイル+リビジョン、実行試行、結果）。
+- `GET /api/routing-analytics` - 成功率・失敗率・フォールバック率、p50/p95/p99 の所要時間と TTFT、不完全ストリーム率、クールダウン失敗数、成功あたりの推定コスト、カバレッジ、信頼度、切り捨てフラグ。
+- `GET /api/routing-profiles`、`POST /api/routing-profiles/dry-run` - プロファイル参照とドライラン評価（上流への送信なし）。
+
+返される履歴とルート決定ペイロードは、マスク済みのリクエストメタデータのみを公開します（例: 不透明な `apiKeyId` ラベル）。資格情報、生のプロンプト本文、プロバイダのシークレットは含みません。
+
+CLI: `ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs index-status`。
+
+## 移行
+
+`routingProfiles` は任意の追加設定です。既存の設定ファイルと古い `usage.jsonl` 行はそのまま読み込めます。インデックスは使い捨てで、削除すると次回クエリ時に `usage.jsonl` から自動再構築されます。自動チューニングは行われません。

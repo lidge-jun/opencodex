@@ -3,7 +3,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
 /**
- * Route contract for devlog/_plan/260803_integrations_toggle_all/011.
+ * Route contract for devlog/_fin/260803_integrations_toggle_all/011.
  *
  * The toggle writes one field of opencodex's own config, so there is nothing to
  * snapshot and nothing to journal — turning it back on is the undo. What DOES

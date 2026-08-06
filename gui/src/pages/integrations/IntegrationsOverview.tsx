@@ -10,6 +10,8 @@ import { describeRefusal } from "./refusal-copy";
 import {
   buildOverviewRows,
   countOverviewRows,
+  type ApiKeyReadPhase,
+  type ApiKeysOverviewRow,
   type OverviewRow,
 } from "./overview-clients";
 import {
@@ -223,7 +225,9 @@ export default function IntegrationsOverview({
     `integration-keys:${apiBase}`,
     [apiBase],
     fetchKeyCount,
-    { isEmpty: value => value === null, enabled: active },
+    // The loader now throws instead of resolving null, so null is not a value
+    // it can produce. Leaving the old predicate would outlive its contract.
+    { isEmpty: () => false, enabled: active },
   );
   const claudeResource = useDataSurface(
     `integration-claude:${apiBase}`,
@@ -265,11 +269,25 @@ export default function IntegrationsOverview({
   // `readOptional` returns null for a failed probe. Only an actual array is a
   // settled contract; an empty array is meaningful and removes both switches.
   const nativeSettled = native !== null;
-  const rows = buildOverviewRows({
+  /*
+   * The three phases the keys row distinguishes, read off the resource rather
+   * than guessed from a null — the same idiom as clientsSettled above. A failed
+   * read must never reach the count branch: `failed-with-stale` still carries
+   * the previous number, and rendering it would report a stale credential
+   * inventory as current.
+   */
+  const keyPhase: ApiKeyReadPhase =
+    keysResource.state.kind === "cold" || keysResource.state.kind === "retrying-cold"
+      ? "checking"
+      : keysResource.state.kind === "failed-cold" || keysResource.state.kind === "failed-with-stale"
+        ? "unavailable"
+        : "settled";
+  const { keysRow, rows } = buildOverviewRows({
     clients,
     clientsSettled,
     codex: codexResource.state.data ?? null,
     keyCount: keysResource.state.data ?? null,
+    keyPhase,
     claude: claudeResource.state.data ?? null,
     claudeDesktop: claudeDesktopResource.state.data ?? null,
     grok: grokResource.state.data ?? null,
@@ -392,7 +410,7 @@ export default function IntegrationsOverview({
       if (row.status) {
         await toggleIntegration(apiBase, row.status.clientId, next);
         refresh();
-      } else if (row.toggle === "claude" || row.toggle === "grok") {
+      } else if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex") {
         const result = await toggleNativeIntegration(apiBase, row.toggle, next);
         if (result.reason === "non_loopback_removed") {
           setCardResult(row.id, {
@@ -411,7 +429,7 @@ export default function IntegrationsOverview({
         tone: "err",
         text: describeRefusal(t, error, undefined, row.togglePath ?? undefined),
       });
-      if (row.toggle === "claude" || row.toggle === "grok") refreshNativeDetails();
+      if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex") refreshNativeDetails();
     } finally {
       setCardPending(null);
     }
@@ -469,6 +487,15 @@ export default function IntegrationsOverview({
           {t("integrations.summary.disableAll")}
         </button>
       </div>
+
+      {/*
+        Below the aggregate, above the client catalog. The summary is the
+        page-level total; this is one credential surface with one action.
+        Putting it above the summary would promote one surface over the
+        aggregate, and merging it into the strip would make "Manage keys" read
+        as a bulk control beside "Disable all".
+      */}
+      <ApiKeysRow row={keysRow} />
 
       <p className="page-sub">{t("integrations.onboarding")}</p>
       {statesResource.state.kind === "failed-cold" && (
@@ -566,5 +593,33 @@ export default function IntegrationsOverview({
         />
       )}
     </section>
+  );
+}
+/**
+ * Credentials are one explicit action, not a clickable client card.
+ *
+ * No `IntegrationStateBadge`: it renders `current` as "Applied" and `absent` as
+ * "Not applied" in all six locales, which is the one thing a credential row
+ * must not claim — issuing a key does not apply an integration. The detail line
+ * IS the state, and `data-key-state` is what keeps the four states testable and
+ * stylable without borrowing client vocabulary.
+ *
+ * The card overlay is also deliberately absent. It exists because a card holds
+ * a switch as well as a title; this row has no nested-control problem to solve,
+ * so one plain button is the whole keyboard path.
+ */
+function ApiKeysRow({ row }: { row: ApiKeysOverviewRow }) {
+  const t = useT();
+  const detail = row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null;
+  return (
+    <div className="integration-api-keys-row" data-client="keys" data-key-state={row.state}>
+      <div className="integration-api-keys-copy">
+        <h4>{t(row.labelKey)}</h4>
+        {detail && <p className="integration-meta">{detail}</p>}
+      </div>
+      <button type="button" className="btn btn-ghost" onClick={() => navigateHash(row.hash)}>
+        {t("integrations.action.manageKeys")}
+      </button>
+    </div>
   );
 }

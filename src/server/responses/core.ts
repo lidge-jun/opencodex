@@ -16,7 +16,8 @@ import {
   previousResponseReplayFailure,
   rememberResponseState,
 } from "../../responses/state";
-import { routeModel, type RouteResult } from "../../router";
+import { comboRouteDecisionTrace, NoEligiblePolicyCandidateError, routeModel, type RouteResult } from "../../router";
+import { evidenceFromBody } from "../../routing/request-evidence";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -102,7 +103,7 @@ import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../provid
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { providerModelWebsocketUpstreamStreaming, type InboundWire } from "../../providers/registry";
+import { providerModelResponsesUpstreamStreaming, type InboundWire } from "../../providers/registry";
 import type { AdapterRequest } from "../../adapters/base";
 import {
   hasKeyPoolFailover,
@@ -163,6 +164,7 @@ import { cancelBodyOnAbort } from "../../lib/abort";
 import {
   createResponsesItemIdPayloadRewrite,
   hasResponsesItemIdRepair,
+  repairResponsesJsonItemIds,
 } from "../responses-item-id-repair";
 import {
   createImageGenCallRestoreRewrite,
@@ -174,7 +176,20 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
+import { recordUpstreamHostFailure, resetUpstreamHostHealth, upstreamHostHealthKey } from "../../codex/upstream-host-health";
+import {
+  createResponsesSnapshotBlockRewrite,
+  hasResponsesSnapshotRepair,
+  repairResponsesSnapshotJson,
+} from "../responses-snapshot-repair";
+import {
+  composeSseBlockRewrites,
+  payloadRewriteAsBlockRewrite,
+  relaySseWithBlockRewrite,
+} from "../sse-payload-rewrite";
+import { responsesJsonToSseBody } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /**
@@ -436,7 +451,12 @@ async function retryCodexPoolOnAlternateAccount(
       connectMs,
       stream,
       providerFetch(route.provider),
+      // Credential-bearing forward send: never follow a redirect into a
+      // dead-host rejection after the credential was seen (#914).
+      route.provider.authMode === "forward",
     );
+    // A real HTTP response proves the host was reached (#914).
+    resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
     return {
       kind: "retried",
       authCtx: retryAuthCtx,
@@ -727,10 +747,18 @@ const UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE =
 // branch of the passthrough return path). 32 MiB matches the continuation snapshot read
 // bound and is far above any legitimate non-streaming completion, including base64 image
 // payloads. The stall deadlines only govern the body transfer — generation time before
-// the response headers is untouched.
+// the response headers is untouched. Generation after early/chunked headers but before
+// the first body byte previously used the 30-second inactivity deadline; this call site
+// gives it the full body deadline instead.
 const MAX_UPSTREAM_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS = 180_000;
 const UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS = 30_000;
+export const UPSTREAM_JSON_BODY_READ_OPTIONS = {
+  maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
+  totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
+  inactivityTimeoutMs: UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS,
+  firstByteTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
+};
 
 function unreadableEncryptedAgentTaskResponse(): Response {
   return new Response(
@@ -843,9 +871,13 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
-  const websocketUpstreamStreaming = inboundTransport === "websocket"
-    ? providerModelWebsocketUpstreamStreaming(route.providerName, route.provider, route.modelId)
-    : undefined;
+  // Transport-neutral reliability policy (#875): applies to any Responses
+  // upstream whose final adapter is openai-responses, not only WS turns.
+  const responsesUpstreamStreaming = providerModelResponsesUpstreamStreaming(
+    route.providerName,
+    route.provider,
+    route.modelId,
+  );
 
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
@@ -853,8 +885,9 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
+  logCtx.routeDecision = route.routeDecision;
 
-  if (websocketUpstreamStreaming === false) {
+  if (responsesUpstreamStreaming === false && route.provider.adapter === "openai-responses") {
     parsed.stream = false;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       (parsed._rawBody as Record<string, unknown>).stream = false;
@@ -965,6 +998,7 @@ export async function handleComboResponses(
       model: requestedModel,
       provider: "combo",
       comboId,
+      routeDecision: logCtx.routeDecision,
       attempts: logCtx.attempts,
       activeAttempt: undefined,
       activeAttemptStartedAt: undefined,
@@ -999,6 +1033,9 @@ export async function handleComboResponses(
   if (!pick) {
     return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
   }
+  // One immutable combo selection trace, before any child dispatch; child
+  // adoption below must never replace it with a concrete child route trace.
+  logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
   let lastFailure: Response | null = null;
   while (pick) {
@@ -1102,6 +1139,7 @@ export async function handleComboResponses(
         model: requestedModel,
         provider: "combo",
         comboId,
+        routeDecision: logCtx.routeDecision,
         attempts: logCtx.attempts,
         activeAttempt: attempt,
         activeAttemptStartedAt: started,
@@ -1345,8 +1383,8 @@ async function handleResponsesInner(
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
-  // Shadow call intercept: rewrite Codex's hard-coded helper calls
-  // (gpt-5.4-mini on older clients, gpt-5.6-luna on 0.145.0+)
+  // Shadow call intercept: rewrite Codex 0.145.0+ helper calls (gpt-5.6-luna).
+  // Ancient clients using gpt-5.4-mini remain configurable via sourceModels.
   const _sci = config.shadowCallIntercept;
   if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
     parsed.modelId,
@@ -1371,10 +1409,16 @@ async function handleResponsesInner(
 
   let route: RouteResult;
   try {
-    route = routeModel(config, parsed.modelId);
+    route = routeModel(config, parsed.modelId, evidenceFromBody(parsed._rawBody));
+    logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {
       return comboUnavailableResponse(err.message);
+    }
+    if (err instanceof NoEligiblePolicyCandidateError) {
+      // Persist the evaluation trace (per-candidate exclusions + the
+      // no-eligible reason) so failed policy requests stay auditable.
+      logCtx.routeDecision = err.trace;
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
@@ -1443,10 +1487,14 @@ async function handleResponsesInner(
 
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
-        route = routeModel(config, fallback.to);
+        route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+        logCtx.routeDecision = route.routeDecision;
       } catch (err) {
         if (err instanceof NoAvailableComboTargetsError) {
           return comboUnavailableResponse(err.message);
+        }
+        if (err instanceof NoEligiblePolicyCandidateError) {
+          logCtx.routeDecision = err.trace;
         }
         return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
       }
@@ -1476,6 +1524,11 @@ async function handleResponsesInner(
     );
   }
 
+  // Captured before normalization: whether the CLIENT asked for SSE. The
+  // transport-neutral upstream-streaming policy below may force a bounded JSON
+  // upstream for reliability (#875); the answer must then be reframed to SSE
+  // for streaming clients.
+  const clientRequestedStream = parsed.stream;
   await applyFinalRouteRequestNormalization({
     parsed,
     route,
@@ -1734,7 +1787,16 @@ async function handleResponsesInner(
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
       if (options.abortSignal?.aborted) return clientCancelledResponse();
-      const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
+      const outcome = classifyTransportFailureKind(err);
+      // Host-level evidence stands regardless of pool membership: a direct
+      // forward send has no pool accounting, but the reachability failure is
+      // still host-wide, not account evidence (#914 review).
+      if (outcome === "connect_neutral") {
+        recordUpstreamHostFailure(
+          upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)),
+          { code: transportErrorCode(err) },
+        );
+      }
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
           threadId: req.headers.get("x-codex-parent-thread-id"),
@@ -1761,7 +1823,14 @@ async function handleResponsesInner(
             method: request.method,
             headers: request.headers,
             body: request.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+            route.provider.authMode === "forward")
+            // Every real attempt response — including an intermediate 5xx the
+            // retry wrapper replaces — proves the host was reached (#914 review).
+            .then(res => {
+              resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+              return res;
+            });
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
       );
@@ -1815,7 +1884,12 @@ async function handleResponsesInner(
               method: request.method,
               headers: request.headers,
               body: request.body,
-            }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+            }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+              route.provider.authMode === "forward")
+              .then(res => {
+                resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
+                return res;
+              });
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
         );
@@ -1940,6 +2014,17 @@ async function handleResponsesInner(
     // Codex renders that as the opaque "Unknown error" (#452). Combo attempts
     // keep their typed failure envelope. Non-empty bodies are relayed verbatim
     // (headers included) so pool-retry Activation B/D and client diagnostics stay intact.
+    // Manual-redirect policy (#914): a 3xx is relayed as-is (Location preserved
+    // through sanitizePassthroughHeaders) so a redirect to a dead host can never
+    // masquerade as a pre-connection failure after the credential was seen.
+    // The numeric outcome above already classified it neutral — no streak.
+    if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        statusText: upstreamResponse.statusText,
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+      });
+    }
     if (!upstreamResponse.ok) {
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
@@ -1962,11 +2047,12 @@ async function handleResponsesInner(
     // `streamMode: "eager-relay"` opt-in. Darwin `auto` always stays tee. The
     // eager shape skips tee and uses one bounded reader with inline inspection
     // (src/server/relay-eager.ts; policy:
-    // devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md).
+    // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
     // The bundled known-bad runtime remains on tee by default on both platforms.
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig);
+      const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
+      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig) || snapshotRepairEnabled;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
@@ -1974,6 +2060,23 @@ async function handleResponsesInner(
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      // #893: sparse-snapshot gateways get field backfills AND lifecycle event
+      // injection at the block level, after payload rewrites. Defaults come
+      // from the finalized OUTBOUND body — the normalized internal tool shapes
+      // are not the Responses wire shapes the snapshot must mirror.
+      const snapshotDefaultsRequest = (() => {
+        try {
+          return JSON.parse(request.body) as unknown;
+        } catch {
+          return undefined;
+        }
+      })();
+      const clientBlockRewrite = snapshotRepairEnabled
+        ? composeSseBlockRewrites(
+          payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)),
+          createResponsesSnapshotBlockRewrite(snapshotDefaultsRequest, translatorBudget),
+        )
+        : undefined;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
@@ -2024,6 +2127,9 @@ async function handleResponsesInner(
           sawTerminal: () => inspector.terminalSeen(),
           ...(win32EagerRewrite
             ? { rewritePayload: composeSsePayloadRewrites(...payloadRewrites) }
+            : {}),
+          ...(clientBlockRewrite
+            ? { rewriteBlocks: clientBlockRewrite }
             : {}),
           onSynthetic: kind => {
             if (!reportNativeTerminal) return;
@@ -2112,8 +2218,8 @@ async function handleResponsesInner(
       // Windows was handled by the eager terminal-aware branch above. Remaining
       // tee traffic can use the JS relay to close on a protocol terminal and to
       // convert a mid-stream reset into a clean response.failed event.
-      const rewrittenBody = payloadRewrites.length > 0
-        ? relaySseWithPayloadRewrite(nativeBody, composeSsePayloadRewrites(...payloadRewrites), translatorBudget)
+      const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0
+        ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite ?? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)), translatorBudget)
         : nativeBody;
       const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
       return markNativePassthroughSseResponse(new Response(clientBody, {
@@ -2128,11 +2234,7 @@ async function handleResponsesInner(
       // without limit. This path is no longer rare — WebSocket turns for models whose
       // streaming terminal event is unreliable are deliberately answered with bounded JSON.
       // Oversize and stall deadlines both fail closed; a partial body is never parsed.
-      const bounded = await readBoundedResponseBody(upstreamResponse, {
-        maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
-        totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
-        inactivityTimeoutMs: UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS,
-      });
+      const bounded = await readBoundedResponseBody(upstreamResponse, UPSTREAM_JSON_BODY_READ_OPTIONS);
       if (bounded.oversized) {
         return formatErrorResponse(502, "upstream_error", "upstream JSON response exceeded the safe body limit");
       }
@@ -2146,7 +2248,65 @@ async function handleResponsesInner(
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
         } catch { /* non-JSON despite content-type; recording is best-effort */ }
       }
-      return new Response(restoreImageGenCallsInJson(text, imageGenCallAliases), {
+      const clientJson = (() => {
+        const restored = restoreImageGenCallsInJson(text, imageGenCallAliases);
+        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) return restored;
+        let outbound: unknown;
+        try {
+          outbound = JSON.parse(request.body);
+        } catch {
+          outbound = undefined;
+        }
+        return repairResponsesSnapshotJson(restored, outbound);
+      })();
+      // #875: the transport-neutral reliability policy forced a bounded JSON
+      // upstream for a client that asked for SSE. Reframe the completed JSON
+      // as the canonical terminal SSE sequence (created → output_item.done →
+      // terminal → [DONE]) so Codex commits the turn instead of hanging on a
+      // stream that never closes. Non-streaming clients keep the plain JSON.
+      if (clientRequestedStream === true
+        && options.inboundTransport !== "websocket"
+        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+        && route.provider.adapter === "openai-responses") {
+        try {
+          let completed = JSON.parse(clientJson) as Record<string, unknown>;
+          // The bounded-JSON answer bypasses the SSE relay, so it also bypasses
+          // the SSE item-id rewrite. Apply the same client-facing normalization
+          // here or this policy would silently disable id repair for the very
+          // providers that need it (raw record already happened above).
+          if (hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)) {
+            completed = repairResponsesJsonItemIds(completed, route.provider.responsesItemIdRepair!, translatorBudget);
+          }
+          const sseHeaders = sanitizePassthroughHeaders(headers);
+          sseHeaders.set("content-type", "text/event-stream");
+          sseHeaders.set("cache-control", "no-store");
+          return new Response(responsesJsonToSseBody(completed), {
+            status: upstreamResponse.status,
+            statusText: upstreamResponse.statusText,
+            headers: sseHeaders,
+          });
+        } catch {
+          // Non-JSON despite content-type: fall through to the plain relay.
+        }
+      }
+      // WS turns reframe this JSON into events in the bridge, which is the
+      // other relay-free path — normalize ids so both bounded-JSON paths agree.
+      const outboundJson = options.inboundTransport === "websocket"
+        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+        && hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)
+        ? (() => {
+          try {
+            return JSON.stringify(repairResponsesJsonItemIds(
+              JSON.parse(clientJson) as Record<string, unknown>,
+              route.provider.responsesItemIdRepair!,
+              translatorBudget,
+            ));
+          } catch {
+            return clientJson;
+          }
+        })()
+        : clientJson;
+      return new Response(outboundJson, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,

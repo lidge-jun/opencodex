@@ -15,7 +15,7 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | --- | --- | --- |
 | `list` | `--json` | 설정된 제공자와 남아 있는 레지스트리 항목을 나열합니다. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 레지스트리/사용자 지정 제공자를 추가합니다. `--force`는 덮어쓰고, `--sync`는 사람이 읽는 출력 모드에서 실행 중인 프록시를 새로 고칩니다. |
-| `edit <name>` | 제공자 필드 플래그, `--json` | 키 풀을 바꾸지 않고 검증된 실시간 제공자 필드를 수정합니다. |
+| `edit <name>` | 제공자 필드 플래그, `--headers <json>`, `--json` | 키 풀을 바꾸지 않고 검증된 실시간 제공자 필드를 수정합니다. `--headers`는 사용자 지정 요청 헤더를 병합하며, `{}` 또는 `-`로 지울 수 있습니다. |
 | `test <name>` | `--json` | 실제 상위 모델 엔드포인트를 확인합니다. |
 | `show <name>` | `--json` | API 키를 마스킹한 설정을 보여줍니다. |
 | `remove <name>` | `--json` | 기본값이 아닌 제공자를 제거합니다. 마지막 제공자는 제거할 수 없습니다. |
@@ -34,6 +34,23 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+:::caution[커스텀 헤더는 자격증명 통로가 아닙니다]
+`--headers`는 비밀이 아닌 요청 메타데이터용입니다 — 라우팅 힌트, 테넌트나 프로젝트
+선택자, 추적 id 같은 것들이요. 인증 정보를 넣는 자리가 아니고, 검증기는 표준 자격증명
+헤더 이름(`Authorization`, `X-Api-Key`, `Cookie` 등)을 `apiKey` / `authMode`를
+쓰라는 안내와 함께 거부합니다.
+
+다만 `X-My-Token` 같은 임의 이름까지 알아볼 수는 없으니 그 경계는 사용자가 지켜야
+합니다. 이유는 두 가지입니다.
+
+- JSON이 명령줄 인자라서, 비밀이 들어가면 셸 히스토리와 프로세스 목록에 남습니다.
+  CLI가 무엇을 가리기도 전에 같은 머신의 다른 프로세스가 읽을 수 있습니다.
+- 헤더 값은 `config.json`에 평문으로 저장됩니다. 별도 저장·마스킹 경로가 있는
+  API 키와 다릅니다.
+
+비밀에 해당하는 값은 `--api-key`나 OAuth 로그인을 쓰세요.
+:::
 
 ## 인증
 
@@ -212,7 +229,7 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 | `provider <name> <on\|off>` | `--json` | 한 제공자의 모든 모델을 한 번의 쓰기로 활성화하거나 비활성화합니다. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 제공자 모델 허용 목록을 읽거나 교체합니다. `--clear`는 허용 목록을 제거해 모든 모델을 제공하도록 합니다. |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | 전역 또는 제공자별로 컨텍스트 창 한도를 읽거나 설정합니다. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-5.4-mini`와 `gpt-5.6-luna`). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-5.6-luna`; 0.144.x 이하 클라이언트가 사용한 `gpt-5.4-mini`는 명시적인 `sourceModels` 재정의로 복원할 수 있습니다). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

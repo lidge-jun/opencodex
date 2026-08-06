@@ -413,7 +413,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
       return "provider openai codexAccountMode must be pool or direct";
     }
     if (seed) seed.codexAccountMode = raw.codexAccountMode;
-    const canonical = seed && sameCanonicalProviderSeed(raw, seed);
+    const canonicalCandidate = { ...raw };
+    delete canonicalCandidate.responsesSnapshotRepair;
+    const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
     }
@@ -453,6 +455,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     typed,
   );
   if (preferHostedToolsError) return `provider ${name} ${preferHostedToolsError}`;
+  if (raw.responsesSnapshotRepair !== undefined && typeof raw.responsesSnapshotRepair !== "boolean") {
+    return `provider ${name} responsesSnapshotRepair must be a boolean`;
+  }
   const defaultMaxOutputError = positiveIntegerConfigError(raw.defaultMaxOutputTokens, "defaultMaxOutputTokens");
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");

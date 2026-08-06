@@ -23,8 +23,13 @@ describe("full uninstall command", () => {
     const cli = await readText("src/cli/index.ts");
 
     expect(cli).toContain("ocx recover-history --legacy-openai");
-    expect(cli).toContain("function handleRecoverHistory()");
-    expect(cli).toContain("restoreLegacyOpenaiHistory");
+    expect(cli).toContain("async function handleRecoverHistory()");
+    // The command still performs legacy recovery, but through the serialized
+    // history job rather than by calling the writer inline — the operation name
+    // is what keeps it distinct from a generic restore, which must not touch the
+    // backup manifest this one deliberately leaves alone.
+    expect(cli).toContain("recover-legacy-openai");
+    expect(cli).toContain("runCodexHistoryJob");
   });
 
   test("service cleanup has a quiet best-effort helper", async () => {

@@ -1,7 +1,7 @@
 /**
  * Shadow call intercept source-model matching (issue #311): Codex 0.145.0 moved
- * its hard-coded helper model from gpt-5.4-mini to gpt-5.6-luna, so the intercept
- * must match a source-model set, not a single literal.
+ * its hard-coded helper model from gpt-5.4-mini to gpt-5.6-luna. The current
+ * default follows modern clients, while sourceModels keeps an escape hatch.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,6 +11,7 @@ import { handleResponses, isShadowSourceModel } from "../src/server/responses";
 import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const originalFetch = globalThis.fetch;
 
@@ -20,9 +21,13 @@ afterEach(() => {
 
 describe("isShadowSourceModel", () => {
   test("matches default shadow source models by prefix", () => {
-    expect(isShadowSourceModel("gpt-5.4-mini")).toBe(true);
-    expect(isShadowSourceModel("gpt-5.4-mini-2026-01")).toBe(true);
     expect(isShadowSourceModel("gpt-5.6-luna")).toBe(true);
+    expect(isShadowSourceModel("gpt-5.6-luna-2026-08")).toBe(true);
+  });
+
+  test("does not match the legacy helper by default but supports an explicit override", () => {
+    expect(isShadowSourceModel("gpt-5.4-mini")).toBe(false);
+    expect(isShadowSourceModel("gpt-5.4-mini", ["gpt-5.4-mini"])).toBe(true);
   });
 
   test("does not match non-helper models", () => {
@@ -197,17 +202,19 @@ async function shadowApi(config: OcxConfig, method: string, body?: unknown): Pro
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const res = await handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog: async () => {} });
+  const res = await handleManagementAPI(req, new URL(req.url), config, {
+    createManagementConvergeCodex: catalogConvergenceFactory(),
+  });
   expect(res).not.toBeNull();
   expect(res!.status).toBe(200);
   return await res!.json() as Record<string, unknown>;
 }
 
 describe("shadow-call settings API reports the intercepted source models", () => {
-  test("GET reports the defaults, including the 0.145.0 helper model", async () => {
+  test("GET reports the 0.145.0+ helper-model default", async () => {
     await withTempHome(async () => {
       const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
-      expect(body.sourceModels).toEqual(["gpt-5.4-mini", "gpt-5.6-luna"]);
+      expect(body.sourceModels).toEqual(["gpt-5.6-luna"]);
     });
   });
 

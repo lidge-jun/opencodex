@@ -9,6 +9,56 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 
 export type SsePayloadRewrite = (payload: string) => string;
 
+/**
+ * Block-level SSE rewrite: maps one complete SSE event block (without its
+ * blank-line delimiter) to zero or more replacement blocks. This is the
+ * contract lifecycle repair needs: injecting missing canonical events
+ * (#893) is impossible in the one-payload-in/one-payload-out model.
+ *
+ * `dispose` releases any retained state (budget-charged collectors) when the
+ * relay tears down — terminal, EOF, cancel, or error. Relays call it exactly
+ * once per teardown path.
+ */
+export type SseBlockRewrite = ((block: string) => readonly string[]) & {
+  dispose?: () => void;
+};
+
+/** Adapt a payload rewrite to the block contract (replace only on change). */
+export function payloadRewriteAsBlockRewrite(rewrite: SsePayloadRewrite): SseBlockRewrite {
+  return (block) => {
+    const payload = sseDataPayload(block);
+    if (payload === null) return [block];
+    const rewritten = rewrite(payload);
+    return rewritten !== payload ? [replaceSseDataPayload(block, rewritten)] : [block];
+  };
+}
+
+/** Chain block rewrites: every block stage N emits feeds stage N+1. */
+export function composeSseBlockRewrites(...rewrites: SseBlockRewrite[]): SseBlockRewrite {
+  const active = rewrites.filter(Boolean);
+  if (active.length === 0) return Object.assign((block: string) => [block], {});
+  const composed: SseBlockRewrite = (block: string) => {
+    let blocks: readonly string[] = [block];
+    for (const rewrite of active) {
+      const next: string[] = [];
+      for (const current of blocks) next.push(...rewrite(current));
+      blocks = next;
+    }
+    return blocks;
+  };
+  // Child disposal is part of the contract: one idempotent disposer for the
+  // whole chain, so relay teardown never leaks a nested collector.
+  let disposed = false;
+  composed.dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    for (const rewrite of active) {
+      try { rewrite.dispose?.(); } catch { /* teardown must not throw */ }
+    }
+  };
+  return composed;
+}
+
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
   const match = buffer.match(/\r?\n\r?\n/);
@@ -70,11 +120,33 @@ export function relaySseWithPayloadRewrite(
   rewrite: SsePayloadRewrite,
   translatorBudget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
+  return relaySseWithBlockRewrite(body, payloadRewriteAsBlockRewrite(rewrite), translatorBudget);
+}
+
+/**
+ * Relay an SSE body through a single JS pull wrapper, applying a block-level
+ * rewrite that may emit zero or more blocks per upstream event (lifecycle
+ * event injection, #893). The original stream's delimiter style is preserved
+ * for every emitted block.
+ */
+export function relaySseWithBlockRewrite(
+  body: ReadableStream<Uint8Array>,
+  rewrite: SseBlockRewrite,
+  translatorBudget: TranslatorBudget,
+): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
   let bufferBytes = 0;
+  // Relays have several independent teardown paths; disposal is exactly once.
+  let disposed = false;
+  let cancelled = false;
+  const disposeRewrite = (): void => {
+    if (disposed) return;
+    disposed = true;
+    try { rewrite.dispose?.(); } catch { /* teardown must not throw */ }
+  };
 
   const appendBuffer = (fragment: string): void => {
     if (!fragment) return;
@@ -130,20 +202,18 @@ export function relaySseWithPayloadRewrite(
     let next: { block: string; delimiter: string; rest: string } | null;
     while ((next = nextSseBlock(buffer))) {
       replaceBuffer(next.rest);
-      const payload = sseDataPayload(next.block);
-      const rewrittenPayload = payload ? rewrite(payload) : undefined;
-      const block = payload && rewrittenPayload !== undefined && rewrittenPayload !== payload
-        ? replaceSseDataPayload(next.block, rewrittenPayload)
-        : next.block;
-      enqueueText(controller, block + next.delimiter);
+      for (const outBlock of rewrite(next.block)) {
+        enqueueText(controller, outBlock + next.delimiter);
+      }
     }
     if (flushFinal && buffer.length > 0) {
-      const payload = sseDataPayload(buffer);
-      const rewrittenPayload = payload ? rewrite(payload) : undefined;
-      const block = payload && rewrittenPayload !== undefined && rewrittenPayload !== payload
-        ? replaceSseDataPayload(buffer, rewrittenPayload)
-        : buffer;
-      enqueueText(controller, block);
+      const tailBlocks = rewrite(buffer);
+      // A trailing fragment has no delimiter of its own; multiple emitted
+      // blocks must still be framed as separate events (#893 review).
+      const tailDelimiter = buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n";
+      for (let i = 0; i < tailBlocks.length; i++) {
+        enqueueText(controller, tailBlocks[i]! + (i < tailBlocks.length - 1 ? tailDelimiter : ""));
+      }
       releaseBuffer();
     }
   };
@@ -152,10 +222,14 @@ export function relaySseWithPayloadRewrite(
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
+        // A cancel raced this pending read: never feed the rewriter again
+        // after its disposal (#893 review).
+        if (cancelled) return;
         if (done) {
           appendBuffer(decoder.decode());
           emitProcessedBlocks(controller, true);
           releaseBuffer();
+          disposeRewrite();
           controller.close();
           return;
         }
@@ -163,12 +237,15 @@ export function relaySseWithPayloadRewrite(
         emitProcessedBlocks(controller);
       } catch (error) {
         releaseBuffer();
+        disposeRewrite();
         try { await reader.cancel(error); } catch { /* already closed */ }
         controller.error(error);
       }
     },
     cancel(reason) {
+      cancelled = true;
       releaseBuffer();
+      disposeRewrite();
       reader.cancel(reason).catch(() => {});
     },
   });

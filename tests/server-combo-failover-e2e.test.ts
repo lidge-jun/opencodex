@@ -28,6 +28,7 @@ import {
 } from "../src/codex/routing";
 import { startServer } from "../src/server";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -343,7 +344,7 @@ async function management(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return handleManagementAPI(request, new URL(request.url), config, {
-    refreshCodexCatalog: async () => {},
+    createManagementConvergeCodex: catalogConvergenceFactory(),
   });
 }
 
@@ -421,6 +422,57 @@ describe("server combo failover 030 activation matrix", () => {
           { ordinal: 2, provider: "b", model: "m2", status: 200, usage: { inputTokens: 2, outputTokens: 1 } },
         ],
       });
+    }
+  });
+
+  test("persists one immutable combo route trace, not the child route trace", async () => {
+    const a = serve(() => chatSuccess("winner", "m1"));
+    const b = serve(() => chatSuccess("backup", "m2"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt.routeDecision).toBeDefined();
+      expect(receipt.routeDecision.routeKind).toBe("combo");
+      expect(receipt.routeDecision.requestedModel).toBe("combo/free");
+      expect(receipt.routeDecision.candidates).toHaveLength(2);
+      expect(receipt.routeDecision.selected).toMatchObject({
+        provider: "a",
+        model: "m1",
+        reason: "combo-pick",
+      });
+      // Selection trace stays immutable: exactly one physical attempt happened
+      // and the trace still describes the combo decision, not the child route.
+      expect(receipt.attempts).toHaveLength(1);
+      expect(receipt.attempts![0]).toMatchObject({ provider: "a", model: "m1" });
+    }
+  });
+
+  test("terminal combo failure keeps the combo trace through child adoption", async () => {
+    const a = serve(() => Response.json({ error: { message: "overloaded" } }, { status: 503 }));
+    const b = serve(() => Response.json({ error: { message: "overloaded" } }, { status: 503 }));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt.routeDecision).toBeDefined();
+      expect(receipt.routeDecision.routeKind).toBe("combo");
+      expect(receipt.routeDecision.selected).toMatchObject({
+        provider: "a",
+        model: "m1",
+        reason: "combo-pick",
+      });
+      expect(receipt.attempts).toHaveLength(2);
     }
   });
 

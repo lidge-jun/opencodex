@@ -9,7 +9,7 @@ import { injectGrokConfig, type GrokInjectModel } from "../src/grok/inject";
 import type { OcxConfig } from "../src/types";
 
 /**
- * Route contract for devlog/_plan/260803_integrations_toggle_all/012 (Rev 3).
+ * Route contract for devlog/_fin/260803_integrations_toggle_all/012 (Rev 3).
  *
  * The toggle owns a fenced region of ~/.grok/config.toml and carries no
  * snapshot and no journal — re-enabling regenerates the fence from the current

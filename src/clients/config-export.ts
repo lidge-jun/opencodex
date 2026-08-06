@@ -434,6 +434,55 @@ function outputBudgetFor(context: number): number {
 }
 
 /**
+ * Modalities a given client's schema will actually accept.
+ *
+ * Our internal vocabulary is `text | image | audio` (ALLOWED_INPUT_MODALITIES in
+ * src/server/management/model-routes.ts). Pi and Gajae accept only
+ * `text | image`, and both reject the WHOLE config file over one out-of-enum
+ * value — Gajae reports `/providers/opencodex/models/N/input/2: Invalid option`
+ * and falls back to its built-in list, Pi returns an empty model config. So a
+ * single `audio` model takes every routed model down with it. That is not
+ * hypothetical: zenmux/meta-muse-spark-1.1 advertises audio and did exactly
+ * this. It is also the same defect the Codex catalog had with `video`, where
+ * the app showed zero apps (tests/catalog-input-modality-enum.test.ts).
+ *
+ * UNKNOWN and INCOMPATIBLE are different inputs, and the Codex fix could
+ * conflate them safely only because its enum is wider. A model with nothing
+ * declared is unknown, and `text` is the honest floor — every routed model takes
+ * prompts. A model declaring `["audio"]` and nothing else is incompatible with a
+ * text|image client, and rewriting it to `["text"]` would advertise a capability
+ * it does not have. That input is reachable three ways: `ocx models add
+ * --modalities audio`, `/api/custom-models`, and provider discovery.
+ *
+ * So unknown falls back to text and incompatible returns null, which drops the
+ * row. Omitting a model costs the user a line in a picker; fabricating `text`
+ * costs them a model that fails at call time with no explanation.
+ *
+ * Deliberately NOT applied in `ExportModel` construction: the management and CLI
+ * boundaries carry catalog modalities verbatim on purpose, and stripping `audio`
+ * globally would destroy valid metadata before the destination is known.
+ */
+const CLIENT_INPUT_MODALITIES: Record<"pi" | "gajae", ReadonlySet<string>> = {
+  pi: new Set(["text", "image"]),
+  gajae: new Set(["text", "image"]),
+};
+
+/** `null` means the model cannot be represented for this client — drop the row. */
+function inputModalitiesForClient(
+  client: "pi" | "gajae",
+  modalities: readonly string[] | undefined,
+): string[] | null {
+  const declared = modalities ?? [];
+  if (declared.length === 0) return ["text"];
+  const accepted = CLIENT_INPUT_MODALITIES[client];
+  const kept: string[] = [];
+  for (const value of declared) {
+    if (accepted.has(value) && !kept.includes(value)) kept.push(value);
+  }
+  return kept.length > 0 ? kept : null;
+}
+
+/**
  * Label shared by every client: `"<displayName|id> (<native|provider|routed>)"`. The
  * provider suffix is what makes two same-named models from different upstreams
  * distinguishable in a client's model picker.
@@ -646,25 +695,34 @@ export interface GajaeGeneratedConfig {
  * `reasoning` is a boolean in Pi while our catalog carries an effort list — mapping one
  * to the other would be a guess.
  *
- * Pi's schema is UNVERIFIED against a real installation (001 §2); this contract is ours,
- * not a claim about Pi's acceptance.
+ * Pi's input enum IS verified: its documented model configuration accepts only
+ * `text` and `image`, and a validation failure yields an EMPTY model config
+ * rather than dropping the offending entry — one bad value costs every routed
+ * model. The rest of this contract (omitting `cost` and `reasoning`) is still
+ * ours rather than a claim about Pi's acceptance.
  */
 function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
-  const models: PiModelEntry[] = normalizeExportModels(ctx.models).map(model => {
+  const models: PiModelEntry[] = [];
+  for (const model of normalizeExportModels(ctx.models)) {
+    // Text is the one modality every routed model supports; anything richer must come
+    // from the catalog rather than an assumption — and must still be inside the enum
+    // Pi accepts, because one rejected value empties the whole config.
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    // An audio-only model has no honest representation here; claiming `text`
+    // would fail at call time instead, so the row is dropped.
+    if (input === null) continue;
     const entry: PiModelEntry = {
       id: model.namespaced,
       name: exportModelLabel(model),
-      // Text is the one modality every routed model supports; anything richer must come
-      // from the catalog rather than an assumption.
-      input: model.inputModalities && model.inputModalities.length > 0 ? [...model.inputModalities] : ["text"],
+      input,
     };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
       entry.maxTokens = outputBudgetFor(context);
     }
-    return entry;
-  });
+    models.push(entry);
+  }
   return {
     providers: {
       [OPENCODE_PROVIDER_ID]: {
@@ -758,21 +816,24 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
 }
 
 function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
-  const models: GajaeModelEntry[] = normalizeExportModels(ctx.models).map(model => {
+  const models: GajaeModelEntry[] = [];
+  for (const model of normalizeExportModels(ctx.models)) {
+    // Gajae's enum is text|image and it rejects the whole file over one bad
+    // value, naming the offending index in the error.
+    const input = inputModalitiesForClient("gajae", model.inputModalities);
+    if (input === null) continue;
     const entry: GajaeModelEntry = {
       id: model.namespaced,
       name: exportModelLabel(model),
-      input: model.inputModalities && model.inputModalities.length > 0
-        ? [...model.inputModalities]
-        : ["text"],
+      input,
     };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
       entry.maxTokens = outputBudgetFor(context);
     }
-    return entry;
-  });
+    models.push(entry);
+  }
   return {
     providers: {
       [OPENCODE_PROVIDER_ID]: {

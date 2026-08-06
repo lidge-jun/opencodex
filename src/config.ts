@@ -1,10 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
+import {
+  bumpConfigGenerationAtPath,
+  bumpCurrentConfigGeneration,
+  initializeConfigGeneration,
+  observeConfigGenerationAtPath,
+  readConfigGenerationAtPath,
+  readConfigGenerationInTransaction,
+  type ConfigGenerationObservation,
+} from "./codex/generation";
+import type {
+  BumpConfigGeneration,
+  ConfigGeneration,
+  ReadConfigGeneration,
+  WithExpectedConfigGenerationSync,
+} from "./codex/convergence-types";
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
   codexAccountNamespaceForModel,
@@ -13,6 +28,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
+import { routingProfileIssues } from "./routing/profile";
 import {
   forgetEphemeralSecretPath,
   hardenSecretDir,
@@ -597,10 +613,23 @@ const providerConfigSchema = z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),
     repairMissingTerminalIds: z.boolean().optional(),
+    repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
+  responsesSnapshotRepair: z.boolean().optional(),
 }).passthrough();
 
-const RESERVED_PROVIDER_NAMES = new Set(["__proto__", "prototype", "constructor"]);
+const RESERVED_PROVIDER_NAMES = new Set([
+  // JavaScript prototype-pollution guards.
+  "__proto__",
+  "prototype",
+  "constructor",
+  // System-reserved routing namespace (resolved before provider/account
+  // namespaces in routeModelInternal). "combo" is intentionally NOT reserved:
+  // a physical provider named `combo` is a supported pattern (combo aliases
+  // hosted on the combo provider), and the combo selector only wins when an
+  // actual combo id matches.
+  "policy",
+]);
 const PROVIDER_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const SENSITIVE_PROVIDER_HEADERS = new Set([
@@ -945,6 +974,20 @@ const apiKeyEntrySchema = z.object({
   createdAt: z.string().catch(""),
 }).passthrough();
 
+/**
+ * Durable per-client intent.
+ *
+ * `.passthrough()` is load-bearing: a binary that only knows `codex` must not
+ * erase a key a later version wrote during a field-scoped mutation. And each key
+ * degrades on its own — a hand edit of `{"codex": "false", "future": false}`
+ * drops `codex` to absent (which reads as ON) and keeps `future`, rather than
+ * invalidating the object or, worse, the whole config.
+ */
+const clientIntegrationsSchema = z.object({
+  codex: z.boolean().optional().catch(undefined),
+  grok: z.boolean().optional().catch(undefined),
+}).passthrough();
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
@@ -966,6 +1009,7 @@ const configSchema = z.object({
   // Invalid hand edits must not discard an otherwise usable config. Treat them as
   // pre-migration so startup can safely re-run the one-time normalization.
   googleAntigravityStaticCatalogVersion: z.literal(1).optional().catch(undefined),
+  clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
@@ -1059,7 +1103,7 @@ const configSchema = z.object({
       ctx.addIssue({
         code: "custom",
         path: ["providers", name],
-        message: "provider names must use letters, numbers, dot, underscore, or hyphen and cannot be reserved JavaScript object keys",
+        message: "provider names must use letters, numbers, dot, underscore, or hyphen and cannot be reserved JavaScript object keys or routing namespaces (policy)",
       });
     }
     const provider = config.providers[name];
@@ -1255,6 +1299,27 @@ const configSchema = z.object({
           ctx.addIssue({
             code: "custom",
             path: ["combos", id, ...issue.path],
+            message: issue.message,
+          });
+        }
+      }
+    }
+  }
+  const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;
+  if (routingProfiles !== undefined) {
+    if (!routingProfiles || typeof routingProfiles !== "object" || Array.isArray(routingProfiles)) {
+      ctx.addIssue({ code: "custom", path: ["routingProfiles"], message: "routingProfiles must be an object" });
+    } else {
+      for (const [id, raw] of Object.entries(routingProfiles as Record<string, unknown>)) {
+        for (const issue of routingProfileIssues(id, raw, {
+          providers: config.providers,
+          combos: combos as Record<string, import("./types").OcxComboConfig> | undefined,
+          routingProfiles: routingProfiles as Record<string, import("./types").OcxRoutingProfileConfig>,
+          codexAccountNamespaces: accountNamespaces,
+        }, { excludeProfileId: id })) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["routingProfiles", id, ...issue.path],
             message: issue.message,
           });
         }
@@ -1886,6 +1951,54 @@ export function readConfigDiagnostics(): ConfigDiagnostics {
   return readConfigFileSnapshot().diagnostics;
 }
 
+/**
+ * The persisted config, plus a digest of the EXACT bytes it was parsed from.
+ *
+ * A union rather than a nullable digest, because `{ kind: "read" }` with no
+ * digest is a state that cannot occur — and a state that cannot occur should
+ * not be a state that can be written down. Refusing it at runtime is a check
+ * somebody eventually forgets; making it unrepresentable is not.
+ *
+ * Why a byte digest at all: the Codex write lock compares an authority snapshot
+ * taken before the lock against one taken while holding it, and its config
+ * component used to hash the PARSED object. Two files that differ only in
+ * whitespace or key order parse identically, so a non-cooperating writer could
+ * rewrite the file between admission and commit and the comparison would see
+ * nothing. Hashing what was actually read closes that.
+ *
+ * `readConfigFileSnapshot` stays private on purpose. Its `raw` carries provider
+ * API keys and admission tokens, and `privacy:scan` reads tracked source text,
+ * not runtime values — so it would not catch a caller that logged or serialized
+ * that string. The digest travels; the bytes do not.
+ */
+export type ConfigAdmissionSnapshot =
+  | Readonly<{ kind: "read"; diagnostics: ConfigDiagnostics; contentSha256: string }>
+  | Readonly<{ kind: "unreadable"; diagnostics: ConfigDiagnostics; contentSha256: null }>;
+
+export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
+  let bytes: Buffer;
+  try {
+    // ONE read. Hashing the file and then reading it again to parse would leave
+    // a window for the two to disagree, which is the exact hazard this exists
+    // to detect — the check would become a second chance to be wrong.
+    bytes = readFileSync(getConfigPath());
+  } catch (error) {
+    return {
+      kind: "unreadable",
+      diagnostics: isMissingPathError(error)
+        ? { config: getDefaultConfig(), source: "default", error: null }
+        : { config: getDefaultConfig(), source: "fallback", error: "invalid_json" },
+      contentSha256: null,
+    };
+  }
+  return {
+    kind: "read",
+    // Decoded from the same buffer that was hashed, not re-read from disk.
+    diagnostics: configDiagnosticsFromRaw(bytes.toString("utf-8")),
+    contentSha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+
 const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 let warnedConfigMutationDirectoryAcl = false;
@@ -1934,6 +2047,7 @@ function configMutationDatabasePath(): string {
 }
 
 let configMutationLockDepth = 0;
+let configMutationDatabase: Database | null = null;
 
 /**
  * Serialize synchronous config and Codex credential-generation commits across processes with an
@@ -1960,7 +2074,11 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
+    initializeConfigGeneration(database);
   } catch (cause) {
+    if (transactionOpen) {
+      try { database?.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
+    }
     try { database?.close(); } catch { /* acquisition already failed */ }
     const code = cause && typeof cause === "object" && "code" in cause
       ? String((cause as { code?: unknown }).code)
@@ -1972,6 +2090,7 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
   }
 
   configMutationLockDepth = 1;
+  configMutationDatabase = database;
   try {
     const value = fn();
     database.exec("COMMIT");
@@ -1985,19 +2104,118 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     throw error;
   } finally {
     configMutationLockDepth = 0;
+    configMutationDatabase = null;
     try { database.close(); } catch { /* the OS lock is released with the handle */ }
   }
 }
 
-function persistConfigUnlocked(config: OcxConfig): void {
+function bumpGenerationForCooperatingConfigWrite(): void {
+  if (!configMutationDatabase) {
+    throw new Error("A cooperating config write requires the config mutation transaction.");
+  }
+  bumpCurrentConfigGeneration(configMutationDatabase);
+}
+
+export const readConfigGeneration: ReadConfigGeneration = () => {
+  try {
+    return readConfigGenerationAtPath(configMutationDatabasePath());
+  } catch {
+    return { kind: "unavailable", reason: "database" };
+  }
+};
+
+export function observeConfigGeneration(): ConfigGenerationObservation {
+  return observeConfigGenerationAtPath(join(getConfigDir(), CONFIG_MUTATION_DB_FILENAME));
+}
+
+/**
+ * Read the generation from the transaction that is open RIGHT NOW.
+ *
+ * The observer cannot do this job. On the very first acquisition the
+ * `BEGIN IMMEDIATE` that creates the table has not committed yet, so a separate
+ * read-only connection cannot read a generation from it — measured, not
+ * assumed. A caller that compared a pre-lock observation against an observer
+ * re-read would therefore refuse every first write as stale.
+ *
+ * Throwing when no transaction is open is deliberate. Being called outside the
+ * lock is broken plumbing, and returning a typed "unavailable" would let that
+ * bug arrive disguised as an environmental failure — retried forever, on a
+ * machine where nothing is wrong.
+ */
+export function readConfigGenerationInCurrentMutationTransaction(): ConfigGeneration {
+  if (configMutationLockDepth < 1 || !configMutationDatabase) {
+    throw new Error(
+      "readConfigGenerationInCurrentMutationTransaction requires an open config mutation transaction.",
+    );
+  }
+  return readConfigGenerationInTransaction(configMutationDatabase);
+}
+
+export const bumpConfigGeneration: BumpConfigGeneration = expected => {
+  try {
+    return bumpConfigGenerationAtPath(configMutationDatabasePath(), expected);
+  } catch {
+    return { kind: "unavailable", reason: "database" };
+  }
+};
+
+function configGenerationFailureReason(error: unknown): "busy" | "database" {
+  const cause = error instanceof ConfigMutationLockError ? error.cause : error;
+  const code = cause && typeof cause === "object" && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  const message = cause instanceof Error ? cause.message : "";
+  return code === "SQLITE_BUSY"
+    || code === "SQLITE_LOCKED"
+    || /database (?:is|table is) locked/i.test(message)
+    ? "busy"
+    : "database";
+}
+
+export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync = (
+  expected,
+  commit,
+) => {
+  let callbackThrew = false;
+  let callbackError: unknown;
+  try {
+    return withConfigMutationLockSync(() => {
+      const database = configMutationDatabase;
+      if (!database) throw new Error("Config mutation transaction database is unavailable.");
+      const current = readConfigGenerationInTransaction(database);
+      if (current.value !== expected.value) return { kind: "conflict", current };
+      try {
+        return { kind: "matched", generation: current, value: commit() };
+      } catch (error) {
+        callbackThrew = true;
+        callbackError = error;
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (callbackThrew && error === callbackError) throw error;
+    return { kind: "unavailable", reason: configGenerationFailureReason(error) };
+  }
+};
+
+function persistConfigUnlocked(config: OcxConfig): boolean {
   const configPath = getConfigPath();
-  atomicWriteFile(configPath, JSON.stringify(config, null, 2) + "\n");
+  const bytes = JSON.stringify(config, null, 2) + "\n";
+  try {
+    if (readFileSync(configPath, "utf8") === bytes) return false;
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  atomicWriteFile(configPath, bytes);
+  return true;
 }
 
 export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
-  withConfigMutationLockSync(() => persistConfigUnlocked(config));
+  withConfigMutationLockSync(() => {
+    if (persistConfigUnlocked(config)) bumpGenerationForCooperatingConfigWrite();
+  });
 }
 
 export type PersistedConfigMutation<T> = {
@@ -2077,7 +2295,7 @@ export function mutatePersistedConfig<T>(
         continue;
       }
 
-      persistConfigUnlocked(confirmedConfig);
+      if (persistConfigUnlocked(confirmedConfig)) bumpGenerationForCooperatingConfigWrite();
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -2336,10 +2554,10 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       const persistedConfig: OcxConfig = { ...config, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      persistConfigUnlocked(persistedConfig);
+      if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      persistConfigUnlocked(config);
+      if (persistConfigUnlocked(config)) bumpGenerationForCooperatingConfigWrite();
     }
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));

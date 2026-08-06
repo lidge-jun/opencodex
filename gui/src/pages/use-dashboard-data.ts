@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { replaceHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
@@ -589,6 +589,15 @@ export function useDashboardData(apiBase: string) {
     }
   };
 
+  // Clears the sync result/error in this hook. The dashboard toast owns its own dismissal
+  // timer but must publish the dismissal here: syncResult/syncError live above the dashboard
+  // tabs, so a component-local flag alone would let a stale result remount as a fresh toast
+  // after the Overview panel unmounts and comes back.
+  const clearSyncFeedback = useCallback(() => {
+    setSyncResult(null);
+    setSyncError(null);
+  }, []);
+
   const runSync = async () => {
     if (syncing) return;
     setSyncing(true);
@@ -737,7 +746,7 @@ export function useDashboardData(apiBase: string) {
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
     filteredGroups, sidecarModels,
-    saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync,
+    saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
 }

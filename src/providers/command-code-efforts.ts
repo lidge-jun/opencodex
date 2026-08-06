@@ -1,0 +1,85 @@
+import { readBoundedResponseBody } from "../lib/bounded-body";
+
+const COMMAND_CODE_MODEL_EFFORTS = {
+  "deepseek/deepseek-v4-pro": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/deepseek-v4-pro",
+  },
+  "deepseek/deepseek-v4-flash": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
+  },
+  "zai-org/glm-5.2": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/glm-5-2",
+  },
+} as const;
+
+/**
+ * Official Command Code model-profile facts, not a model catalog. Models remain
+ * account-scoped and come exclusively from the authenticated /provider/v1/models endpoint.
+ */
+export const COMMAND_CODE_MODEL_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
+  Object.entries(COMMAND_CODE_MODEL_EFFORTS).map(([id, row]) => [id, [...row.efforts]]),
+);
+
+const refreshedEfforts = new Map<string, string[]>();
+
+function keyFor(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
+  const key = keyFor(modelId);
+  return refreshedEfforts.get(key) ?? COMMAND_CODE_MODEL_REASONING_EFFORTS[key];
+}
+
+function parsedProfileEfforts(page: string): string[] | undefined {
+  const match = page.match(/Reasoning efforts\s+([^.;]+?)\s+are supported;\s*([^.]*)/i);
+  if (!match) return undefined;
+  const listed = match[1]!.toLowerCase().match(/\b(?:low|medium|high|xhigh|max)\b/g) ?? [];
+  const mapped = match[2]!.toLowerCase().match(/\b(?:low|medium|high|xhigh|max)\s+maps to\s+(?:low|medium|high|xhigh|max)\b/g) ?? [];
+  const normalized = new Set(listed);
+  for (const mapping of mapped) {
+    const [, source, target] = mapping.match(/(low|medium|high|xhigh|max)\s+maps to\s+(low|medium|high|xhigh|max)/) ?? [];
+    if (source && target) {
+      normalized.delete(source);
+      normalized.add(target);
+    }
+  }
+  return normalized.size > 0 ? [...normalized] : [];
+}
+
+/**
+ * Refresh one stale effort record only after the upstream rejects an effort request.
+ * A failed or unparseable public profile deliberately leaves the known table unchanged.
+ */
+export async function refreshCommandCodeReasoningEfforts(
+  modelId: string,
+  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+): Promise<readonly string[] | undefined> {
+  const key = keyFor(modelId);
+  const profile = COMMAND_CODE_MODEL_EFFORTS[key as keyof typeof COMMAND_CODE_MODEL_EFFORTS];
+  if (!profile) return undefined;
+  try {
+    const response = await fetchFn(profile.profileUrl, {
+      headers: { Accept: "text/html" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return undefined;
+    // Bound the profile page before parsing: a large or malformed page must not
+    // allocate unbounded memory on the request path.
+    const observed = await readBoundedResponseBody(response, { maxBytes: 256 * 1024 });
+    if (!observed.displaySafe) return undefined;
+    const efforts = parsedProfileEfforts(observed.text);
+    if (efforts === undefined) return undefined;
+    refreshedEfforts.set(key, efforts);
+    return efforts;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resetCommandCodeReasoningEffortsForTest(): void {
+  refreshedEfforts.clear();
+}

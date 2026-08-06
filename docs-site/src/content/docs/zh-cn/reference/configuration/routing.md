@@ -89,3 +89,26 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 如果是一个没有上下文元数据的裸 relay id，或者目标之间的模态互不相交，combo 就会从
 目录中移除。同步时会输出一条汇总警告，仪表板会将其标记为 **Needs attention**。
 补充上下文元数据、对齐模态，或者把目标模型切换为可发现且兼容的能力。
+
+## 路由策略配置文件（`config.routingProfiles`）
+
+显式请求的 `policy/<id>`（或配置的别名）会在固定的候选白名单中，根据硬性能力要求与确定性、可解释的评分进行选择。现有模型 ID 永远不会隐式经过配置文件。支持 `candidates`（显式白名单）、可选 `alias`、`require`（`minContextWindow`、`minQuotaHeadroom`、`tools`、`imageInput`、`structuredOutput`、`localOnly`、`remoteAllowed`、`encryptedCodexTasks`、`reasoningEffort`、`serviceTier`）、`optimize`（latency/health/cost/quota 权重）、`limits.maxEstimatedCostUsd`、`unknownEvidence`（allow/penalize/exclude）。未知不会被当作零或免费。
+
+CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
+
+组合是显式的有序/加权目标路由与故障转移；策略配置文件是基于证据在候选之间进行选择。
+
+## 请求历史与路由分析
+
+- `GET /api/request-history` - 从派生索引（`routing-history.sqlite`）进行游标分页的全历史查询。过滤器：`provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`。
+- `GET /api/request-history/:requestId/route-decision` - 为什么选择此路由（跟踪、候选、排除、分数、配置文件+版本、执行尝试、结果）。
+- `GET /api/routing-analytics` - 成功/失败/取消/回退率、p50/p95/p99 耗时与 TTFT、不完整流率、冷却失败数、每次成功请求的估算成本、覆盖率、置信度、截断标志。
+- `GET /api/routing-profiles`、`POST /api/routing-profiles/dry-run` - 配置文件查看与试运行评估（不发送上游请求）。
+
+返回的历史记录与路由决策负载仅暴露已脱敏的请求元数据（例如不透明的 `apiKeyId` 标签）。不包含凭证、原始提示正文或提供商密钥。
+
+CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs index-status`。
+
+## 迁移
+
+`routingProfiles` 是可选的增量配置：现有配置文件与旧 `usage.jsonl` 行均可原样加载。索引是一次性的——删除后会在下次查询时从 `usage.jsonl` 自动重建。系统不会自动调优。

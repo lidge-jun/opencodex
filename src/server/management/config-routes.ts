@@ -75,7 +75,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(safeConfigDTO(config));
   }

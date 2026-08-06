@@ -11,6 +11,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  withConfigMutationLockSync,
 } from "../../config";
 import {
   clearLoginState,
@@ -27,7 +28,7 @@ import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode } from "../../providers/registry";
+import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
   extractProviderModelItems,
@@ -70,8 +71,169 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
+type ProviderPatchApplication =
+  | { error: string }
+  | {
+      next: OcxProviderConfig;
+      touched: boolean;
+      editorTouched: boolean;
+      enablingOpenAi: boolean;
+      headersTouched: boolean;
+    };
+
+/**
+ * Apply the recognized PATCH field mask onto a provider copy. The caller runs this once
+ * for validation and again inside the config mutation lock against the newest provider,
+ * so a concurrent PATCH cannot be erased by a save of a stale snapshot. Only synchronous
+ * checks live here; the async destination probe stays in the route.
+ */
+function applyProviderPatchFields(
+  name: string,
+  provider: OcxProviderConfig,
+  rawBody: Record<string, unknown>,
+  keys: string[],
+  config: OcxConfig,
+): ProviderPatchApplication {
+  const next: OcxProviderConfig = { ...provider };
+  let touched = false;
+  let headersTouched = false;
+
+  if (Object.hasOwn(rawBody, "disabled")) {
+    if (typeof rawBody.disabled !== "boolean") return { error: "disabled must be a boolean" };
+    if (rawBody.disabled && name === config.defaultProvider) {
+      return { error: "cannot disable the default provider; set another default first" };
+    }
+    next.disabled = rawBody.disabled;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "adapter")) {
+    if (typeof rawBody.adapter !== "string" || !rawBody.adapter.trim()) return { error: "adapter must be a non-empty string" };
+    next.adapter = rawBody.adapter.trim();
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "baseUrl")) {
+    if (typeof rawBody.baseUrl !== "string" || !rawBody.baseUrl.trim()) return { error: "baseUrl must be a non-empty string" };
+    next.baseUrl = rawBody.baseUrl.trim();
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "defaultModel")) {
+    if (typeof rawBody.defaultModel !== "string") return { error: "defaultModel must be a string" };
+    const dm = rawBody.defaultModel.trim();
+    if (dm) next.defaultModel = dm;
+    else delete next.defaultModel;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "authMode")) {
+    if (typeof rawBody.authMode !== "string") return { error: "authMode must be a string" };
+    const mode = rawBody.authMode.trim();
+    if (mode === "key" || mode === "forward" || mode === "oauth" || mode === "local") {
+      next.authMode = mode;
+      touched = true;
+    } else if (mode === "") {
+      delete next.authMode;
+      touched = true;
+    } else {
+      return { error: "authMode must be key, forward, oauth, or local" };
+    }
+  }
+  if (Object.hasOwn(rawBody, "apiKeyTransport")) {
+    const transport = rawBody.apiKeyTransport;
+    if (transport === "x-api-key" || transport === "bearer") {
+      next.apiKeyTransport = transport;
+      touched = true;
+    } else if (transport === "") {
+      delete next.apiKeyTransport;
+      touched = true;
+    } else {
+      return { error: "apiKeyTransport must be x-api-key, bearer, or empty to clear" };
+    }
+  }
+  if (Object.hasOwn(rawBody, "note")) {
+    if (typeof rawBody.note !== "string") return { error: "note must be a string" };
+    const note = rawBody.note.trim();
+    if (note) next.note = note;
+    else delete next.note;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "allowPrivateNetwork")) {
+    if (typeof rawBody.allowPrivateNetwork !== "boolean") return { error: "allowPrivateNetwork must be a boolean" };
+    next.allowPrivateNetwork = rawBody.allowPrivateNetwork;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "liveModels")) {
+    if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };
+    next.liveModels = rawBody.liveModels;
+    touched = true;
+  }
+
+  // headers is the one object-valued field in the mask. PATCH semantics merge it
+  // shallowly into the existing block so a single fingerprint header can be added
+  // without wiping the rest; null or an empty object clears user-managed headers.
+  if (Object.hasOwn(rawBody, "headers")) {
+    const headersValue = rawBody.headers;
+    if (headersValue === null || (isPlainRecord(headersValue) && Object.keys(headersValue).length === 0)) {
+      // Registry-owned static metadata (e.g. opencode-free's x-opencode-client marker)
+      // is not user-managed: restoring it keeps the upstream transport intact after a
+      // clear instead of deleting the whole block.
+      const entry = getProviderRegistryEntry(name);
+      if (entry?.staticHeaders && providerMatchesRegistryTransport(name, next)) {
+        next.headers = { ...entry.staticHeaders };
+      } else {
+        delete next.headers;
+      }
+    } else {
+      if (!isPlainRecord(headersValue)) return { error: "headers must be an object" };
+      const headersError = providerHeadersConfigError(headersValue);
+      if (headersError) return { error: headersError };
+      // Header names are case-insensitive on the wire. Drop any existing key whose
+      // lowercase name collides with an incoming one, or Headers normalization would
+      // send a combined "x-custom: v1, v2" value upstream.
+      const incoming = new Map(
+        Object.entries(headersValue as Record<string, string>).map(([key, value]) => [key.toLowerCase(), [key, value] as const]),
+      );
+      const merged: Record<string, string> = {};
+      for (const [key, value] of Object.entries(next.headers ?? {})) {
+        if (!incoming.has(key.toLowerCase())) merged[key] = value;
+      }
+      for (const [key, value] of incoming.values()) merged[key] = value;
+      next.headers = merged;
+    }
+    touched = true;
+    headersTouched = true;
+  }
+
+  if (!touched) return { error: "no recognized fields to update" };
+
+  // A disabled-only toggle preserves the v2 fast lane for non-openai providers: it changes
+  // routing eligibility, not the provider shape. Re-enabling `openai` is different — a
+  // malformed disabled row must not come back online unchanged, so canonicalize/reject
+  // against the same built-in gate used by mode PATCH and POST.
+  const editorTouched = keys.some(key => key !== "disabled");
+  const enablingOpenAi = name === "openai"
+    && Object.hasOwn(rawBody, "disabled")
+    && rawBody.disabled === false
+    && provider.disabled === true;
+  if (!editorTouched && enablingOpenAi) {
+    if (!isCanonicalOpenAiForwardProvider(next)) {
+      return { error: "provider openai must be the canonical built-in provider" };
+    }
+    // Persist the byte-identical canonical URL so config.ts startup checks (case-sensitive)
+    // accept the row after we fill mode. Equivalent hosts like CHATGPT.com/:443 normalize here.
+    next.baseUrl = CODEX_FORWARD_BASE_URL;
+    // Fill missing mode so a disabled canonical row becomes a complete live openai entry.
+    if (next.codexAccountMode !== "pool" && next.codexAccountMode !== "direct") {
+      next.codexAccountMode = "pool";
+    }
+    if (next.disabled === false) delete next.disabled;
+    // Canonical openai never uses private-network opt-in; drop a stale flag that
+    // was ignored for the DNS probe so it cannot linger on the live row.
+    delete next.allowPrivateNetwork;
+  }
+  return { next, touched, editorTouched, enablingOpenAi, headersTouched };
+}
+
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
@@ -82,6 +244,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
       hasApiKey: !!p.apiKey,
+      // Presence only (#959 review): header names and values never leave the process.
+      hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
       models: p.models ?? [],
@@ -144,8 +308,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     const { clearModelCache } = await import("../../codex/model-cache");
     clearModelCache(name);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, name });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, name, catalogRefresh });
   }
 
   if (url.pathname === "/api/providers" && req.method === "PATCH") {
@@ -213,106 +377,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (Object.hasOwn(rawBody, "apiKey")) {
       return jsonResponse({ error: "apiKey cannot be patched here; use the provider API-key endpoints" }, 400);
     }
-    const next: OcxProviderConfig = { ...config.providers[name]! };
-    let touched = false;
+    const applied = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
+    if ("error" in applied) return jsonResponse({ error: applied.error }, 400);
+    const next = applied.next;
 
-    if (Object.hasOwn(rawBody, "disabled")) {
-      if (typeof rawBody.disabled !== "boolean") return jsonResponse({ error: "disabled must be a boolean" }, 400);
-      if (rawBody.disabled && name === config.defaultProvider) {
-        return jsonResponse({ error: "cannot disable the default provider; set another default first" }, 400);
-      }
-      next.disabled = rawBody.disabled;
-      touched = true;
-    }
-    if (Object.hasOwn(rawBody, "adapter")) {
-      if (typeof rawBody.adapter !== "string" || !rawBody.adapter.trim()) return jsonResponse({ error: "adapter must be a non-empty string" }, 400);
-      next.adapter = rawBody.adapter.trim();
-      touched = true;
-    }
-    if (Object.hasOwn(rawBody, "baseUrl")) {
-      if (typeof rawBody.baseUrl !== "string" || !rawBody.baseUrl.trim()) return jsonResponse({ error: "baseUrl must be a non-empty string" }, 400);
-      next.baseUrl = rawBody.baseUrl.trim();
-      touched = true;
-    }
-    if (Object.hasOwn(rawBody, "defaultModel")) {
-      if (typeof rawBody.defaultModel !== "string") return jsonResponse({ error: "defaultModel must be a string" }, 400);
-      const dm = rawBody.defaultModel.trim();
-      if (dm) next.defaultModel = dm;
-      else delete next.defaultModel;
-      touched = true;
-    }
-    if (Object.hasOwn(rawBody, "authMode")) {
-      if (typeof rawBody.authMode !== "string") return jsonResponse({ error: "authMode must be a string" }, 400);
-      const mode = rawBody.authMode.trim();
-      if (mode === "key" || mode === "forward" || mode === "oauth" || mode === "local") {
-        next.authMode = mode;
-        touched = true;
-      } else if (mode === "") {
-        delete next.authMode;
-        touched = true;
-      } else {
-        return jsonResponse({ error: "authMode must be key, forward, oauth, or local" }, 400);
-      }
-    }
-    if (Object.hasOwn(rawBody, "apiKeyTransport")) {
-      const transport = rawBody.apiKeyTransport;
-      if (transport === "x-api-key" || transport === "bearer") {
-        next.apiKeyTransport = transport;
-        touched = true;
-      } else if (transport === "") {
-        delete next.apiKeyTransport;
-        touched = true;
-      } else {
-        return jsonResponse({ error: "apiKeyTransport must be x-api-key, bearer, or empty to clear" }, 400);
-      }
-    }
-   if (Object.hasOwn(rawBody, "note")) {
-     if (typeof rawBody.note !== "string") return jsonResponse({ error: "note must be a string" }, 400);
-     const note = rawBody.note.trim();
-     if (note) next.note = note;
-     else delete next.note;
-     touched = true;
-   }
-
-   if (Object.hasOwn(rawBody, "allowPrivateNetwork")) {
-     if (typeof rawBody.allowPrivateNetwork !== "boolean") return jsonResponse({ error: "allowPrivateNetwork must be a boolean" }, 400);
-     next.allowPrivateNetwork = rawBody.allowPrivateNetwork;
-     touched = true;
-   }
-
-   if (Object.hasOwn(rawBody, "liveModels")) {
-     if (typeof rawBody.liveModels !== "boolean") return jsonResponse({ error: "liveModels must be a boolean" }, 400);
-     next.liveModels = rawBody.liveModels;
-     touched = true;
-   }
-
-    if (!touched) return jsonResponse({ error: "no recognized fields to update" }, 400);
-
-    // A disabled-only toggle preserves the v2 fast lane for non-openai providers: it changes
-    // routing eligibility, not the provider shape. Re-enabling `openai` is different — a
-    // malformed disabled row must not come back online unchanged, so canonicalize/reject
-    // against the same built-in gate used by mode PATCH and POST.
-    const editorTouched = keys.some(key => key !== "disabled");
-    const enablingOpenAi = name === "openai"
-      && Object.hasOwn(rawBody, "disabled")
-      && rawBody.disabled === false
-      && config.providers[name]?.disabled === true;
-    if (editorTouched) {
+    if (applied.editorTouched) {
       const providerError = providerManagementConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
       const resolvedError = await providerDestinationResolvedError(name, next);
       if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
-    } else if (enablingOpenAi) {
-      if (!isCanonicalOpenAiForwardProvider(next)) {
-        return jsonResponse({ error: "provider openai must be the canonical built-in provider" }, 400);
-      }
-      // Persist the byte-identical canonical URL so config.ts startup checks (case-sensitive)
-      // accept the row after we fill mode. Equivalent hosts like CHATGPT.com/:443 normalize here.
-      next.baseUrl = CODEX_FORWARD_BASE_URL;
-      // Fill missing mode so a disabled canonical row becomes a complete live openai entry.
-      if (next.codexAccountMode !== "pool" && next.codexAccountMode !== "direct") {
-        next.codexAccountMode = "pool";
-      }
+    } else if (applied.enablingOpenAi) {
       // Same DNS gate as POST: Clash fake-IP only. Never honor a persisted
       // allowPrivateNetwork on this path — it must not bypass the built-in guard.
       const resolvedError = await providerDestinationResolvedError(
@@ -321,26 +395,47 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         { allowBenchmarkAddresses: true },
       );
       if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
-      if (next.disabled === false) delete next.disabled;
-      // Canonical openai never uses private-network opt-in; drop a stale flag that
-      // was ignored for the DNS probe so it cannot linger on the live row.
-      delete next.allowPrivateNetwork;
     }
 
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    config.providers[name] = stripRegistryOnlyStaticHeaders(name, next);
-    save(config);
+    // The live config is shared and the destination probe above is awaited. Re-apply the
+    // mask onto the newest provider under the mutation lock right before saving, so two
+    // concurrent PATCHes updating different fields/headers both survive instead of the
+    // later save clobbering the earlier snapshot.
+    let replayError: string | undefined;
+    withConfigMutationLockSync(() => {
+      const replay = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
+      if ("error" in replay) {
+        replayError = replay.error;
+        return;
+      }
+      if (replay.editorTouched) {
+        const syncError = providerManagementConfigError(name, replay.next);
+        if (syncError) {
+          replayError = syncError;
+          return;
+        }
+      } else if (replay.enablingOpenAi && !isCanonicalOpenAiForwardProvider(replay.next)) {
+        replayError = "provider openai must be the canonical built-in provider";
+        return;
+      }
+      // A PATCH that managed headers owns the resulting block: the clear path restores
+      // registry static headers, so exact-match stripping must not erase them again.
+      config.providers[name] = replay.headersTouched ? replay.next : stripRegistryOnlyStaticHeaders(name, replay.next);
+      saveConfigPreservingClaudeCode(config);
+    });
+    if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
-    if (editorTouched) {
+    if (applied.editorTouched) {
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
     }
-    await refreshCodexCatalogBestEffort();
+    const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+      catalogRefresh,
     });
   }
 
@@ -484,8 +579,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
-    await refreshCodexCatalogBestEffort();
-    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}) });
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}), catalogRefresh });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {
@@ -497,7 +592,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const { clearModelCache } = await import("../../codex/model-cache");
-    const respond = () => jsonResponse({ ok: true, cap: DEFAULT_PROVIDER_CONTEXT_CAP, value: globalContextCapValue(config), caps: providerContextCaps(config) });
+    const respond = (catalogRefresh: Awaited<ReturnType<typeof convergeCodexCatalog>>) => jsonResponse({
+      ok: true,
+      cap: DEFAULT_PROVIDER_CONTEXT_CAP,
+      value: globalContextCapValue(config),
+      caps: providerContextCaps(config),
+      catalogRefresh,
+    });
 
     // Branch 1: set the global cap value and re-point every enabled provider to it.
     if (body.value !== undefined) {
@@ -509,8 +610,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       save(config);
       reconcileLiveStateStores();
       for (const provider of affected) clearModelCache(provider);
-      await refreshCodexCatalogBestEffort();
-      return respond();
+      const catalogRefresh = await convergeCodexCatalog();
+      return respond(catalogRefresh);
     }
 
     // Branch 2: enable/clear the cap for every provider at once.
@@ -524,8 +625,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       save(config);
       reconcileLiveStateStores();
       for (const provider of new Set([...before, ...names])) clearModelCache(provider);
-      await refreshCodexCatalogBestEffort();
-      return respond();
+      const catalogRefresh = await convergeCodexCatalog();
+      return respond(catalogRefresh);
     }
 
     // Branch 3: existing per-provider toggle (enable writes the current global value).
@@ -543,8 +644,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     save(config);
     reconcileLiveStateStores();
     clearModelCache(provider);
-    await refreshCodexCatalogBestEffort();
-    return respond();
+    const catalogRefresh = await convergeCodexCatalog();
+    return respond(catalogRefresh);
   }
 
   // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a

@@ -99,3 +99,26 @@ Combo остаётся доступной для прямой маршрутиз
 из каталога. Sync выводит итоговое предупреждение, а дашборд помечает её как **Needs attention**.
 Добавьте метаданные контекста, согласуйте модальности или выберите модели с обнаруживаемыми
 совместимыми возможностями.
+
+## Профили маршрутизации (`config.routingProfiles`)
+
+Явно запрошенный `policy/<id>` (или настроенный псевдоним) выбирает среди фиксированного разрешённого списка кандидатов по жёстким требованиям к возможностям и детерминированной объяснимой оценке. Существующие идентификаторы моделей никогда не проходят через профиль неявно. Поддерживаются: `candidates` (явный список), необязательный `alias`, `require` (`minContextWindow`, `minQuotaHeadroom`, `tools`, `imageInput`, `structuredOutput`, `localOnly`, `remoteAllowed`, `encryptedCodexTasks`, `reasoningEffort`, `serviceTier`), `optimize` (веса latency/health/cost/quota), `limits.maxEstimatedCostUsd`, `unknownEvidence` (allow/penalize/exclude). Неизвестное не становится нулём или бесплатным.
+
+CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dry-run <id> --model-context <tokens> --tools`, `ocx route policy evaluate <id>`.
+
+Комбо — это явная маршрутизация с порядком/весами и отказоустойчивостью. Профиль — это выбор на основе доказательств среди кандидатов.
+
+## История запросов и аналитика маршрутизации
+
+- `GET /api/request-history` - полная история с курсорной пагинацией из производного индекса (`routing-history.sqlite`). Фильтры: `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from`, `to`.
+- `GET /api/request-history/:requestId/route-decision` - объяснение выбора маршрута (трасса, кандидаты, исключения, оценки, профиль+ревизия, попытки, результат).
+- `GET /api/routing-analytics` - доли успеха/отказа/отмены/фолбэка, p50/p95/p99 длительность и TTFT, доля неполных потоков, сбои кулдауна, оценка стоимости за успешный запрос, покрытие, доверие, флаг усечения.
+- `GET /api/routing-profiles`, `POST /api/routing-profiles/dry-run` - просмотр профилей и пробная оценка (без отправки запросов).
+
+Возвращаемые записи истории и решений маршрута содержат только маскированные метаданные запроса (например, непрозрачные метки `apiKeyId`). Учётные данные, сырые тела промптов и секреты провайдеров не включаются.
+
+CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index-status`.
+
+## Миграция
+
+`routingProfiles` — необязательная аддитивная настройка. Существующие конфиги и старые строки `usage.jsonl` загружаются без изменений. Индекс одноразовый: при удалении он автоматически перестраивается из `usage.jsonl` при следующем запросе. Автонастройки нет.

@@ -27,8 +27,10 @@
 import { buildFailedTailPayload, createSseTerminalOutputBoundary } from "./relay";
 import {
   nextSseBlock,
+  payloadRewriteAsBlockRewrite,
   replaceSseDataPayload,
   sseDataPayload,
+  type SseBlockRewrite,
   type SsePayloadRewrite,
 } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -43,6 +45,12 @@ export type EagerRelayHooks = {
    * Bun#32111-unsafe tee()+JS-pull chain (#864).
    */
   rewritePayload?: SsePayloadRewrite;
+  /**
+   * Optional block-level rewrite (zero or more blocks out per upstream
+   * block) for lifecycle event injection (#893). Takes precedence over
+   * rewritePayload when both are set.
+   */
+  rewriteBlocks?: SseBlockRewrite;
   /** Flush inspection at upstream end (createSseInspector.finish). */
   finishInspection: () => void;
   /** Drop inspector-owned frame/item state during producer teardown. */
@@ -93,9 +101,10 @@ export function relaySseEagerBounded(
 
   const reader = body.getReader();
   const terminalBoundary = createSseTerminalOutputBoundary();
-  const rewrite = hooks.rewritePayload;
-  const rewriteDecoder = rewrite ? new TextDecoder() : null;
-  const rewriteEncoder = rewrite ? new TextEncoder() : null;
+  const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
+    ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
+  const rewriteDecoder = activeRewrite ? new TextDecoder() : null;
+  const rewriteEncoder = activeRewrite ? new TextEncoder() : null;
   const rewriteBudget = opts?.rewriteBudget;
   let frameBuffer = "";
   let frameBufferBytes = 0;
@@ -122,15 +131,9 @@ export function relaySseEagerBounded(
     for (;;) {
       const next = nextSseBlock(frameBuffer);
       if (!next) break;
-      const payload = sseDataPayload(next.block);
-      const rewrittenPayload = payload === null ? null : rewrite!(payload);
-      // Replace only on an actual change: replaceSseDataPayload collapses
-      // multi-data-line events and normalizes newline style even when the
-      // payload is identical, which corrupts valid streams.
-      const block = payload !== null && rewrittenPayload !== payload
-        ? replaceSseDataPayload(next.block, rewrittenPayload!)
-        : next.block;
-      out += block + next.delimiter;
+      for (const outBlock of activeRewrite!(next.block)) {
+        out += outBlock + next.delimiter;
+      }
       frameBuffer = next.rest;
     }
     if (rewriteBudget) {
@@ -144,14 +147,13 @@ export function relaySseEagerBounded(
   };
   /** Flush any trailing partial block at upstream end (rewrite applied, matching the pull relay). */
   const flushRewriteTail = (): Uint8Array => {
-    if (!rewrite) return new Uint8Array(0);
+    if (!activeRewrite) return new Uint8Array(0);
     // Decoder-flushed bytes logically follow everything already decoded.
     let tail = frameBuffer + rewriteDecoder!.decode();
-    const payload = sseDataPayload(tail);
-    if (payload !== null) {
-      const rewrittenPayload = rewrite(payload);
-      if (rewrittenPayload !== payload) tail = replaceSseDataPayload(tail, rewrittenPayload);
-    }
+    const rewritten = activeRewrite(tail);
+    // Multiple emitted blocks must stay separately framed (#893 review);
+    // join places the delimiter only between blocks, never after the last.
+    tail = rewritten.join(tail.includes("\r\n") ? "\r\n\r\n" : "\n\n");
     frameBuffer = "";
     if (rewriteBudget && frameBufferBytes > 0) {
       rewriteBudget.releaseRetained(frameBufferBytes, { kind: "live_transient" });
@@ -219,7 +221,7 @@ export function relaySseEagerBounded(
         if (upstreamDone) {
           hooks.finishInspection();
           const boundedTail = terminalBoundary.finish();
-          if (rewrite) {
+          if (activeRewrite) {
             const rewritten = rewriteOutbound(boundedTail);
             const tail = joinUint8Arrays(rewritten, flushRewriteTail());
             if (tail.byteLength > 0 && !cancelled) {
@@ -245,7 +247,7 @@ export function relaySseEagerBounded(
           continue;
         }
         const terminalBounded = terminalBoundary.feed(value);
-        const outbound = rewrite ? rewriteOutbound(terminalBounded) : terminalBounded;
+        const outbound = activeRewrite ? rewriteOutbound(terminalBounded) : terminalBounded;
         if (outbound.byteLength > 0) {
           queuedBytes += outbound.byteLength;
           try {
@@ -312,6 +314,7 @@ export function relaySseEagerBounded(
         try { controllerRef?.close(); } catch { /* already closed/errored */ }
       }
       try { hooks.disposeInspection?.(); } catch { /* inspection teardown must not block lifecycle cleanup */ }
+      try { activeRewrite?.dispose?.(); } catch { /* rewrite teardown must not block lifecycle cleanup */ }
       fireDone();
     }
   };

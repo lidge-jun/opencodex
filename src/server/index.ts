@@ -19,7 +19,9 @@ import {
   websocketsEnabled,
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
-import { invalidateCodexModelsCache } from "../codex/catalog";
+import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
+import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
+import { getCodexHome } from "../codex/paths";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
 import { startMemoryWatchdog } from "./memory-watchdog";
 import {
@@ -58,7 +60,7 @@ export {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import { registerCodexWebSocket, tryReserveCodexWebSocket, unregisterCodexWebSocket, updateCodexWebSocketAuthContext } from "../codex/websocket-registry";
-import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile } from "./gui-static";
+import { resolveGuiFilePath, rootFallbackPayload, serveGuiFile, serveSessionBootstrap } from "./gui-static";
 export { resolveGuiFilePath, rootFallbackPayload } from "./gui-static";
 export { resolveAdapter } from "./adapter-resolve";
 import { formatErrorResponse, type ResponsesTerminalStatus } from "../bridge";
@@ -357,6 +359,27 @@ export interface StartServerDeps {
   liveSidebandWebSocketFactory?: LiveSidebandWebSocketFactory;
 }
 
+/*
+ * #1046. `startServer` rewrites the Codex models cache during boot, and an
+ * app-server that started earlier keeps its own in-memory model list. The stale
+ * warning is not emitted here: `handleStart` runs a catalog sync moments later,
+ * so warning now would read an mtime that write is about to move, and both sites
+ * calling the helper independently would warn twice. This records the fact; the
+ * CLI start path owns the single decision.
+ *
+ * A caller that starts a server without `handleStart` (tests, embedded use)
+ * deliberately gets no warning — lifecycle diagnostics belong to whoever owns
+ * the lifecycle.
+ */
+let startupCacheInvalidationWrote = false;
+
+/** #1046: did this process's startup cache invalidation actually write? */
+export function consumeStartupCacheInvalidationWrite(): boolean {
+  const wrote = startupCacheInvalidationWrote;
+  startupCacheInvalidationWrote = false;
+  return wrote;
+}
+
 export function startServer(port?: number, deps: StartServerDeps = {}) {
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
   setLiveStateStoreConfig(config);
@@ -398,7 +421,21 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       if (migrated) saveConfig(config);
     }
   }
-  invalidateCodexModelsCache();
+  // Startup cache invalidation is best-effort and must never block the server from
+  // serving. It now takes K so it cannot race a convergence commit, but both the
+  // home resolution and the acquisition can fail on a machine with no Codex home —
+  // `getCodexHome()` THROWS when CODEX_HOME names a missing directory, which would
+  // otherwise turn "no Codex installed" into "proxy will not start".
+  try {
+    const startupCodexHome = getCodexHome();
+    // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
+    // with the later startup sync and warns ONCE about stale app-servers; warning
+    // here instead would read a catalog mtime the sync is about to move.
+    const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
+      invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
+    // A refused permit is not a write; only a completed run that returned true is.
+    startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
+  } catch { /* no readable Codex home: nothing to invalidate */ }
   // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
   // the server can serve a request, and AFTER the startup migrations above — those run
   // against a config nobody else holds and are the documented exception to the save
@@ -1034,6 +1071,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       const guiSessionCandidate = req.method === "GET" && (url.pathname === "/" || !url.pathname.includes("."))
         ? issueGuiSession(req, config, managementAuth)
         : null;
+      // Dedicated bootstrap path: answer without requiring a packaged GUI build, so the
+      // Vite dev server can mint an origin-bound loopback session on a fresh checkout.
+      if (url.pathname === "/opencodex-session" && guiSessionCandidate) {
+        return serveSessionBootstrap(guiSessionCandidate);
+      }
       const guiFile = serveGuiFile(url.pathname, undefined, guiSessionCandidate ?? undefined);
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {

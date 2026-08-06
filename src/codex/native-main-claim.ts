@@ -78,7 +78,13 @@ async function openClaimDatabase(
     file = openStableLockFile(path, platform);
     const identity = `${file.dev}:${file.ino}`;
     if (hardenedIdentities.get(path) !== identity) {
-      await (options.hardenPath ?? hardenStableLockFile)(path);
+      // The resolved platform is threaded into the DEFAULT hardener, not left to
+      // `hardenStableLockFile`'s own `process.platform` read. Otherwise a test
+      // that forces `platform` here still exercises the host's branch, and the
+      // production default — the thing that actually hardens a coordinator
+      // database — stays unproved. An audit deleted this call entirely and 89
+      // tests stayed green, because nearly every claim test injects `hardenPath`.
+      await (options.hardenPath ?? ((target: string) => hardenStableLockFile(target, platform)))(path);
       assertStableLockFile(path, file);
       hardenedIdentities.set(path, identity);
     }

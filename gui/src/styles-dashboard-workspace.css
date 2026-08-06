@@ -32,6 +32,13 @@
   padding: 0 var(--space-2) var(--space-2);
 }
 
+/* Top inset without sticky-header leaks: margin on the table, not padding on the
+   scrollport. At rest the table sits below the shell border; while scrolled the
+   sticky thead stays flush at the scrollport top. */
+.dashboard-workspace-main .tbl {
+  margin-top: var(--space-3);
+}
+
 .dashboard-workspace-main .tbl thead th {
   position: sticky;
   top: 0;

@@ -24,7 +24,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 将识别出的 Codex 辅助/影子调用以低努力级别重定向到选定模型。默认源前缀为 `gpt-5.4-mini` 和 `gpt-5.6-luna`。 |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 将识别出的 Codex 辅助/影子调用以低努力级别重定向到选定模型。默认源前缀为 `gpt-5.6-luna`；0.144.x 及更早客户端使用 `gpt-5.4-mini`，可通过 `sourceModels` 恢复。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 在可用时启用 | Web 搜索侧车选项。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 在可用时启用 | 图像描述侧车选项。 |
 | `images?` | `OcxImagesConfig` | 自动选择 OpenAI | 用于 Codex `image_gen` 的独立 Images 转发选项。 |
@@ -118,7 +118,7 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```

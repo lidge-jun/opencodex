@@ -539,6 +539,22 @@ export interface OcxApiKeyEntry {
   createdAt: string;
 }
 
+/**
+ * Durable per-client intent. One key today, deliberately.
+ *
+ * A top-level `codexEnabled` would force every later client to invent an
+ * unrelated name and its own helpers; a ten-key union recreated the coupling
+ * that failed two audits, because every phase then had to touch every client's
+ * write path. A one-key object keeps the extension point without letting this
+ * phase claim ownership over a client it does not implement.
+ */
+export interface OcxClientIntegrationsConfig {
+  /** Durable desired state for native Codex. MISSING MEANS ON. */
+  codex?: boolean;
+  /** Durable desired state for Grok Build. MISSING MEANS ON. */
+  grok?: boolean;
+}
+
 export interface OcxConfig {
   port: number;
   /** Maximum usage-log bytes read for one management snapshot. */
@@ -551,6 +567,11 @@ export interface OcxConfig {
   googleAntigravityStaticCatalogVersion?: 1;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /**
+   * Per-client durable intent. This phase owns only `codex`; later phases extend
+   * one key at a time rather than widening a shared union.
+   */
+  clientIntegrations?: OcxClientIntegrationsConfig;
   /**
    * Up to 5 Codex-facing catalog ids to feature first. Values may be bare catalog ids,
    * exact account-qualified "<selector>/<native-openai-model>" ids, or routed
@@ -773,6 +794,13 @@ export interface OcxConfig {
   };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
+  /**
+   * Routing policy profiles (Router Intelligence, RI-04+): explicitly requested
+   * `policy/<id>` (or configured alias) models select among an explicit
+   * candidate allowlist using hard capability requirements and deterministic
+   * scoring. Existing model ids are never routed through profiles implicitly.
+   */
+  routingProfiles?: Record<string, OcxRoutingProfileConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
@@ -805,6 +833,65 @@ export interface OcxComboConfig {
    * mandated model id; exact-match requests route here before any provider resolution.
    */
   alias?: string;
+}
+
+export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";
+
+export interface OcxRoutingProfileCandidate {
+  provider: string;
+  model: string;
+}
+
+export interface OcxRoutingProfileRequirements {
+  /** Minimum model context window in tokens. */
+  minContextWindow?: number;
+  /** Minimum remaining quota headroom fraction (0..1). */
+  minQuotaHeadroom?: number;
+  tools?: boolean;
+  imageInput?: boolean;
+  structuredOutput?: boolean;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  localOnly?: boolean;
+  remoteAllowed?: boolean;
+  /** Special encrypted Codex task readability (ChatGPT forward pool). */
+  encryptedCodexTasks?: boolean;
+}
+
+export interface OcxRoutingProfileOptimize {
+  latency?: number;
+  health?: number;
+  cost?: number;
+  quota?: number;
+}
+
+export interface OcxRoutingProfileLimits {
+  /** Hard per-request estimated-cost ceiling in USD. */
+  maxEstimatedCostUsd?: number;
+}
+
+export interface OcxRoutingProfileUnknownEvidence {
+  capability?: OcxRoutingUnknownEvidenceMode;
+  health?: OcxRoutingUnknownEvidenceMode;
+  quota?: OcxRoutingUnknownEvidenceMode;
+  cost?: OcxRoutingUnknownEvidenceMode;
+}
+
+export interface OcxRoutingProfileConfig {
+  /**
+   * Explicit candidate allowlist (`provider/model` refs). No implicit
+   * expansion in v1.
+   */
+  candidates: OcxRoutingProfileCandidate[];
+  /** Optional public model name replacing the default `policy/<id>` slug. */
+  alias?: string;
+  /** Hard requirements evaluated before scoring. */
+  require?: OcxRoutingProfileRequirements;
+  /** Optimization weights; normalized deterministically. */
+  optimize?: OcxRoutingProfileOptimize;
+  limits?: OcxRoutingProfileLimits;
+  /** How unknown evidence is handled per dimension. */
+  unknownEvidence?: OcxRoutingProfileUnknownEvidence;
 }
 
 /**
@@ -926,6 +1013,12 @@ export interface ResponsesItemIdRepairConfig {
   reasoning?: string[];
   /** Backfill missing `output_item.done` / terminal snapshot ids from the matching output_index. */
   repairMissingTerminalIds?: boolean;
+  /**
+   * Treat existing message/reasoning ids without the canonical `msg_`/`rs_` prefix (e.g. bare
+   * UUIDs from DeepSeek's Responses route) as invalid and mint canonical replacements (#938).
+   * function_call ids and call_id pairing are never rewritten.
+   */
+  repairInvalidIds?: boolean;
 }
 
 /**
@@ -975,6 +1068,12 @@ export interface OcxProviderConfig {
    * the legacy `/v1/responses` construction.
    */
   responsesPath?: string;
+  /**
+   * Command Code protocol version sent as `x-command-code-version` on /alpha/generate requests.
+   * The internal endpoint's schema drifts with the CLI version; operators can pin a known-good
+   * version here instead of waiting for a code change. Absent uses the adapter's current default.
+   */
+  commandCodeVersion?: string;
   /**
    * Responses upstream that stores nothing server-side (DeepSeek documents "the API
    * is stateless"). Stateful request parameters are dropped, `store` is pinned false,
@@ -1113,6 +1212,12 @@ export interface OcxProviderConfig {
    * Use for non-forward Responses gateways that reserve a hosted tool namespace server-side.
    */
   modelPreferHostedTools?: Record<string, string[]>;
+  /**
+   * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
+   * fields or closing events (#893). Disabled by default and applied only to client-facing
+   * SSE/JSON; raw inspection state remains authoritative.
+   */
+  responsesSnapshotRepair?: boolean;
   /** Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values. */
   reasoningEffortMap?: Record<string, string>;
   /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */

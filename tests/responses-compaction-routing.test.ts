@@ -930,3 +930,28 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 });
+
+test("a no-eligible policy compact request persists the evaluation trace", async () => {
+  const config = {
+    ...keyProviderConfig(),
+    routingProfiles: {
+      strict: {
+        candidates: [{ provider: "gw", model: "gpt-5.5" }],
+        require: { minContextWindow: 128000 },
+      },
+    },
+  } as unknown as OcxConfig;
+  globalThis.fetch = (async () => {
+    throw new Error("compact must not send upstream when policy evaluation has no eligible candidate");
+  }) as typeof fetch;
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponsesCompact(
+    compactionRequest(baseCompactionBody({ model: "policy/strict" })),
+    config,
+    logCtx,
+  );
+  expect(response.status).toBe(404);
+  expect(logCtx.routeDecision).toBeDefined();
+  expect(logCtx.routeDecision!.selected.reason).toBe("no-eligible-candidate");
+  expect(logCtx.routeDecision!.candidates).toHaveLength(1);
+});

@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { atomicWriteFile, expandUserPath, getConfigDir, readConfigDiagnostics, websocketsEnabled } from "../../config";
-import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
+import { expandUserPath, readConfigDiagnostics, websocketsEnabled } from "../../config";
+import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, getCodexHome, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
@@ -11,7 +11,6 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
@@ -30,15 +29,30 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogModelSlug, ensureCatalogBackup, ensureStrictCatalogFields, findNativeTemplate, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
-import type { CatalogModel, MultiAgentMode, RawEntry } from "./parsing";
-import { applyNativeVisibility, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
-import { loadCatalogForSync, resetBundledCatalogCacheForTests } from "./bundled";
+import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
+import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
+import {
+  bundledCatalogCacheState,
+  loadBundledCodexCatalog,
+  resetBundledCatalogCacheForTests,
+} from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, clampCatalogModelsToCodexSupport, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
 import { clearGatherRoutedModelsInflight, filterCatalogVisibleModels, gatherRoutedModels, lastDropWarnSignature } from "./provider-fetch";
 import { accountSelectorShadowCollisionWarnings, clearLastComboCatalogOmissions, comboCatalogWarningSignatures, comboMasqueradeCollisionWarnings, exactComboCatalogSlugs, openAiApiCollisionWarnings, resolveSlugAliasCollisions, slugAliasCollisionWarnings, warnAccountSelectorShadowedProviderOnce, warnComboMasqueradeCollisionOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
+import {
+  withCatalogWriteSerialization,
+  type CatalogWritePermit,
+} from "../catalog-write-serialization";
+import {
+  publishHashedCodexCatalogBackup,
+  publishLegacyCodexCatalogBackup,
+  replaceActiveCodexCatalog,
+  replaceCodexModelsCache,
+} from "../internal/catalog-writer";
+import { codexRuntimeStatePath } from "../runtime";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
@@ -185,6 +199,26 @@ export function isExactComboCatalogModel(
   return model !== undefined && exactComboSlugs.has(catalogModelSlug(model));
 }
 
+/**
+ * Friendly Codex-picker label for a routed `provider/model` slug. Command Code's two config
+ * ids differ by a single dash (`command-code` vs `commandcode`), so relabel them to the
+ * lowercase-dash style the opencode presets use: `commandcode-auth/x` and `commandcode-api/x`.
+ * The model-id portion also carries a redundant `<vendor>-` prefix (`deepseek-deepseek-v4-flash`)
+ * that is dropped for display. All other providers keep the raw slug exactly as before.
+ */
+function routedDisplayName(slug: string): string {
+  const slash = slug.indexOf("/");
+  if (slash <= 0) return slug;
+  const provider = slug.slice(0, slash);
+  let model = slug.slice(slash + 1);
+  if (provider === "command-code" || provider === "commandcode") {
+    const m = model.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);
+    if (m && model.startsWith(`${m[1]}-${m[1]}-`)) model = model.slice(m[1]!.length + 1);
+    return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${model}`;
+  }
+  return slug;
+}
+
 export function deriveEntry(
   template: RawEntry | null,
   slug: string,
@@ -205,7 +239,7 @@ export function deriveEntry(
   if (template) {
     const e = JSON.parse(JSON.stringify(template)) as RawEntry;
     e.slug = slug;
-    e.display_name = slug;
+    e.display_name = routedDisplayName(slug);
     e.description = desc;
     e.priority = priority;
     e.visibility = "list";
@@ -214,6 +248,13 @@ export function deriveEntry(
     // Routed (namespaced) models inherit the gpt template — correct its OpenAI/GPT identity
     // and advertise the reasoning ladder Codex accepts.
     if (isRouted) {
+      // A routed model is NOT the native template: never inherit its context
+      // window when /models omits context metadata (#992). Known metadata
+      // restores exact values below; otherwise the strict-fields fallback
+      // supplies the conservative 128k triple.
+      delete e.context_window;
+      delete e.max_context_window;
+      delete e.auto_compact_token_limit;
       // Native id for identity text + metadata lookups — the slug may be an encoded
       // alias (`provider/vendor-model`); the model object carries the native id.
       const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
@@ -249,7 +290,7 @@ export function deriveEntry(
   }
   // Fallback when no template is available (best-effort; strict parser may need more).
   const entry: RawEntry = {
-    slug, display_name: slug, description: desc,
+    slug, display_name: routedDisplayName(slug), description: desc,
     shell_type: "shell_command", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
     ...(isRouted ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
@@ -594,30 +635,176 @@ export function mergeCatalogEntriesForSync(
   );
 }
 
-export async function syncCatalogModels(config: OcxConfig): Promise<{
+interface RetainedCatalogSyncRead {
+  readonly catalogPath: string;
+  readonly catalog: RawCatalog;
+  readonly onDiskCatalog: RawCatalog | null;
+  readonly evidence: string;
+  /**
+   * Process-local epochs, baselined AFTER our own gather rather than with the
+   * filesystem bytes above. See `retainedCatalogProcessEvidence`.
+   */
+  readonly processEvidence: string;
+}
+
+interface RetainedCatalogSyncResult {
   added: number;
   path: string;
   catalogWritten: boolean;
   comboOmissions: ComboCatalogOmission[];
-}> {
+}
+
+interface RetainedCatalogSyncWrite {
+  readonly config: OcxConfig;
+  readonly goModels: CatalogModel[];
+  readonly comboOmissions: ComboCatalogOmission[];
+  readonly read: RetainedCatalogSyncRead;
+  readonly permit: CatalogWritePermit;
+  readonly owningCodexHome: string;
+}
+
+function optionalFileBytes(path: string): string | null {
+  try {
+    return readFileSync(path).toString("base64");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function loadCatalogForRetainedSync(path: string): RawCatalog | null {
+  const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
+  if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
+  const active = readCatalog(path);
+  if (active && findNativeTemplate(active)) return active;
+  return readCatalog(catalogBackupPathFor(path))
+    ?? (isDefaultCatalogPath(path) ? readCatalog(legacyCatalogBackupPath()) : null)
+    ?? readCatalog(activeCodexModelsCachePath())
+    ?? active;
+}
+
+function retainedCatalogSyncEvidence(
+  config: OcxConfig,
+  catalogPath: string,
+  catalog: RawCatalog,
+): string {
+  return JSON.stringify({
+    config,
+    catalogPath,
+    catalog,
+    catalogBytes: optionalFileBytes(catalogPath),
+    hashedBackupBytes: optionalFileBytes(catalogBackupPathFor(catalogPath)),
+    legacyBackupBytes: isDefaultCatalogPath(catalogPath)
+      ? optionalFileBytes(legacyCatalogBackupPath()) : null,
+    modelsCacheBytes: optionalFileBytes(activeCodexModelsCachePath()),
+    // The persisted runtime selection is a pre-await filesystem input, not a
+    // process epoch: another PROCESS can move runtime authority by rewriting this
+    // file, and that move is invisible to our in-process memo. Recorded PRESENT or
+    // ABSENT, because its absence is what makes the resolver fall back.
+    runtimeStateBytes: optionalFileBytes(codexRuntimeStatePath()),
+  });
+}
+
+/**
+ * The bundled-template half of the same evidence, observed separately.
+ *
+ * The runtime process memo is deliberately NOT here, and that exclusion took three
+ * attempts to get honest. Gathering resolves the Codex runtime lazily and under its
+ * own cache key, so this path cannot pre-settle that memo: baselining it before the
+ * await always detected our own side effect and refused every write, and baselining
+ * it after the await captured a runtime that ANOTHER process had moved as though it
+ * were ours — a catalog prepared from R1 committing after authority reached R2.
+ *
+ * Runtime authority is covered where it is actually durable instead: the persisted
+ * `codex-runtime.json` bytes sit in the pre-await filesystem evidence, PRESENT or
+ * ABSENT, so a cross-process runtime move is caught. What is left uncovered, and is
+ * written down rather than papered over, is a same-process in-memory runtime swap
+ * that never touches that file — WP11 owns the lock that makes that case decidable.
+ */
+function retainedCatalogProcessEvidence(): string {
+  return JSON.stringify({
+    bundledCatalogCache: bundledCatalogCacheState(),
+  });
+}
+
+/**
+ * Capture every local catalog input the retained sync path consults before its
+ * provider await. The exact evidence is compared after K acquisition; a newer
+ * catalog/backup/cache or target selection makes this attempt a no-write.
+ */
+function readRetainedCatalogSync(config: OcxConfig): RetainedCatalogSyncRead | null {
   const catalogPath = readCodexCatalogPath();
-  const catalog = loadCatalogForSync(catalogPath);
-  if (!catalog) return { added: 0, path: catalogPath, catalogWritten: false, comboOmissions: [] };
+  const catalog = loadCatalogForRetainedSync(catalogPath);
+  if (!catalog) return null;
 
   // The bundled catalog is a reliable native template on the default path, but it is not the
   // merge source. Preservation must inspect the file that this sync is about to overwrite;
   // otherwise an empty/partial provider gather cannot see routed or user-native rows on disk.
   const onDiskCatalog = readCatalog(catalogPath);
-  const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
+  const evidence = retainedCatalogSyncEvidence(config, catalogPath, catalog);
+  // `processEvidence` is filled in after the provider await, not here.
+  return { catalogPath, catalog, onDiskCatalog, evidence, processEvidence: "" };
+}
 
+function revalidateRetainedCatalogSync(
+  config: OcxConfig,
+  prepared: RetainedCatalogSyncRead,
+): RetainedCatalogSyncRead | null {
+  const catalogPath = readCodexCatalogPath();
+  if (catalogPath !== prepared.catalogPath) return null;
+  const evidence = retainedCatalogSyncEvidence(config, catalogPath, prepared.catalog);
+  if (evidence !== prepared.evidence) return null;
+  if (retainedCatalogProcessEvidence() !== prepared.processEvidence) return null;
+  return {
+    catalogPath,
+    catalog: JSON.parse(JSON.stringify(prepared.catalog)) as RawCatalog,
+    onDiskCatalog: readCatalog(catalogPath),
+    evidence,
+    processEvidence: prepared.processEvidence,
+  };
+}
+
+function pristineCatalogBytes(read: RetainedCatalogSyncRead): string | null {
+  if (read.onDiskCatalog && !catalogHasRoutedEntries(read.onDiskCatalog)) {
+    try {
+      return readFileSync(read.catalogPath, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  return catalogHasRoutedEntries(read.catalog)
+    ? null
+    : `${JSON.stringify(read.catalog, null, 2)}\n`;
+}
+
+function writeRetainedCatalogSync({
+  config,
+  goModels,
+  comboOmissions,
+  read,
+  permit,
+  owningCodexHome,
+}: RetainedCatalogSyncWrite): RetainedCatalogSyncResult {
+  const { catalogPath, catalog, onDiskCatalog } = read;
+  const catalogModelsForMerge = onDiskCatalog?.models ?? catalog.models ?? [];
   const template = findNativeTemplate(catalog);
 
-  const comboOmissions: ComboCatalogOmission[] = [];
-  const goModels = await gatherRoutedModels(config, { comboOmissions });
   try {
     // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
     // (later syncs would otherwise overwrite it with featured-modified priorities).
-    ensureCatalogBackup(catalogPath, catalog);
+    const pristine = pristineCatalogBytes(read);
+    if (pristine !== null) {
+      publishHashedCodexCatalogBackup(permit, owningCodexHome, {
+        path: catalogBackupPathFor(catalogPath),
+        content: pristine,
+      });
+      if (isDefaultCatalogPath(catalogPath)) {
+        publishLegacyCodexCatalogBackup(permit, owningCodexHome, {
+          path: legacyCatalogBackupPath(),
+          content: pristine,
+        });
+      }
+    }
   } catch { /* backup best-effort */ }
 
   // Hide disabled models from Codex, then feature the chosen subagent models (native OR routed)
@@ -690,7 +877,10 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{
   );
   clampCatalogModelsToCodexSupport(catalog.models);
 
-  atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
+  replaceActiveCodexCatalog(permit, owningCodexHome, {
+    path: catalogPath,
+    content: `${JSON.stringify(catalog, null, 2)}\n`,
+  });
   return {
     added: goEntries.length + accountBoundEntries.length,
     path: catalogPath,
@@ -747,7 +937,58 @@ function currentDisabledModelsForRestore(): Set<string> | null {
   }
 }
 
-export function restoreCodexCatalog(): { removed: number; kept: number; path: string } {
+export async function syncCatalogModels(config: OcxConfig): Promise<RetainedCatalogSyncResult> {
+  const owningCodexHome = getCodexHome();
+  const preflightRead = readRetainedCatalogSync(config);
+  if (preflightRead === null) {
+    return {
+      added: 0,
+      path: readCodexCatalogPath(),
+      catalogWritten: false,
+      comboOmissions: [],
+    };
+  }
+
+  const comboOmissions: ComboCatalogOmission[] = [];
+  // Settle the bundled template, then baseline, and only then await. Reading it
+  // here makes the memo ours before anyone else can move it, so a bundled swap
+  // during the await is an outside change rather than our own side effect.
+  //
+  // The persisted runtime selection is covered by the filesystem evidence above
+  // rather than by a process epoch; see `retainedCatalogProcessEvidence` for why
+  // the in-memory runtime memo cannot be baselined honestly from this path.
+  loadBundledCodexCatalog();
+  const prepared: RetainedCatalogSyncRead = {
+    ...preflightRead,
+    evidence: retainedCatalogSyncEvidence(config, preflightRead.catalogPath, preflightRead.catalog),
+    processEvidence: retainedCatalogProcessEvidence(),
+  };
+  const goModels = await gatherRoutedModels(config, { comboOmissions });
+  const committed = withCatalogWriteSerialization(owningCodexHome, permit => {
+    const current = revalidateRetainedCatalogSync(config, prepared);
+    if (current === null) return null;
+    return writeRetainedCatalogSync({
+      config,
+      goModels,
+      comboOmissions,
+      read: current,
+      permit,
+      owningCodexHome,
+    });
+  });
+  if (committed.kind === "completed" && committed.value !== null) return committed.value;
+  return {
+    added: 0,
+    path: prepared.catalogPath,
+    catalogWritten: false,
+    comboOmissions,
+  };
+}
+
+export function restoreCodexCatalogWithPermit(
+  permit: CatalogWritePermit,
+  owningCodexHome: string,
+): { removed: number; kept: number; path: string } {
   const catalogPath = readCodexCatalogPath();
   const catalog = readCatalog(catalogPath);
   if (!catalog || !Array.isArray(catalog.models)) return { removed: 0, kept: 0, path: catalogPath };
@@ -768,7 +1009,10 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
       ...backup,
       models: [...backup.models, ...userNativeAdditions],
     };
-    atomicWriteFile(catalogPath, JSON.stringify(restored, null, 2) + "\n");
+    replaceActiveCodexCatalog(permit, owningCodexHome, {
+      path: catalogPath,
+      content: `${JSON.stringify(restored, null, 2)}\n`,
+    });
     return { removed, kept: restored.models.length, path: catalogPath };
   }
   const before = catalog.models.length;
@@ -780,13 +1024,30 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
   const removed = before - native.length;
   if (removed > 0) {
     catalog.models = native;
-    atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
+    replaceActiveCodexCatalog(permit, owningCodexHome, {
+      path: catalogPath,
+      content: `${JSON.stringify(catalog, null, 2)}\n`,
+    });
   }
   return { removed, kept: native.length, path: catalogPath };
 }
 
+export function restoreCodexCatalog(): { removed: number; kept: number; path: string } {
+  const owningCodexHome = getCodexHome();
+  const outcome = withCatalogWriteSerialization(
+    owningCodexHome,
+    permit => restoreCodexCatalogWithPermit(permit, owningCodexHome),
+  );
+  return outcome.kind === "completed"
+    ? outcome.value
+    : { removed: 0, kept: 0, path: readCodexCatalogPath() };
+}
+
 /** Force Codex's models_cache stale from the on-disk catalog. Returns whether a cache write occurred. */
-export function invalidateCodexModelsCache(): boolean {
+export function invalidateCodexModelsCacheWithPermit(
+  permit: CatalogWritePermit,
+  owningCodexHome: string,
+): boolean {
   try {
     const catalogPath = readCodexCatalogPath();
     if (!existsSync(catalogPath)) return false;
@@ -797,9 +1058,21 @@ export function invalidateCodexModelsCache(): boolean {
       client_version: "0.0.0",
       models,
     };
-    atomicWriteFile(activeCodexModelsCachePath(), JSON.stringify(wrapper, null, 2) + "\n");
+    replaceCodexModelsCache(permit, owningCodexHome, {
+      path: activeCodexModelsCachePath(),
+      content: `${JSON.stringify(wrapper, null, 2)}\n`,
+    });
     return true;
   } catch {
     return false;
   }
+}
+
+export function invalidateCodexModelsCache(): boolean {
+  const owningCodexHome = getCodexHome();
+  const outcome = withCatalogWriteSerialization(
+    owningCodexHome,
+    permit => invalidateCodexModelsCacheWithPermit(permit, owningCodexHome),
+  );
+  return outcome.kind === "completed" && outcome.value;
 }

@@ -687,6 +687,52 @@ a.btn, a.btn:hover { text-decoration: none; }
   overflow: hidden;
 }
 .maintenance-notice { margin: 14px 0 0; align-items: flex-start; }
+/*
+  Transient action feedback (sync result, model-apply confirmation, …) as a fixed toast.
+  It is out of the layout flow, so appearing or dismissing it can never shift the page the
+  way an inline notice did (that box pushed every panel below it down by its full height on
+  each action). It sits bottom-right of the viewport, clear of the content column, and
+  reuses the notice tones.
+*/
+.action-toast {
+  position: fixed;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  z-index: var(--z-modal);
+  margin: 0;
+  max-width: min(480px, calc(100vw - 48px));
+  box-shadow: var(--shadow);
+  align-items: flex-start;
+  animation: sync-toast-in var(--motion-normal) ease-out;
+}
+@keyframes sync-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* Refresh icon spins while a sync is in flight (the `.spin` keyframes already exist). */
+.spin-icon { animation: spin 0.9s linear infinite; }
+/* Toast dismiss affordance: quiet ghost button inside the notice row. */
+.action-toast-dismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  /* 13px icon + 4px padding = 21px: too small to hit comfortably. Floor the hit
+     target at 24px while keeping the icon size and visual padding. */
+  min-width: 24px;
+  min-height: 24px;
+  margin: -4px -6px 0 2px;
+  padding: 4px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--motion-fast), background var(--motion-fast);
+}
+.action-toast-dismiss:hover { color: var(--text); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.action-toast-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .update-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .update-row .field-label { margin: 0; }
 .update-empty { padding: 18px; margin-bottom: 14px; }
@@ -914,6 +960,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 .tbl tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
 .tbl tbody tr:last-child td { border-bottom: none; }
 .tbl tbody tr:hover td { background: var(--hover); }
+
+.checkbox { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .tbl .num { text-align: right; font-family: var(--font-code); font-variant-numeric: tabular-nums; }
 .tbl-wrap {
   border: 1px solid var(--border);
@@ -1325,7 +1373,8 @@ dialog.modal-overlay::backdrop {
   transition: transform var(--motion-normal);
 }
 .bar-green { background: var(--green); }
-.bar-amber { background: linear-gradient(90deg, var(--green), var(--amber)); }
+/* Flat, matching .bar-warn: no gradients on data bars (FE-GRADIENT-02 / AI-tell audit). */
+.bar-amber { background: var(--amber); }
 .quota-row--skeleton { min-height: 18px; }
 .quota-skel {
   display: inline-block;

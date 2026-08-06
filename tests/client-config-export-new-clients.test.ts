@@ -27,7 +27,7 @@ import type { OcxConfig } from "../src/types";
 
 /**
  * WP1 coverage for the four clients added past OpenCode and Pi
- * (devlog/_plan/260802_client_toggle_api/010 §5, 011 §2).
+ * (devlog/_fin/260802_client_toggle_api/010 §5, 011 §2).
  *
  * The no-secret assertions are the release-blocking ones: a config we generate
  * must carry an environment reference or a loopback placeholder, never a key.

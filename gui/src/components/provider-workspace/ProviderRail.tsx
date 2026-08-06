@@ -5,7 +5,7 @@
  */
 /* eslint-disable react-refresh/only-export-components -- label helpers co-locate with the rail row */
 import { useT, type TFn } from "../../i18n/shared";
-import { IconServer, IconStar } from "../../icons";
+import { IconStar } from "../../icons";
 import {
   binProviderStatus,
   isFreeProvider,
@@ -48,14 +48,37 @@ export function ProviderIcon({ name, adapter, baseUrl, cls }: {
   baseUrl?: string;
   cls: string;
 }) {
+  const t = useT();
   const src = providerIconSrc(name, { adapter, baseUrl });
   return (
     <span className={cls}>
       {src ? (
         <img src={src} alt="" aria-hidden="true" />
       ) : (
-        <IconServer aria-hidden="true" />
+        <ProviderFallbackMark name={name} label={formatProviderDisplayName(name, t)} />
       )}
+    </span>
+  );
+}
+
+/**
+ * Colored initial-letter tile for providers without a logo asset (long-tail
+ * presets and custom providers). Hue is derived deterministically from the
+ * provider id so the same provider always gets the same color.
+ */
+export function ProviderFallbackMark({ name, label }: { name: string; label: string }) {
+  const hue = [...name].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
+  const initial = (label.trim()[0] ?? name[0] ?? "?").toUpperCase();
+  return (
+    <span
+      className="provider-icon-fallback"
+      style={{
+        background: `hsl(${hue} 55% 90%)`,
+        color: `hsl(${hue} 65% 32%)`,
+      }}
+      aria-hidden="true"
+    >
+      {initial}
     </span>
   );
 }

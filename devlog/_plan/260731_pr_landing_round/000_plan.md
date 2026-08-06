@@ -31,7 +31,7 @@ PR을 얹기 전에 기준선부터 확인했더니 **손대지 않은 dev HEAD�
 exit 1**이다.
 
 세 건 모두 같은 파일에서 나온다:
-`devlog/_plan/260730_devlog_publication_feasibility/030_wp3_wp4_execution_record.md`
+`devlog/_fin/260730_devlog_publication_feasibility/030_wp3_wp4_execution_record.md`
 의 84~86행이고, 종류는 각각 `token-looking`, `home-path`, `email`이다. 실제 값은
 여기 옮기지 않는다 — 옮기는 순간 이 문서가 같은 이유로 스캔에 걸린다. 실제로 처음
 이 문서를 쓸 때 값을 그대로 인용했다가 스캐너에 잡혔고, 그게 아래 예외가 파일 단위로

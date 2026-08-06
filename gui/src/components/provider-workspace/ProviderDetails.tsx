@@ -221,28 +221,13 @@ export default function ProviderDetails({
       >
         {tab === "overview" && (
           <ProviderOverview
-            accountPanel={authSurface ? (
-              <ProviderAuthPanel
-                item={item}
-                apiBase={apiBase}
-                oauth={oauth}
-                accounts={accounts}
-                keys={keys}
-                accountLoadState={accountLoadState}
-                switchingAccountId={switchingAccountId}
-                busy={busyProvider === item.name}
-                loginHint={loginHint}
-                authHandlers={authHandlers}
-                onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
-                codexController={codexController}
-              />
-            ) : undefined}
             item={item}
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
             oauthEmail={oauthEmail}
+            oauth={oauth}
             onEditSettings={() => switchTab("settings")}
             onViewUsage={() => switchTab("usage")}
             onUpdateProvider={onUpdateProvider}

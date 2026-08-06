@@ -7,7 +7,7 @@
  * conflating them is what lets a foreign edit read as ordinary drift — which
  * would then be silently overwritten.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/021 §2.
+ * Design of record: devlog/_fin/260802_client_toggle_api/021 §2.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";

@@ -81,8 +81,10 @@ test("Providers owns exactly one controller and shares it with both surfaces", a
   expect(details).toContain("codexController={codexController}");
   expect(panel).toContain("controller={codexController}");
 
-  // ...and the same panel element is what Overview renders.
-  expect(details).toContain("accountPanel={authSurface ?");
+  // The full panel lives on the Accounts tab; Overview keeps the compact auth summary.
+  expect(details).not.toContain("accountPanel={authSurface ?");
+  const overview = await read("../src/components/provider-workspace/ProviderOverview.tsx");
+  expect(overview).not.toContain("accountPanel");
 });
 
 test("a nested pool cannot start a second poll loop", async () => {

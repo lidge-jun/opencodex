@@ -21,7 +21,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
-| `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。 |
+| `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。已证明的连接前 DNS/TCP 不可达故障按 provider-host 粒度记录，不影响账户健康、冷却、线程/会话亲和性、活动账户选择或 Pool 路由，也不会计入此阈值；未确认的失败仍归属账户。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
@@ -84,7 +84,8 @@ pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex 
 | `noTopPModels?` | `string[]` | 会拒绝调用方指定 `top_p` 的模型。 |
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 |
 | `parallelToolCalls?` | `boolean` | 切换并行工具调用。OpenAI Chat 默认开启；非 chat 适配器只有显式 `true` 时才会声明支持。 |
-| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id 和缺失的终止 id。function-call id 永远不会被重写。 |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及（`repairInvalidIds`）缺少规范 `msg_`/`rs_` 前缀的 message/reasoning id。function-call id 永远不会被重写。内置 DeepSeek 默认启用后两项。 |
+| `responsesSnapshotRepair?` | `boolean` | 默认关闭的客户端修复，用于补全 SSE 与 JSON 中稀疏 Responses 生命周期快照缺失的 status、output 和工具元数据；原始检查与持久化保持不变。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | 仅限 API-key 提供商（`authMode: "key"`）。可选的同目标 429 重试：未配置 `retryOn429` 时功能关闭；对象存在即启用，除非 `enabled: false`。收到 429 时等待（上游 `Retry-After` 或固定间隔）后在相同 key 上重放完全相同请求，再进入任何 key 故障转移——覆盖主文本恢复循环、Responses passthrough、图像/视频桥、web-search 侧车与终结续接。重放仅适用于流开始前的 HTTP 429 响应；自定义 `runTurn` 传输不在 HTTP 重试循环范围内。`attempts` 是首个 429 之后的同 key 重放次数（总发送次数 = `attempts` + 1），是主恢复循环、终结守卫续接与桥接重试共享的按请求统一预算；`attempts` 耗尽只会停止进一步的同 key 重放：随后按可用目标进行正常的 key 故障转移或最终错误处理——key 认证的 passthrough 线路上没有故障转移，因此耗尽的 429 会原样透出。Codex 自身从不重试 429，因此这是单 key 提供商唯一的防线。默认值：`enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`（单次等待以 `maxIntervalMs` 为上限，其本身上限 600000）、`respectRetryAfter: true`。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；强制选择会被降级。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。 |

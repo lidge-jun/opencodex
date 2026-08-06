@@ -16,8 +16,12 @@ let promptCancelled = false;
 type AdminTokenPrompt = (verifyToken: AdminTokenVerifier) => Promise<string | null>;
 let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
 
-/** Document path re-fetched to mint a fresh loopback GUI session (server injects meta tags). */
-const SESSION_REBOOTSTRAP_PATH = "/";
+/**
+ * Document path re-fetched to mint a fresh loopback GUI session (server injects meta tags).
+ * Deliberately NOT "/": the Vite dev server owns that route for the app shell, so the dev
+ * proxy forwards this dedicated extensionless path to the backend with the original host.
+ */
+const SESSION_REBOOTSTRAP_PATH = "/opencodex-session";
 /** Safe authenticated read used to validate a raw admin token before closing the sign-in form. */
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
 

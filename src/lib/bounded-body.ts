@@ -23,6 +23,8 @@ export interface BoundedBodyOptions {
 	totalTimeoutMs?: number;
 	/** Deadline between non-empty raw chunks. Exposed for focused tests. */
 	inactivityTimeoutMs?: number;
+	/** Deadline for the first non-empty raw chunk. Defaults to inactivityTimeoutMs. */
+	firstByteTimeoutMs?: number;
 }
 
 export interface BoundedBodyResult {
@@ -129,7 +131,7 @@ export async function readBoundedResponseBody(
 	let cancelReason: unknown;
 	const total = timeoutPromise(options.totalTimeoutMs ?? BOUNDED_BODY_TIMEOUT_MS, TOTAL_TIMEOUT);
 	let inactivity = timeoutPromise(
-		options.inactivityTimeoutMs ?? BOUNDED_BODY_TIMEOUT_MS,
+		options.firstByteTimeoutMs ?? options.inactivityTimeoutMs ?? BOUNDED_BODY_TIMEOUT_MS,
 		INACTIVITY_TIMEOUT,
 	);
 

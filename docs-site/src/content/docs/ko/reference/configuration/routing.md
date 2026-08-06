@@ -82,3 +82,26 @@ combo는 목록에 오를 수 없더라도 계속 직접 라우팅할 수 있습
 - 비어 있지 않은 `inputModalities` 교집합. 생략된 member value는 `["text"]`로 취급합니다.
 
 context metadata가 없는 bare relay id이거나 modalities가 서로 겹치지 않는 target이 있으면 combo가 catalog에서 빠집니다. sync는 summary warning을 내고 dashboard는 이를 **Needs attention**으로 표시합니다. context metadata를 추가하거나, modalities를 맞추거나, 발견 가능한 호환 capability를 가진 model을 대상으로 삼으십시오.
+
+## 라우팅 정책 프로필 (`config.routingProfiles`)
+
+명시적으로 요청된 `policy/<id>`(또는 설정된 별칭)가 고정된 후보 허용 목록에서 하드 능력 요구사항과 결정적·설명 가능한 점수로 선택합니다. 기존 모델 ID가 암시적으로 프로필을 통과하지 않습니다. `candidates`(명시적 허용 목록), 선택적 `alias`, `require`(`minContextWindow`, `minQuotaHeadroom`, `tools`, `imageInput`, `structuredOutput`, `localOnly`, `remoteAllowed`, `encryptedCodexTasks`, `reasoningEffort`, `serviceTier`), `optimize`(latency/health/cost/quota 가중치), `limits.maxEstimatedCostUsd`, `unknownEvidence`(allow/penalize/exclude)를 지원합니다. 알 수 없음은 0이나 무료가 되지 않습니다.
+
+CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dry-run <id> --model-context <tokens> --tools`, `ocx route policy evaluate <id>`.
+
+콤보는 명시적인 순서·가중치 대상 라우팅 및 장애 조치입니다. 정책 프로필은 후보 간 증거 기반 선택입니다.
+
+## 요청 기록 및 라우팅 분석
+
+- `GET /api/request-history` - 파생 인덱스(`routing-history.sqlite`)에서 커서 페이지네이션으로 전체 기록을 조회. 필터: `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from`, `to`.
+- `GET /api/request-history/:requestId/route-decision` - 이 경로가 선택된 이유(추적, 후보, 제외, 점수, 프로필+리비전, 실행 시도, 결과).
+- `GET /api/routing-analytics` - 성공/실패/취소/폴백 비율, p50/p95/p99 소요 시간 및 TTFT, 불완전 스트림 비율, 쿨다운 실패 수, 성공 요청당 추정 비용, 커버리지, 신뢰도, 잘림 플래그.
+- `GET /api/routing-profiles`, `POST /api/routing-profiles/dry-run` - 프로필 조회와 드라이런 평가(업스트림 전송 없음).
+
+반환되는 히스토리와 라우트 결정 페이로드는 마스킹된 요청 메타데이터만 노출합니다(예: 불투명한 `apiKeyId` 라벨). 자격 증명, 원본 프롬프트 본문, 공급자 시크릿은 포함하지 않습니다.
+
+CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index-status`.
+
+## 마이그레이션
+
+`routingProfiles`는 선택적 추가 설정입니다. 기존 설정 파일과 이전 `usage.jsonl` 행은 그대로 읽힙니다. 인덱스는 일회용이며 삭제 시 다음 쿼리에서 `usage.jsonl`로 자동 재구축됩니다. 자동 튜닝은 없습니다.

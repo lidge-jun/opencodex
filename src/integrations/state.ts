@@ -6,7 +6,7 @@
  * be reported as ordinary drift. Getting that wrong would let `disable` delete
  * a user's own edits.
  *
- * Design of record: devlog/_plan/260802_client_toggle_api/021 §3.
+ * Design of record: devlog/_fin/260802_client_toggle_api/021 §3.
  */
 import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import type { OcxConfig } from "../types";

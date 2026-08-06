@@ -327,6 +327,7 @@ describe("acceptSystemRestart", () => {
     let scheduled: (() => void | Promise<void>) | null = null;
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
     let rejectStop!: (reason?: unknown) => void;
+    let now = 1_000;
 
     acceptSystemRestart({
       isDraining: () => false,
@@ -339,6 +340,7 @@ describe("acceptSystemRestart", () => {
         timers.push(timer);
         return () => { timer.cancelled = true; };
       },
+      now: () => now,
       setDraining: () => { calls.push("latched"); },
       drainAndShutdown: () => {
         calls.push("drain");

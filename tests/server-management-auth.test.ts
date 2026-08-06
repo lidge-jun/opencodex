@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
-import { serveGuiFile } from "../src/server/gui-static";
+import { serveGuiFile, serveSessionBootstrap } from "../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../src/server/auth-cors";
 import {
   initializeManagementAuthState,
@@ -381,6 +381,14 @@ describe("management and data-plane credential separation", () => {
     expect(html).toContain(`name="opencodex-session-token" content="${session?.token}"`);
     expect(html).toContain(`name="opencodex-session-csrf" content="${session?.csrfToken}"`);
 
+    // The dev GUI fetches /opencodex-session through Vite so the app shell stays
+    // Vite-owned. The backend answers that path without requiring gui/dist, so a fresh
+    // source checkout (no packaged build) can still mint an origin-bound session.
+    const bootstrapPage = serveSessionBootstrap(session!);
+    const bootstrapHtml = await bootstrapPage.text();
+    expect(bootstrapHtml).toContain(`name="opencodex-session-origin" content="${session?.origin}"`);
+    expect(bootstrapHtml).toContain(`name="opencodex-session-token" content="${session?.token}"`);
+
     const sameOriginRead = new Request("http://localhost:10100/api/config", {
       headers: {
         Host: "localhost:10100",
@@ -427,6 +435,31 @@ describe("management and data-plane credential separation", () => {
       headers: { Host: "attacker.test" },
     }), config, state)).toBeNull();
     expect(issueGuiSession(new Request("http://localhost:10100/"), config, state)).toBeNull();
+  });
+
+  test("GET /opencodex-session serves the bootstrap document from a live server", async () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/opencodex-session", server.url), {
+        headers: { Host: server.url.host },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("pragma")).toBe("no-cache");
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+
+      const html = await response.text();
+      expect(html).toContain('name="opencodex-session-token"');
+      expect(html).toContain('name="opencodex-session-csrf"');
+      expect(html).toContain('name="opencodex-session-origin"');
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("a non-loopback binding never issues a GUI session from a forged loopback Host", () => {

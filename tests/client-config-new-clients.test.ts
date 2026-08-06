@@ -21,7 +21,7 @@ import type { OcxConfig } from "../src/types";
 
 /**
  * Activation coverage for the four clients added in WP1
- * (devlog/_plan/260802_client_toggle_api/010 §2.4, 011 §3).
+ * (devlog/_fin/260802_client_toggle_api/010 §2.4, 011 §3).
  */
 const MODELS: ExportModel[] = [
   { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000, displayName: "Claude Opus 4.8" },

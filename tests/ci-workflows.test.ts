@@ -81,15 +81,15 @@ describe("GitHub Actions hardening", () => {
     };
 
     // Job-scoped: a global count still passes if values are swapped between jobs.
-    // Pin ownership explicitly. `platform-windows` keeps the 30m Windows isolate
-    // margin from #827 after state-store admission — do not raise again; fix hung
-    // tests instead (unref'd oauth waitMs / shell kill-grace). A `test` shard runs
-    // a quarter of the suite, so 15m there means wedged rather than slow.
+    // Pin ownership explicitly. The Windows leg is sharded like the Linux ones
+    // since 8034cd7c0 — a single leg reached 30m on a green suite and was killed
+    // in cleanup, so each shard now holds the same 15m a Linux shard holds. A
+    // shard that needs longer is wedged, not slow.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(30);
-    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
@@ -127,10 +127,18 @@ describe("GitHub Actions hardening", () => {
     // Sharding is only safe while the shards tile the suite exactly. If the
     // matrix and the divisor drift apart, some files stop running and CI stays
     // green — the worst failure available here. Pin them to each other.
-    const shards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
+    const linuxShards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
       ?.strategy?.matrix?.shard ?? [];
-    expect(shards).toEqual([1, 2, 3, 4]);
-    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${shards.length}`);
+    expect(linuxShards).toEqual([1, 2, 3, 4]);
+    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${linuxShards.length}`);
+
+    // Windows uses the same shard matrix after the single-leg isolate budget was
+    // replaced. Keep the two matrices equal so a future edit cannot reintroduce
+    // a partial Windows suite while Linux stays fully tiled.
+    const windowsShards = (ci.jobs?.["platform-windows"] as {
+      strategy?: { matrix?: { shard?: number[] } };
+    })?.strategy?.matrix?.shard ?? [];
+    expect(windowsShards).toEqual(linuxShards);
 
     // The aggregate gate is the check a human trusts. Three ways to break it
     // silently: drop `if: always()` so it skips (and a skipped job reports
@@ -150,23 +158,25 @@ describe("GitHub Actions hardening", () => {
     expect(macosSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     expect(ci.jobs?.["platform-macos"]).not.toHaveProperty("if");
 
-    // Windows leaving the PR lane is a trade, not a deletion: it still runs
-    // before anything is published. Assert the positive condition rather than the
-    // absence of `pull_request` — `!= 'pull_request'` also matches every push to
-    // dev, which would restore the 16-minute leg to the busiest lane while still
-    // passing a loosely-worded test.
+    // Windows is dispatch-only: it gates nothing, not even the shipping
+    // boundary. The sharded promotion run surfaced ~207 Windows-only failures
+    // that pre-date every released version, so the leg became a measurement
+    // tool a maintainer runs by hand, not a gate. Assert the positive
+    // condition and the absence of every automatic trigger — a stray
+    // `|| github.ref == ...` would restore a red leg to the release path.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toContain("github.event_name == 'workflow_dispatch'");
-    expect(windowsIf).toContain("github.ref == 'refs/heads/main'");
-    expect(windowsIf).toContain("github.ref == 'refs/heads/preview'");
+    expect(windowsIf).not.toContain("refs/heads/main");
+    expect(windowsIf).not.toContain("refs/heads/preview");
     expect(windowsIf).not.toContain("refs/heads/dev");
+    expect(windowsIf).not.toContain("pull_request");
 
-    // Windows runs the same full suite, and keeps the self-hosted workspace wipe.
-    // Without the wipe a deleted file survives on the runner's disk and the suite
-    // passes against a tree that no longer exists in git.
+    // Windows runs the same suite, sharded like the Linux legs, and keeps the
+    // self-hosted workspace wipe. Without the wipe a deleted file survives on
+    // the runner's disk and the suite passes against a tree that no longer
+    // exists in git.
     const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
-    expect(winSteps.some(step => step.run?.includes("bun test --isolate tests"))).toBe(true);
-    expect(winSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    expect(winSteps.some(step => step.run?.includes(`--shard=\${{ matrix.shard }}/${windowsShards.length}`))).toBe(true);
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
@@ -354,8 +364,8 @@ describe("GitHub Actions hardening", () => {
     // Whole-list comparison, not samples. Every entry is an input to the
     // published tarball; dropping one silently stops packaging verification for
     // that surface. `src/**` is the load-bearing one: it keeps a source-only PR
-    // running the Windows packaged-CLI smoke now that the Windows suite only
-    // runs at the shipping boundary.
+    // running the Windows smoke jobs (keyring, npm-global) now that the full
+    // Windows suite runs only on manual dispatch.
     const filters = String(filterStep?.with?.filters ?? "");
     const packagingBlock = filters.split(/\n\s*packaging:\s*\n/)[1] ?? "";
     const packaging = [...packagingBlock.matchAll(/-\s*'([^']+)'/g)].map(match => match[1]).sort();
@@ -629,6 +639,18 @@ describe("GitHub Actions hardening", () => {
     expect(createStep.indexOf("gh api")).toBeGreaterThan(-1);
     expect(createStep.indexOf('git tag "$release_tag"')).toBeGreaterThan(-1);
     expect(createStep.indexOf("gh api")).toBeLessThan(createStep.indexOf('git tag "$release_tag"'));
+    // The notes baseline must read the FULL tag set, not `--merged HEAD`: stable
+    // tags live on main's lineage, which the preview branch does not carry, and a
+    // trailing same-core preview must not hide the stable from the range
+    // (v2.9.1-preview → v2.10.0-preview is wrong; the range must start at v2.9.1).
+    expect(createStep).toContain("git tag --list 'v[0-9]*' |");
+    expect(createStep).not.toContain("--merged HEAD");
+    // The merged-only restriction remains on the service gate, whose
+    // changed-files comparison is deliberately lineage-relative.
+    const ciGateStep = workflow
+      .split("- name: Require successful Cross-platform CI for this commit")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(ciGateStep).toContain("--merged HEAD");
     // First-channel releases must not call generate-notes without an explicit baseline
     // (GitHub would otherwise pick the newest repo tag, possibly from the other channel).
     // Scope to the single if-block that owns generate-notes; createStep has two

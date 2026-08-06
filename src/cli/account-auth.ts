@@ -11,6 +11,23 @@ import {
   type CliStdin,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { writeSync } from "node:fs";
+
+/**
+ * Write the whole block to fd 1 synchronously (#1007). `console.log` can
+ * buffer behind a pipe, which hid the authorization URL for the entire
+ * polling window under non-TTY stdout. A partial write loops; a zero-byte
+ * write is a hard failure, never silent progress.
+ */
+function writeStdoutFully(text: string): void {
+  const bytes = Buffer.from(text, "utf8");
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = writeSync(1, bytes, offset, bytes.length - offset);
+    if (written <= 0) throw new CliUsageError("failed to write login instructions to stdout");
+    offset += written;
+  }
+}
 
 const USAGE = `Usage:
   ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
@@ -82,9 +99,14 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       body: JSON.stringify({ ...(id ? { id } : {}), ...(reauth ? { reauth: true } : {}) }),
     }, deps);
     if (!wantsJson) {
-      if (start.url) console.log(`Open this URL to sign in:\n${start.url}`);
-      if (start.instructions) console.log(start.instructions);
-      if (start.flowId) console.log(`Flow: ${start.flowId}`);
+      // One atomic pre-poll block, flushed synchronously so a piped parent
+      // reads the URL before the polling window starts (#1007).
+      const block = [
+        start.url ? `Open this URL to sign in:\n${start.url}` : "",
+        start.instructions ?? "",
+        start.flowId ? `Flow: ${start.flowId}` : "",
+      ].filter(line => line !== "").join("\n");
+      if (block) writeStdoutFully(`${block}\n`);
     }
     if (code && start.flowId) {
       await runtimeRequest("/api/codex-auth/login/code", {
@@ -120,9 +142,12 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     body: JSON.stringify({ provider, addAccount: !reauth, ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
   }, deps);
   if (!wantsJson) {
-    if (start.url) console.log(`Open this URL to sign in:\n${start.url}`);
-    if (start.instructions) console.log(start.instructions);
-    if (start.deviceCode) console.log(`Device code: ${start.deviceCode}`);
+    const block = [
+      start.url ? `Open this URL to sign in:\n${start.url}` : "",
+      start.instructions ?? "",
+      start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+    ].filter(line => line !== "").join("\n");
+    if (block) writeStdoutFully(`${block}\n`);
   }
   if (code) {
     await runtimeRequest("/api/oauth/login/code", {

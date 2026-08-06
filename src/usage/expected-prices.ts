@@ -168,8 +168,11 @@ export function findExpectedPriceOverlay(
  */
 export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
   "gpt-5.6-sol": 2,
-  "gpt-5.6-terra": 1.6,
-  "gpt-5.6-luna": 0.4,
+  // Post-price-cut Fast tables (https://openai.com/api-fast-mode/, 2026-08-05):
+  // Terra 4/24/0.40/5 and Luna 0.40/2.40/0.04/0.50 are both 2× the corrected
+  // standard tuples; the stale bases made these look like 1.6/0.4 (#907).
+  "gpt-5.6-terra": 2,
+  "gpt-5.6-luna": 2,
   "gpt-5.5": 2.5,
   "gpt-5.4-mini": 2,
   "gpt-5.4": 2,

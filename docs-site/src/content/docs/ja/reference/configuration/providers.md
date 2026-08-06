@@ -21,7 +21,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は紐付け済み/未紐付けタスクの次のリクエストを再評価でき、`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は、未紐付けリクエストまたは紐付け済みタスクの次のリクエストを usage の低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
-| `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。 |
+| `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。実証済みの接続前DNS/TCP到達不能障害はprovider-host単位で記録され、アカウントの健全性、クールダウン、スレッド/セッションの親和性、アクティブアカウントの選択、Poolルーティングには影響せず、この閾値にもカウントされません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
@@ -85,7 +85,8 @@ namespace 付き combo alias はその namespace prefix に selector を再利�
 | `noTopPModels?` | `string[]` |発信者指定の`top_p`を拒否するモデル。 |
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
-| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` |正確なプレースホルダー ID および欠落している端末 ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。 |
+| `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
+| `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key プロバイダーのみ(`authMode: "key"`)。オプトインの同一ターゲット 429 リトライ: `retryOn429` が無ければ無効で、オブジェクトがあれば `enabled: false` でない限り有効になります。429 時に待機(上流の `Retry-After` または固定間隔)してから、キー フェイルオーバーの前に同一キーで同一リクエストを再送します — メインのテキストターン回復ループ、Responses passthrough、画像/動画ブリッジ、web-search サイドカー、ターミナル継続要求をすべてカバーします。再送の対象はプリストリームの HTTP 429 応答のみで、カスタム `runTurn` トランスポートは HTTP リトライループの対象外です。`attempts` は最初の 429 以降の同一キー再送回数(合計送信数 = `attempts` + 1)で、メインの回復ループ・ターミナルガード継続・ブリッジ再試行で共有されるリクエスト単位の予算です。`attempts` を使い切っても同一キーでの再送が止まるだけで、通常のキー フェイルオーバーまたは最終エラー処理が利用可能なターゲットに応じて続きます — キー認証の passthrough ワイヤにはフェイルオーバーがないため、使い切った 429 はそのまま返ります。Codex 自体は 429 をリトライしないため、単一キーのプロバイダーでは唯一の防御です。デフォルト: `enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`(1回の待機は `maxIntervalMs` で上限、その上限は 600000)、`respectRetryAfter: true`。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
 | `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |

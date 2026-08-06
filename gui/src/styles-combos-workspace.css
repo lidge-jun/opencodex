@@ -29,6 +29,8 @@
   padding: 10px 16px 0;
 }
 
+/* Revalidation shell: keeps the workspace body stable while aria-busy and an
+   sr-only status span announce in-flight refreshes to assistive tech. */
 .combos-workspace-shell-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -60,14 +62,14 @@
 }
 
 .combos-workspace-rail-title {
-  font-size: 18px;
+  font-size: var(--text-title);
   font-weight: 600;
   color: var(--text);
 }
 
 .combos-workspace-rail-count {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--faint);
 }
 
@@ -88,7 +90,7 @@
   gap: 7px;
   padding: 8px 16px 6px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--text-caption);
   font-weight: 600;
 }
 
@@ -104,7 +106,7 @@
   background: none;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-control);
   color: var(--text);
   text-align: left;
   width: 100%;
@@ -141,12 +143,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--text-label);
 }
 
 .combos-workspace-rail-meta {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--text-caption);
   color: var(--faint);
   text-align: right;
 }
@@ -200,7 +202,7 @@
 }
 
 .combos-workspace-detail-title {
-  font-size: 18px;
+  font-size: var(--text-title);
   font-weight: 600;
   font-family: var(--mono);
   margin: 0;
@@ -227,7 +229,7 @@
   border: none;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-control);
   font-weight: 500;
   color: var(--muted);
   padding: 8px 12px;
@@ -302,12 +304,18 @@
 
 .cwi-count-pill strong {
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: var(--text-subtitle);
 }
 
 .cwi-count-pill span {
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--muted);
+}
+
+/* Keep helper copy on the shared prose measure (line-length bar). */
+.cwi-field > p.muted {
+  max-width: var(--prose-measure);
+  overflow-wrap: anywhere;
 }
 
 .cwi-target-list {
@@ -401,7 +409,7 @@
 
 .cwi-copy-chip {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--text-label);
   cursor: pointer;
 }
 
@@ -413,7 +421,7 @@
 
 .cwi-field label {
   display: block;
-  font-size: 12px;
+  font-size: var(--text-label);
   font-weight: 600;
   color: var(--muted);
   margin-bottom: 4px;
@@ -492,15 +500,15 @@
 .pwi-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--muted); }
 .pwi-back-overview { flex: 0 0 auto; gap: 4px; margin-right: 2px; white-space: nowrap; }
 .pwi-section { background: none; border: none; border-radius: 0; min-width: 0; padding: 0; }
-.pwi-section-title { margin: 0 0 4px; font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.pwi-section-title { margin: 0 0 4px; font-size: var(--text-label); font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .pwi-empty-right-icon { color: var(--faint); }
-.pwi-empty-right-sub { font-size: 13.5px; color: var(--muted); margin: 0; max-width: 44ch; line-height: 1.5; }
+.pwi-empty-right-sub { font-size: var(--text-control); color: var(--muted); margin: 0; max-width: 44ch; line-height: 1.5; }
 .pwi-json-unsaved-card,
 .pwi-remove-confirm-card { max-width: 420px; width: min(420px, 92vw); padding: 20px 22px 16px; }
 .pwi-json-unsaved-title,
-.pwi-remove-confirm-title { margin: 0 0 8px; font-size: 16px; font-weight: 650; color: var(--text); }
+.pwi-remove-confirm-title { margin: 0 0 8px; font-size: var(--text-subtitle); font-weight: 650; color: var(--text); }
 .pwi-json-unsaved-desc,
-.pwi-remove-confirm-desc { margin: 0 0 18px; font-size: 13.5px; line-height: 1.45; }
+.pwi-remove-confirm-desc { margin: 0 0 18px; font-size: var(--text-control); line-height: 1.45; }
 .pwi-json-unsaved-actions,
 .pwi-remove-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .pwi-remove-confirm-danger { background: var(--red) !important; color: #fff !important; border-color: transparent !important; }
