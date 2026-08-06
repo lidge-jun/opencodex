@@ -9,6 +9,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -641,6 +642,18 @@ test("a referenced rollout with native first and latest metadata is clean", () =
   createHistoryDatabase("openai", ["openai", "openai"]);
 
   expect(classifyNativeRoutedResidue()).toEqual({ kind: "clean" });
+});
+
+test("an oversized referenced rollout is indeterminate without being loaded", () => {
+  createHistoryDatabase("openai");
+  truncateSync(pathInCodexHome("rollout.jsonl"), 64 * 1024 * 1024 + 1);
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history",
+    path: pathInCodexHome("rollout.jsonl"),
+    reason: expect.stringContaining("inspection limit"),
+  });
 });
 
 for (const fixture of [

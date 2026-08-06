@@ -69,6 +69,7 @@ const MODELS_CACHE_FILE_NAME = basename(CODEX_MODELS_CACHE_PATH);
 const JOURNAL_FILE_NAME = "opencodex-journal.json";
 const HISTORY_DATABASE_FILE_NAME = "state_5.sqlite";
 const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via opencodex → ";
+const MAX_ROLLOUT_INSPECTION_BYTES = 64 * 1024 * 1024;
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -358,47 +359,65 @@ function classifyReferencedRollout(
   surface: "history" | "history-backup",
   reference: RolloutReference,
 ): NativeRoutedResidueResult {
-  const read = readRegularFile(reference.path);
-  if (read.kind === "absent") {
+  const resolved = resolveRegularFile(reference.path);
+  if (resolved.kind === "absent") {
     return indeterminate(surface, reference.path, "referenced rollout is absent");
   }
-  if (read.kind === "indeterminate") return indeterminate(surface, reference.path, read.reason);
+  if (resolved.kind === "indeterminate") return indeterminate(surface, reference.path, resolved.reason);
+  if (resolved.stat.size > MAX_ROLLOUT_INSPECTION_BYTES) {
+    return indeterminate(
+      surface,
+      resolved.path,
+      `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
+    );
+  }
+
+  let content: string;
+  try {
+    content = readFileSync(resolved.path, "utf8");
+    const after = statSync(resolved.path);
+    if (!sameStat(resolved.stat, after)) {
+      return indeterminate(surface, resolved.path, "rollout changed while it was being observed");
+    }
+  } catch (error) {
+    return indeterminate(surface, resolved.path, `unreadable rollout: ${errorReason(error)}`);
+  }
 
   let first: Record<string, unknown> | undefined;
   let latest: Record<string, unknown> | undefined;
-  for (const line of read.content.split("\n")) {
+
+  for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
     } catch (error) {
-      return indeterminate(surface, read.path, `malformed rollout JSONL: ${errorReason(error)}`);
+      return indeterminate(surface, resolved.path, `malformed rollout JSONL: ${errorReason(error)}`);
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return indeterminate(surface, read.path, "rollout JSONL record is not an object");
+      return indeterminate(surface, resolved.path, "rollout JSONL record is not an object");
     }
     const record = parsed as Record<string, unknown>;
     if (record.type !== "session_meta") continue;
     if (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) {
-      return indeterminate(surface, read.path, "session_meta payload has an unknown shape");
+      return indeterminate(surface, resolved.path, "session_meta payload has an unknown shape");
     }
     const payload = record.payload as Record<string, unknown>;
     first ??= payload;
     latest = payload;
   }
-
   if (!first || !latest) {
-    return indeterminate(surface, read.path, "referenced rollout has no session_meta metadata");
+    return indeterminate(surface, resolved.path, "referenced rollout has no session_meta metadata");
   }
   for (const [position, payload] of [["first", first], ["latest", latest]] as const) {
     if (payload.id !== reference.id) {
-      return indeterminate(surface, read.path, `${position} session_meta does not identify the referenced thread`);
+      return indeterminate(surface, resolved.path, `${position} session_meta does not identify the referenced thread`);
     }
     if (typeof payload.model_provider !== "string" || !payload.model_provider) {
-      return indeterminate(surface, read.path, `${position} session_meta has no provider metadata`);
+      return indeterminate(surface, resolved.path, `${position} session_meta has no provider metadata`);
     }
     if (payload.model_provider === "opencodex") {
-      return { kind: "residue", surface, path: read.path };
+      return { kind: "residue", surface, path: resolved.path };
     }
   }
   return { kind: "clean" };
