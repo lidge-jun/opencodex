@@ -16,8 +16,8 @@ ocx start
 ocx export --client pi
 ```
 
-The output leads with the JSON, then prints the destination path, the merge warning, the total
-model count, and how many rows omit context limits.
+The output leads with the JSON, then prints the destination path, the merge warning, Pi-specific
+pre-launch guidance, the total model count, and how many rows omit context limits.
 
 ```json
 {

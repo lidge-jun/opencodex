@@ -17,8 +17,8 @@ ocx start
 ocx export --client pi
 ```
 
-출력은 JSON으로 시작하고, 이어서 대상 경로, 병합 경고, 전체 모델 수, 그리고 context
-limit을 생략한 row 수를 보여줍니다.
+출력은 JSON으로 시작하고, 이어서 대상 경로, 병합 경고, Pi 전용 실행 전 안내, 전체 모델
+수, 그리고 context limit을 생략한 row 수를 보여줍니다.
 
 ```json
 {
