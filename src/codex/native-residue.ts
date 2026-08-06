@@ -173,6 +173,33 @@ function rolloutSessionMetaPayload(
   return { kind: "payload", payload: record.payload as Record<string, unknown> };
 }
 
+function consumeRolloutLines(
+  surface: "history" | "history-backup",
+  path: string,
+  partial: string,
+  first: Record<string, unknown> | undefined,
+  latest: Record<string, unknown> | undefined,
+): NativeRoutedResidueResult | { kind: "continue"; partial: string; first: Record<string, unknown> | undefined; latest: Record<string, unknown> | undefined } {
+  let rest = partial;
+  let newline = rest.indexOf("\n");
+  while (newline !== -1) {
+    const line = rest.slice(0, newline);
+    rest = rest.slice(newline + 1);
+    if (line.trim()) {
+      const payload = rolloutSessionMetaPayload(line);
+      if (payload.kind === "malformed") {
+        return indeterminate(surface, path, payload.reason);
+      }
+      if (payload.payload !== null) {
+        first ??= payload.payload;
+        latest = payload.payload;
+      }
+    }
+    newline = rest.indexOf("\n");
+  }
+  return { kind: "continue", partial: rest, first, latest };
+}
+
 function classifyToml(
   surface: "config" | "profile",
   path: string,
@@ -416,7 +443,7 @@ function classifyReferencedRollout(
         `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
       );
     }
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
     const buffer = Buffer.allocUnsafe(ROLLOUT_READ_CHUNK_BYTES);
     while (totalRead < opened.size) {
       const remaining = Math.min(buffer.length, opened.size - totalRead);
@@ -429,24 +456,18 @@ function classifyReferencedRollout(
       }
       totalRead += count;
       partial += decoder.decode(buffer.subarray(0, count), { stream: true });
-      let newline = partial.indexOf("\n");
-      while (newline !== -1) {
-        const line = partial.slice(0, newline);
-        partial = partial.slice(newline + 1);
-        if (line.trim()) {
-          const payload = rolloutSessionMetaPayload(line);
-          if (payload.kind === "malformed") {
-            return indeterminate(surface, resolved.path, payload.reason);
-          }
-          if (payload.payload !== null) {
-            first ??= payload.payload;
-            latest = payload.payload;
-          }
-        }
-        newline = partial.indexOf("\n");
-      }
+      const consumed = consumeRolloutLines(surface, resolved.path, partial, first, latest);
+      if (consumed.kind !== "continue") return consumed;
+      partial = consumed.partial;
+      first = consumed.first;
+      latest = consumed.latest;
     }
     partial += decoder.decode();
+    const consumed = consumeRolloutLines(surface, resolved.path, partial, first, latest);
+    if (consumed.kind !== "continue") return consumed;
+    partial = consumed.partial;
+    first = consumed.first;
+    latest = consumed.latest;
     if (partial.trim()) {
       const payload = rolloutSessionMetaPayload(partial);
       if (payload.kind === "malformed") {
@@ -460,6 +481,10 @@ function classifyReferencedRollout(
     const after = fstatSync(handle);
     if (!sameStat(resolved.stat, after)) {
       return indeterminate(surface, resolved.path, "rollout changed while it was being observed");
+    }
+    const pathAfter = statSync(resolved.path);
+    if (!sameStat(resolved.stat, pathAfter)) {
+      return indeterminate(surface, resolved.path, "rollout pathname was replaced while it was being observed");
     }
   } catch (error) {
     if (errorCode(error) === "ENOENT") {

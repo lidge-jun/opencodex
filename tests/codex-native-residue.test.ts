@@ -700,6 +700,18 @@ test("an oversized referenced rollout is indeterminate without being loaded", ()
   });
 });
 
+test("a BOM-prefixed rollout record is indeterminate", () => {
+  createHistoryDatabase("openai");
+  writeFileSync(pathInCodexHome("rollout.jsonl"), `\uFEFF${sessionMeta("thread-1", "opencodex")}\n`);
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history",
+    path: pathInCodexHome("rollout.jsonl"),
+    reason: expect.stringContaining("malformed rollout JSONL"),
+  });
+});
+
 for (const fixture of [
   {
     name: "missing",
