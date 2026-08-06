@@ -1148,6 +1148,7 @@ export const de: Record<TKey, string> = {
   "api.clientConfig.downloadedAnnounce": "{filename} heruntergeladen. Es hat sich noch nichts geändert — führe die Datei selbst in {destination} ein.",
   "api.clientConfig.whereDisclosure": "Wohin diese Datei gehört",
   "api.clientConfig.whereBody": "Der Pfad oben ist der globale Speicherort. Eine projektlokale Konfigurationsdatei im Arbeitsverzeichnis hat Vorrang, und der Schlüssel wird aus der in der Konfiguration genannten Umgebungsvariable gelesen — nie aus dieser Datei.",
+  "api.clientConfig.whereBodyLoopback": "Der Pfad oben ist der globale Speicherort. Eine projektlokale Konfigurationsdatei im Arbeitsverzeichnis hat Vorrang. Diese generierte Datei enthält einen nicht geheimen Loopback-Platzhalter, keine Anmeldedaten; eine Schlüssel-Umgebungsvariable ist nicht erforderlich.",
   "api.keysLoadFailed": "API-Schlüssel konnten nicht geladen werden.",
   "api.createFailed": "API-Schlüssel konnte nicht erstellt werden.",
   "api.deleteFailed": "API-Schlüssel konnte nicht gelöscht werden.",

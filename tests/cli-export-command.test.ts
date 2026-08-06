@@ -123,6 +123,36 @@ describe("ocx export --json (accept criterion 1)", () => {
     expect(ids).not.toContain("banned/hidden");
     expect(ids).toEqual(["anthropic/claude-opus-5", "custom/no-context", "gpt-5.6-luna"]);
   });
+
+  test("Codex Direct omits custom rows owned by the canonical OpenAI provider", async () => {
+    const proxy = fakeProxy([
+      ...ROWS,
+      {
+        provider: "openai",
+        id: "custom-direct",
+        namespaced: "openai/custom-direct",
+        custom: true,
+        disabled: false,
+      },
+    ]);
+    const directConfig = config({
+      providers: {
+        mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" },
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+      },
+    });
+    const result = await run(["--client", "pi", "--json"], {
+      baseUrl: proxy.baseUrl,
+      config: directConfig,
+    });
+    const parsed = JSON.parse(result.stdout) as { providers: Record<string, { models: Array<{ id: string }> }> };
+    expect(parsed.providers.opencodex!.models.map(model => model.id)).not.toContain("openai/custom-direct");
+  });
 });
 
 describe("ocx export human output (accept criterion 2)", () => {
@@ -144,6 +174,18 @@ describe("ocx export human output (accept criterion 2)", () => {
     const result = await run(["--client", "pi"], { baseUrl: proxy.baseUrl });
     expect(result.stdout).toContain(join(".pi", "agent", "models.json"));
     expect(result.stdout).toContain("loopback needs no key");
+  });
+
+  test("Pi counts only models emitted by its serializer", async () => {
+    const proxy = fakeProxy([
+      { provider: "text", id: "limited", namespaced: "text/limited", disabled: false, contextWindow: 64_000, inputModalities: ["text"] },
+      { provider: "text", id: "no-context", namespaced: "text/no-context", disabled: false, inputModalities: ["text"] },
+      { provider: "audio", id: "only", namespaced: "audio/only", disabled: false, inputModalities: ["audio"] },
+    ]);
+    const result = await run(["--client", "pi"], { baseUrl: proxy.baseUrl });
+
+    expect(result.stdout).not.toContain("\"id\": \"audio/only\"");
+    expect(result.stdout).toContain("2 models; 1 omit context limits");
   });
 });
 

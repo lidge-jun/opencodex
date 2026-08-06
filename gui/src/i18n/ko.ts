@@ -1175,6 +1175,7 @@ export const ko: Record<TKey, string> = {
   "api.clientConfig.downloadedAnnounce": "{filename} 파일을 다운로드했습니다. 아직 아무것도 바뀌지 않았으니 {destination}에 직접 병합하세요.",
   "api.clientConfig.whereDisclosure": "이 파일이 들어갈 위치",
   "api.clientConfig.whereBody": "위 경로는 전역 설정 경로입니다. 작업 디렉터리의 프로젝트 설정 파일이 우선하며, 키는 설정에 적힌 환경 변수에서 읽고 이 파일에는 저장되지 않습니다.",
+  "api.clientConfig.whereBodyLoopback": "위 경로는 전역 설정 경로입니다. 작업 디렉터리의 프로젝트 설정 파일이 우선합니다. 이 생성 파일에 저장되는 값은 인증 정보가 아니라 비밀이 아닌 루프백 자리표시자이며, 키 환경 변수는 필요하지 않습니다.",
   "api.keysLoadFailed": "API 키를 불러오지 못했습니다.",
   "api.createFailed": "API 키를 만들지 못했습니다.",
   "api.deleteFailed": "API 키를 삭제하지 못했습니다.",

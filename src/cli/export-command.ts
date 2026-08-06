@@ -64,12 +64,6 @@ export interface ExportCommandDeps extends RuntimeApiDeps {
  */
 type ExportProxyModelRow = OpencodeProxyModelRow & { inputModalities?: string[] };
 
-/** Same authoritativeness rule the serializers apply, for the degraded-count line. */
-function hasContextLimit(model: ExportModel): boolean {
-  return typeof model.contextWindow === "number"
-    && Number.isFinite(model.contextWindow)
-    && model.contextWindow > 0;
-}
 
 /**
  * Export rows from proxy `/api/models` rows.
@@ -182,7 +176,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     // stderr, so `--json` stdout stays byte-exact for a redirect.
     if (out !== undefined && wantsJson) console.error(`Wrote ${out}`);
 
-    const degraded = models.filter(model => !hasContextLimit(model)).length;
+    const summary = spec.summarize(clientConfig);
     // `--json` keeps emitting the DOCUMENT at the top level: a script that
     // pipes it into a config file must not have to unwrap an envelope we added
     // for our own convenience. Format metadata rides in the human lines below.
@@ -193,7 +187,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
       `Destination: ${spec.destination(process.env)}`,
       "Merge this provider block into that file; do not replace it.",
       `Before launching: ${spec.exportHint}`,
-      `${models.length} model${models.length === 1 ? "" : "s"}; ${degraded} omit context limits (the client applies its own defaults).`,
+      `${summary.modelCount} model${summary.modelCount === 1 ? "" : "s"}; ${summary.modelsWithoutLimits} omit context limits (the client applies its own defaults).`,
     ]);
   });
 }

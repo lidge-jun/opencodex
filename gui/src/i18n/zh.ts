@@ -1168,6 +1168,7 @@ export const zh: Record<TKey, string> = {
   "api.clientConfig.downloadedAnnounce": "已下载 {filename}。目前还没有任何改动，请自行将其合并到 {destination}。",
   "api.clientConfig.whereDisclosure": "该文件应放在哪里",
   "api.clientConfig.whereBody": "上面的路径是全局配置位置。工作目录中的项目级配置文件优先级更高；密钥由配置中指定的环境变量读取，不会写入该文件。",
+  "api.clientConfig.whereBodyLoopback": "上面的路径是全局配置位置。工作目录中的项目级配置文件优先级更高。该生成文件保存的是非机密的回环占位符，而不是凭据；无需设置密钥环境变量。",
   "api.keysLoadFailed": "无法加载 API 密钥。",
   "api.createFailed": "无法创建 API 密钥。",
   "api.deleteFailed": "无法删除 API 密钥。",

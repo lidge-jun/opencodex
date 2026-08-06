@@ -1556,6 +1556,7 @@ export const ja: Record<TKey, string> = {
   "api.clientConfig.downloadedAnnounce": "{filename} をダウンロードしました。まだ何も変わっていません。{destination} に自分でマージしてください。",
   "api.clientConfig.whereDisclosure": "このファイルの置き場所",
   "api.clientConfig.whereBody": "上のパスはグローバル設定の場所です。作業ディレクトリのプロジェクト設定ファイルが優先され、キーは設定に書かれた環境変数から読み込まれ、このファイルには保存されません。",
+  "api.clientConfig.whereBodyLoopback": "上のパスはグローバル設定の場所です。作業ディレクトリのプロジェクト設定ファイルが優先されます。この生成ファイルに保存されるのは秘密情報ではないループバック用プレースホルダーであり、認証情報ではありません。キー用の環境変数は不要です。",
   "api.keysLoadFailed": "APIキーを読み込めませんでした。",
   "api.createFailed": "APIキーを作成できませんでした。",
   "api.deleteFailed": "APIキーを削除できませんでした。",

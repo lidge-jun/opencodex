@@ -291,20 +291,21 @@ export async function fetchOpencodeProxyModels(
 }
 
 /**
- * Visible OpenCode catalog entries from proxy /api/models rows. Disabled rows are omitted;
- * native rows are omitted in Codex Direct mode.
+ * Visible OpenCode catalog entries from proxy /api/models rows. Disabled rows
+ * are omitted. In Codex Direct mode, every canonical OpenAI row is omitted:
+ * native and custom Direct routes both require the caller's ChatGPT bearer.
  */
 export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
   config: OcxConfig,
 ): OpencodeCatalogModel[] {
-  const omitNative = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
+  const omitDirectOpenAi = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
   const seen = new Set<string>();
   const catalog: OpencodeCatalogModel[] = [];
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
     if (!namespaced || row.disabled === true) continue;
-    if (omitNative && row.native === true) continue;
+    if (omitDirectOpenAi && row.provider === "openai") continue;
     if (seen.has(namespaced)) continue;
     seen.add(namespaced);
     catalog.push({

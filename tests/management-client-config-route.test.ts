@@ -158,7 +158,7 @@ describe("GET /api/client-config", () => {
     expect(provider.models.map(model => model.id)).toContain("a/m1");
   }, 15_000);
 
-  test("pi omits native rows in Codex Direct mode", async () => {
+  test("pi omits every canonical OpenAI row in Codex Direct mode", async () => {
     const poolConfig = baseConfig();
     const nativeIds = new Set(nativeModelRows(poolConfig).map(row => row.slug));
     const pool = await (await clientConfigApi(poolConfig, "?client=pi")).json() as ClientConfigEnvelope;
@@ -176,11 +176,18 @@ describe("GET /api/client-config", () => {
           disabled: true,
         },
       },
+      customModels: [
+        { id: "direct-custom", provider: "openai", modelId: "custom-direct" },
+        { id: "routed-custom", provider: "a", modelId: "custom-routed" },
+      ],
     });
     const direct = await (await clientConfigApi(directConfig, "?client=pi")).json() as ClientConfigEnvelope;
     const directModels = (direct.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID].models;
+    const directIds = directModels.map(model => model.id);
     expect(directModels.some(model => nativeIds.has(model.id))).toBe(false);
-    expect(directModels.map(model => model.id)).toContain("a/m1");
+    expect(directIds).not.toContain("openai/custom-direct");
+    expect(directIds).toContain("a/custom-routed");
+    expect(directIds).toContain("a/m1");
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {

@@ -1611,6 +1611,7 @@ export const en = {
   "api.clientConfig.downloadedAnnounce": "Downloaded {filename}. Nothing changed yet — merge it into {destination} yourself.",
   "api.clientConfig.whereDisclosure": "Where this file goes",
   "api.clientConfig.whereBody": "The destination above is the global path. A project-local config file in the working directory takes precedence over it, and the client reads the key from the environment variable named in the config — never from this file.",
+  "api.clientConfig.whereBodyLoopback": "The destination above is the global path. A project-local config file in the working directory takes precedence over it. This generated file stores a non-secret loopback placeholder, not a credential; no key environment variable is needed.",
   "api.keysLoadFailed": "Could not load API keys.",
   "api.createFailed": "Could not create API key.",
   "api.deleteFailed": "Could not delete API key.",
