@@ -34,8 +34,12 @@ import { env, platform } from "node:process";
 
 const hardenedDirectories = new Map<string, HardenedIdentity>();
 const hardenedPaths = new Map<string, HardenedIdentity>();
-/** Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them. */
-const timedOutPaths = new Set<string>();
+/**
+ * Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them.
+ * `false` means one explicitly authorized recovery attempt remains; `true` means
+ * that attempt was consumed. Ordinary callers never consume it.
+ */
+const timedOutPaths = new Map<string, boolean>();
 
 /**
  * The memo value: `object:freshness` for a file a harden was actually attributed
@@ -212,6 +216,12 @@ export interface HardenOptions {
    * Must NOT be a parent directory — directory ACLs are not authoritative for new files.
    */
   timeoutMemoKey?: string;
+  /**
+   * Consume the one recovery attempt for a previously timed-out memo key.
+   * Only a caller that owns its own single-flight and bounded retry policy should
+   * set this. It never clears or bypasses an already-consumed timeout memo.
+   */
+  retryTimedOutOnce?: boolean;
 }
 
 /**
@@ -524,6 +534,50 @@ function isTimeoutError(error: unknown): boolean {
     && String((error as NodeJS.ErrnoException).code) === "ETIMEDOUT";
 }
 
+/** Preserve only the bounded machine-readable cause on a sanitized public error. */
+function sanitizedAclError(diagnostics: string, cause: unknown): NodeJS.ErrnoException {
+  const error = new Error(diagnostics) as NodeJS.ErrnoException;
+  const code = cause && typeof cause === "object" && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  if (code === "ETIMEDOUT" || code === "EICACLS" || code === "EACCES" || code === "EPERM") {
+    error.code = code;
+  }
+  return error;
+}
+
+function previousTimeoutError(retryConsumed: boolean): NodeJS.ErrnoException {
+  if (retryConsumed) {
+    const error = new Error(
+      "ACL hardening skipped — the previous timeout recovery was already consumed",
+    ) as NodeJS.ErrnoException;
+    error.code = "EACLRETRYEXHAUSTED";
+    return error;
+  }
+  return sanitizedAclError(
+    "ACL hardening skipped — previous attempt timed out",
+    Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+  );
+}
+
+/** Consume, but never reset, the single explicit recovery attempt for this key. */
+function timeoutMemoErrorIfBlocked(
+  memoKey: string,
+  opts: HardenOptions,
+): NodeJS.ErrnoException | null {
+  const retryConsumed = timedOutPaths.get(memoKey);
+  if (retryConsumed === undefined) return null;
+  if (opts.retryTimedOutOnce && retryConsumed === false) {
+    timedOutPaths.set(memoKey, true);
+    return null;
+  }
+  return previousTimeoutError(retryConsumed);
+}
+
+function recordTimeout(memoKey: string): void {
+  if (!timedOutPaths.has(memoKey)) timedOutPaths.set(memoKey, false);
+}
+
 /**
  * Diagnostic-only post-timeout probe (never promotes to ok:true — a clean /findsid
  * does not prove inheritance was disabled or the user grant ran; only a fully
@@ -588,10 +642,10 @@ function hardenEntry(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
-  if (timedOutPaths.has(memoKey)) {
-    const diagnostics = "ACL hardening skipped — previous attempt timed out";
-    if (opts.required) throw new Error(diagnostics);
-    return { ok: false, diagnostics };
+  const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
+  if (timeoutMemoError) {
+    if (opts.required) throw timeoutMemoError;
+    return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -606,6 +660,7 @@ function hardenEntry(
         if (opts.required) throw new Error(SUBSTITUTED_DIAGNOSTIC);
         return { ok: false, diagnostics: SUBSTITUTED_DIAGNOSTIC };
       }
+      timedOutPaths.delete(memoKey);
       return { ok: true };
     } catch (err) {
       // A substitution is not a transient icacls stall; do not spend the retry on it.
@@ -617,14 +672,14 @@ function hardenEntry(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(memoKey);
+    recordTimeout(memoKey);
     const state = describeAclStateAfterTimeout(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    if (opts.required) throw new Error(annotated);
+    if (opts.required) throw sanitizedAclError(annotated, lastErr);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
-  if (opts.required) throw new Error(diagnostics);
+  if (opts.required) throw sanitizedAclError(diagnostics, lastErr);
   return { ok: false, diagnostics };
 }
 
@@ -639,10 +694,10 @@ async function hardenEntryAsync(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
-  if (timedOutPaths.has(memoKey)) {
-    const diagnostics = "ACL hardening skipped — previous attempt timed out";
-    if (opts.required) throw new Error(diagnostics);
-    return { ok: false, diagnostics };
+  const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
+  if (timeoutMemoError) {
+    if (opts.required) throw timeoutMemoError;
+    return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -656,6 +711,7 @@ async function hardenEntryAsync(
         if (opts.required) throw new Error(SUBSTITUTED_DIAGNOSTIC);
         return { ok: false, diagnostics: SUBSTITUTED_DIAGNOSTIC };
       }
+      timedOutPaths.delete(memoKey);
       return { ok: true };
     } catch (err) {
       if (err instanceof Error && err.message === SUBSTITUTED_DIAGNOSTIC) throw err;
@@ -666,14 +722,14 @@ async function hardenEntryAsync(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(memoKey);
+    recordTimeout(memoKey);
     const state = await describeAclStateAfterTimeoutAsync(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    if (opts.required) throw new Error(annotated);
+    if (opts.required) throw sanitizedAclError(annotated, lastErr);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
-  if (opts.required) throw new Error(diagnostics);
+  if (opts.required) throw sanitizedAclError(diagnostics, lastErr);
   return { ok: false, diagnostics };
 }
 

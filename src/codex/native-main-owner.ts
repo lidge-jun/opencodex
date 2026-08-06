@@ -53,6 +53,7 @@ interface OwnerEntry {
   timer?: ReturnType<typeof setTimeout>;
   drive?: Promise<void>;
   activeOperations: Set<Promise<unknown>>;
+  aclTimeoutRetryUsed: boolean;
   closing: boolean;
 }
 
@@ -149,8 +150,13 @@ async function prepareOwnerDatabase(entry: OwnerEntry): Promise<void> {
     // here still exercises the host's branch, and the production default — the
     // thing that actually hardens the owner's lock file — stays unproved. An
     // audit replaced this fallback with a no-op and 91 tests stayed green.
-    await (entry.options.hardenPath
-      ?? ((target: string) => hardenStableLockFile(target, entry.options.platform)))(entry.lockPath);
+    if (entry.options.hardenPath) {
+      await entry.options.hardenPath(entry.lockPath);
+    } else {
+      await hardenStableLockFile(entry.lockPath, entry.options.platform, {
+        retryTimedOutOnce: entry.aclTimeoutRetryUsed,
+      });
+    }
     assertStableLockFile(entry.lockPath, file);
     entry.file = file;
     file = undefined;
@@ -196,6 +202,13 @@ async function drive(entry: OwnerEntry, generation: number): Promise<void> {
       scheduleRetry(entry, generation);
       return;
     }
+    if (errorCode(error) === "ETIMEDOUT" && !entry.aclTimeoutRetryUsed) {
+      entry.aclTimeoutRetryUsed = true;
+      // A timeout is neither ownership contention nor a permanent ACL denial.
+      // Stay fail-closed in `acquiring` and spend exactly one fresh-budget retry.
+      scheduleRetry(entry, generation);
+      return;
+    }
     publish(entry, { status: "unavailable", homeId: entry.context.homeId, reason: "lock-unavailable" });
   }
 }
@@ -222,6 +235,7 @@ function entryFor(context: NativeProfileContext, options: NativeMainOwnerOptions
     snapshot: { status: "acquiring", homeId: context.homeId },
     listeners: new Set(),
     activeOperations: new Set(),
+    aclTimeoutRetryUsed: false,
     prepared: false,
     closing: false,
   };
@@ -239,7 +253,7 @@ export function retainNativeMainOwner(
     throw new NativeProfileError("NATIVE_MAIN_OWNER_BUSY", "Native-main ownership is closing.", 503, true);
   }
   entry.refs += 1;
-  if (!entry.drive && !entry.database && !entry.timer) {
+  if (!entry.drive && !entry.database && !entry.timer && entry.snapshot.status !== "unavailable") {
     const generation = entry.generation;
     entry.drive = drive(entry, generation).finally(() => {
       if (entry.generation === generation) entry.drive = undefined;

@@ -576,7 +576,15 @@ describe("async hardenSecretPath (issue #612)", () => {
 
   test("async permission failure still throws on required paths", async () => {
     setAsyncIcaclsRunnerForTests(async () => denied);
-    await expect(hardenSecretPathAsync(secretFile(), { required: true })).rejects.toThrow(/EICACLS/);
+    let caught: unknown;
+    try {
+      await hardenSecretPathAsync(secretFile(), { required: true });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as NodeJS.ErrnoException).code).toBe("EICACLS");
+    expect((caught as Error).message).toMatch(/EICACLS/);
   });
 
   test("timeoutMemoKey shares the timeout cache across distinct temp paths", async () => {
@@ -596,6 +604,66 @@ describe("async hardenSecretPath (issue #612)", () => {
     });
     await expect(hardenSecretPathAsync(tempB, { required: true, timeoutMemoKey: dest })).rejects.toThrow(/skipped/);
     expect(calls).toBe(0); // destination-keyed memo; not a parent-directory shortcut
+  });
+
+  test("a required timeout preserves ETIMEDOUT and one explicit recovery gets a fresh budget", async () => {
+    const target = secretFile("one-time-recovery.json");
+    let now = 0;
+    let grantCalls = 0;
+    setNowForTests(() => now);
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (args.includes("/grant:r")) grantCalls += 1;
+      if (grantCalls === 1) {
+        now = 5_000; // exhaust the first call's entire budget
+        return timeout;
+      }
+      return ok;
+    });
+
+    let first: unknown;
+    try {
+      await hardenSecretPathAsync(target, { required: true });
+    } catch (error) {
+      first = error;
+    }
+    expect((first as NodeJS.ErrnoException).code).toBe("ETIMEDOUT");
+    expect((first as Error).message).not.toContain(target);
+    expect(timedOutSecretPathCountForTests()).toBe(1);
+
+    await expect(hardenSecretPathAsync(target, {
+      required: true,
+      retryTimedOutOnce: true,
+    })).resolves.toEqual({ ok: true });
+    expect(grantCalls).toBe(2);
+    expect(timedOutSecretPathCountForTests()).toBe(0);
+  });
+
+  test("the explicit timeout recovery cannot be consumed more than once", async () => {
+    const target = secretFile("consumed-recovery.json");
+    let now = 0;
+    let grantCalls = 0;
+    setNowForTests(() => now);
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (args.includes("/grant:r")) grantCalls += 1;
+      now += 5_000;
+      return timeout;
+    });
+
+    await expect(hardenSecretPathAsync(target, { required: true })).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+    });
+    await expect(hardenSecretPathAsync(target, {
+      required: true,
+      retryTimedOutOnce: true,
+    })).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    const callsAfterRecovery = grantCalls;
+    await expect(hardenSecretPathAsync(target, {
+      required: true,
+      retryTimedOutOnce: true,
+    })).rejects.toMatchObject({ code: "EACLRETRYEXHAUSTED" });
+    expect(grantCalls).toBe(callsAfterRecovery);
+    expect(grantCalls).toBe(2);
+    expect(timedOutSecretPathCountForTests()).toBe(1);
   });
 
   test("optional timeout memo does not poison a later required harden of the same path", () => {
@@ -1093,7 +1161,12 @@ describe("hardenStableLockFile — the production call edge, not just the primit
     const lockPath = join(testDir, "coordinator-posix.sqlite");
     writeFileSync(lockPath, "x", "utf8");
     chmodSync(lockPath, 0o644);
-    expect(statSync(lockPath).mode & 0o777).toBe(0o644);
+    // Windows does not expose POSIX mode bits faithfully even when this test
+    // forces the caller's platform branch to Linux. Keep the real mode proof on
+    // POSIX hosts; on Windows this case still proves no ACL command is invoked.
+    if (process.platform !== "win32") {
+      expect(statSync(lockPath).mode & 0o777).toBe(0o644);
+    }
 
     let calls = 0;
     setAsyncIcaclsRunnerForTests(async () => {
@@ -1102,7 +1175,9 @@ describe("hardenStableLockFile — the production call edge, not just the primit
     });
     try {
       await hardenStableLockFile(lockPath, "linux");
-      expect(statSync(lockPath).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        expect(statSync(lockPath).mode & 0o777).toBe(0o600);
+      }
       expect(calls).toBe(0);
     } finally {
       setAsyncIcaclsRunnerForTests(null);
@@ -1141,6 +1216,7 @@ describe("the production default hardener is reached, with the resolved platform
     run: (codexHome: string) => Promise<void>,
     onGrant: () => void = () => {},
     gate?: Promise<void>,
+    resultFor?: (args: string[]) => IcaclsResult | Promise<IcaclsResult>,
   ): Promise<string[][]> => {
     const seen: string[][] = [];
     setPlatformForTests("win32");
@@ -1152,7 +1228,9 @@ describe("the production default hardener is reached, with the resolved platform
       // A deferred runner lets a test observe the window WHILE hardening is in
       // flight, which is the only way to assert nothing was published early.
       if (gate) await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return resultFor
+        ? await resultFor(args)
+        : { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     const codexHome = mkdtempSync(join(tmpdir(), "ocx-default-harden-"));
     try {
@@ -1236,6 +1314,49 @@ describe("the production default hardener is reached, with the resolved platform
     }, () => {}, aclBlocked);
     expect(seen.some(args => args.includes("/grant:r"))).toBe(true);
     expect(seen.every(args => args[0] === expected)).toBe(true);
+  });
+
+  test("the production owner default consumes one timeout memo and then acquires", async () => {
+    resetHardenedStateForTests();
+    let now = 0;
+    let grantAttempts = 0;
+    const trace: string[] = [];
+    let expected = "";
+    setNowForTests(() => now);
+    try {
+      const seen = await forcedWindows(async codexHome => {
+        expected = join(codexHome, NATIVE_MAIN_OWNER_DB);
+        const owner = retainNativeMainOwner(
+          { codexHome } as never,
+          { platform: "win32", retryMs: 10 },
+        );
+        const unsubscribe = owner.subscribe(snapshot => { trace.push(snapshot.status); });
+        try {
+          const deadline = Date.now() + 5_000;
+          while (owner.snapshot().status === "acquiring" && Date.now() < deadline) {
+            await Bun.sleep(10);
+          }
+          expect(owner.snapshot()).toMatchObject({ status: "held" });
+        } finally {
+          unsubscribe();
+          await owner.release();
+        }
+      }, () => {}, undefined, args => {
+        if (args.includes("/grant:r")) {
+          grantAttempts += 1;
+          if (grantAttempts === 1) {
+            now = 5_000;
+            return { success: false, exitCode: null, timedOut: true, stdout: "" };
+          }
+        }
+        return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      });
+      expect(trace).toEqual(["acquiring", "held"]);
+      expect(grantAttempts).toBe(2);
+      expect(seen.every(args => args[0] === expected)).toBe(true);
+    } finally {
+      setNowForTests(null);
+    }
   });
 });
 
@@ -1324,6 +1445,7 @@ describe("a required hardening failure stops the operation it protects", () => {
     await forcedWindowsFailure(async codexHome => {
       expected = join(codexHome, NATIVE_MAIN_OWNER_DB);
       const owner = retainNativeMainOwner({ codexHome } as never, { platform: "win32", retryMs: 10 });
+      let second: ReturnType<typeof retainNativeMainOwner> | undefined;
       const trace: string[] = [];
       const unsubscribe = owner.subscribe(snapshot => { trace.push(snapshot.status); });
       try {
@@ -1353,8 +1475,13 @@ describe("a required hardening failure stops the operation it protects", () => {
         expect(hardenAttempts).toBe(1);
         // Exactly one attempt, against exactly the owner's own database.
         expect(targets).toEqual([expected]);
+        second = retainNativeMainOwner({ codexHome } as never, { platform: "win32", retryMs: 10 });
+        await Bun.sleep(60);
+        expect(second.snapshot()).toMatchObject({ status: "unavailable" });
+        expect(hardenAttempts).toBe(1);
       } finally {
         unsubscribe();
+        if (second) await second.release();
         await owner.release();
       }
     }, args => { hardenAttempts += 1; targets.push(args[0]!); });

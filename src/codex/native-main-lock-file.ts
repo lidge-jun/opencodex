@@ -140,12 +140,16 @@ export function assertStableLockFile(path: string, handle: StableLockFile): void
 export async function hardenStableLockFile(
   path: string,
   platform: NodeJS.Platform = process.platform,
+  options: { retryTimedOutOnce?: boolean } = {},
 ): Promise<void> {
   if (platform === "win32") {
     // Best-effort here: POSIX modes are not authoritative on NTFS, and the
     // required ACL hardening below is what actually decides.
     try { chmodSync(path, 0o600); } catch { /* ACL below is authoritative. */ }
-    await hardenSecretPathAsync(path, { required: true });
+    await hardenSecretPathAsync(path, {
+      required: true,
+      retryTimedOutOnce: options.retryTimedOutOnce,
+    });
     return;
   }
   // On POSIX the mode IS the mechanism, so a failure may not be swallowed.
