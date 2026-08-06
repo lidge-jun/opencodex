@@ -193,6 +193,9 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
 火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
+内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE
+流式输出。如果该模型已经完成全部输出项却缺少最终 Responses 事件，opencodex 会应用模型级
+5 秒宽限修复；不完整或格式异常的流会以 incomplete 结束，不会被误报为成功。
 
 > **三条火山方舟计费线路：**`volcengine` 是按量付费方舟 API，`volcengine-coding-plan`
 > 消耗 Coding Plan 额度，`volcengine-agent-plan` 消耗 Agent Plan 额度。密钥与端点需要属于

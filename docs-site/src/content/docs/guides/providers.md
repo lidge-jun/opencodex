@@ -279,6 +279,10 @@ free-experimentation model.
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
 Volcengine Agent Plan uses its native Responses endpoint through `openai-responses`.
+The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Responses endpoint and
+keeps upstream SSE streaming enabled. If that model finishes every output item but omits the final
+Responses event, opencodex applies a five-second model-scoped grace repair; malformed or partial
+streams close as incomplete rather than being reported as successful.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent
