@@ -1267,7 +1267,9 @@ const configSchema = z.object({
     if (modelCostsError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelCosts"],
+        // The provider key is caller-controlled and can be token-shaped; redact it
+        // before schemaDiagnosticsError serializes the path (ocx config validate/import).
+        path: ["providers", redactSecretString(name), "modelCosts"],
         message: modelCostsError,
       });
     }

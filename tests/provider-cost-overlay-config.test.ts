@@ -7,6 +7,7 @@ import {
   loadConfig,
   providerModelCostsConfigError,
   saveConfig,
+  validateConfigCandidate,
 } from "../src/config";
 import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
 import { activeUserCostOverlays, refreshUserCostOverlays, userCostOverlayVersion } from "../src/usage/user-cost-overlays";
@@ -67,6 +68,25 @@ describe("providerModelCostsConfigError", () => {
     });
     expect(error).not.toContain("sk-abcdef1234567890");
     expect(error).toContain("[REDACTED]");
+  });
+
+  test("validateConfigCandidate redacts a token-shaped provider name in modelCosts schema errors", () => {
+    const result = validateConfigCandidate({
+      port: 12345,
+      providers: {
+        "sk-abcdef1234567890": {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelCosts: { m: { input: -1, output: 1, cacheRead: 0, cacheWrite: 0 } },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain("sk-abcdef1234567890");
+      expect(result.error).toContain("[REDACTED]");
+      expect(result.error).toContain("modelCosts");
+    }
   });
 });
 
