@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
+import { usageLogPath } from "../src/usage/log";
 import {
   addRequestLog,
   clearRequestLogsForTests,
@@ -173,6 +174,34 @@ describe("GET /api/logs display metrics", () => {
     }));
     const [dto] = await readLogs();
     expect(dto!.displayMetrics.cost).toEqual({ kind: "unavailable", reason: "invalid_cache_breakdown" });
+  });
+
+  test("fixture usage rows land in the scratch home, never the default location", () => {
+    // Pins the safety property this file's isolation exists for: addRequestLog
+    // persists to usage.jsonl, so if the scratch-home hook is ever dropped (or a
+    // future test logs before it runs), a bare `bun test <file>` from outside the
+    // repo writes fixture rows into the developer's real ~/.opencodex log.
+    const requestId = "safety-pin-usage-log-target";
+    addRequestLog(baseEntry({ requestId }));
+
+    const resolvedTarget = usageLogPath();
+    expect(resolvedTarget).toBe(join(testDir, "usage.jsonl"));
+    expect(readFileSync(resolvedTarget, "utf-8")).toContain(requestId);
+
+    // The default location (what the resolver returns with no OPENCODEX_HOME
+    // override) must never be the write target for this suite.
+    const previousHome = process.env.OPENCODEX_HOME;
+    delete process.env.OPENCODEX_HOME;
+    try {
+      const defaultTarget = usageLogPath();
+      expect(defaultTarget).not.toBe(resolvedTarget);
+      if (existsSync(defaultTarget)) {
+        expect(readFileSync(defaultTarget, "utf-8")).not.toContain(requestId);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
