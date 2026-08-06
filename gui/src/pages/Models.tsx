@@ -46,6 +46,7 @@ import {
   type V2Status,
 } from "./models-shared";
 import { EmptyProviderHint } from "./models-provider-hints";
+import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 
 type CachedModelsPage = {
@@ -174,6 +175,10 @@ export default function Models({ apiBase }: { apiBase: string }) {
     () => activeModelOptions(models, disabled, selectedModels ?? {}, t),
     [models, disabled, selectedModels, t],
   );
+  const shadowCallOptions = useMemo(() => {
+    const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
+    return shadowCallModelOptions(models.filter(model => activeNamespaced.has(model.namespaced)), shadowCall?.model);
+  }, [models, shadowCall?.model, shadowModelOptions]);
 
   const loadShadowCall = useCallback(async () => {
     try {
@@ -912,7 +917,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
           <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={[{ value: "", label: "\u2014" }, ...shadowModelOptions]} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
           </div>
         </div>
 
