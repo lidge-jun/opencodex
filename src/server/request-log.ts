@@ -68,6 +68,8 @@ export interface RequestLogContext {
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
   resolvedModel?: string;
+  /** Internal: a bridge emitted a client-facing selector; keep the physical routed model in logs. */
+  preserveResolvedModelFromRoute?: boolean;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   attempts?: PersistedUsageAttempt[];
@@ -512,7 +514,11 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
     : payload;
   if (!source || typeof source !== "object") return;
   const model = (source as { model?: unknown }).model;
-  if (typeof model === "string" && model.trim()) logCtx.resolvedModel = model;
+  if (
+    !logCtx.preserveResolvedModelFromRoute
+    && typeof model === "string"
+    && model.trim()
+  ) logCtx.resolvedModel = model;
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) logCtx.responseServiceTier = serviceTier;
   const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);

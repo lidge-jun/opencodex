@@ -98,7 +98,7 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { slugsEquivalent } from "../../providers/slug-codec";
+import { routedSlug, slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -864,6 +864,15 @@ async function applyFinalRouteRequestNormalization(args: {
 }): Promise<void> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
 
+  // Preserve the final Codex-facing selector before upstream route normalization.
+  // Bare routed response ids make Codex miss catalog context/compaction metadata.
+  const requestedProviderSeparator = parsed.modelId.indexOf("/");
+  const alreadyQualifiedForRoute = requestedProviderSeparator > 0
+    && parsed.modelId.slice(0, requestedProviderSeparator) === route.providerName;
+  parsed._responseModelId = route.providerName === "openai" || alreadyQualifiedForRoute
+    ? parsed.modelId
+    : routedSlug(route.providerName, route.modelId);
+
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
@@ -882,6 +891,13 @@ async function applyFinalRouteRequestNormalization(args: {
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  if (
+    parsed._responseModelId !== route.modelId
+    && route.provider.adapter !== "openai-responses"
+  ) {
+    logCtx.resolvedModel = route.modelId;
+    logCtx.preserveResolvedModelFromRoute = true;
+  }
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
@@ -2560,7 +2576,7 @@ async function handleResponsesInner(
         eventSource = preflight.stream;
       }
       const sseStream = bridgeToResponsesSSE(
-        eventSource, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        eventSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           runTurnAbort.abort();
           queue.close();
@@ -2612,7 +2628,7 @@ async function handleResponsesInner(
       }
     }
     let providerState: OcxProviderContinuationState | undefined;
-    const json = buildResponseJSON(events, parsed.modelId, {
+    const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -3254,7 +3270,7 @@ async function handleResponsesInner(
       : initialEventStream;
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     const sseStream = bridgeToResponsesSSE(
-      eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+      eventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
       {
         translatorBudget,
@@ -3314,7 +3330,7 @@ async function handleResponsesInner(
     }
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     let providerState: OcxProviderContinuationState | undefined;
-    const json = buildResponseJSON(events, parsed.modelId, {
+    const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,

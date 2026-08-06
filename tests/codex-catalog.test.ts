@@ -747,6 +747,31 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(row?.slug).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  test("adds a hidden bare Anthropic alias with routed context metadata", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-5",
+        owned_by: "anthropic",
+        contextWindow: 1_000_000,
+        maxInputTokens: 900_000,
+      },
+    ]);
+    const routed = entries.find(e => e.slug === "anthropic/claude-sonnet-5");
+    const compat = entries.find(e => e.slug === "claude-sonnet-5");
+
+    expect(routed).toBeDefined();
+    expect(compat).toMatchObject({
+      slug: "claude-sonnet-5",
+      display_name: "claude-sonnet-5",
+      visibility: "hide",
+      owned_by: "opencodex-routed-context-compat",
+      context_window: 1_000_000,
+      max_context_window: 1_000_000,
+      auto_compact_token_limit: 900_000,
+    });
+  });
+
   test("Command Code routed models relabel the picker row with distinguishable slugs", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "command-code", id: "deepseek/deepseek-v4-flash", owned_by: "command-code" },

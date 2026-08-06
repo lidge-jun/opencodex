@@ -47,6 +47,7 @@ describe("Codex catalog restore", () => {
       models: [
         { slug: "gpt-5.5" },
         { slug: "opencode-go/deepseek-v4-pro" },
+        { slug: "claude-sonnet-5", owned_by: "opencodex-routed-context-compat" },
         { slug: "user-native" },
       ],
     }, null, 2) + "\n");
@@ -58,7 +59,7 @@ describe("Codex catalog restore", () => {
     `);
 
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 2 });
+    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 2, kept: 2 });
     const slugs = JSON.parse(readFileSync(catalogPath, "utf8")).models.map((m: { slug: string }) => m.slug);
     expect(slugs).toEqual(["gpt-5.5", "user-native"]);
   }, { timeout: 15_000 });

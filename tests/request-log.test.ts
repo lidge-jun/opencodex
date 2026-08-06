@@ -619,6 +619,29 @@ describe("request log metadata", () => {
     });
   });
 
+  test("client-facing response selectors do not replace the physical routed model", async () => {
+    const entries: RequestLogEntry[] = [];
+    const logCtx: RequestLogContext = {
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      resolvedModel: "claude-sonnet-5",
+      preserveResolvedModelFromRoute: true,
+    };
+    const response = responseWithDeferredRequestLog(
+      new Response(JSON.stringify({
+        model: "anthropic/claude-sonnet-5",
+        status: "completed",
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+      "ocx-test-routed-model",
+      Date.now(),
+      logCtx,
+      entry => entries.push(entry),
+    );
+
+    expect(await response.json()).toMatchObject({ model: "anthropic/claude-sonnet-5" });
+    expect(entries[0]?.resolvedModel).toBe("claude-sonnet-5");
+  });
+
   test("deferred JSON logging captures reported usage", async () => {
     const entries: RequestLogEntry[] = [];
     const response = responseWithDeferredRequestLog(
