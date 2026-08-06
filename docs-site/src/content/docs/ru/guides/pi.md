@@ -71,8 +71,8 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 ## Заглушка Pi `apiKey`
 
-Pi обычно вызывает `/chat/completions` и отправляет настроенный `apiKey` как значение Bearer-
-авторизации. Поэтому сгенерированный блок помещает несекретный литерал `opencodex-loopback` в
+Pi обычно вызывает `/chat/completions` и отправляет настроенный `apiKey` как значение авторизации
+Bearer. Поэтому сгенерированный блок помещает несекретный литерал `opencodex-loopback` в
 обычное поле Pi `apiKey`.
 
 Этот литерал — не credential допуска прокси и не ключ upstream-провайдера. Loopback-прокси
