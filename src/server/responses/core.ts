@@ -1318,6 +1318,25 @@ async function handleResponsesInner(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
 ): Promise<Response> {
+  /**
+   * #875 mirror: the transport policy forced a bounded JSON upstream even though the client
+   * asked for SSE. Reframe the completed JSON as the canonical terminal SSE sequence —
+   * otherwise Codex's SSE parser hits EOF at the first byte ("stream closed before
+   * response.completed") and fails the turn. The passthrough branch already does this; the
+   * routed branches (runTurn and parseStream) need the same reframe (observed on deepseek
+   * compaction turns, where routedCompaction skips the passthrough reframe).
+   */
+  const reframeRoutedJsonToSseIfRequested = (json: Record<string, unknown>): Response | null => {
+    if (clientRequestedStream === true
+      && options.inboundTransport !== "websocket"
+      && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+      && route.provider.adapter === "openai-responses") {
+      const sseHeaders = new Headers({ "content-type": "text/event-stream", "cache-control": "no-store" });
+      return new Response(responsesJsonToSseBody(json), { status: 200, headers: sseHeaders });
+    }
+    return null;
+  };
+
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
@@ -2726,6 +2745,8 @@ async function handleResponsesInner(
         adapterNeedsForcedContinuation(adapter.name) ? { force: true } : undefined,
       );
     }
+    const reframed = reframeRoutedJsonToSseIfRequested(json);
+    if (reframed) return reframed;
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 
@@ -3429,6 +3450,8 @@ async function handleResponsesInner(
         activeAdapter.name === "kiro" ? { force: true } : undefined,
       );
     }
+    const reframed = reframeRoutedJsonToSseIfRequested(json);
+    if (reframed) return reframed;
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 

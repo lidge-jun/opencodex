@@ -9,6 +9,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../src/server/responses";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
+import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
 
@@ -106,5 +108,93 @@ describe("responses input-size guard", () => {
       input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
     });
     expect(upstreamCalls).toBe(1);
+  });
+});
+
+describe("routed compaction turn reframes bounded JSON to SSE", () => {
+  function seededDeepseekConfig(): OcxConfig {
+    const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
+    enrichProviderFromRegistry("deepseek", provider);
+    return {
+      port: 0,
+      defaultProvider: "deepseek",
+      providers: { deepseek: provider },
+    } as OcxConfig;
+  }
+
+  test("compaction_trigger with stream:true returns SSE with the compaction item and a terminal", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_up",
+        object: "response",
+        status: "completed",
+        model: "deepseek-v4-flash",
+        output: [{
+          id: "msg_1",
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text: "handoff summary text", annotations: [] }],
+        }],
+        usage: {
+          input_tokens: 3,
+          output_tokens: 2,
+          total_tokens: 5,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
+        },
+      });
+    }) as typeof fetch;
+    const res = await postResponses(seededDeepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      stream: true,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "hello" }] },
+        { type: "compaction_trigger" },
+      ],
+    });
+    expect(upstreamCalls).toBe(1);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const body = await res.text();
+    expect(body).toContain("response.completed");
+    expect(body).toContain('"type":"compaction"');
+    expect(body).toContain("[DONE]");
+    expect(body.indexOf('"type":"compaction"')).toBeLessThan(body.indexOf("response.completed"));
+  });
+
+  test("same compaction turn without stream:true stays JSON", async () => {
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_up",
+      object: "response",
+      status: "completed",
+      model: "deepseek-v4-flash",
+      output: [{
+        id: "msg_1",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text: "handoff summary text", annotations: [] }],
+      }],
+      usage: {
+        input_tokens: 3,
+        output_tokens: 2,
+        total_tokens: 5,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens_details: { reasoning_tokens: 0 },
+      },
+    })) as typeof fetch;
+    const res = await postResponses(seededDeepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      stream: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "hello" }] },
+        { type: "compaction_trigger" },
+      ],
+    });
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = await res.text();
+    expect(body).toContain('"type":"compaction"');
   });
 });
