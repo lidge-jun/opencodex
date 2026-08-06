@@ -47,6 +47,7 @@ describe("Codex catalog restore", () => {
       models: [
         { slug: "gpt-5.5" },
         { slug: "opencode-go/deepseek-v4-pro" },
+        { slug: "claude-sonnet-5", opencodex_catalog_kind: "anthropic-response-model-alias-v1" },
         { slug: "user-native" },
       ],
     }, null, 2) + "\n");
@@ -58,7 +59,7 @@ describe("Codex catalog restore", () => {
     `);
 
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 2 });
+    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 2, kept: 2 });
     const slugs = JSON.parse(readFileSync(catalogPath, "utf8")).models.map((m: { slug: string }) => m.slug);
     expect(slugs).toEqual(["gpt-5.5", "user-native"]);
   }, { timeout: 15_000 });
@@ -212,6 +213,7 @@ describe("Codex catalog restore", () => {
         { slug: "gpt-5.5", priority: 0, supports_websockets: true },
         { slug: "codex-mini", priority: 60, supports_websockets: true },
         { slug: "umans/umans-kimi-k2.7" },
+        { slug: "claude-sonnet-5", opencodex_catalog_kind: "anthropic-response-model-alias-v1" },
         { slug: "user-native", priority: 10 },
       ],
     }, null, 2) + "\n");
@@ -223,7 +225,7 @@ describe("Codex catalog restore", () => {
     `);
 
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 3 });
+    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 2, kept: 3 });
     const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(restored).toEqual([
       { slug: "gpt-5.5", priority: 50 },

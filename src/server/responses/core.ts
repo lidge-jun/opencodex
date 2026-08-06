@@ -98,7 +98,7 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { slugsEquivalent } from "../../providers/slug-codec";
+import { routedSlug, slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -1529,6 +1529,7 @@ async function handleResponsesInner(
   // upstream for reliability (#875); the answer must then be reframed to SSE
   // for streaming clients.
   const clientRequestedStream = parsed.stream;
+  const finalSelectedModelId = route.modelId;
   await applyFinalRouteRequestNormalization({
     parsed,
     route,
@@ -1538,6 +1539,15 @@ async function handleResponsesInner(
     inboundWire,
     inboundTransport: options.inboundTransport,
   });
+  // Anthropic routes strip their provider namespace for the upstream Messages
+  // request. Keep the canonical Codex catalog selector separately so every
+  // client-facing Responses surface resolves back to the same metadata row.
+  // Legacy bare selectors are intentionally healed to the namespaced row.
+  // Other adapters retain their post-normalization identity (including virtual
+  // model rewrites), exactly as before this repair.
+  const responseModel = route.provider.adapter === "anthropic"
+    ? routedSlug(route.providerName, finalSelectedModelId)
+    : route.modelId;
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
@@ -2388,6 +2398,7 @@ async function handleResponsesInner(
     }
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
+      responseModel,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
@@ -2463,6 +2474,7 @@ async function handleResponsesInner(
     parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
+      responseModel,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
@@ -2560,7 +2572,7 @@ async function handleResponsesInner(
         eventSource = preflight.stream;
       }
       const sseStream = bridgeToResponsesSSE(
-        eventSource, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        eventSource, responseModel, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           runTurnAbort.abort();
           queue.close();
@@ -2612,7 +2624,7 @@ async function handleResponsesInner(
       }
     }
     let providerState: OcxProviderContinuationState | undefined;
-    const json = buildResponseJSON(events, parsed.modelId, {
+    const json = buildResponseJSON(events, responseModel, {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -3254,7 +3266,7 @@ async function handleResponsesInner(
       : initialEventStream;
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     const sseStream = bridgeToResponsesSSE(
-      eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+      eventStream, responseModel, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
       {
         translatorBudget,
@@ -3314,7 +3326,7 @@ async function handleResponsesInner(
     }
     const { toolNsMap, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     let providerState: OcxProviderContinuationState | undefined;
-    const json = buildResponseJSON(events, parsed.modelId, {
+    const json = buildResponseJSON(events, responseModel, {
       translatorBudget,
       replayCacheScope: parsed._clientThreadId ?? "global",
       hideThinkingSummary: parsed.options.hideThinkingSummary,

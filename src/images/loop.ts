@@ -225,6 +225,8 @@ class LoopError extends Error {
  */
 export interface ImageBridgeDeps {
   parsed: OcxParsedRequest;
+  /** Client-facing Responses model; upstream adapters continue to read parsed.modelId. */
+  responseModel?: string;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
   plan?: ImageBridgePlan;
@@ -900,7 +902,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    produce(), deps.responseModel ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {

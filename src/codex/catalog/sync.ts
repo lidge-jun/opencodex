@@ -56,6 +56,39 @@ import { codexRuntimeStatePath } from "../runtime";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
+/** Marker for hidden bare Anthropic rows that heal legacy response-model identities. */
+export const ANTHROPIC_RESPONSE_MODEL_ALIAS_CATALOG_KIND = "anthropic-response-model-alias-v1";
+
+function isAnthropicResponseModelAlias(entry: RawEntry): boolean {
+  return entry.opencodex_catalog_kind === ANTHROPIC_RESPONSE_MODEL_ALIAS_CATALOG_KIND;
+}
+
+/**
+ * Clone canonical Anthropic catalog rows under hidden bare slugs. Older Codex
+ * sessions can still request the bare id, while new responses always identify
+ * the canonical provider-qualified row. The marker lets sync and restore remove
+ * these generated aliases without treating them as user-authored native rows.
+ */
+function appendAnthropicResponseModelAliases(
+  entries: RawEntry[],
+  models: readonly CatalogModel[],
+): RawEntry[] {
+  const result = [...entries];
+  for (const model of models) {
+    if (model.provider !== "anthropic" || model.id.includes("/")) continue;
+    const canonicalSlug = routedSlug(model.provider, model.id);
+    const canonical = entries.find(entry => entry.slug === canonicalSlug);
+    if (!canonical) continue;
+    if (result.some(entry => entry.slug === model.id)) continue;
+    result.push({
+      ...JSON.parse(JSON.stringify(canonical)) as RawEntry,
+      slug: model.id,
+      visibility: "hide",
+      opencodex_catalog_kind: ANTHROPIC_RESPONSE_MODEL_ALIAS_CATALOG_KIND,
+    });
+  }
+  return result;
+}
 
 export type SpawnAgentSurface = "v1" | "v2";
 
@@ -396,7 +429,10 @@ export function buildCatalogEntries(
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, isMultiAgentV2Enabled());
+  return appendAnthropicResponseModelAliases(
+    applyMultiAgentMode(out, multiAgentMode, isMultiAgentV2Enabled()),
+    goModels,
+  );
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -466,6 +502,7 @@ export function mergeCatalogEntriesForSync(
     ? catalogModels
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
+      && !isAnthropicResponseModelAlias(m)
       && m.owned_by !== COMBO_NAMESPACE
       && !goIds.has(m.slug as string)
       && !isUnsupportedOpenAiNativeSlug(m.slug as string))
@@ -996,11 +1033,16 @@ export function restoreCodexCatalogWithPermit(
   const replacementVisibility = visibleAccountReplacementNatives(catalog.models, disabledModels);
   const backup = readCatalogBackup(catalogPath);
   if (backup && Array.isArray(backup.models)) {
-    const removed = (catalog.models ?? []).filter(m => typeof m.slug === "string" && m.slug.includes("/")).length;
+    const removed = (catalog.models ?? []).filter(m =>
+      (typeof m.slug === "string" && m.slug.includes("/")) || isAnthropicResponseModelAlias(m)
+    ).length;
     const backupSlugs = new Set(backup.models.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
     const userNativeAdditions = restoreAccountHiddenBareNatives(
       (catalog.models ?? []).filter(m =>
-        typeof m.slug === "string" && !m.slug.includes("/") && !backupSlugs.has(m.slug)
+        typeof m.slug === "string"
+        && !m.slug.includes("/")
+        && !backupSlugs.has(m.slug)
+        && !isAnthropicResponseModelAlias(m)
       ),
       replacementVisibility,
       disabledModels,
@@ -1017,7 +1059,10 @@ export function restoreCodexCatalogWithPermit(
   }
   const before = catalog.models.length;
   const native = restoreAccountHiddenBareNatives(
-    catalog.models.filter(m => !(typeof m.slug === "string" && m.slug.includes("/"))),
+    catalog.models.filter(m =>
+      !(typeof m.slug === "string" && m.slug.includes("/"))
+      && !isAnthropicResponseModelAlias(m)
+    ),
     replacementVisibility,
     disabledModels,
   );

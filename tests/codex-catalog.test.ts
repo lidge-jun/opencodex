@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { ANTHROPIC_RESPONSE_MODEL_ALIAS_CATALOG_KIND, augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
   CURSOR_STATIC_MODELS,
@@ -1309,6 +1309,35 @@ describe("Codex catalog routed normalization", () => {
 
     expect(routed?.web_search_tool_type).toBe("text_and_image");
     expect(routed?.supports_search_tool).toBe(true);
+  });
+
+  test("Anthropic catalog rows include a hidden metadata-identical bare compatibility alias", () => {
+    const entries = buildCatalogEntries(null, [], [{
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      contextWindow: 1_000_000,
+      maxInputTokens: 950_000,
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "high",
+      inputModalities: ["text", "image"],
+    }]);
+    const canonical = entries.find(entry => entry.slug === "anthropic/claude-sonnet-5");
+    const alias = entries.find(entry => entry.slug === "claude-sonnet-5");
+
+    expect(canonical).toBeDefined();
+    expect(alias).toMatchObject({
+      slug: "claude-sonnet-5",
+      visibility: "hide",
+      opencodex_catalog_kind: ANTHROPIC_RESPONSE_MODEL_ALIAS_CATALOG_KIND,
+      context_window: canonical?.context_window,
+      max_context_window: canonical?.max_context_window,
+      auto_compact_token_limit: canonical?.auto_compact_token_limit,
+      input_modalities: canonical?.input_modalities,
+      supported_reasoning_levels: canonical?.supported_reasoning_levels,
+    });
+
+    const custom = buildCatalogEntries(null, [], [{ provider: "anthropic-compatible", id: "claude-sonnet-5" }]);
+    expect(custom.some(entry => entry.slug === "claude-sonnet-5")).toBe(false);
   });
 
   test("liveModels false uses configured provider models without fetching", async () => {

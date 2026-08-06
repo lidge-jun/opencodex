@@ -242,6 +242,8 @@ class LoopError extends Error {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  /** Client-facing Responses model; upstream adapters continue to read parsed.modelId. */
+  responseModel?: string;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
   /** Which executor runs searches. Defaults to "openai" so existing callers keep the ChatGPT path (audit F4). */
@@ -770,7 +772,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    produce(), deps.responseModel ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       const elapsed = Date.now() - loopT0;
       if (executedSearchCount > 0 || searchesExecuted > 0) {
         console.warn(`[web-search-loop] cancelled — ${executedSearchCount} real searches, ${searchesExecuted - executedSearchCount} placeholders, ${elapsed}ms`);

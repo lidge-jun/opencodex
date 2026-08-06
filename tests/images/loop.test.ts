@@ -126,6 +126,20 @@ describe("runWithImageBridge", () => {
     expect(sse).toContain("hello world");
   });
 
+  test("uses the client-facing response model without changing the upstream model", async () => {
+    const parsed = makeParsed();
+    streamQueue = [[{ type: "text_delta", text: "hello" }, { type: "done" }]];
+    const response = await runWithImageBridge({
+      parsed,
+      responseModel: "anthropic/claude-sonnet-5",
+      adapter: mockAdapter,
+      plan,
+    });
+    const sse = await response.text();
+    expect(parsed.modelId).toBe("test-model");
+    expect(sse).toContain('"model":"anthropic/claude-sonnet-5"');
+  });
+
   test("single image call → fulfilled, second iteration yields text", async () => {
     const sse = await runAndGetSSE(
       [imageCallEvents, [{ type: "text_delta", text: "Here is your image" }, { type: "done" }]],

@@ -121,6 +121,35 @@ The `multi_agent_v2` feature flag and the logical maximum thread count are separ
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 
+## Routed response model identity
+
+Anthropic requests use a provider-qualified Codex selector (for example
+`anthropic/claude-sonnet-5`) but the upstream Messages request uses the bare model id. The response
+bridge preserves those as separate identities: upstream adapters read the bare `parsed.modelId`,
+while every Codex-facing Responses path emits the canonical provider-qualified selector. This
+includes the ordinary stream/JSON bridge and the image and web-search loops.
+
+Legacy sessions may still send a bare Anthropic selector. Catalog sync therefore clones each
+canonical Anthropic row into a hidden bare compatibility row with identical context, compaction,
+modality, and reasoning metadata. The clone carries
+`opencodex_catalog_kind = "anthropic-response-model-alias-v1"`; sync drops stale marked rows and
+restore removes them without touching user-authored bare catalog entries.
+
+[Decision Log]
+- 목적과 의도: keep `response.model` resolvable against the exact Codex catalog metadata row while
+  preserving Anthropic's bare upstream wire model.
+- 기존 구현 및 제약 조건: route normalization overwrites `parsed.modelId` before every response
+  bridge, and old sessions can resume with a bare selector that has no catalog row.
+- 검토한 주요 대안: stop stripping the upstream model, rewrite only the terminal event, or retain a
+  separate client-facing identity and marker-owned hidden compatibility row.
+- 선택한 방식: retain the separate identity and thread it through every bridge; generate only the
+  built-in Anthropic compatibility aliases and mark them for deterministic cleanup.
+- 다른 대안 대신 이 방식을 선택한 이유: upstream behavior remains byte-compatible, all response
+  events agree on one identity, and restore can distinguish generated aliases from user data.
+- 장점, 단점 및 영향: long-context and auto-compaction metadata resolve correctly for new and
+  resumed sessions; the catalog gains hidden rows, but they never appear in the picker and are
+  removed with OpenCodex-owned routing state.
+
 ## Ultra reasoning level
 
 Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle. The v2 toggle

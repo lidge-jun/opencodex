@@ -106,6 +106,24 @@ describe("issue #1001 — forced-answer passes must produce usable output", () =
     expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
   });
 
+  test("uses the client-facing response model without changing the upstream model", async () => {
+    const parsed = parseRequest({ model: "claude-sonnet-5", input: "hi", stream: true, tools: [{ type: "web_search" }] });
+    const response = await runWithWebSearch({
+      parsed,
+      responseModel: "anthropic/claude-sonnet-5",
+      adapter: twoPassAdapter([{ type: "text_delta", text: "final answer" }, { type: "done" }]),
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+    const frames = await collectSse(response.body!);
+    const completed = frames.find(frame => frame.event === "response.completed")?.data.response as Record<string, unknown>;
+    expect(parsed.modelId).toBe("claude-sonnet-5");
+    expect(completed.model).toBe("anthropic/claude-sonnet-5");
+  });
+
   test("a valid closed non-web tool call without text is allowed to complete", async () => {
     const frames = await drive([
       { type: "tool_call_start", id: "call_1", name: "shell" },
