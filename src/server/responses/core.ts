@@ -50,6 +50,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
+import { estimateTokens } from "../../lib/token-estimate";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
@@ -1806,6 +1807,38 @@ async function handleResponsesInner(
       "invalid_request_error",
       "OpenAI forward continuation state is unavailable or expired; start a new session instead of reusing this previous_response_id.",
     );
+  }
+
+  // Input-size guard: refuse to forward an input that exceeds the model's advertised context
+  // window. The client compacts well before this limit, so an oversized body means abnormal
+  // duplication (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M).
+  // Forwarding it on Windows balloons bun RSS and can native-crash the whole proxy (upstream
+  // Bun memory bug, issue #314), taking every active thread down at once. Fail one request
+  // cleanly instead. Reuse the model/CJK-aware estimate that already drives usage and compact
+  // decisions; summing parts avoids materializing another copy of a multi-megabyte request.
+  const advertisedWindow = route.provider.modelContextWindows?.[route.modelId];
+  if (typeof advertisedWindow === "number" && advertisedWindow > 0) {
+    let estimatedInputTokens = 0;
+    for (const msg of parsed.context.messages) {
+      const content = msg.content;
+      if (typeof content === "string") {
+        estimatedInputTokens += estimateTokens(content, route.modelId);
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+            estimatedInputTokens += estimateTokens((part as { text: string }).text, route.modelId);
+          }
+        }
+      }
+    }
+    if (estimatedInputTokens > advertisedWindow) {
+      return formatErrorResponse(
+        413,
+        "request_too_large",
+        `input (≈${estimatedInputTokens} tokens) exceeds ${route.modelId} context window (${advertisedWindow} tokens); refusing to forward`,
+        { code: "input_context_window_exceeded" },
+      );
+    }
   }
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
