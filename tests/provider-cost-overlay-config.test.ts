@@ -136,6 +136,27 @@ describe("modelCosts config persistence and registry refresh", () => {
     expect(activeUserCostOverlays()).toHaveLength(0);
   });
 
+  test("reloading an unchanged config does not bump the overlay version", () => {
+    const config = {
+      port: 12345,
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          modelCosts: VALID_COSTS,
+        },
+      },
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(config));
+    loadConfig();
+    const versionAfterFirstLoad = userCostOverlayVersion();
+    // Same bytes on disk: the load-time refresh must be a no-op for the version.
+    writeFileSync(getConfigPath(), JSON.stringify(config));
+    loadConfig();
+    expect(userCostOverlayVersion()).toBe(versionAfterFirstLoad);
+    expect(activeUserCostOverlays()).toHaveLength(2);
+  });
+
   test("loadConfig degrades a malformed modelCosts row instead of falling back to defaults", () => {
     writeFileSync(getConfigPath(), JSON.stringify({
       port: 12345,
@@ -280,7 +301,7 @@ describe("modelCosts management validation and DTO", () => {
     expect(rows?.["__proto__"]).toEqual({ input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 });
   });
 
-  test("safeConfigDTO redacts secret-shaped model ids in modelCosts", () => {
+  test("safeConfigDTO drops secret-shaped model ids from modelCosts", () => {
     writeFileSync(getConfigPath(), JSON.stringify({
       port: 12345,
       providers: {
@@ -299,6 +320,8 @@ describe("modelCosts management validation and DTO", () => {
     const keys = Object.keys(dto.providers.blsc.modelCosts ?? {});
     expect(keys).toContain("deepseek-v4-flash");
     expect(keys).not.toContain("sk-abcdef1234567890");
-    expect(keys).toContain("[REDACTED]");
+    // Dropped entirely — distinct secret-shaped rows must not collapse into a
+    // single placeholder key in the dashboard DTO.
+    expect(keys).not.toContain("[REDACTED]");
   });
 });

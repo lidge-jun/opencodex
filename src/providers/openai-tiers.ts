@@ -76,6 +76,10 @@ function managedLegacyMultiOverlay(
   if (!Object.keys(provider).every(key => allowed.has(key))) return null;
   if (!isCanonicalOpenAiForwardProvider(provider)) return null;
   if (provider.disabled !== undefined && typeof provider.disabled !== "boolean") return null;
+  // Keep the migration self-contained: a malformed overlay is a collision, not
+  // something to carry into the canonical row (importing config.ts here would
+  // create an import cycle — config.ts already imports this module).
+  if (provider.modelCosts !== undefined && !validLegacyOverlayCosts(provider.modelCosts)) return null;
   if (provider.selectedModels !== undefined && (
     !Array.isArray(provider.selectedModels)
     || provider.selectedModels.some(model => typeof model !== "string")
@@ -85,6 +89,17 @@ function managedLegacyMultiOverlay(
     ...(provider.selectedModels !== undefined ? { selectedModels: [...provider.selectedModels] } : {}),
     ...(provider.modelCosts !== undefined ? { modelCosts: provider.modelCosts } : {}),
   };
+}
+
+/** Shape check for a legacy overlay: a plain record of complete non-negative finite Cost4 rows. */
+function validLegacyOverlayCosts(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(entry => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const rates = entry as Record<string, unknown>;
+    return (["input", "output", "cacheRead", "cacheWrite"] as const)
+      .every(key => typeof rates[key] === "number" && Number.isFinite(rates[key]) && (rates[key] as number) >= 0);
+  });
 }
 
 function rewriteLegacyOpenAiSelectedId(value: string): string {
@@ -110,13 +125,14 @@ function mergeLegacyOpenAiProviderRows(
   // Both rows can carry disjoint overlays; merge them (canonical openai wins on
   // key conflicts) so legacy Multi prices are not silently dropped.
   const modelCosts = { ...(legacyMulti?.modelCosts ?? {}), ...(openai?.modelCosts ?? {}) };
+  const hasModelCosts = Object.keys(modelCosts).length > 0;
   const formerRows = [openai, legacyMulti].filter((row): row is OcxProviderConfig => row !== undefined);
   const disabled = formerRows.length > 0 && formerRows.every(row => row.disabled === true);
   return {
     ...canonicalCodexForwardProvider(mode),
     ...(disabled ? { disabled: true } : {}),
     ...(selectedModels && selectedModels.length > 0 ? { selectedModels } : {}),
-    ...(modelCosts ? { modelCosts } : {}),
+    ...(hasModelCosts ? { modelCosts } : {}),
   };
 }
 
