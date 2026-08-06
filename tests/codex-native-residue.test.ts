@@ -638,6 +638,21 @@ test("routed first rollout metadata is residue even when the latest metadata is 
   });
 });
 
+test("an opencodex first rollout with invalid latest metadata is indeterminate", () => {
+  createHistoryDatabase("openai");
+  writeFileSync(
+    pathInCodexHome("rollout.jsonl"),
+    sessionMeta("thread-1", "opencodex") + "\n" + sessionMeta("thread-2", "openai") + "\n",
+  );
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "history",
+    path: pathInCodexHome("rollout.jsonl"),
+    reason: expect.stringContaining("latest session_meta"),
+  });
+});
+
 test("a referenced rollout with native first and latest metadata is clean", () => {
   createHistoryDatabase("openai", ["openai", "openai"]);
 

@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import type { Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -364,23 +374,49 @@ function classifyReferencedRollout(
     return indeterminate(surface, reference.path, "referenced rollout is absent");
   }
   if (resolved.kind === "indeterminate") return indeterminate(surface, reference.path, resolved.reason);
-  if (resolved.stat.size > MAX_ROLLOUT_INSPECTION_BYTES) {
-    return indeterminate(
-      surface,
-      resolved.path,
-      `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
-    );
+
+  let handle: number;
+  try {
+    handle = openSync(resolved.path, "r");
+  } catch (error) {
+    return indeterminate(surface, resolved.path, `unreadable rollout: ${errorReason(error)}`);
   }
 
   let content: string;
   try {
-    content = readFileSync(resolved.path, "utf8");
-    const after = statSync(resolved.path);
+    const opened = fstatSync(handle);
+    if (opened.size > MAX_ROLLOUT_INSPECTION_BYTES) {
+      return indeterminate(
+        surface,
+        resolved.path,
+        `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
+      );
+    }
+    const buffer = Buffer.allocUnsafe(opened.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = readSync(handle, buffer, offset, buffer.length - offset, offset);
+      if (read <= 0) {
+        return indeterminate(surface, resolved.path, "rollout read ended before the observed size");
+      }
+      offset += read;
+    }
+    const after = fstatSync(handle);
     if (!sameStat(resolved.stat, after)) {
       return indeterminate(surface, resolved.path, "rollout changed while it was being observed");
     }
+    content = buffer.toString("utf8");
   } catch (error) {
+    if (errorCode(error) === "ENOENT") {
+      return indeterminate(surface, resolved.path, "referenced rollout is absent");
+    }
     return indeterminate(surface, resolved.path, `unreadable rollout: ${errorReason(error)}`);
+  } finally {
+    try {
+      closeSync(handle);
+    } catch {
+      // Closing an already-closed descriptor cannot affect the classification.
+    }
   }
 
   let first: Record<string, unknown> | undefined;
@@ -409,6 +445,7 @@ function classifyReferencedRollout(
   if (!first || !latest) {
     return indeterminate(surface, resolved.path, "referenced rollout has no session_meta metadata");
   }
+  let hasOpenCodexProvider = false;
   for (const [position, payload] of [["first", first], ["latest", latest]] as const) {
     if (payload.id !== reference.id) {
       return indeterminate(surface, resolved.path, `${position} session_meta does not identify the referenced thread`);
@@ -416,11 +453,11 @@ function classifyReferencedRollout(
     if (typeof payload.model_provider !== "string" || !payload.model_provider) {
       return indeterminate(surface, resolved.path, `${position} session_meta has no provider metadata`);
     }
-    if (payload.model_provider === "opencodex") {
-      return { kind: "residue", surface, path: resolved.path };
-    }
+    hasOpenCodexProvider = hasOpenCodexProvider || payload.model_provider === "opencodex";
   }
-  return { kind: "clean" };
+  return hasOpenCodexProvider
+    ? { kind: "residue", surface, path: resolved.path }
+    : { kind: "clean" };
 }
 
 function classifyReferencedRollouts(
