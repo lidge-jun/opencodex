@@ -615,6 +615,12 @@ export type SseInspectorHandlers = {
   logCtx?: RequestLogContext;
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
   onFirstOutput?: () => void;
+  /**
+   * Provider-scoped compatibility: persist the completed snapshot under the
+   * first response id exposed to the client when an upstream changes ids
+   * between `response.created` and `response.completed`.
+   */
+  pinCompletedResponseIdToFirstSeen?: boolean;
 };
 
 type CompletedOutputItem = { item: unknown; sourceBytes: number };
@@ -686,6 +692,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     : null;
   let aggregateItemBytes = 0;
   let reconstructionTainted = false;
+  let firstResponseId: string | undefined;
 
   const clearFrameState = (): void => {
     delimiterTail = new Uint8Array(0);
@@ -706,6 +713,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     decoder = null;
     clearFrameState();
     clearCompletedItems();
+    firstResponseId = undefined;
   };
 
   const retainCandidateSlice = (slice: Uint8Array): void => {
@@ -800,6 +808,17 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? parsed as ParsedSseEvent
         : null;
+      const responseRecord = parsedEvent
+        && typeof parsedEvent.response === "object"
+        && parsedEvent.response !== null
+        && !Array.isArray(parsedEvent.response)
+        ? parsedEvent.response as { id?: unknown }
+        : null;
+      if (handlers.pinCompletedResponseIdToFirstSeen
+        && responseRecord
+        && typeof responseRecord.id === "string") {
+        firstResponseId ??= responseRecord.id;
+      }
       const doneItem = parsedEvent?.type === "response.output_item.done" ? parsedEvent.item : undefined;
       if (parsedEvent
         && doneItem !== undefined
@@ -814,6 +833,11 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
       let response = completedResponseFromParsedEvent(parsedEvent);
       if (response) {
+        if (handlers.pinCompletedResponseIdToFirstSeen
+          && firstResponseId !== undefined
+          && response.id !== firstResponseId) {
+          response = { ...response, id: firstResponseId };
+        }
         // Authoritative output is a NON-EMPTY ARRAY only. Anything else
         // (missing, null, scalar, object) keeps the historical backfill
         // behavior so a malformed terminal cannot reach rememberResponseState
@@ -929,6 +953,8 @@ export type InspectionConsumerOptions = {
   drainBounds?: Partial<InspectionDrainBounds>;
   upstream?: AbortController;
   now?: () => number;
+  /** Forward provider-scoped response-id pinning to the owned inspector. */
+  pinCompletedResponseIdToFirstSeen?: boolean;
   /** Test seam for proving both public consumers dispose their owned inspector. */
   inspectorFactory?: (handlers: SseInspectorHandlers) => SseInspector;
 };
@@ -1085,6 +1111,7 @@ export function consumeForInspection(
     logCtx,
     onCompletedResponse,
     onFirstOutput,
+    pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
   });
   startBoundedInspectionPump({
     ...options,
@@ -1130,6 +1157,7 @@ export function consumeForResponseLogMetadata(
     logCtx,
     onCompletedResponse,
     onFirstOutput,
+    pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
   });
   startBoundedInspectionPump({ ...options, reader, inspector, signal, onDone });
 }
