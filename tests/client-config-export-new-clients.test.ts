@@ -321,7 +321,9 @@ describe("omp", () => {
       baseUrl: "http://127.0.0.1:10100/v1",
       models: [
         { namespaced: "command-code/deepseek-deepseek-v4-flash", provider: "command-code", id: "deepseek/deepseek-v4-flash", contextWindow: 1_000_000, reasoningEfforts: ["high", "max"], defaultReasoningEffort: "high" },
-        { namespaced: "command-code/moonshotai-Kimi-K3", provider: "command-code", id: "moonshotai/Kimi-K3", contextWindow: 1_000_000, reasoningEfforts: ["high", "max"] },
+        // Kimi K3 is reasoning-capable in Command Code but has no effort
+        // selector, so no thinking block is emitted.
+        { namespaced: "command-code/moonshotai-Kimi-K3", provider: "command-code", id: "moonshotai/Kimi-K3", contextWindow: 1_000_000, reasoningEfforts: [] },
         // No reasoning metadata: the model stays plain so omp applies its own defaults.
         { namespaced: "command-code/claude-fable-5", provider: "command-code", id: "claude-fable-5", contextWindow: 1_000_000 },
       ],
@@ -336,8 +338,8 @@ describe("omp", () => {
       defaultLevel: "high",
     });
     const kimi = models.find(m => m.id === "command-code/moonshotai-Kimi-K3")!;
-    expect(kimi.reasoning).toBe(true);
-    expect(kimi.thinking).toEqual({ mode: "effort", efforts: ["high", "max"] });
+    expect(kimi.reasoning).toBeUndefined();
+    expect(kimi.thinking).toBeUndefined();
     const fable = models.find(m => m.id === "command-code/claude-fable-5")!;
     expect(fable.thinking).toBeUndefined();
   });

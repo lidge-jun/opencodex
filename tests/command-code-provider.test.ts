@@ -51,7 +51,6 @@ describe("Command Code provider", () => {
     expect(registry?.models).toBeUndefined();
     expect(registry?.modelReasoningEfforts).toMatchObject({
       "deepseek/deepseek-v4-flash": ["high", "max"],
-      "moonshotai/Kimi-K3": ["high", "max"],
       "zai-org/glm-5.2": ["high", "max"],
     });
     expect(OAUTH_PROVIDERS["command-code"]?.providerConfig).toMatchObject({
