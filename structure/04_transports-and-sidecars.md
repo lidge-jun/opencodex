@@ -61,6 +61,11 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
+Translated response request-log tracking and the heartbeat relay also reuse
+`createSseInspector`. This keeps every client-facing SSE observation path on
+the same byte-bounded, discard-and-resynchronize frame policy and ensures the
+request-log, first-output, and terminal observers share one payload parse.
+
 ## Standalone Search and exact account selectors
 
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an

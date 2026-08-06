@@ -6,7 +6,6 @@ import {
   addFinalRequestLog,
   httpStatusForRequestLogTerminal,
   inspectResponseLogJson,
-  inspectResponseLogSsePayload,
   inspectResponseLogSsePayloadParsed,
   recordFirstOutput,
   type RequestLogContext,
@@ -359,53 +358,42 @@ export function trackSseForRequestLog(
   onFirstOutput?: () => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let terminalReported = false;
-  const reportFirstOutput = createFirstOutputReporter(onFirstOutput);
 
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported) return;
     terminalReported = true;
     onTerminal(status);
   };
-
-  const inspectPayload = (payload: string | null) => {
-    if (!payload) return;
-    if (logCtx) inspectResponseLogSsePayload(logCtx, payload);
-    reportFirstOutput.payload(payload);
-    const status = terminalStatusFromSsePayload(payload);
-    if (status) reportTerminal(status);
-  };
-
-  const inspectChunk = (value: Uint8Array) => {
-    buffer += decoder.decode(value, { stream: true });
-    let next: { block: string; rest: string } | null;
-    while ((next = nextSseBlock(buffer))) {
-      buffer = next.rest;
-      inspectPayload(sseDataPayload(next.block));
-    }
-  };
+  // Reuse the byte-bounded inspector so translated responses cannot retain an
+  // unterminated upstream frame or parse the same event once per observer.
+  const inspector = createSseInspector({
+    onTerminal: reportTerminal,
+    logCtx,
+    onFirstOutput,
+  });
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
         if (done) {
-          buffer += decoder.decode();
-          if (buffer.trim()) inspectPayload(sseDataPayload(buffer));
+          inspector.finish();
           if (!terminalReported) reportTerminal("incomplete");
+          inspector.dispose();
           controller.close();
           return;
         }
-        inspectChunk(value);
+        inspector.feed(value);
         controller.enqueue(value);
       } catch (err) {
         if (!terminalReported) reportTerminal("incomplete");
+        inspector.dispose();
         try { controller.error(err); } catch { /* already torn down */ }
       }
     },
     cancel(reason) {
+      inspector.dispose();
       onCancel();
       reader.cancel(reason).catch(() => {});
     },
@@ -516,38 +504,23 @@ export function relaySseWithHeartbeat(
 ): ReadableStream<Uint8Array> | null {
   if (!body) return null;
   const reader = body.getReader();
-  const decoder = new TextDecoder();
   const heartbeat = new TextEncoder().encode(": opencodex keepalive\n\n");
   let timer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
   let clientCancelled = false;
   let terminalReported = false;
-  let buffer = "";
 
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported || clientCancelled || closed) return;
     terminalReported = true;
     onTerminal?.(status);
   };
-
-  const inspectPayload = (payload: string | null) => {
-    if (!payload) return;
-    const status = terminalStatusFromSsePayload(payload);
-    if (status) reportTerminal(status);
-  };
-
-  const inspectChunk = (value: Uint8Array) => {
-    buffer += decoder.decode(value, { stream: true });
-    let next: { block: string; rest: string } | null;
-    while ((next = nextSseBlock(buffer))) {
-      buffer = next.rest;
-      inspectPayload(sseDataPayload(next.block));
-    }
-  };
+  const inspector = createSseInspector({ onTerminal: reportTerminal });
 
   const cleanup = () => {
     if (closed) return;
     closed = true;
+    inspector.dispose();
     if (timer) clearInterval(timer);
     timer = undefined;
     options?.onDone?.();
@@ -569,14 +542,13 @@ export function relaySseWithHeartbeat(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          buffer += decoder.decode();
-          if (buffer.trim()) inspectPayload(sseDataPayload(buffer));
+          inspector.finish();
           if (!terminalReported && !clientCancelled) reportTerminal("incomplete");
           cleanup();
           controller.close();
           return;
         }
-        inspectChunk(value);
+        inspector.feed(value);
         controller.enqueue(value);
       } catch (err) {
         if (!clientCancelled) reportTerminal("incomplete");

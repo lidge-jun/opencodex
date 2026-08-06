@@ -4,7 +4,9 @@ import {
   getInspectionCounters,
   MAX_COMPLETED_OUTPUT_ITEMS,
   MAX_INSPECTION_SSE_FRAME_BYTES,
+  relaySseWithHeartbeat,
   resetInspectionCountersForTest,
+  trackSseForRequestLog,
 } from "../src/server/relay";
 import type { RequestLogContext } from "../src/server/request-log";
 
@@ -377,5 +379,68 @@ describe("createSseInspector parse-once", () => {
     } finally {
       JSON.parse = originalParse;
     }
+  });
+});
+
+describe("client-facing SSE wrapper bounds", () => {
+  test("translated request-log tracking discards an oversized frame, resynchronizes, and preserves bytes", async () => {
+    const oversized = encoder.encode(`data: ${"x".repeat(MAX_INSPECTION_SSE_FRAME_BYTES)}x`);
+    const delimiter = encoder.encode("\n\n");
+    const terminal = frame(completedEvent("translated-after-cap"));
+    const chunks = [oversized, delimiter, terminal];
+    const terminals: string[] = [];
+    const tracked = trackSseForRequestLog(
+      streamFromChunks(chunks),
+      status => terminals.push(status),
+      () => {},
+      {} as RequestLogContext,
+      () => {},
+    );
+
+    expect(await readAllBytes(tracked)).toEqual(joinBytes(chunks));
+    expect(terminals).toEqual(["completed"]);
+    expect(getInspectionCounters().frameCapOverflows).toBe(1);
+    expect(getInspectionCounters().frameBufferHighWaterBytes)
+      .toBeLessThanOrEqual(MAX_INSPECTION_SSE_FRAME_BYTES);
+  });
+
+  test("translated request-log tracking parses a complete payload once for all observers", async () => {
+    const originalParse = JSON.parse;
+    let parses = 0;
+    JSON.parse = ((text: string) => {
+      parses += 1;
+      return originalParse(text);
+    }) as typeof JSON.parse;
+    try {
+      const tracked = trackSseForRequestLog(
+        streamFromChunks([frame(completedEvent("translated-parse-once"))]),
+        () => {},
+        () => {},
+        {} as RequestLogContext,
+        () => {},
+      );
+      await readAllBytes(tracked);
+      expect(parses).toBe(1);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  test("heartbeat relay applies the same frame bound without changing upstream bytes", async () => {
+    const oversized = encoder.encode(`data: ${"x".repeat(MAX_INSPECTION_SSE_FRAME_BYTES)}x`);
+    const delimiter = encoder.encode("\r\n\r\n");
+    const terminal = frame(completedEvent("heartbeat-after-cap"));
+    const chunks = [oversized, delimiter, terminal];
+    const terminals: string[] = [];
+    const relayed = relaySseWithHeartbeat(
+      streamFromChunks(chunks),
+      new AbortController(),
+      60_000,
+      status => terminals.push(status),
+    )!;
+
+    expect(await readAllBytes(relayed)).toEqual(joinBytes(chunks));
+    expect(terminals).toEqual(["completed"]);
+    expect(getInspectionCounters().frameCapOverflows).toBe(1);
   });
 });
