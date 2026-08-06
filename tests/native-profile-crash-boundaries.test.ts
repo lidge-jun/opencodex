@@ -9,6 +9,7 @@ import { NativeProfileManager, type NativeProfileSwitchBoundary } from "../src/c
 import { readNativeProfileJournal, readNativeProfileVault } from "../src/codex/native-profile-store";
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../src/codex/native-profile-types";
 import type { OcxConfig } from "../src/types";
+import { INTERNAL_DEADLINE_MS } from "./helpers/test-budget";
 
 const roots: string[] = [];
 const oldOcx = process.env.OPENCODEX_HOME;
@@ -83,6 +84,59 @@ async function waitFor(path: string, timeout = 10_000): Promise<void> {
   if (!existsSync(path)) throw new Error(`timed out waiting for ${path}`);
 }
 
+/*
+ * #1061. `waitFor` proves a file EXISTS, which is not the precondition a caller
+ * that immediately parses it actually needs — a partially written document
+ * satisfies the wait and then throws `Unexpected EOF`. This waits for the real
+ * precondition instead.
+ */
+async function waitForJson<T>(path: string, timeout = 10_000): Promise<T> {
+  const deadline = Date.now() + timeout;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(readFileSync(path, "utf8")) as T;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(`timed out waiting for parseable JSON in ${path}`, { cause: lastError });
+}
+
+const KILL_GRACE_MS = 2_000;
+
+/*
+ * #1061. The teardown used to `await child.exited` with no deadline, so a child
+ * stalled in `server.stop(true)` hung the run until CI killed the job — a
+ * 30-minute wait for a test that had already done its work. Every wait here is
+ * bounded, including the ones after a signal: an ignored SIGTERM would otherwise
+ * reproduce the same hang one layer down.
+ */
+async function stopStartup(
+  child: Bun.Subprocess,
+  paths: { release: string; stop: string },
+  timeoutMs: number = INTERNAL_DEADLINE_MS,
+): Promise<void> {
+  writeFileSync(paths.release, "recover");
+  writeFileSync(paths.stop, "stop");
+  const exit = await Promise.race([child.exited, Bun.sleep(timeoutMs).then(() => null)]);
+  if (exit === null) {
+    child.kill();
+    const killed = await Promise.race([child.exited, Bun.sleep(KILL_GRACE_MS).then(() => null)]);
+    if (killed === null) {
+      child.kill("SIGKILL");
+      // Observe the escalation before throwing, so a caller asserting on
+      // `exitCode` is not racing the reap.
+      await Promise.race([child.exited, Bun.sleep(KILL_GRACE_MS).then(() => null)]);
+    }
+    throw new Error("startup child did not stop");
+  }
+  if (exit !== 0) throw new Error(`startup child exited ${exit}`);
+}
+
 function spawnSwitch(f: Awaited<ReturnType<typeof fixture>>, options: { boundary?: NativeProfileSwitchBoundary; marker?: string; release?: string; contention?: string; result: string }) {
   return Bun.spawn([process.execPath, join(import.meta.dir, "helpers", "native-profile-switch-child.ts")], {
     cwd: join(import.meta.dir, ".."),
@@ -109,7 +163,11 @@ function startupPaths(f: Awaited<ReturnType<typeof fixture>>) {
   return { port: join(f.root, "port"), release: join(f.root, "recover"), settled: join(f.root, "settled"), upstream: join(f.root, "upstream"), stop: join(f.root, "stop") };
 }
 
-function spawnStartup(f: Awaited<ReturnType<typeof fixture>>, p: ReturnType<typeof startupPaths>) {
+function spawnStartup(
+  f: Awaited<ReturnType<typeof fixture>>,
+  p: ReturnType<typeof startupPaths>,
+  extraEnv: Record<string, string> = {},
+) {
   return Bun.spawn([process.execPath, join(import.meta.dir, "helpers", "native-profile-startup-child.ts")], {
     cwd: join(import.meta.dir, ".."),
     env: {
@@ -119,6 +177,7 @@ function spawnStartup(f: Awaited<ReturnType<typeof fixture>>, p: ReturnType<type
       NATIVE_STARTUP_KEY: f.key.toString("base64"), NATIVE_STARTUP_KEY_REF: "memory:switch-test", NATIVE_STARTUP_PORT: p.port,
       NATIVE_STARTUP_RECOVERY_RELEASE: p.release, NATIVE_STARTUP_SETTLED: p.settled,
       NATIVE_STARTUP_UPSTREAM: p.upstream, NATIVE_STARTUP_STOP: p.stop,
+      ...extraEnv,
     },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
@@ -179,8 +238,7 @@ describe("native profile OpenCodex process-exit phases", () => {
           expect(existsSync(p.upstream)).toBe(false);
           writeFileSync(p.release, "recover");
         }
-        await waitFor(p.settled);
-        expect(JSON.parse(readFileSync(p.settled, "utf8"))).toMatchObject({ gate: { status: "ready" } });
+        expect(await waitForJson(p.settled)).toMatchObject({ gate: { status: "ready" } });
         expect((await mainRequest(port)).status).toBe(200);
         await waitFor(p.upstream);
         const receipt = JSON.parse(readFileSync(p.upstream, "utf8").trim().split("\n").at(-1)!);
@@ -192,9 +250,7 @@ describe("native profile OpenCodex process-exit phases", () => {
         expect(recoveredVault.revision).toBe(f.initialRevision + (finalTarget ? 1 : 0));
         expect(readNativeProfileJournal(f.manager.context)).toBeNull();
       } finally {
-        writeFileSync(p.release, "recover");
-        writeFileSync(p.stop, "stop");
-        expect(await restart.exited).toBe(0);
+        await stopStartup(restart, p);
       }
     }
   }, 90_000);
@@ -230,4 +286,51 @@ describe("native profile OpenCodex process-exit phases", () => {
       if (second) await second.exited;
     }
   }, 20_000);
+
+  /*
+   * #1061 activation evidence for the teardown deadline. A green suite says nothing
+   * about a timeout branch nobody drives, so this drives it: the child is told to
+   * stall exactly where the reported hang occurred (before `server.stop(true)`),
+   * and the teardown must give up and reap it instead of waiting forever.
+   *
+   * The reap assertion is the part that matters — it proves cleanup happened, not
+   * merely that a deadline was noticed. A signalled child reports `signalCode`
+   * rather than `exitCode`, so this checks that the process settled either way.
+   */
+  test("a stalled startup child is killed by the bounded teardown instead of hanging", async () => {
+    const f = await fixture();
+    const p = startupPaths(f);
+    const child = spawnStartup(f, p, { OCX_TEST_STALL_ON_STOP: "1" });
+    try {
+      await waitFor(p.port);
+      await expect(stopStartup(child, p, 1_000)).rejects.toThrow("startup child did not stop");
+      expect(child.killed).toBe(true);
+      expect(child.exitCode ?? child.signalCode).not.toBeNull();
+    } finally {
+      if (child.exitCode === null) {
+        child.kill("SIGKILL");
+        await child.exited;
+      }
+    }
+  }, 30_000);
+
+  /*
+   * #1061 the other half: the settled file is parsed the moment it appears, so a
+   * reader that only checks existence sees a partial document. This drives that
+   * exact sequence — partial content first, then the real document — and asserts
+   * the wait holds out for something parseable.
+   */
+  test("waitForJson holds out for a complete document instead of parsing a partial write", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-settled-race-"));
+    const target = join(dir, "settled.json");
+    try {
+      writeFileSync(target, "{\"gate\":");   // what a half-finished write looks like
+      const pending = waitForJson<{ gate: { status: string } }>(target, 5_000);
+      await Bun.sleep(50);
+      writeFileSync(target, JSON.stringify({ gate: { status: "ready" } }));
+      expect(await pending).toMatchObject({ gate: { status: "ready" } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

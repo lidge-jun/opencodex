@@ -78,6 +78,8 @@ export const de: Record<TKey, string> = {
   "theme.dark": "Dunkel",
   "theme.system": "System",
   "lang.label": "Sprache",
+  "provider.name.commandCodeAuth": "Command Code - Auth",
+  "provider.name.commandCodeApi": "Command Code - API",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark Coding-Tarif",
   "provider.name.volcengineAgentPlan": "Volcengine Ark Agent-Tarif",

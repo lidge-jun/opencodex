@@ -153,10 +153,10 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 69 встроенными пресетами: 58 на основе ключей, семь OAuth, три локальных и
+opencodex поставляется с 70 встроенными пресетами: 58 на основе ключей, восемь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
-выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера, а публичный
-каталог Command Code сообщает ключ как непроверенный. Наиболее заметные записи:
+выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
+Наиболее заметные записи:
 
 **ClinePass** подключается с помощью Cline API key к [официальному каталогу подписки](https://docs.cline.bot/getting-started/clinepass)
 и [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions). Оператор — Cline Bot Inc., указанный в
@@ -234,12 +234,13 @@ Volcengine Agent Plan использует нативную конечную т�
 строками. Он охватывает только serverless text и vision-language chat; отдельные image, audio и GPU
 endpoint в него не входят. Ключи создаются в [Hyperbolic](https://app.hyperbolic.ai).
 
-**Discovery для Command Code.** Пресет читает публичный список `/provider/v1/models` с фиксированного
+**Discovery для Command Code.** Пресет читает список `/provider/v1/models` с фиксированного
 хоста Provider API, сохраняет нативные id моделей со знаком `/` и ограничивает live discovery размером
-256 KiB и 256 исходными строками. Каталог моделей не требует аутентификации, поэтому CLI-флоу входа
-сообщает ключ как непроверенный, а не как ложноположительно действительный. Запросы чата используют
-настроенный bearer-ключ; для доступа к API требуется план Provider, а CLI-мост аутентификации для
-подписок Go/Pro пока недоступен. Ключи создаются в [Command Code Studio](https://commandcode.ai/studio/).
+256 KiB и 256 исходными строками. `ocx login command-code` поддерживает вход через OAuth в браузере
+(с возможностью импорта локальных учётных данных CLI из `~/.commandcode/auth.json` для существующих
+пользователей CLI Command Code); каталог моделей привязан к учётной записи и берётся из
+аутентифицированного discovery endpoint после входа. Запросы чата используют настроенный bearer-ключ.
+Ключи создаются в [Command Code Studio](https://commandcode.ai/studio/).
 
 > **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),

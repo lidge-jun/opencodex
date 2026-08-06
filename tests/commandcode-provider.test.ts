@@ -58,7 +58,7 @@ describe("Command Code provider", () => {
     const entry = commandcodeEntry();
     expect(entry).toMatchObject({
       id: "commandcode",
-      label: "Command Code",
+      label: "Command Code - API",
       adapter: "openai-chat",
       baseUrl: "https://api.commandcode.ai/provider/v1",
       authKind: "key",
@@ -82,7 +82,7 @@ describe("Command Code provider", () => {
 
   test("derives key-login, init, and dashboard presets without persisting trust policy", () => {
     expect(KEY_LOGIN_PROVIDERS.commandcode).toMatchObject({
-      label: "Command Code",
+      label: "Command Code - API",
       adapter: "openai-chat",
       baseUrl: "https://api.commandcode.ai/provider/v1",
       dashboardUrl: "https://commandcode.ai/studio/",

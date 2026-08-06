@@ -1072,6 +1072,12 @@ export interface OcxProviderConfig {
    */
   responsesPath?: string;
   /**
+   * Command Code protocol version sent as `x-command-code-version` on /alpha/generate requests.
+   * The internal endpoint's schema drifts with the CLI version; operators can pin a known-good
+   * version here instead of waiting for a code change. Absent uses the adapter's current default.
+   */
+  commandCodeVersion?: string;
+  /**
    * Responses upstream that stores nothing server-side (DeepSeek documents "the API
    * is stateless"). Stateful request parameters are dropped, `store` is pinned false,
    * and orphaned tool results left by a replay miss are repaired rather than

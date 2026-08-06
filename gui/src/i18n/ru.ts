@@ -83,6 +83,8 @@ export const ru: Record<TKey, string> = {
   "theme.dark": "Тёмная",
   "theme.system": "Системная",
   "lang.label": "Язык",
+  "provider.name.commandCodeAuth": "Command Code - Auth",
+  "provider.name.commandCodeApi": "Command Code - API",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark — тариф Coding",
   "provider.name.volcengineAgentPlan": "Volcengine Ark — тариф Agent",

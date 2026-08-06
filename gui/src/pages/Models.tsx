@@ -4,6 +4,7 @@ import { IconChevron, IconBoxes, IconInfo, IconShuffle, IconCheck, IconAlert } f
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
+import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { type ComboItem, parseComboList } from "../combo-workspace-data";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
@@ -170,8 +171,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   }, []);
 
   const shadowModelOptions = useMemo(
-    () => activeModelOptions(models, disabled, selectedModels ?? {}),
-    [models, disabled, selectedModels],
+    () => activeModelOptions(models, disabled, selectedModels ?? {}, t),
+    [models, disabled, selectedModels, t],
   );
 
   const loadShadowCall = useCallback(async () => {
@@ -723,7 +724,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
             style={{ flex: 1, border: 0, background: "transparent", padding: 0, color: "inherit", cursor: "pointer", textAlign: "left" }}
           >
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
-          <span className="text-body font-semibold">{provider}</span>
+          <span className="text-body font-semibold">{providerDisplaySlug(provider)}</span>
           {isNative && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
@@ -797,7 +798,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                  >
                    <div className="row models-model-row">
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
-                     <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
@@ -823,7 +824,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                          onMouseEnter={keepRowTipOpen}
                          onMouseLeave={onRowLeave}
                        >
-                         <div className="model-tip-id">{m.native ? m.id : m.namespaced}</div>
+                          <div className="model-tip-id">{m.native ? m.id : m.namespaced}</div>
                          {m.displayName && <div className="model-tip-display">{m.displayName}</div>}
                          {m.custom && (
                            <span className="models-chip models-chip--tip muted mono text-caption">
@@ -832,7 +833,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                          )}
                          <div className="model-tip-grid">
                            <span className="model-tip-key">{t("models.tipProvider")}</span>
-                           <span className="model-tip-val">{m.provider}</span>
+                           <span className="model-tip-val">{formatProviderDisplayName(m.provider, t)}</span>
                            {(m.contextWindow || m.contextCap) && (
                              <>
                                <span className="model-tip-key">{t("models.tipContext")}</span>
@@ -1204,8 +1205,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
             <div className="modal-head">
               <h3>
                 {customModalMode === "add"
-                  ? t("models.customAddTitle", { provider: customModalProvider })
-                  : t("models.customEditTitle", { provider: customModalProvider })}
+                  ? t("models.customAddTitle", { provider: formatProviderDisplayName(customModalProvider, t) })
+                  : t("models.customEditTitle", { provider: formatProviderDisplayName(customModalProvider, t) })}
               </h3>
               <button
                 type="button"
@@ -1399,7 +1400,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                   onClick={() => setSelectedProvider(provider)}
                   aria-current={selectedProvider === provider ? "true" : undefined}
                 >
-                  <span className="models-workspace-rail-name">{provider}</span>
+                  <span className="models-workspace-rail-name">{formatProviderDisplayName(provider, t)}</span>
                   <span className="models-workspace-rail-meta">{t("models.active", { active: activeCount, total: rows.length })}</span>
                 </button>
               );

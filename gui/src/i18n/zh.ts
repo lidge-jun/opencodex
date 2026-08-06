@@ -78,6 +78,8 @@ export const zh: Record<TKey, string> = {
   "theme.dark": "深色",
   "theme.system": "跟随系统",
   "lang.label": "语言",
+  "provider.name.commandCodeAuth": "Command Code - Auth",
+  "provider.name.commandCodeApi": "Command Code - API",
   "provider.name.volcengine": "火山方舟",
   "provider.name.volcengineCodingPlan": "火山方舟编程套餐",
   "provider.name.volcengineAgentPlan": "火山方舟智能体套餐",

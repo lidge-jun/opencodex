@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -191,6 +192,94 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(sidecarHits).toBe(0);
       expect(upstreamBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain(CAPTION);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  /*
+   * #1043 activation evidence. The registry classification is only useful if the
+   * strip actually fires for a Zen model, so this drives the real path with the
+   * built-in `opencode-zen` list rather than a fixture list, and asserts the
+   * observable effect: the image bytes are gone from the upstream body and the
+   * omission marker is there instead.
+   *
+   * `big-pickle` is the id that reproduced the reported 400 verbatim against the
+   * live endpoint (devlog/_plan/260805_bug_fix_stack/002_zen_modality_probe.md).
+   */
+  test("a text-only Zen model has its image stripped before the upstream request (#1043)", async () => {
+    let upstreamBody = "";
+    upstream = serveUpstream(b => { upstreamBody = b; });
+
+    const zen = PROVIDER_REGISTRY.find(p => p.id === "opencode-zen");
+    expect(zen?.noVisionModels).toContain("big-pickle");
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike", openaiProviderTierVersion: 2,
+      providers: {
+        // A custom provider carrying the REGISTRY's list verbatim. The built-in
+        // opencode-zen entry pins its own baseUrl, so it cannot be aimed at a local
+        // upstream; what is under test is the classification, which is read from the
+        // registry above rather than written out here.
+        zenlike: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: zen?.noVisionModels,
+        },
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer forward-oauth-token" },
+        body: JSON.stringify(baseRequest("zenlike/big-pickle")),
+      });
+      expect(res.status).toBe(200);
+      // The effect, not merely a 200: no image bytes on the wire, marker present.
+      expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).toContain("[image omitted");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a vision-capable Zen model keeps its image (#1043 negative case)", async () => {
+    let upstreamBody = "";
+    upstream = serveUpstream(b => { upstreamBody = b; });
+
+    const zen = PROVIDER_REGISTRY.find(p => p.id === "opencode-zen");
+    // Measured as accepting images; classifying it would silently degrade it.
+    expect(zen?.noVisionModels).not.toContain("mimo-v2.5-free");
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike", openaiProviderTierVersion: 2,
+      providers: {
+        zenlike: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: zen?.noVisionModels,
+        },
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer forward-oauth-token" },
+        body: JSON.stringify(baseRequest("zenlike/mimo-v2.5-free")),
+      });
+      expect(res.status).toBe(200);
+      expect(upstreamBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).not.toContain("[image omitted");
     } finally {
       await server.stop(true);
     }

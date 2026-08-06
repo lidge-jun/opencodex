@@ -111,6 +111,7 @@ const TOOL_CAPABLE_ADAPTERS = new Set([
   "azure",
   "kiro",
   "mimo-free",
+  "command-code",
 ]);
 
 function localRemoteEvidence(baseUrl: string | undefined): Pick<RouteCapabilityEvidence, "localOnly" | "remoteAllowed"> {

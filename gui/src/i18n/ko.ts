@@ -78,6 +78,8 @@ export const ko: Record<TKey, string> = {
   "theme.dark": "다크",
   "theme.system": "시스템",
   "lang.label": "언어",
+  "provider.name.commandCodeAuth": "Command Code - Auth",
+  "provider.name.commandCodeApi": "Command Code - API",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark 코딩 플랜",
   "provider.name.volcengineAgentPlan": "Volcengine Ark 에이전트 플랜",

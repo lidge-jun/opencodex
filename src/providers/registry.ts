@@ -14,6 +14,7 @@ import {
   cursorModelInputModalities,
   cursorModelReasoningEfforts,
 } from "../adapters/cursor/discovery";
+import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -348,16 +349,89 @@ const THINKING_BUDGET_MODELS = [
 const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus"];
 const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
-// "max" is advertised too: the wire map routes xhigh->max and max->max, so the picker
-// should surface the max tier instead of hiding it behind xhigh.
-const DEEPSEEK_THINKING_EFFORTS = ["high", "xhigh", "max"];
-const DEEPSEEK_THINKING_REASONING_MAP: Record<string, string> = {
+/*
+ * Zen free models that reject `image_url` upstream (#1043, and the reproducible
+ * half of #1024).
+ *
+ * Zen publishes NO modality metadata — its `/v1/models` returns only id, object,
+ * created, owned_by — so this list is measured, not derived. Each id was probed
+ * once against https://opencode.ai/zen/v1 on 2026-08-05 with a text control first
+ * and then a 1x1 PNG; the six below failed the image request, four of them with
+ * `[404] No endpoints found that support image input` and `big-pickle` with the
+ * exact deserialize error quoted in #1043.
+ *
+ * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images and are deliberately
+ * absent. Adding them would silently replace a working image with a caption,
+ * which is worse than the loud 400 this list exists to prevent — see the negative
+ * assertion in tests/provider-registry-parity.test.ts.
+ *
+ * Zen's roster is discovered live while this list is static, so it is a dated
+ * exception list, not a capability model. Re-probe before extending it.
+ * Evidence: devlog/_plan/260805_bug_fix_stack/002_zen_modality_probe.md
+ */
+const OPENCODE_ZEN_TEXT_ONLY_MODELS = [
+  "big-pickle",
+  "nemotron-3-ultra-free",
+  "ling-3.0-flash-free",
+  "north-mini-code-free",
+  "laguna-s-2.1-free",
+  "deepseek-v4-flash-free",
+];
+/*
+ * DeepSeek's Codex ladder is low/high/max, and the two V4 models resolve it
+ * DIFFERENTLY. From the official thinking-mode table (api-docs.deepseek.com,
+ * EN and zh-cn agree, re-verified 2026-08-06):
+ *
+ *   requested  | v4-flash | v4-pro
+ *   low        | low      | high
+ *   high       | high     | high
+ *   xhigh      | high     | max
+ *   max        | max      | max
+ *
+ * Two consequences (#1057):
+ *
+ * - `xhigh` is a COMPATIBILITY ALIAS, not a native tier. It stays in the wire maps
+ *   so existing requests and saved configs keep working, but it is not advertised.
+ * - Pro does NOT honor `low` — the vendor silently upgrades it to `high`. So Pro
+ *   advertises only the two levels it actually distinguishes. Advertising `low`
+ *   there would put a tier in the picker that costs `high`, which is the same
+ *   defect this fixes wearing a different value.
+ *
+ * The vendor page footnotes that Pro's mapping updates in early August 2026; as of
+ * the re-verification above it had not changed. When it does, Pro gains `low` here.
+ *
+ * `medium` has no row in the vendor table — mapping it to `high` is OUR
+ * compatibility choice for clients that only speak the OpenAI ladder.
+ */
+const DEEPSEEK_FLASH_THINKING_EFFORTS = ["low", "high", "max"];
+const DEEPSEEK_PRO_THINKING_EFFORTS = ["high", "max"];
+const DEEPSEEK_PRO_REASONING_MAP: Record<string, string> = {
   low: "high",
   medium: "high",
   high: "high",
   xhigh: "max",
   max: "max",
 };
+const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
+  low: "low",
+  medium: "high",
+  high: "high",
+  xhigh: "high",
+  max: "max",
+};
+/**
+ * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
+ * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
+ * `tests/provider-registry-parity.test.ts` enumerates every id the registry
+ * actually passes here, so a future id this substring test would misread cannot
+ * land silently.
+ */
+const isDeepseekFlashModel = (modelId: string): boolean =>
+  modelId.toLowerCase().includes("flash");
+const deepseekThinkingEffortsFor = (modelId: string): string[] =>
+  isDeepseekFlashModel(modelId) ? DEEPSEEK_FLASH_THINKING_EFFORTS : DEEPSEEK_PRO_THINKING_EFFORTS;
+const deepseekReasoningMapFor = (modelId: string): Record<string, string> =>
+  isDeepseekFlashModel(modelId) ? DEEPSEEK_FLASH_REASONING_MAP : DEEPSEEK_PRO_REASONING_MAP;
 // 260719 Alibaba Token Plan Personal Edition (China/Beijing). Keep it distinct from
 // Coding Plan: the products use different exact allowlists and different base URLs.
 // Evidence: https://help.aliyun.com/en/model-studio/token-plan-personal-overview
@@ -800,6 +874,32 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: ["grok-build-0.1", "grok-composer-2.5-fast"],
   },
   {
+    id: "command-code",
+    label: "Command Code - Auth",
+    adapter: "command-code",
+    baseUrl: "https://api.commandcode.ai",
+    authKind: "oauth",
+    oauthId: "command-code",
+    featured: true,
+    note: "Log in with your Command Code account",
+    // OAuth needs one initial selection, but the exposed catalog is always discovered from the
+    // signed-in account. Do not add a static model list here.
+    defaultModel: "deepseek/deepseek-v4-flash",
+    liveModels: true,
+    modelDiscovery: {
+      url: "https://api.commandcode.ai/provider/v1/models",
+      maxResponseBytes: 262_144,
+      maxModels: 256,
+    },
+    // These are capability facts from official Command Code model profiles, not seeded models.
+    // Unknown/new live models deliberately do not advertise a reasoning picker.
+    reasoningEfforts: [],
+    modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
+    defaultMaxOutputTokens: 64_000,
+    // The proprietary generate wire has no verified per-request serialization flag.
+    parallelToolCalls: false,
+  },
+  {
     id: "anthropic",
     label: "Anthropic Claude",
     adapter: "anthropic",
@@ -938,7 +1038,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k2.7-code-highspeed": [],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS])),
+      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     },
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
@@ -946,7 +1046,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: {
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORT_MAP,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_MAP])),
-      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP])),
+      ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     },
     thinkingToggleModels: OPENCODE_GO_THINKING_TOGGLE_MODELS,
     thinkingBudgetModels: THINKING_BUDGET_MODELS,
@@ -1087,9 +1187,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     //   returned 200), so no noTemperatureModels entry is warranted here.
     modelReasoningEfforts: {
       "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
-      "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+      "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
     },
-    modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
+    modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro") },
     preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
     note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
   },
@@ -1182,8 +1282,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
     - 선택 근거: DeepSeek V4 thinking mode requires history replay, while older DeepSeek reasoner has different compatibility rules. A model-scoped registry flag fixes built-in and stale saved configs without broad provider regressions.
     */
-    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS])),
-    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP])),
+    modelReasoningEfforts: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+    modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
     // Issue #88: every DeepSeek API model is text-only input (no image support upstream) — the
     // vision sidecar describes attached images for them, and the catalog advertises image input
@@ -1256,7 +1356,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "commandcode",
-    label: "Command Code",
+    label: "Command Code - API",
     adapter: "openai-chat",
     baseUrl: "https://api.commandcode.ai/provider/v1",
     authKind: "key",
@@ -1278,7 +1378,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     // Verified 2026-08-03: public /provider/v1/models returns 51 rows; /chat/completions returns
     // 401 UNAUTHORIZED without a Bearer key. Primary source: https://commandcode.ai/docs/provider.
-    note: "Command Code Provider API (OpenAI-compatible); API access requires the Provider plan. CLI auth bridging for Go/Pro subscriptions is not yet available. Docs: https://commandcode.ai/docs/provider.",
+    note: "Command Code Provider API (OpenAI-compatible); API access requires the Provider plan. Use `ocx login command-code` for OAuth account login (imports an existing local Command Code CLI credential when present). Docs: https://commandcode.ai/docs/provider.",
   },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
@@ -1470,10 +1570,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
     noVisionModels: VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
     modelReasoningEfforts: Object.fromEntries(
-      DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS]),
+      DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)]),
     ),
     modelReasoningEffortMap: Object.fromEntries(
-      DEEPSEEK_THINKING_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP]),
+      DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)]),
     ),
     preserveReasoningContentModels: DEEPSEEK_THINKING_MODELS,
     note: "Coding tools only. Volcengine restricts Coding Plan quota to supported AI coding tools and warns that using this key for general API calls may suspend the subscription or ban the account. Use the plan key issued by the Ark console.",
@@ -1519,9 +1619,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: {
       ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
+      "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
     },
-    modelReasoningEffortMap: { "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP },
+    modelReasoningEffortMap: { "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro") },
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS,
     preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
     noVisionModels: ["glm-5.2", "deepseek-v4-pro"],
@@ -1553,12 +1653,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       "qwen3.8-max": ["low", "high", "xhigh"],
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "deepseek-v4-pro": DEEPSEEK_THINKING_EFFORTS,
-      "deepseek-v4-flash": DEEPSEEK_THINKING_EFFORTS,
+      "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
+      "deepseek-v4-flash": deepseekThinkingEffortsFor("deepseek-v4-flash"),
     },
     modelReasoningEffortMap: {
-      "deepseek-v4-pro": DEEPSEEK_THINKING_REASONING_MAP,
-      "deepseek-v4-flash": DEEPSEEK_THINKING_REASONING_MAP,
+      "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
+      "deepseek-v4-flash": deepseekReasoningMapFor("deepseek-v4-flash"),
     },
     thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS,
     preserveReasoningContentModels: ["glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash"],
@@ -1649,7 +1749,17 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     autoToolChoiceOnlyModels: KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS,
     preserveReasoningContentModels: KIMI_THINKING_MODELS,
   },
-  { id: "opencode-zen", label: "opencode zen", baseUrl: "https://opencode.ai/zen/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://opencode.ai/auth" },
+  {
+    id: "opencode-zen",
+    label: "opencode zen",
+    baseUrl: "https://opencode.ai/zen/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://opencode.ai/auth",
+    // #1043: without this the proxy forwards image parts to text-only Zen models and
+    // the upstream rejects the whole request with a 400.
+    noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
+  },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
   {
     id: "opencode-free",
@@ -1665,10 +1775,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     staticHeaders: {
       "x-opencode-client": "desktop",
     },
-    modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, DEEPSEEK_THINKING_EFFORTS])),
-    modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, DEEPSEEK_THINKING_REASONING_MAP])),
+    modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+    modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     preserveReasoningContentModels: OPENCODE_FREE_DEEPSEEK_MODELS,
-    noVisionModels: OPENCODE_FREE_DEEPSEEK_MODELS,
+    // Same Zen roster behind the same base URL, so it carries the same measured
+    // text-only list rather than only its DeepSeek member (#1043).
+    noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
   },
   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },

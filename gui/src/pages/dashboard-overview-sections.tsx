@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { IconAlert, IconCheck, IconInfo, IconRefresh, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
+import { formatNamespacedModelId } from "../provider-icons";
 import { navigateHash } from "../hash-routing";
 import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
 import { shadowSourceModelBadge } from "./shadow-call-source";
@@ -112,7 +113,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
           value={injectionModel}
           options={[
             { value: "", label: t("dash.injectionNone") },
-            ...injectionAvailable.map(m => ({ value: m.namespaced, label: `${m.provider} / ${m.model}` })),
+            ...injectionAvailable.map(m => ({ value: m.namespaced, label: formatNamespacedModelId(`${m.provider}/${m.model}`, t) })),
           ]}
           onChange={(v) => { void saveInjection({ model: v || null, effort: injectionEffort || null }); }}
           disabled={injectionSaving}
@@ -360,7 +361,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             </button>
             <Select
               value={shadowCall?.model ?? ""}
-              options={[{ value: "", label: "—" }, ...models.map(m => ({ value: m.id, label: `${m.provider}/${m.id}` }))]}
+              options={[{ value: "", label: "—" }, ...models.map(m => ({ value: m.id, label: formatNamespacedModelId(`${m.provider}/${m.id}`, t) }))]}
               onChange={v => { void saveShadowCall({ model: v }); }}
               disabled={!shadowCall || shadowCallSaving || !shadowCall?.enabled}
               label={t("dash.shadowCallModel")}

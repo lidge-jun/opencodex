@@ -143,10 +143,9 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 69 個含まれています。キー方式 58、OAuth 7、ローカル 3、
+opencodex には組み込みプリセットが 70 個含まれています。キー方式 58、OAuth 8、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
-入力したキーを検証した後保存します(検証はプロバイダー固有で、Command Code の公開カタログはキーを
-検証不能として報告します)。主な項目は以下のとおりです:
+入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
 **ClinePass** は Cline API キーで[公式サブスクリプションカタログ](https://docs.cline.bot/getting-started/clinepass)と
 [Chat Completions エンドポイント](https://docs.cline.bot/api/chat-completions)に接続します。運営主体は
@@ -222,11 +221,12 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 vision-language chat のみを対象とし、別系統の image、audio、GPU endpoint は対象外です。キーは
 [Hyperbolic](https://app.hyperbolic.ai) で作成します。
 
-**Command Code の discovery:** preset は Command Code の公開 `/provider/v1/models` リストを固定の
+**Command Code の discovery:** preset は Command Code の `/provider/v1/models` リストを固定の
 Provider API ホストから読み、スラッシュを含むネイティブモデル ID を保持し、live discovery を
-256 KiB と raw 256 行に制限します。モデルカタログは未認証のため、CLI ログインフローはキーを
-誤って有効と報告せず、検証不能として報告します。チャットリクエストは設定済みの bearer キーを使います。
-API アクセスには Provider プランが必要で、Go/Pro サブスクリプション向けの CLI 認証ブリッジはまだ利用できません。
+256 KiB と raw 256 行に制限します。`ocx login command-code` はブラウザーでの OAuth サインインを
+サポートします(既存の Command Code CLI ユーザー向けに `~/.commandcode/auth.json` からのローカル
+CLI 資格情報の取り込みも可能)。モデルカタログはアカウント単位で、ログイン後に認証済みの
+discovery エンドポイントから取得します。チャットリクエストは設定済みの bearer キーを使います。
 キーは [Command Code Studio](https://commandcode.ai/studio/) で作成します。
 
 > **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)

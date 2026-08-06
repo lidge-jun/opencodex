@@ -1,6 +1,7 @@
 import type { TFn } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
+import { formatNamespacedModelId } from "../provider-icons";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -88,12 +89,14 @@ export function activeModelOptions(
   models: ModelRow[],
   disabled: Set<string>,
   selected: ProviderModelMap,
+  t?: TFn,
 ): { value: string; label: string }[] {
   const options: { value: string; label: string }[] = [];
   for (const m of models) {
     const blocked = disabled.has(m.id) || disabled.has(m.namespaced);
     if (modelVisible(selected, m.provider, m.id, m.native === true, blocked)) {
-      options.push({ value: m.namespaced, label: m.namespaced });
+      // Friendly label (display-name provider prefix) while the raw route stays the value.
+      options.push({ value: m.namespaced, label: t ? formatNamespacedModelId(m.namespaced, t) : m.namespaced });
     }
   }
   return options;

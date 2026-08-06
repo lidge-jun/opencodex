@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { NativeProfileManager } from "../../src/codex/native-profile-manager";
 import { isCodexAccountUsable } from "../../src/codex/account-usability";
 import { isMainAccountTokenLive, MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
-import { loadConfig } from "../../src/config";
+import { atomicWriteFile, loadConfig } from "../../src/config";
 import {
   nativeMainStartupGateSnapshot,
   waitForNativeMainStartupGate,
@@ -68,17 +68,23 @@ const server = startServer(0, {
 });
 
 writeFileSync(portPath, String(server.port));
+// #1061: the parent parses this file as soon as it exists, so a partial write
+// surfaces as `Unexpected EOF`. atomicWriteFile publishes through a rename, so a
+// reader sees either nothing or the whole document.
 void waitForNativeMainStartupGate().then(() => {
-  writeFileSync(settledPath, JSON.stringify({
+  atomicWriteFile(settledPath, JSON.stringify({
     gate: nativeMainStartupGateSnapshot(),
     mainTokenLive: isMainAccountTokenLive(),
     mainUsable: isCodexAccountUsable(loadConfig(), MAIN_CODEX_ACCOUNT_ID),
   }));
 }).catch((error: unknown) => {
-  writeFileSync(settledPath, JSON.stringify({
+  atomicWriteFile(settledPath, JSON.stringify({
     error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
   }));
 });
 
 while (!existsSync(stopPath)) await Bun.sleep(10);
+// Test-only stall, opt-in. It exists so the parent's bounded teardown can be shown
+// firing (#1061) — without it the timeout branch is present but never exercised.
+if (process.env.OCX_TEST_STALL_ON_STOP === "1") await new Promise(() => {});
 await server.stop(true);

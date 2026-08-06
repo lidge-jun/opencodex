@@ -11,7 +11,6 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { identifyRoutedModel } from "../../adapters/identity";
@@ -200,6 +199,26 @@ export function isExactComboCatalogModel(
   return model !== undefined && exactComboSlugs.has(catalogModelSlug(model));
 }
 
+/**
+ * Friendly Codex-picker label for a routed `provider/model` slug. Command Code's two config
+ * ids differ by a single dash (`command-code` vs `commandcode`), so relabel them to the
+ * lowercase-dash style the opencode presets use: `commandcode-auth/x` and `commandcode-api/x`.
+ * The model-id portion also carries a redundant `<vendor>-` prefix (`deepseek-deepseek-v4-flash`)
+ * that is dropped for display. All other providers keep the raw slug exactly as before.
+ */
+function routedDisplayName(slug: string): string {
+  const slash = slug.indexOf("/");
+  if (slash <= 0) return slug;
+  const provider = slug.slice(0, slash);
+  let model = slug.slice(slash + 1);
+  if (provider === "command-code" || provider === "commandcode") {
+    const m = model.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);
+    if (m && model.startsWith(`${m[1]}-${m[1]}-`)) model = model.slice(m[1]!.length + 1);
+    return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${model}`;
+  }
+  return slug;
+}
+
 export function deriveEntry(
   template: RawEntry | null,
   slug: string,
@@ -220,7 +239,7 @@ export function deriveEntry(
   if (template) {
     const e = JSON.parse(JSON.stringify(template)) as RawEntry;
     e.slug = slug;
-    e.display_name = slug;
+    e.display_name = routedDisplayName(slug);
     e.description = desc;
     e.priority = priority;
     e.visibility = "list";
@@ -271,7 +290,7 @@ export function deriveEntry(
   }
   // Fallback when no template is available (best-effort; strict parser may need more).
   const entry: RawEntry = {
-    slug, display_name: slug, description: desc,
+    slug, display_name: routedDisplayName(slug), description: desc,
     shell_type: "shell_command", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
     ...(isRouted ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
