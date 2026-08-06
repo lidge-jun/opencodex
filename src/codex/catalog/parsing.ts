@@ -119,7 +119,12 @@ export interface CatalogModel {
 
 export type RawEntry = Record<string, unknown>;
 
+export const COMBO_CATALOG_KIND = "combo-v1";
 export const ROUTED_CONTEXT_COMPAT_CATALOG_KIND = "routed-context-compat-v1";
+
+export function isComboCatalogEntry(entry: RawEntry): boolean {
+  return entry.opencodex_catalog_kind === COMBO_CATALOG_KIND;
+}
 
 export function isRoutedContextCompatEntry(entry: RawEntry): boolean {
   return entry.opencodex_catalog_kind === ROUTED_CONTEXT_COMPAT_CATALOG_KIND;

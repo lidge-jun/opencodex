@@ -877,7 +877,7 @@ async function applyFinalRouteRequestNormalization(args: {
   parsed._responseModelId = comboAttempt
     ? route.modelId
     : route.providerName === "openai" && isCanonicalOpenAiForwardProvider(route.provider)
-      ? parsed.modelId
+      ? (route.codexAccountNamespace ? parsed.modelId : route.modelId)
       : encodedModelIdIsReversible
         ? canonicalRoutedModelId
         : `${route.providerName}/${route.modelId}`;

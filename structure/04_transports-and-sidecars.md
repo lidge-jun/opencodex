@@ -24,7 +24,8 @@ Responses-compatible streaming output.
 
 Model identity has two deliberately separate forms. Upstream requests and request logs use the
 final physical route model id. Client-facing Responses metadata uses the canonical public selector:
-native canonical OpenAI traffic keeps its selected bare id, while every routed provider uses the
+native canonical OpenAI traffic normalizes an unscoped `openai/<native>` selector to the selected
+bare id (account-qualified selectors remain qualified), while every routed provider uses the
 one-slash `routedSlug(provider, model)` codec when that alias uniquely decodes to the selected
 native id. A slash-containing id with an unknown or colliding encoding keeps its raw qualified
 selector to prevent a later turn from switching to a different native-exact model. The client

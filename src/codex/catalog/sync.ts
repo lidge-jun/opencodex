@@ -30,7 +30,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedContextCompatEntry, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, ROUTED_CONTEXT_COMPAT_CATALOG_KIND, routedContextCompatTarget } from "./parsing";
+import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isComboCatalogEntry, isDefaultCatalogPath, isRoutedContextCompatEntry, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, ROUTED_CONTEXT_COMPAT_CATALOG_KIND, routedContextCompatTarget } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
@@ -341,6 +341,7 @@ export function buildCatalogEntries(
   const routedContextCompatWinnerByBareId = new Map<string, CatalogModel>();
   for (const model of goModels) {
     if (model.adapter !== "anthropic" || model.id.includes("/")) continue;
+    if (comboPublicSlugs.has(model.id)) continue;
     const slug = catalogModelSlug(model);
     if (slug === model.id) continue;
     const current = routedContextCompatWinnerByBareId.get(model.id);
@@ -468,6 +469,13 @@ function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
 }
 
+/** Current marker plus the pre-marker description signature needed to retire legacy combo rows. */
+function isComboLifecycleEntry(entry: RawEntry): boolean {
+  if (isComboCatalogEntry(entry)) return true;
+  const desc = typeof entry.description === "string" ? entry.description : "";
+  return desc.startsWith(`Routed via opencodex → ${COMBO_NAMESPACE} (`);
+}
+
 export function mergeCatalogEntriesForSync(
   catalogModels: RawEntry[],
   routedEntries: RawEntry[],
@@ -493,7 +501,7 @@ export function mergeCatalogEntriesForSync(
     ? catalogModels
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
-      && m.owned_by !== COMBO_NAMESPACE
+      && !isComboLifecycleEntry(m)
       && !isRoutedContextCompatEntry(m)
       && !goIds.has(m.slug as string)
       && !isUnsupportedOpenAiNativeSlug(m.slug as string))
@@ -618,7 +626,7 @@ export function mergeCatalogEntriesForSync(
   if (!hasPhysicalComboProvider) {
     finalRoutedEntries = finalRoutedEntries.filter(entry => {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
-      const comboOwned = slug.startsWith(`${COMBO_NAMESPACE}/`) || entry.owned_by === COMBO_NAMESPACE;
+      const comboOwned = slug.startsWith(`${COMBO_NAMESPACE}/`) || isComboLifecycleEntry(entry);
       return !comboOwned || freshSlugs.has(slug);
     });
   }

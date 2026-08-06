@@ -32,6 +32,8 @@ so a selector persisted by Codex Desktop still resolves the routed row's context
 metadata. This row is derived from the effective per-model adapter identity (including configured
 model overrides), not a provider-name convention. When providers share a bare model id, the
 lexicographically smallest canonical routed slug owns the single compatibility row.
+If a combo reserves that bare public slug, the combo row wins and no hidden compatibility duplicate
+is emitted.
 It preserves the canonical row's `owned_by` value and is identified only by the nonsemantic
 `opencodex_catalog_kind = "routed-context-compat-v1"` marker plus its
 `opencodex_routed_slug` target. Empty-discovery protection in both sync and convergence retains the
@@ -39,12 +41,20 @@ alias only while that target routed row survives; catalog convergence never prom
 native slug set; restore removes it with the routed rows. Repeated sync/convergence must therefore
 leave exactly one hidden alias and no visible native duplicate.
 
+Generated combo rows use the independent `opencodex_catalog_kind = "combo-v1"` lifecycle marker.
+`owned_by` remains provider-supplied semantic metadata and must never decide combo cleanup; sync
+removes stale combo rows by the marker, the canonical `combo/` namespace, or the legacy generated
+description signature, so a normal provider is free to report `owned_by: "combo"` without losing
+its catalog row.
+
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
-instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+instead. A gather flight captures registry-only per-model wire defaults before any async discovery,
+includes them in its authority identity, and never rereads mutable registry state when mapping the
+response. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
 
 ## Startup readiness
 

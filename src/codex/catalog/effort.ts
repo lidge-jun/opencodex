@@ -31,7 +31,7 @@ import { redactSecretString, redactUserPath } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { readCatalog, readCodexCatalogPath } from "./parsing";
+import { COMBO_CATALOG_KIND, readCatalog, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, RawEntry } from "./parsing";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import { loadBundledCodexCatalog } from "./bundled";
@@ -111,6 +111,7 @@ export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
 
 export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
   if (!model) return;
+  if (model.provider === COMBO_NAMESPACE) entry.opencodex_catalog_kind = COMBO_CATALOG_KIND;
   // Preserve upstream/provider ownership as semantic catalog metadata. Generated lifecycle
   // markers must use opencodex_catalog_kind instead of overloading this field.
   if (model.owned_by) entry.owned_by = model.owned_by;

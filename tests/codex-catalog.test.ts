@@ -271,6 +271,7 @@ describe("combo catalog capability intersection", () => {
       .toEqual(["low", "medium"]);
     expect(row?.input_modalities).toEqual(["text"]);
     expect(row?.owned_by).toBe("combo");
+    expect(row?.opencodex_catalog_kind).toBe("combo-v1");
   });
 
   test("treats bare and slashed combo aliases as routed catalog rows", () => {
@@ -305,6 +306,34 @@ describe("combo catalog capability intersection", () => {
     expect((row.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
       .toEqual(["low", "medium"]);
     expect(row.input_modalities).toEqual(["text"]);
+  });
+
+  test("does not emit a hidden Anthropic compatibility row when a combo reserves the bare slug", () => {
+    const alias = "claude-sonnet-5";
+    const combo = deriveComboCatalogModel(
+      "mixed",
+      normalizedCombo({ alias }),
+      [memberA, memberB],
+    )!;
+    const anthropic = {
+      provider: "anthropic-compatible",
+      adapter: "anthropic" as const,
+      id: alias,
+      owned_by: "anthropic",
+    };
+    const rows = buildCatalogEntries(
+      nativeTemplate(),
+      [],
+      [anthropic, combo],
+      undefined,
+      false,
+      "default",
+      new Set([alias]),
+    );
+
+    expect(rows.filter(row => row.slug === alias)).toHaveLength(1);
+    expect(rows.find(row => row.slug === alias)?.opencodex_catalog_kind).toBe("combo-v1");
+    expect(rows.some(row => row.opencodex_catalog_kind === "routed-context-compat-v1")).toBe(false);
   });
 
   test("restores a non-OpenAI catalog row after its shadowing combo alias is renamed or deleted", () => {
@@ -359,6 +388,7 @@ describe("combo catalog capability intersection", () => {
       const stale = {
         slug,
         owned_by: "combo",
+        opencodex_catalog_kind: "combo-v1",
         input_modalities: ["text"],
         supported_reasoning_levels: [{ effort: "low" }],
       };
@@ -368,6 +398,33 @@ describe("combo catalog capability intersection", () => {
       );
       expect(merged.some(entry => entry.slug === slug)).toBe(false);
     }
+
+    const legacy = {
+      slug: "legacy-combo-alias",
+      owned_by: "combo",
+      description: "Routed via opencodex → combo (combo).",
+    };
+    const merged = mergeCatalogEntriesForSync(
+      [legacy], [], new Map(), [], false, new Set(), null, new Set(), new Set(),
+      "default", new Set(), false,
+    );
+    expect(merged.some(entry => entry.slug === legacy.slug)).toBe(false);
+  });
+
+  test("keeps semantic owned_by metadata out of combo lifecycle cleanup", () => {
+    const semanticOwnerRows = [
+      { slug: "third-party-native", owned_by: "combo" },
+      { slug: "vendor/model", owned_by: "combo", description: "Vendor catalog model." },
+    ];
+    const merged = mergeCatalogEntriesForSync(
+      semanticOwnerRows, [], new Map(), [], false, new Set(), null, new Set(), new Set(),
+      "default", new Set(), false,
+    );
+
+    expect(merged.map(entry => entry.slug)).toEqual(expect.arrayContaining([
+      "third-party-native",
+      "vendor/model",
+    ]));
   });
 
   test("filters aliased combos by public or canonical disabled model ids", () => {

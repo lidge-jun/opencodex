@@ -25,11 +25,11 @@ import {
   type OAuthActiveTokenObservation,
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { modelInList } from "../../types";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED, modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
+import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerModelWireDefault } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
@@ -132,7 +132,31 @@ interface CapturedProviderGather {
   readonly discovery: ResolvedProviderModelDiscovery;
   readonly policy: CatalogProviderDiscoveryPolicySnapshot;
   readonly request: CapturedModelsRequest;
+  readonly registryWireDefaults: Readonly<Record<string, string>>;
   readonly observedAuth?: ModelsAuthResolution;
+}
+
+function captureRegistryWireDefaults(
+  name: string,
+  provider: OcxProviderConfig,
+): Readonly<Record<string, string>> {
+  const declared = getProviderRegistryEntry(name)?.modelWireDefaults ?? {};
+  const captured: Record<string, string> = {};
+  for (const modelId of Object.keys(declared)) {
+    const wire = providerModelWireDefault(
+      name,
+      provider,
+      modelId,
+      MODEL_ADAPTER_OVERRIDE_ALLOWED,
+      "responses",
+    );
+    if (wire) captured[modelId.trim().toLowerCase()] = wire;
+  }
+  return Object.freeze(captured);
+}
+
+function capturedRegistryWireDefault(captured: CapturedProviderGather, modelId: string): string | null {
+  return captured.registryWireDefaults[modelId.trim().toLowerCase()] ?? null;
 }
 
 interface GatherFlightCapture {
@@ -379,6 +403,7 @@ function captureProviderGather(
     maxModels: resolved.maxModels,
   });
   const registryTransportMatch = providerMatchesRegistryTransport(name, provider);
+  const registryWireDefaults = captureRegistryWireDefaults(name, provider);
   const trustedOpenAiApi = captureTrustedOpenAiApiPolicy(name, registryTransportMatch);
   const policy = detachedFrozen({
     provider: name,
@@ -402,6 +427,7 @@ function captureProviderGather(
     discovery,
     policy,
     request,
+    registryWireDefaults,
     ...(observedAuth ? { observedAuth: Object.freeze({ ...observedAuth }) } : {}),
   });
 }
@@ -441,6 +467,7 @@ function captureGatherFlight(
         // It is the one member of a provider row that is legitimately a function,
         // so it is dropped here rather than allowed to break every encode.
         provider: omitProviderTransportExecutor(provider.provider),
+        registryWireDefaults: provider.registryWireDefaults,
       }))),
     discoveryPolicySnapshots,
     providers: Object.freeze(providers),
@@ -548,8 +575,13 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
   return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
 }
 
-export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
-  void name;
+export function applyProviderConfigHints(
+  name: string,
+  prov: OcxProviderConfig,
+  model: CatalogModel,
+  providerCap?: number,
+  capturedWireDefault?: string | null,
+): CatalogModel {
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   let inputModalities = configuredInputModalities(prov, model.id);
@@ -566,7 +598,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
-    adapter: resolveWireProtocolOverride(name, model.id, prov).adapter,
+    adapter: resolveWireProtocolOverride(name, model.id, prov, "responses", capturedWireDefault).adapter,
     ...(configuredCap !== undefined
       ? {
         contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
@@ -599,14 +631,32 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   return providerCap !== undefined ? { ...hinted, contextCap: providerCap, contextCapped: false } : hinted;
 }
 
-export function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string, contextCap?: number): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap);
+export function catalogHintsFromProviderConfig(
+  name: string,
+  prov: OcxProviderConfig,
+  id: string,
+  contextCap?: number,
+  capturedWireDefault?: string | null,
+): Partial<CatalogModel> {
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, capturedWireDefault);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
 
-export function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[], contextCap?: number): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap));
+export function applyConfigHintsToCachedModels(
+  name: string,
+  prov: OcxProviderConfig,
+  models: CatalogModel[],
+  contextCap?: number,
+  registryWireDefaults?: Readonly<Record<string, string>>,
+): CatalogModel[] {
+  return models.map(model => applyProviderConfigHints(
+    name,
+    prov,
+    model,
+    contextCap,
+    registryWireDefaults ? registryWireDefaults[model.id.trim().toLowerCase()] ?? null : undefined,
+  ));
 }
 
 export function isDatedVariantId(liveId: string, configuredId: string): boolean {
@@ -840,7 +890,7 @@ async function fetchProviderModelsWithAuth(
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, capturedRegistryWireDefault(captured, id)),
   }));
   // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
   // discovery failure left by an older live configuration even when the account is logged out.
@@ -861,7 +911,7 @@ async function fetchProviderModelsWithAuth(
     : [{
       id: prov.defaultModel,
       provider: name,
-      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap),
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, capturedRegistryWireDefault(captured, prov.defaultModel)),
     }];
   const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
   const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
@@ -876,10 +926,10 @@ async function fetchProviderModelsWithAuth(
     // suffix) but filter the static seed to the bases the account actually has — so models not on the
     // plan (e.g. claude-fable-5) drop out instead of failing ERROR_BAD_MODEL_NAME. Fall back to the seed.
     const cachedCursor = getFreshCached(name, ttlMs);
-    if (cachedCursor) return applyConfigHintsToCachedModels(name, prov, cachedCursor);
+    if (cachedCursor) return applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, captured.registryWireDefaults);
     if (isModelsFetchCoolingDown(name)) {
       const cooling = getStaleCached(name);
-      return cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured;
+      return cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, captured.registryWireDefaults) : configured;
     }
     const liveResult = await fetchCursorUsableModels({ apiKey, baseUrl: prov.baseUrl });
     if (liveResult.ok) {
@@ -896,7 +946,7 @@ async function fetchProviderModelsWithAuth(
       `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
     );
     const staleCursor = getStaleCached(name);
-    return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured;
+    return staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, captured.registryWireDefaults) : configured;
   }
   if (prov.authMode === "oauth" && !apiKey) {
     // No usable token (logged out, or account marked needsReauth). Still surface the
@@ -905,12 +955,12 @@ async function fetchProviderModelsWithAuth(
     return configured;
   }
   const fresh = getFreshCached(name, ttlMs);
-  if (fresh) return withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap)); // dedups Codex's frequent /v1/models polling within the TTL
+  if (fresh) return withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, captured.registryWireDefaults)); // dedups Codex's frequent /v1/models polling within the TTL
   if (isModelsFetchCoolingDown(name)) {
     // A recently-failed provider (unreachable API, missing proxy, bad key) must not re-pay the
     // fetch timeout on every catalog poll — the dashboard polls this path per page load.
     const stale = getStaleCached(name);
-    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap)) : failedDiscoveryConfigured;
+    return stale ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, captured.registryWireDefaults)) : failedDiscoveryConfigured;
   }
   const url = request.url;
   const headers = materializeCapturedHeaders(request, apiKey);
@@ -929,7 +979,7 @@ async function fetchProviderModelsWithAuth(
     const stale = getStaleCached(name);
     return {
       models: stale
-        ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
+        ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, captured.registryWireDefaults))
         : failedDiscoveryConfigured,
       fallback: stale ? "stale" : "configured",
       shouldLog,
@@ -1002,7 +1052,7 @@ async function fetchProviderModelsWithAuth(
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
         ...catalogHintsFromModelsApiItem(name, m),
-      }, contextCap);
+      }, contextCap, capturedRegistryWireDefault(captured, m.id));
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
@@ -1020,7 +1070,13 @@ async function fetchProviderModelsWithAuth(
       const dated = live.find(l => isDatedVariantId(l.id, m.id));
       if (dated) {
         // Reapply config hints so alias-keyed overrides (modelContextWindows etc.) win.
-        live.push(applyProviderConfigHints(name, prov, { ...dated, id: m.id }, contextCap));
+        live.push(applyProviderConfigHints(
+          name,
+          prov,
+          { ...dated, id: m.id },
+          contextCap,
+          capturedRegistryWireDefault(captured, m.id),
+        ));
       } else if (seedVertexDefault || shouldRetainConfiguredProviderModel(name, m.id)) {
         live.push(m);
       } else {

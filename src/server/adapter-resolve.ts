@@ -24,12 +24,15 @@ import { type InboundWire, providerModelWireDefault } from "../providers/registr
  * because the Chat and Anthropic surfaces translate into a Responses-shaped body and
  * replay through `handleResponses`; those two callers pass their real inbound so a
  * scoped registry default cannot fire for a client that never asked for that wire.
+ * `capturedRegistryDefault` freezes catalog-gather authority across async discovery:
+ * `null` is an authoritative absence, while `undefined` keeps the ordinary live lookup.
  */
 export function resolveWireProtocolOverride(
   providerName: string,
   modelId: string,
   providerConfig: OcxProviderConfig,
   inbound: InboundWire = "responses",
+  capturedRegistryDefault?: string | null,
 ): OcxProviderConfig {
   const pinned = pinnedWireAdapter(providerName, modelId);
   if (pinned && providerConfig.adapter !== pinned) {
@@ -42,7 +45,9 @@ export function resolveWireProtocolOverride(
   // opt-out from a registry default). Invalid hand-edited values fall through to the default.
   const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)
     ? configured
-    : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound);
+    : capturedRegistryDefault === undefined
+      ? providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound)
+      : capturedRegistryDefault ?? undefined;
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter

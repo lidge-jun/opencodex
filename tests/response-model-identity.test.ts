@@ -9,7 +9,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function routedConfig(providerName: string, adapter: OcxProviderConfig["adapter"], models?: string[]): OcxConfig {
+function routedConfig(
+  providerName: string,
+  adapter: OcxProviderConfig["adapter"],
+  models?: string[],
+  providerOverrides: Partial<OcxProviderConfig> = {},
+): OcxConfig {
   return {
     port: 0,
     defaultProvider: providerName,
@@ -20,6 +25,7 @@ function routedConfig(providerName: string, adapter: OcxProviderConfig["adapter"
         authMode: "key",
         apiKey: "test-key",
         ...(models ? { models } : {}),
+        ...providerOverrides,
       },
     },
   } as OcxConfig;
@@ -43,6 +49,8 @@ async function post(args: {
   adapter?: OcxProviderConfig["adapter"];
   models?: string[];
   stream?: boolean;
+  providerOverrides?: Partial<OcxProviderConfig>;
+  requestHeaders?: Record<string, string>;
 }): Promise<{ response: Response; upstreamModel: unknown; logCtx: RequestLogContext }> {
   const providerName = args.providerName ?? "fixture-anthropic";
   const adapter = args.adapter ?? "openai-chat";
@@ -82,10 +90,10 @@ async function post(args: {
   const response = await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...args.requestHeaders },
       body: JSON.stringify({ model: args.model, input: "ping", stream }),
     }),
-    routedConfig(providerName, adapter, args.models),
+    routedConfig(providerName, adapter, args.models, args.providerOverrides),
     logCtx,
     {},
   );
@@ -164,6 +172,24 @@ describe("routed response model identity", () => {
     expect((await result.response.json() as Record<string, unknown>).model)
       .toBe("fixture-anthropic/claude-sonnet-5");
     expect(result.logCtx.resolvedModel).toBe("claude-sonnet-5");
+  });
+
+  test("canonical OpenAI forward responses normalize a qualified selector to the native slug", async () => {
+    const result = await post({
+      model: "openai/gpt-5.6-sol",
+      providerName: "openai",
+      adapter: "openai-responses",
+      providerOverrides: {
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        codexAccountMode: "direct",
+      },
+      requestHeaders: { authorization: "Bearer test-forward-token" },
+    });
+
+    expect(result.upstreamModel).toBe("gpt-5.6-sol");
+    expect((await result.response.json() as Record<string, unknown>).model).toBe("gpt-5.6-sol");
+    expect(result.logCtx.resolvedModel).toBe("gpt-5.6-sol");
   });
 
   test("Responses passthrough rewrites every SSE snapshot and keeps the upstream selector bare", async () => {
