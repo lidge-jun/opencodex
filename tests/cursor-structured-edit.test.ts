@@ -254,6 +254,8 @@ describe("cursor protobuf event translation", () => {
   test("emits a structured edit_file call as an apply_patch custom tool call", () => {
     const state = createCursorProtobufEventState({
       clientToolNames: [CURSOR_EDIT_FILE_TOOL, "apply_patch"],
+      // We advertised the synthetic edit tool on this request, so conversion is ours to do.
+      syntheticStructuredEditToolNames: [CURSOR_EDIT_FILE_TOOL],
       toolSchemas: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_INPUT_SCHEMA]]),
       cursorToolNameMap: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_TOOL]]),
     });
@@ -292,6 +294,7 @@ describe("cursor protobuf event translation", () => {
   test("drops a malformed structured edit call with a clear error instead of relaying it", () => {
     const state = createCursorProtobufEventState({
       clientToolNames: [CURSOR_EDIT_FILE_TOOL],
+      syntheticStructuredEditToolNames: [CURSOR_EDIT_FILE_TOOL],
       toolSchemas: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_INPUT_SCHEMA]]),
       cursorToolNameMap: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_TOOL]]),
     });
@@ -304,7 +307,7 @@ describe("cursor protobuf event translation", () => {
     ]);
   });
 
-  test("stateless native-exec path converts edit_file the same way", () => {
+  test("stateless native-exec path passes edit_file through untranslated (no provenance)", () => {
     const args = create(McpArgsSchema, {
       name: CURSOR_EDIT_FILE_TOOL,
       toolName: CURSOR_EDIT_FILE_TOOL,
@@ -316,28 +319,50 @@ describe("cursor protobuf event translation", () => {
         new_string: encoder.encode(JSON.stringify("y")),
       },
     });
-    expect(mapSyntheticMcpExecToToolEvents(args, "fallback")).toEqual([
-      { type: "tool_call_start", id: "call_2", name: "apply_patch" },
-      {
-        type: "tool_call_delta",
-        arguments: JSON.stringify({
-          input: [
-            "*** Begin Patch",
-            "*** Update File: src/g.ts",
-            "@@",
-            "-x",
-            "+y",
-            "*** End Patch",
-          ].join("\n"),
-        }),
+    // The stateless branch carries no request state, so it has no record of whether WE
+    // advertised `edit_file` on this request. Converting on the name alone would rewrite a
+    // client or MCP tool of the same name into an apply_patch it never asked for (#1036
+    // review), so this path relays the call untouched. The live transport always seeds
+    // state, so real traffic still converts — see the stateful tests above.
+    const events = mapSyntheticMcpExecToToolEvents(args, "fallback");
+    expect(events[0]).toEqual({ type: "tool_call_start", id: "call_2", name: CURSOR_EDIT_FILE_TOOL });
+    expect(JSON.stringify(events)).not.toContain("*** Begin Patch");
+    expect(events.at(-1)).toEqual({ type: "tool_call_end", id: "call_2" });
+  });
+
+  test("a client tool named edit_file is not hijacked when we advertised nothing (#1036 review)", () => {
+    // The collision the name-only gate allowed: an MCP server exposing `edit_file`. State exists
+    // (so this is the live shape), but syntheticStructuredEditToolNames is absent because we
+    // advertised no synthetic tools on this request.
+    const state = createCursorProtobufEventState({
+      clientToolNames: [CURSOR_EDIT_FILE_TOOL],
+      toolSchemas: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_INPUT_SCHEMA]]),
+      cursorToolNameMap: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_TOOL]]),
+    });
+    const args = create(McpArgsSchema, {
+      name: CURSOR_EDIT_FILE_TOOL,
+      toolName: CURSOR_EDIT_FILE_TOOL,
+      toolCallId: "call_collision",
+      providerIdentifier: "opencodex-responses",
+      args: {
+        file_path: encoder.encode(JSON.stringify("src/client-owned.ts")),
+        old_string: encoder.encode(JSON.stringify("x")),
+        new_string: encoder.encode(JSON.stringify("y")),
       },
-      { type: "tool_call_end", id: "call_2" },
-    ]);
+    });
+
+    const events = mapSyntheticMcpExecToToolEvents(args, "call_collision", { state });
+
+    expect(JSON.stringify(events)).not.toContain("*** Begin Patch");
+    expect(JSON.stringify(events)).not.toContain("was not converted to apply_patch");
+    expect(JSON.stringify(events)).toContain(CURSOR_EDIT_FILE_TOOL);
   });
 
   test("native-exec mcpArgs path (planMcpArgsHandling) emits the translated apply_patch call", () => {
     const state = createCursorProtobufEventState({
       clientToolNames: [CURSOR_EDIT_FILE_TOOL, "apply_patch"],
+      // We advertised the synthetic edit tool on this request, so conversion is ours to do.
+      syntheticStructuredEditToolNames: [CURSOR_EDIT_FILE_TOOL],
       toolSchemas: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_INPUT_SCHEMA]]),
       cursorToolNameMap: new Map([[CURSOR_EDIT_FILE_TOOL, CURSOR_EDIT_FILE_TOOL]]),
     });
@@ -386,6 +411,7 @@ describe("cursor protobuf event translation", () => {
     // map that display name back to the advertised `multi_edit` before translating (#399 pattern).
     const state = createCursorProtobufEventState({
       clientToolNames: [CURSOR_MULTI_EDIT_TOOL, "apply_patch"],
+      syntheticStructuredEditToolNames: [CURSOR_MULTI_EDIT_TOOL],
       toolSchemas: new Map([[CURSOR_MULTI_EDIT_TOOL, CURSOR_MULTI_EDIT_INPUT_SCHEMA]]),
       cursorToolNameMap: new Map([[CURSOR_MULTI_EDIT_TOOL, CURSOR_MULTI_EDIT_TOOL]]),
     });

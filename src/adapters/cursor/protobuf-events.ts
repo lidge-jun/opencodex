@@ -164,7 +164,33 @@ export interface CursorProtobufEventState {
   toolSchemas?: Map<string, unknown>;
   /** Cursor wire-name → original Responses/Codex tool name for this request. */
   cursorToolNameMap?: Map<string, string>;
+  /**
+   * Bare names WE advertised as synthetic structured-edit tools on this request.
+   * See structuredEditCallIsOurs: conversion is gated on provenance, not on the name.
+   */
+  syntheticStructuredEditToolNames?: ReadonlySet<string>;
   translatorBudget?: TranslatorBudget;
+}
+
+
+/**
+ * Did WE advertise this bare tool name as a synthetic structured-edit tool on this request?
+ *
+ * Provenance, not a name test. `edit_file` / `multi_edit` are ordinary names a client or MCP
+ * server may legitimately expose, and `cursorStructuredEditTools` already refuses to shadow one
+ * that exists. Converting on the name alone would undo that refusal at the other end of the
+ * request: the client's own call would be silently re-emitted as `apply_patch`, or dropped with
+ * an error naming a conversion the user never asked for.
+ *
+ * Absent set = we advertised nothing, so nothing converts. Fail-closed in the safe direction:
+ * an unconverted structured call is a visible, recoverable failure; a wrongly converted one
+ * edits a file.
+ */
+function structuredEditCallIsOurs(
+  advertised: ReadonlySet<string> | undefined,
+  toolName: string,
+): boolean {
+  return advertised?.has(toolName) === true;
 }
 
 export function createCursorProtobufEventState(options: {
@@ -172,6 +198,7 @@ export function createCursorProtobufEventState(options: {
   parallelToolCalls?: boolean;
   toolSchemas?: Map<string, unknown>;
   cursorToolNameMap?: Map<string, string>;
+  syntheticStructuredEditToolNames?: Iterable<string>;
   contextUsage?: CursorContextUsageControls;
   /**
    * Request-local input estimate derived from the payload actually sent. Used only
@@ -188,6 +215,9 @@ export function createCursorProtobufEventState(options: {
     openToolCalls: new Map(),
     completedToolCalls: new Set(),
     ...(options.clientToolNames ? { clientToolNames: new Set(options.clientToolNames) } : {}),
+    ...(options.syntheticStructuredEditToolNames
+      ? { syntheticStructuredEditToolNames: new Set(options.syntheticStructuredEditToolNames) }
+      : {}),
     ...(options.parallelToolCalls !== undefined ? { parallelToolCalls: options.parallelToolCalls } : {}),
     startedClientToolCalls: 0,
     ...(options.toolSchemas ? { toolSchemas: options.toolSchemas } : {}),
@@ -454,13 +484,16 @@ export function mapSyntheticMcpExecToToolEvents(
       return [{ type: "error", message: cursorShellBridgeDropError(responsesName) }];
     }
   }
-  const translation = translateStructuredEditCall(responsesName, normalizedArgs);
-  if (translation?.error !== undefined) {
-    return [{ type: "error", message: `${responsesName} call was not converted to apply_patch: ${translation.error}` }];
-  }
-  const emittedName = translation ? CODEX_APPLY_PATCH_TOOL : responsesName;
-  const emittedArgs = translation ? JSON.stringify({ input: translation.patch }) : normalizedArgs;
   // Stateless fallback (no shared event state): emit a complete, self-contained tool call.
+  //
+  // No conversion happens here by design (#1036 review). Structured-edit translation is gated on
+  // provenance — did WE advertise this bare name on THIS request — and that record lives on the
+  // request state, which this branch does not have. Converting anyway would reinstate the exact
+  // hazard the gate exists to close: a client or MCP tool legitimately named `edit_file` would be
+  // rewritten into an apply_patch it never asked for. The live path always carries state
+  // (live-transport seeds it), so this only affects direct/unit callers.
+  const emittedName = responsesName;
+  const emittedArgs = normalizedArgs;
   return [
     { type: "tool_call_start", id: callId, name: emittedName },
     ...(emittedArgs.length > 2
@@ -523,7 +556,9 @@ function commitToolCall(state: CursorProtobufEventState, callId: string, finalAr
   }
   // Structured edit calls are converted to apply_patch here so both the interactionUpdate and the
   // native-exec mcpArgs paths emit the same valid freeform payload (#1017).
-  const translation = translateStructuredEditCall(open.name, finalArgs);
+  const translation = structuredEditCallIsOurs(state.syntheticStructuredEditToolNames, open.name)
+    ? translateStructuredEditCall(open.name, finalArgs)
+    : undefined;
   if (translation?.error !== undefined) {
     return dropStructuredEditCall(state, callId, open.name, translation.error);
   }

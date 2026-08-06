@@ -67,6 +67,7 @@ import {
   buildCursorToolDefinitions,
   cursorRequestAdvertisesApplyPatch,
   cursorRequestAdvertisesStructuredEdits,
+  cursorStructuredEditTools,
   cursorRequestHasShellAlias,
   cursorToolArgNormalizeSchema,
   cursorToolWireName,
@@ -547,6 +548,17 @@ class LiveCursorTransport implements CursorTransport {
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
       structuredEditAvailable: cursorRequestAdvertisesStructuredEdits(request.tools, request.toolChoice),
     };
+    // Provenance for the synthetic structured-edit tools (#1036 review): record the bare names WE
+    // actually advertised on THIS request, taken from the definitions that were really sent rather
+    // than from the name alone. A client or MCP tool legitimately called `edit_file` is in
+    // clientToolDefs too, so the discriminator is `cursorStructuredEditTools` having produced it —
+    // which is precisely what `structuredEditAvailable` already reflects.
+    const syntheticStructuredEditToolNames = new Set(
+      (this.execContext.structuredEditAvailable
+        ? cursorStructuredEditTools(request.tools, request.toolChoice)
+        : []
+      ).map(tool => tool.name),
+    );
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();
     for (const tool of cursorVisibleTools ?? []) {
@@ -573,6 +585,7 @@ class LiveCursorTransport implements CursorTransport {
         parallelToolCalls: request.parallelToolCalls,
         toolSchemas,
         cursorToolNameMap,
+        syntheticStructuredEditToolNames,
         translatorBudget: this.translatorBudget,
         contextUsage,
         ...(prepared.estimatedInputTokens !== undefined
