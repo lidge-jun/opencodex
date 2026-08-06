@@ -73,6 +73,6 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ## 已知限制
 
 - **Responses 后端与保活：** opencodex 在 `/v1/responses` 流上、上游静默期间会发送 `response.heartbeat` 保活事件。Grok Build 的 Responses 解码器会拒绝未知事件类型，因此手动配置为 `api_backend = "responses"` 的模型在上游较慢时可能会在对话中途失败。自动注册的条目会固定为 `api_backend = "chat_completions"`，这样就不会暴露原始的心跳帧。
-- **服务安装后的 `ocx restart`：** 当 opencodex 运行在服务管理器下时，`ocx restart` 目前会停止该服务，并将其替换为一个非受管进程——服务持久化能力（自动重启、登录时启动）会丢失，直到下一次 `ocx service` 设置完成；如果这个非受管进程退出，受管理区块可能会指向一个已失效的代理，直到下一次 `ocx start`/`ocx ensure` 刷新它。
+- **服务安装后的 `ocx restart`：** 运行中的代理自行管理排空和替换，因此服务监督和受管理区块会继续保留。只有确认同一端口上出现另一个经过身份验证且健康的进程后，命令才会成功。
 - **配置读取时机：** 先启动 opencodex，再启动 `grok`，结果最可预测。Grok Build 会监视 `~/.grok/config.toml`，并在 `[model]` 表实际发生变化时重新加载（大约一秒的防抖，按内容比较），因此刷新后的区块可以在无需重启的情况下进入已打开的会话。要确认 Grok 解析到了什么，可以运行 `grok inspect`：它会列出已加载的配置来源，并提示被拒绝的字段，但不会打印最终解析出的模型列表。注意，单个 TOML 错误会使*整个*用户配置层失效，这也是 opencodex 以原子方式写入文件的原因——Grok 不会看到半写入的配置。
 - **目录更新：** 有边界线的区块反映的是注入时的目录状态。添加提供方或模型后，运行 `ocx ensure`（或重启代理）以刷新它。

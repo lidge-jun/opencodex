@@ -73,6 +73,6 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ## 알려진 제한
 
 - **Responses 백엔드와 keep-alive:** 상위 업스트림이 조용한 동안 opencodex는 `/v1/responses` 스트림에 `response.heartbeat` keep-alive를 보냅니다. Grok Build의 Responses 디코더는 알 수 없는 이벤트 타입을 거부하므로, 수동으로 설정한 `api_backend = "responses"` 모델은 느린 업스트림에서 턴 도중 실패할 수 있습니다. 자동 등록된 항목은 `api_backend = "chat_completions"`로 고정되며, 원시 heartbeat 프레임을 노출하지 않습니다.
-- **서비스 설치된 `ocx restart`:** opencodex가 서비스 관리자 아래에서 실행될 때 `ocx restart`는 현재 서비스를 멈추고 unmanaged 프로세스로 바꿉니다. 서비스 지속성(auto-restart, start-at-login)은 다음 `ocx service` 설정 전까지 사라지며, 그 unmanaged 프로세스가 죽으면 다음 `ocx start`/`ocx ensure`가 갱신하기 전까지 관리 블록이 죽은 프록시를 가리킬 수 있습니다.
+- **서비스 설치된 `ocx restart`:** 실행 중인 프록시가 드레인과 교체를 직접 소유하므로 서비스 감시와 관리 블록이 그대로 유지됩니다. 같은 포트에 신원이 확인된 다른 프로세스가 정상 상태가 된 뒤에만 명령이 성공합니다.
 - **설정 읽기 시점:** 가장 예측 가능한 결과를 얻으려면 opencodex를 먼저 시작하고 그다음 `grok`를 실행합니다. Grok Build는 `~/.grok/config.toml`을 감시하다가 `[model]` 테이블이 실제로 바뀔 때 다시 불러옵니다(내용을 기준으로 비교하는 약 1초 디바운스). 그래서 새로 고친 블록은 재시작 없이 열린 세션에도 들어갑니다. Grok가 무엇을 파싱했는지 확인하려면 `grok inspect`를 실행합니다. 이 명령은 로드한 설정 원본을 나열하고 거부한 필드가 있으면 경고합니다. 해석된 모델 목록은 출력하지 않습니다. TOML 오류 하나만으로도 사용자 설정 레이어 전체가 무효가 되므로, opencodex가 파일을 원자적으로 쓰는 이유도 여기에 있습니다. Grok는 절반만 써진 설정을 보지 않습니다.
 - **카탈로그 업데이트:** 펜스 블록은 주입 시점의 카탈로그를 반영합니다. 공급자나 모델을 추가한 뒤에는 `ocx ensure`를 실행하거나 프록시를 재시작해 갱신합니다.

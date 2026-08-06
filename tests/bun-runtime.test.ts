@@ -243,9 +243,15 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
     for (const relative of launchers) {
       const text = readFileSync(join(import.meta.dir, "..", relative), "utf8");
       const spawnCount = (text.match(/spawn\(process\.execPath/g) ?? []).length;
-      const stampCount = (text.match(/env: withProcessRuntimeProvenance\(/g) ?? []).length;
+      const directStampCount = (text.match(/env: withProcessRuntimeProvenance\(/g) ?? []).length;
+      const detachedStartStampCount = relative === "src/cli/index.ts"
+        ? (text.match(/env: detachedStartEnvironment\(\)/g) ?? []).length
+        : 0;
+      if (detachedStartStampCount > 0) {
+        expect(text).toContain("return withProcessRuntimeProvenance(env)");
+      }
       expect(spawnCount).toBeGreaterThan(0);
-      expect(stampCount).toBe(spawnCount);
+      expect(directStampCount + detachedStartStampCount).toBe(spawnCount);
     }
   });
 });

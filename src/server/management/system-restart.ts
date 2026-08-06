@@ -17,8 +17,8 @@
  * - If detached spawn fails (sync throw or pre-start `error`): exit(1) without
  *   markRecycling — after drain the listen socket is already closed, so a latch
  *   reset cannot recover serving. Clear inherited `OCX_SERVICE` so exit cleanup
- *   can restore Codex/Grok fences (ensure/tray daemons set the marker without a
- *   real supervisor). Log only a stable errno code — never the raw message
+ *   can restore Codex/Grok fences when a stale service marker has no viable
+ *   supervisor. Log only a stable errno code — never the raw message
  *   (paths in ENOENT often include the OS username).
  */
 import { spawn } from "node:child_process";
@@ -35,13 +35,13 @@ import {
 import { isServiceViable } from "../../service";
 import { readRuntimePort } from "../../config";
 import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
+import {
+  MEMORY_DRAIN_RESTART_MS,
+  REPLACEMENT_READY_TIMEOUT_MS,
+} from "../../lib/system-restart-contract";
 import { findLiveProxy } from "../proxy-liveness";
 
-/** Fixed v1 drain window for the memory-card action (not config-driven). */
-export const MEMORY_DRAIN_RESTART_MS = 60_000;
-// Ordinary pinned-port start can spend 60s reclaiming a Windows ghost listener
-// and another 5s settling it. Keep one polling/scheduler margin beyond that.
-export const REPLACEMENT_READY_TIMEOUT_MS = 70_000;
+export { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../../lib/system-restart-contract";
 export const DEADLINE_LISTENER_STOP_TIMEOUT_MS = 5_000;
 const REPLACEMENT_READY_POLL_MS = 150;
 
@@ -223,11 +223,13 @@ function spawnDetachedStart(
   return new Promise<void>((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      delete env.OCX_SERVICE;
       child = spawn(process.execPath, args, {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+        env: withProcessRuntimeProvenance(env),
       });
     } catch (err) {
       reject(err);
@@ -411,8 +413,8 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
           `⚠️  Drain-and-restart spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
         );
         // Listen socket is already stopped; do not markRecycling — no child to inherit fences.
-        // ensure/tray children inherit OCX_SERVICE=1 without an installed service; clear it so
-        // syncCleanup can restore Codex/Grok fences instead of leaving clients pointed at a dead port.
+        // No replacement inherited the routing. Clear a stale service marker so
+        // this unsupervised parent restores clients after the failed handoff.
         delete process.env.OCX_SERVICE;
         exitProcess(1);
         return;

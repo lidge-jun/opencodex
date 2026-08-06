@@ -12,6 +12,7 @@ import {
   setSystemRestartIoForTests,
   waitForReplacementReady,
 } from "../src/server/management/system-restart";
+import { SYSTEM_RESTART_EXPECTED_PID_HEADER } from "../src/lib/system-restart-contract";
 import type { OcxConfig } from "../src/types";
 
 function config(): OcxConfig {
@@ -632,7 +633,7 @@ describe("acceptSystemRestart", () => {
       acceptSystemRestart({
         isDraining: () => false,
         getActiveTurnCount: () => 0,
-        // ensure/tray: marker set, but no installed service → unsupervised spawn path
+        // A stale service marker without a viable service must use the unsupervised spawn path.
         isSupervisedServiceChild: () => false,
         listenPort: () => 10123,
         schedule: (fn) => { scheduled = fn; },
@@ -783,6 +784,51 @@ describe("POST /api/system/restart", () => {
     expect(body.drainTimeoutMs).toBe(60_000);
     expect(body.alreadyDraining).toBe(false);
     expect(body.message.toLowerCase()).toContain("drain");
+  });
+
+  test("rejects an invalid expected PID before scheduling restart", async () => {
+    let scheduled = 0;
+    setSystemRestartIoForTests({
+      schedule: () => { scheduled += 1; },
+    });
+    const req = new Request("http://127.0.0.1:10100/api/system/restart", {
+      method: "POST",
+      headers: { [SYSTEM_RESTART_EXPECTED_PID_HEADER]: "not-a-pid" },
+    });
+    const res = await handleManagementAPI(req, new URL(req.url), config());
+    expect(res?.status).toBe(400);
+    expect(scheduled).toBe(0);
+  });
+
+  test("rejects a stale expected PID before scheduling restart", async () => {
+    let scheduled = 0;
+    setSystemRestartIoForTests({
+      schedule: () => { scheduled += 1; },
+    });
+    const stalePid = process.pid === 1 ? 2 : 1;
+    const req = new Request("http://127.0.0.1:10100/api/system/restart", {
+      method: "POST",
+      headers: { [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(stalePid) },
+    });
+    const res = await handleManagementAPI(req, new URL(req.url), config());
+    expect(res?.status).toBe(409);
+    expect(scheduled).toBe(0);
+  });
+
+  test("accepts a matching expected PID", async () => {
+    let scheduled = 0;
+    setSystemRestartIoForTests({
+      isDraining: () => false,
+      schedule: () => { scheduled += 1; },
+      setDraining: () => {},
+    });
+    const req = new Request("http://127.0.0.1:10100/api/system/restart", {
+      method: "POST",
+      headers: { [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid) },
+    });
+    const res = await handleManagementAPI(req, new URL(req.url), config());
+    expect(res?.status).toBe(202);
+    expect(scheduled).toBe(1);
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

@@ -11,6 +11,7 @@ import { isProxyAdmissionSecret } from "../src/server/auth-cors";
 import {
   initializeManagementAuthState,
   issueGuiSession,
+  managementPrincipal,
   removeManagementTokenPathBestEffort,
   requireManagementAuth,
 } from "../src/server/management-auth";
@@ -28,6 +29,15 @@ import {
   LOCAL_ATTESTATION_PROOF_HEADER,
   verifyLocalAttestationProof,
 } from "../src/lib/local-management-attestation";
+import {
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_METHOD,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  createSystemRestartCapability,
+} from "../src/lib/system-restart-contract";
+import { setSystemRestartIoForTests } from "../src/server/management/system-restart";
 
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -80,6 +90,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemRestartIoForTests();
   setIcaclsRunnerForTests(null);
   setPlatformForTests(null);
   resetHardenedStateForTests();
@@ -104,6 +115,95 @@ describe("management and data-plane credential separation", () => {
       });
       const proof = health.headers.get(LOCAL_ATTESTATION_PROOF_HEADER);
       expect(verifyLocalAttestationProof(secret, challenge, process.pid, server.port, proof)).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a process-scoped capability authorizes only the exact restart operation", async () => {
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    let scheduled = 0;
+    // The capability contract is platform-independent. Avoid making this HTTP
+    // integration assertion depend on the host's live icacls policy; dedicated
+    // Windows ACL tests cover that boundary separately.
+    setPlatformForTests("linux");
+    setSystemRestartIoForTests({
+      isDraining: () => false,
+      schedule: () => { scheduled += 1; },
+      setDraining: () => {},
+    });
+    const unavailable = { available: false, reason: "injected unavailable state" } as const;
+    const server = startServer(0, {
+      localAttestationSecret: secret,
+      managementAuthState: unavailable,
+    });
+    try {
+      const capability = createSystemRestartCapability(
+        secret,
+        nonce,
+        SYSTEM_RESTART_METHOD,
+        SYSTEM_RESTART_PATH,
+        process.pid,
+        server.port,
+      );
+      const headers = {
+        [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid),
+        [SYSTEM_RESTART_NONCE_HEADER]: nonce,
+        [SYSTEM_RESTART_CAPABILITY_HEADER]: capability!,
+      };
+
+      const restart = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers,
+      });
+      expect(restart.status).toBe(202);
+      expect(scheduled).toBe(1);
+
+      const foreignRoute = await fetch(new URL("/api/config", server.url), {
+        method: "POST",
+        headers,
+      });
+      expect(foreignRoute.status).toBe(503);
+
+      const tampered = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers: { ...headers, [SYSTEM_RESTART_CAPABILITY_HEADER]: "C".repeat(43) },
+      });
+      expect(tampered.status).toBe(503);
+
+      const wrongMethod = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: "DELETE",
+        headers,
+      });
+      expect(wrongMethod.status).toBe(503);
+
+      const wrongPortCapability = createSystemRestartCapability(
+        secret,
+        nonce,
+        SYSTEM_RESTART_METHOD,
+        SYSTEM_RESTART_PATH,
+        process.pid,
+        server.port + 1,
+      );
+      const wrongPort = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers: {
+          ...headers,
+          [SYSTEM_RESTART_CAPABILITY_HEADER]: wrongPortCapability!,
+        },
+      });
+      expect(wrongPort.status).toBe(503);
+      expect(scheduled).toBe(1);
+
+      const request = new Request(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers,
+      });
+      const local = { attestationSecret: secret, pid: process.pid, port: server.port };
+      expect(requireManagementAuth(request, unavailable, remoteConfig(), local)).toBeNull();
+      expect(managementPrincipal(request, unavailable, remoteConfig(), local))
+        .toBe("system-restart-capability");
     } finally {
       await server.stop(true);
     }

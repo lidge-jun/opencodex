@@ -857,8 +857,9 @@ test("sideband frame log records direction, kind, and U+FFFD context without ful
 });
 
 // ── /readyz: per-server readiness gate ────────────────────────────────────────
-// /healthz stays byte-for-byte the same immediate liveness signal; /readyz is the
-// stricter gate that reflects the post-startup Codex sync outcome. It is exact-GET
+// /healthz remains the immediate liveness signal (with only bounded capability
+// metadata); /readyz is the stricter gate that reflects the post-startup Codex sync
+// outcome. It is exact-GET
 // and unauthenticated (like /healthz), returns a sanitized body, 503+Retry-After
 // while pending/failed, and 200 only when ready. Each startServer gets its own
 // PRIVATE gate via createReadinessGate(); starting/failing a second server in the

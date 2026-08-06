@@ -183,6 +183,7 @@ import {
   createLocalAttestationProof,
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
+import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../lib/system-restart-contract";
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -628,7 +629,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = server.port ?? listenPort;
-        const response = jsonResponse({ status: "ok", service: "opencodex", version: VERSION, uptime: process.uptime(), pid: process.pid, port: healthPort }, 200, req, config);
+        const response = jsonResponse({
+          status: "ok",
+          service: "opencodex",
+          version: VERSION,
+          uptime: process.uptime(),
+          pid: process.pid,
+          port: healthPort,
+          restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION,
+        }, 200, req, config);
         const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
         if (challenge) {
           const proof = createLocalAttestationProof(localAttestationSecret, challenge, process.pid, healthPort);
@@ -674,12 +683,17 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
 
       if (url.pathname.startsWith("/api/")) {
-        const apiAuthError = requireManagementAuth(req, managementAuth, config);
+        const localManagementAuth = {
+          attestationSecret: localAttestationSecret,
+          pid: process.pid,
+          port: boundPort ?? requestServer.port ?? listenPort,
+        };
+        const apiAuthError = requireManagementAuth(req, managementAuth, config, localManagementAuth);
         if (apiAuthError) return withManagementCors(apiAuthError, req, config);
         // Which credential passed the gate, resolved from the same session table the
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
-        const principal = managementPrincipal(req, managementAuth, config) ?? undefined;
+        const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
         const mgmtResponse = await handleManagementAPI(req, url, config, deps.managementApi, principal);
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);

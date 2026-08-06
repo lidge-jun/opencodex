@@ -13,6 +13,14 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { adminApiTokenFilePath } from "../lib/admin-secrets";
+import {
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  parseExpectedSystemRestartPid,
+  verifySystemRestartCapability,
+} from "../lib/system-restart-contract";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
@@ -245,20 +253,58 @@ export function issueGuiSession(
  * minted for a browser, and it only authorizes a mutation after the origin and the
  * per-session CSRF token match. Consent-bearing routes must key off this value
  * rather than off request headers, which the token holder can forge freely.
+ * `system-restart-capability` is a process-scoped HMAC accepted only for the exact
+ * restart route and bound to the current process PID and listening port.
  */
-export type ManagementPrincipal = "admin-token" | "gui-session";
+export type ManagementPrincipal = "admin-token" | "gui-session" | "system-restart-capability";
+
+export interface LocalManagementAuthContext {
+  attestationSecret: string;
+  pid: number;
+  port: number;
+}
+
+function hasSystemRestartCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (!local || req.method !== "POST") return false;
+  let path: string;
+  try {
+    path = new URL(req.url).pathname;
+  } catch {
+    return false;
+  }
+  if (path !== SYSTEM_RESTART_PATH) return false;
+  const expectedPid = parseExpectedSystemRestartPid(
+    req.headers.get(SYSTEM_RESTART_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  return verifySystemRestartCapability(
+    local.attestationSecret,
+    req.headers.get(SYSTEM_RESTART_NONCE_HEADER),
+    req.method,
+    path,
+    local.pid,
+    local.port,
+    req.headers.get(SYSTEM_RESTART_CAPABILITY_HEADER),
+  );
+}
 
 /**
  * The principal for a request that already passed `requireManagementAuth`. Kept as a
  * separate resolution (rather than a changed return type) so every existing caller
- * keeps its `Response | null` contract; the value is derived from the same session
- * table and the same CSRF comparison the gate uses, so the two cannot disagree.
+ * keeps its `Response | null` contract. Browser and admin principals are derived
+ * from the same session table and CSRF comparison the gate uses; the restart
+ * principal is derived from the same process-scoped capability check.
  */
 export function managementPrincipal(
   req: Request,
   state: ManagementAuthState,
   config?: OcxConfig,
+  local?: LocalManagementAuthContext,
 ): ManagementPrincipal | null {
+  if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
   if (!state.available) return null;
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
@@ -273,7 +319,9 @@ export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,
   config?: OcxConfig,
+  local?: LocalManagementAuthContext,
 ): Response | null {
+  if (hasSystemRestartCapability(req, local)) return null;
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",

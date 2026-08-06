@@ -21,7 +21,15 @@ import {
 } from "../config";
 import { collectStatus } from "./status";
 import { dispatchInternalCliCommand, type InternalCliCommand } from "./internal-dispatch";
-import { runTrayProxyRestart, runTrayProxyStart } from "./tray-proxy";
+import {
+  discoverStableProxyForRestart,
+  isProxyReplacement,
+  runProxyRestart,
+  runTrayProxyStart,
+  type ProxyRestartLive,
+  type ProxyRestartResult,
+} from "./tray-proxy";
+import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
@@ -50,6 +58,7 @@ import { removeOwnedConfigState } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
+import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
 initializeNodeLauncherContext();
 const args = process.argv.slice(2);
@@ -281,7 +290,8 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (!recycling && !process.env.OCX_SERVICE && !currentExternalCodexModelProvider()) {
+    const preserveRouting = process.env.OCX_SERVICE === "1";
+    if (!recycling && !preserveRouting && !currentExternalCodexModelProvider()) {
       try {
         const restored = restoreNativeCodex();
         if (!restored.success) {
@@ -297,7 +307,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Grok fence is shared state we must not remove — that service keeps running and would be
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
-    if (!recycling && !process.env.OCX_SERVICE && serviceEnvironmentOwnedHere()) {
+    if (!recycling && !preserveRouting && serviceEnvironmentOwnedHere()) {
       try { stripGrokConfig(); } catch { /* best-effort restore */ }
     }
     return cleanupSucceeded;
@@ -402,15 +412,27 @@ async function handleStart(options: { block?: boolean } = {}) {
   }
 }
 
-async function handleEnsure() {
+function detachedStartEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Only a real service wrapper may claim supervision. A detached ensure/tray child
+  // is an ordinary owner: while live it maintains routing, and on exit it restores it.
+  delete env.OCX_SERVICE;
+  return withProcessRuntimeProvenance(env);
+}
+
+async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Promise<boolean> {
   if (!currentExternalCodexModelProvider()) reconcileJournal();
   const config = loadConfig();
   if (!codexAutoStartEnabled(config)) {
     console.log("Codex autostart is disabled.");
-    return;
+    return false;
   }
   const live = await findLiveProxy();
   if (live) {
+    if (options.existingIsSuccess === false) {
+      console.error("Proxy appeared while restart was confirming absence; no start was attempted.");
+      return false;
+    }
       const synced = await syncModelsToCodex(live.port).catch(e => {
         console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
         return null;
@@ -427,7 +449,7 @@ async function handleEnsure() {
         else if (!g.ok) console.error(`⚠️  ${g.message}`);
       } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
       console.log(`✅ Proxy running on port ${live.port}`);
-      return;
+      return true;
     }
 
   const pinPort = config.port ?? 10100;
@@ -435,14 +457,15 @@ async function handleEnsure() {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+    env: detachedStartEnvironment(),
   });
   child.unref();
 
   const port = (await waitForProxy())?.port;
   if (!port) {
     console.error("❌ Proxy did not become healthy after starting.");
-    process.exit(1);
+    process.exitCode = 1;
+    return false;
   }
   // Deterministic fence guarantee: the spawned child injects late in its own startup, but
   // this parent returns as soon as /healthz responds — inject here too (idempotent block
@@ -461,12 +484,14 @@ async function handleEnsure() {
   });
   if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
   console.log(`✅ Proxy running on port ${port}`);
+  return true;
 }
 
 /** Fixed tray action: start the proxy without depending on codexAutoStart. */
-async function handleTrayProxyStart(): Promise<void> {
+async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> {
   const ok = await runTrayProxyStart({
     findLive: findLiveProxy,
+    existingIsSuccess,
     diagnoseService: () => {
       const service = diagnoseService();
       return { installed: service.installed, startable: serviceStartableFromTray(service), summary: service.summary };
@@ -479,29 +504,117 @@ async function handleTrayProxyStart(): Promise<void> {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+        env: detachedStartEnvironment(),
       });
       child.unref();
     },
-    waitForProxy,
+    // serviceCommand("start") already spends up to 20s confirming the supervised
+    // child. Slow Windows hosts can still be publishing native-main state after that
+    // first window, so keep one shared follow-up budget instead of returning a false
+    // failure while Task Scheduler is still starting the approved child.
+    waitForProxy: () => waitForProxy(40_000),
     info: message => console.log(message),
     error: message => console.error(message),
   });
-  if (!ok) process.exitCode = 1;
+  // serviceCommand("start") can set exitCode=1 after its own 20s probe, while
+  // the coordinator's bounded follow-up observes the same service become live.
+  // The final observed state, not the earlier probe, owns this command result.
+  process.exitCode = ok ? 0 : 1;
+  return ok;
+}
+
+const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
+
+async function waitForProxyReplacement(
+  previous: ProxyRestartLive,
+  deadlineAt: number,
+): Promise<ProxyRestartLive | null> {
+  while (Date.now() < deadlineAt) {
+    const live = await findLiveProxy({ deadlineAt });
+    if (Date.now() >= deadlineAt) return null;
+    // Modern /healthz publishes a PID. Require a different, identity-verified process;
+    // merely seeing the old port online again is not proof that restart completed.
+    if (isProxyReplacement(previous, live)) {
+      return live;
+    }
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs > 0) await Bun.sleep(Math.min(250, remainingMs));
+  }
+  return null;
+}
+
+function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
+  if (result.phase === "identity") {
+    console.error("❌ Refusing to restart because the running proxy identity could not be attested.");
+  } else if (result.phase === "request") {
+    const code = result.error instanceof Error ? result.error.message : "";
+    if (code === "restart_capability_unsupported") {
+      console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
+      console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
+    } else {
+      console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
+    }
+  } else if (result.phase === "replacement") {
+    console.error("❌ Proxy restart was accepted, but no identity-verified replacement became healthy in time.");
+  } else {
+    console.error("❌ Proxy was not running and the fallback start did not become healthy.");
+  }
+}
+
+async function handleProxyRestart(
+  startWhenStopped: () => Promise<boolean | "skipped">,
+): Promise<boolean> {
+  const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
+  const result = await runProxyRestart({
+    findLive: () => discoverStableProxyForRestart({
+      findLive: () => findLiveProxy({ deadlineAt, attempts: 2 }),
+      expired: () => Date.now() >= deadlineAt,
+    }),
+    startWhenStopped,
+    requestInPlaceRestart: previous => requestBoundSystemRestart(previous, deadlineAt),
+    waitForReplacement: previous => waitForProxyReplacement(previous, deadlineAt),
+  });
+  if (!result.ok) reportRestartFailure(result);
+  process.exitCode = result.ok ? 0 : 1;
+  return result.ok;
 }
 
 async function handleTrayProxyRestart(): Promise<void> {
-  const ok = await runTrayProxyRestart({
-    stop: async () => {
-      await handleStop();
-      return !process.exitCode || process.exitCode === 0;
-    },
-    start: async () => {
-      await handleTrayProxyStart();
-      return !process.exitCode || process.exitCode === 0;
-    },
-  });
-  if (!ok) process.exitCode = 1;
+  await handleProxyRestart(() => handleTrayProxyStart(false));
+}
+
+async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
+  if (!codexAutoStartEnabled(loadConfig())) {
+    console.log("Codex autostart is disabled; no proxy was started.");
+    return "skipped";
+  }
+  return handleEnsure({ existingIsSuccess: false });
+}
+
+async function restoreSharedClientStateAfterStop(): Promise<boolean> {
+  let restored = true;
+  try {
+    const result = await restoreNativeCodexAsync();
+    if (result.success) console.log(`↩️  ${result.message}`);
+    else {
+      restored = false;
+      console.error(`⚠️  ${result.message}`);
+    }
+  } catch (error) {
+    restored = false;
+    console.error(`⚠️  Native Codex restore failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  // A refused or thrown Grok strip is actionable because it would point Grok at a dead proxy.
+  try {
+    const grok = stripGrokConfig();
+    if (grok.changed) console.log(`↩️  ${grok.message}`);
+    else if (!grok.ok) { restored = false; console.error(`⚠️  ${grok.message}`); }
+  } catch (error) {
+    restored = false;
+    console.error(`⚠️  Grok config restore failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return restored;
 }
 
 async function handleStop() {
@@ -575,26 +688,11 @@ async function handleStop() {
       removeRuntimePortIfPidIs(staleRuntimePid);
     }
   }
-  if (!ownershipBlocked) {
-    const r = await restoreNativeCodexAsync();
-    if (r.success) console.log(`↩️  ${r.message}`);
-    else {
-      stopFailed = true;
-      console.error(`⚠️  ${r.message}`);
-    }
-  }
-  // revertSystemEnv is NOT gated: it carries its own ownership check and concerns launchctl
-  // user env, not CODEX_HOME. Safety net for when the daemon's syncCleanup didn't run (SIGKILL).
+  // Environment ownership is independent from service ownership. Always roll back
+  // current-home variables; the helper refuses foreign markers on its own.
   try { revertSystemEnv(); } catch { /* best-effort */ }
   if (!ownershipBlocked) {
-    // Same safety net for the Grok Build managed block (marker-owned, idempotent).
-    try {
-      const g = stripGrokConfig();
-      if (g.changed) console.log(`↩️  ${g.message}`);
-      // A refused strip (e.g. orphaned marker) leaves the fence pointing at a dead proxy —
-      // reporting success there hides a broken end state.
-      else if (!g.ok) { stopFailed = true; console.error(`⚠️  ${g.message}`); }
-    } catch { /* best-effort */ }
+    if (!await restoreSharedClientStateAfterStop()) stopFailed = true;
   }
   // Set the code rather than exiting inline: `restart` and the tray coordinator call this
   // function and need it to RETURN so they can decide what to do next.
@@ -1078,7 +1176,7 @@ switch (command) {
   case "__tray-restart":
   case "__startup-health":
     await dispatchInternalCliCommand(command as InternalCliCommand, {
-      trayStart: handleTrayProxyStart,
+      trayStart: async () => { await handleTrayProxyStart(); },
       trayRestart: handleTrayProxyRestart,
       startupHealth: async () => {
         const { collectStartupHealth } = await import("../codex/autostart-health");
@@ -1099,10 +1197,9 @@ switch (command) {
     break;
   }
   case "restart": {
-    // A failed stop must not be followed by a re-inject: with a foreign service still running
-    // (ownership mismatch) we would rewrite shared config we just declined to touch.
-    if (await handleStop()) await handleEnsure();
-    else console.error("↩️  Restart aborted: the proxy was not stopped cleanly.");
+    // The running proxy owns its drain and replacement through /api/system/restart.
+    // If nothing is live, restart degrades to the documented `ensure` start behavior.
+    await handleProxyRestart(handleRestartStartWhenStopped);
     break;
   }
   case "health": {

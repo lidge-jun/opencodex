@@ -17,6 +17,8 @@ export interface HealthzIdentity {
   version?: unknown;
   uptime?: unknown;
   pid?: unknown;
+  port?: unknown;
+  restartCapability?: unknown;
 }
 
 export interface LivenessIo {
