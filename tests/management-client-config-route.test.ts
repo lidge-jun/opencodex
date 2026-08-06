@@ -12,6 +12,7 @@ import {
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
+import { nativeModelRows } from "../src/codex/catalog";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
@@ -155,6 +156,31 @@ describe("GET /api/client-config", () => {
     expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(provider.models.map(model => model.id)).toContain("a/m1");
+  }, 15_000);
+
+  test("pi omits native rows in Codex Direct mode", async () => {
+    const poolConfig = baseConfig();
+    const nativeIds = new Set(nativeModelRows(poolConfig).map(row => row.slug));
+    const pool = await (await clientConfigApi(poolConfig, "?client=pi")).json() as ClientConfigEnvelope;
+    const poolModels = (pool.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID].models;
+    expect(poolModels.some(model => nativeIds.has(model.id))).toBe(true);
+
+    const directConfig = baseConfig({
+      providers: {
+        ...poolConfig.providers,
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+          disabled: true,
+        },
+      },
+    });
+    const direct = await (await clientConfigApi(directConfig, "?client=pi")).json() as ClientConfigEnvelope;
+    const directModels = (direct.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID].models;
+    expect(directModels.some(model => nativeIds.has(model.id))).toBe(false);
+    expect(directModels.map(model => model.id)).toContain("a/m1");
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {
