@@ -16,6 +16,7 @@
  */
 import type { OcxConfig, ProviderCostOverlay } from "../types";
 import type { ExpectedPriceOverlay } from "./expected-prices";
+import { redactSecretString } from "../lib/redact";
 
 const EMPTY: readonly ExpectedPriceOverlay[] = [];
 
@@ -57,7 +58,10 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
             cacheRead: cost4.cacheRead,
             cacheWrite: cost4.cacheWrite,
           },
-          source: `config:providers.${providerName}.modelCosts[${modelId}]`,
+          // Display provenance only — redact token-shaped provider/model ids so
+          // neither the registry rows nor the refresh signature below can echo
+          // a pasted key or account id. Matching still uses the raw fields.
+          source: `config:providers.${redactSecretString(providerName)}.modelCosts[${redactSecretString(modelId)}]`,
           verifiedAt: "user-configured",
           status: "verified",
         });
@@ -69,7 +73,12 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   // would invalidate the /api/usage summary cache on unrelated reloads and
   // churn the cost memo. Only a real overlay change bumps the version, so the
   // cache survives reloads of an unchanged config.
-  const signature = JSON.stringify(rows);
+  const signature = JSON.stringify(rows.map(row => ({
+    provider: redactSecretString(row.provider),
+    modelId: redactSecretString(row.modelId),
+    cost4: row.cost4,
+    source: row.source,
+  })));
   if (signature === activeSignature) return;
   activeSignature = signature;
   active = rows;

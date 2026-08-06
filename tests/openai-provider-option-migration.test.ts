@@ -169,6 +169,30 @@ describe("OpenAI provider option migration matrix", () => {
     expect(result.config.providers.openai.selectedModels).toEqual(["gpt-a", "gpt-b", "gpt-c"]);
   });
 
+  test("carries modelCosts from openai and openai-multi into the merged row", () => {
+    const costs = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const multiCosts = { "gpt-4.1": { input: 3, output: 4, cacheRead: 0.2, cacheWrite: 0 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual(costs);
+  });
+
+  test("modelCosts-bearing canonical Multi is a managed overlay, not a collision", () => {
+    const multiCosts = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual(multiCosts);
+  });
+
   test("merges provider context caps to the lower positive cap with path-only warning", () => {
     const result = projectOpenAiTierMigration(cfg({
       openaiProviderTierVersion: 1,
