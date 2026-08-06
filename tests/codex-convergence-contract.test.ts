@@ -187,6 +187,14 @@ test("repeated convergence keeps one hidden routed-context alias and no native d
     expect(committed.kind).toBe("committed");
   }
 
+  const catalogPath = join(codexHome, "opencodex-catalog.json");
+  const beforeEmptyGather = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+    models: Array<Record<string, unknown>>;
+  };
+  const compatibility = beforeEmptyGather.models.find(entry => entry.slug === "claude-sonnet-5")!;
+  beforeEmptyGather.models.push({ ...compatibility, slug: "claude-legacy-duplicate" });
+  writeFileSync(catalogPath, `${JSON.stringify(beforeEmptyGather, null, 2)}\n`);
+
   const emptyGather = structuredClone(routed);
   emptyGather.providers["anthropic-compatible-default"]!.models = [];
   saveConfig(emptyGather);
@@ -198,15 +206,25 @@ test("repeated convergence keeps one hidden routed-context alias and no native d
   );
   expect(committed.kind).toBe("committed");
 
-  const rows = (JSON.parse(readFileSync(join(codexHome, "opencodex-catalog.json"), "utf8")) as {
+  const finalModels = (JSON.parse(readFileSync(catalogPath, "utf8")) as {
     models: Array<Record<string, unknown>>;
-  }).models.filter(entry => entry.slug === "claude-sonnet-5");
+  }).models;
+  const rows = finalModels.filter(entry => entry.slug === "claude-sonnet-5");
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({
     visibility: "hide",
     opencodex_catalog_kind: "routed-context-compat-v1",
     opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
   });
+  expect(finalModels
+    .filter(entry => entry.opencodex_catalog_kind === "routed-context-compat-v1")
+    .map(entry => ({ slug: entry.slug, target: entry.opencodex_routed_slug })))
+    .toEqual([{
+      slug: "claude-sonnet-5",
+      target: "anthropic-compatible-default/claude-sonnet-5",
+    }]);
+  expect(finalModels.find(entry => entry.slug === "anthropic-compatible-default/claude-sonnet-5"))
+    .not.toHaveProperty("opencodex_catalog_kind");
 });
 
 test("generation drift rejects before every catalog target write", async () => {

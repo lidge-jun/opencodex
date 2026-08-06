@@ -194,6 +194,7 @@ function prepareCatalog(
     const configuredProviders = new Set(enabledProviders.map(([name]) => name));
     const activeEntries = active?.models ?? [];
     const preserved = activeEntries.filter(entry => {
+      if (isRoutedContextCompatEntry(entry)) return false;
       if (typeof entry.slug !== "string" || !entry.slug.includes("/")) return false;
       const provider = entry.slug.slice(0, entry.slug.indexOf("/"));
       const description = typeof entry.description === "string" ? entry.description : "";
@@ -203,11 +204,27 @@ function prepareCatalog(
       typeof entry.slug === "string" ? [entry.slug] : []
     ));
     const preservedAliasSlugs = new Set<string>();
-    const preservedCompat = activeEntries.filter(entry => {
+    const preservedCompatTargets = new Set<string>();
+    const preservedCompat = activeEntries.flatMap(entry => {
       const target = routedContextCompatTarget(entry);
-      if (target === undefined || !preservedTargets.has(target) || typeof entry.slug !== "string") return false;
-      if (preservedAliasSlugs.has(entry.slug)) return false;
-      preservedAliasSlugs.add(entry.slug);
+      return target !== undefined && preservedTargets.has(target) && typeof entry.slug === "string"
+        ? [entry] : [];
+    }).sort((a, b) => {
+      const aTarget = routedContextCompatTarget(a)!;
+      const bTarget = routedContextCompatTarget(b)!;
+      const targetOrder = aTarget.localeCompare(bTarget);
+      if (targetOrder !== 0) return targetOrder;
+      const targetModelId = aTarget.slice(aTarget.indexOf("/") + 1);
+      const aCanonical = a.slug === targetModelId;
+      const bCanonical = b.slug === targetModelId;
+      if (aCanonical !== bCanonical) return aCanonical ? -1 : 1;
+      return (a.slug as string).localeCompare(b.slug as string);
+    }).filter(entry => {
+      const target = routedContextCompatTarget(entry)!;
+      const slug = entry.slug as string;
+      if (preservedAliasSlugs.has(slug) || preservedCompatTargets.has(target)) return false;
+      preservedAliasSlugs.add(slug);
+      preservedCompatTargets.add(target);
       return true;
     });
     entries.push(...preserved, ...preservedCompat);

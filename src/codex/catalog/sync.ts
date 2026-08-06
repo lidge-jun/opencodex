@@ -246,6 +246,10 @@ export function deriveEntry(
     e.visibility = "list";
     if ("upgrade" in e) e.upgrade = null;
     delete e.availability_nux; // don't replay another model's "now available" NUX
+    // Generated-row lifecycle markers belong only to their source row. A template selected
+    // from a converged catalog must never stamp compatibility/account metadata onto new rows.
+    delete e.opencodex_catalog_kind;
+    delete e.opencodex_routed_slug;
     // Routed (namespaced) models inherit the gpt template — correct its OpenAI/GPT identity
     // and advertise the reasoning ladder Codex accepts.
     if (isRouted) {
