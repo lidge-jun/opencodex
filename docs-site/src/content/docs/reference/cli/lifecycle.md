@@ -36,8 +36,10 @@ The same action is available from the web dashboard's **Stop** button (`POST /ap
 
 ### `ocx restart`
 
-Run `stop` followed by `ensure`: stop the proxy/service, restore native Codex, start the proxy in the
-background, and sync the live port back into Codex.
+Stop and restart the proxy while preserving its supervision mode. If a background service was
+installed, `restart` starts that service again so login and crash protection remain active. Without
+an installed service, it starts the standalone background proxy through `ensure`. Both paths sync
+the live port back into Codex.
 
 ### `ocx ensure`
 
@@ -232,6 +234,11 @@ If nothing answers, they warn and **exit non-zero**:
 A non-zero exit here means *registered but not serving* — not *not installed*. The
 service manager accepted the job; the proxy behind it never bound the port. Read the
 log named in the message, and use `ocx start` to serve in the foreground meanwhile.
+
+Before `install` writes and loads new service assets, it stops any existing registered manager and
+any tracked standalone proxy. This prevents an old standalone listener from retaining the service
+port, forcing the newly installed manager into a restart loop, and making the old listener look like
+a successful service install.
 
 `ocx service status` reports the same three states rather than raw manager output:
 

@@ -1099,9 +1099,16 @@ switch (command) {
     break;
   }
   case "restart": {
+    const serviceWasInstalled = diagnoseService().installed;
     // A failed stop must not be followed by a re-inject: with a foreign service still running
     // (ownership mismatch) we would rewrite shared config we just declined to touch.
-    if (await handleStop()) await handleEnsure();
+    if (await handleStop()) {
+      // Preserve the installed supervision boundary. Starting via handleEnsure here
+      // creates a detached standalone proxy after handleStop unloads the service,
+      // so every routine restart silently loses login/crash protection.
+      if (serviceWasInstalled) await serviceCommand("start");
+      else await handleEnsure();
+    }
     else console.error("↩️  Restart aborted: the proxy was not stopped cleanly.");
     break;
   }

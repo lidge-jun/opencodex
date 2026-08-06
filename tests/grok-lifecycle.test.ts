@@ -80,7 +80,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn.match(/if \(detail\) console\.error\(`   \$\{detail\}`\);/g)).toHaveLength(2);
   });
 
-  test("handleStop returns its outcome so restart and the tray can react", () => {
+  test("handleStop returns its outcome and restart preserves its supervision mode", () => {
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
     // process.exit() inside handleStop would strand runTrayProxyRestart's start() half.
     expect(stopFn).toContain("process.exitCode = 1");
@@ -88,7 +88,15 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).not.toContain("process.exit(1)");
 
     const restartCase = sliceFn(CLI_SOURCE, 'case "restart"', 'case "health"');
-    expect(restartCase).toContain("if (await handleStop()) await handleEnsure()");
+    const diagnoseAt = restartCase.indexOf("diagnoseService().installed");
+    const stopAt = restartCase.indexOf("await handleStop()");
+    const serviceStartAt = restartCase.indexOf('await serviceCommand("start")');
+    const standaloneStartAt = restartCase.indexOf("await handleEnsure()");
+    expect(diagnoseAt).toBeGreaterThan(-1);
+    expect(diagnoseAt).toBeLessThan(stopAt);
+    expect(serviceStartAt).toBeGreaterThan(stopAt);
+    expect(standaloneStartAt).toBeGreaterThan(serviceStartAt);
+    expect(restartCase).toContain("if (serviceWasInstalled)");
   });
 
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {

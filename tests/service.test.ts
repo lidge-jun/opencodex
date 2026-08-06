@@ -647,6 +647,21 @@ describe("launchd service plist", () => {
 });
 
 describe("service lifecycle cleanup ordering", () => {
+  test("service install stops the manager and tracked standalone proxy before loading assets", async () => {
+    const service = await readText("src/service.ts");
+    const installCase = service.slice(service.indexOf('case "install":'), service.indexOf('case "start":'));
+
+    const managerStopAt = installCase.indexOf("ops.stop();");
+    const trackedStopAt = installCase.indexOf("await stopTrackedProxyForServiceCommand();");
+    const installAt = installCase.indexOf("await ops.install();");
+    expect(installCase).toContain("ops.status() !== null || isServiceInstalled()");
+    expect(managerStopAt).toBeGreaterThan(-1);
+    expect(trackedStopAt).toBeGreaterThan(-1);
+    expect(installAt).toBeGreaterThan(-1);
+    expect(managerStopAt).toBeLessThan(trackedStopAt);
+    expect(trackedStopAt).toBeLessThan(installAt);
+  });
+
   test("direct service stop kills the tracked proxy before restoring native Codex", async () => {
     const service = await readText("src/service.ts");
     const stopCase = service.slice(service.indexOf('case "stop":'), service.indexOf('case "status":'));
