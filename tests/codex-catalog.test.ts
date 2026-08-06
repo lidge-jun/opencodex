@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { applyProviderConfigHints, augmentRoutedModelsWithJawcodeMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, shouldExposeRoutedModel } from "../src/codex/catalog";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
   CURSOR_STATIC_MODELS,
@@ -789,6 +789,51 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
       opencodex_catalog_kind: "routed-context-compat-v1",
       opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
     });
+  });
+
+  test("uses the effective per-model adapter for discovered and custom catalog rows", async () => {
+    const provider = {
+      adapter: "anthropic" as const,
+      baseUrl: "https://mixed.example.test/v1",
+      authMode: "key" as const,
+      apiKey: "test-key",
+      liveModels: false,
+      models: [],
+      modelAdapters: { "claude-sonnet-5": "openai-chat" as const },
+    };
+    expect(applyProviderConfigHints("mixed-wire", provider, {
+      provider: "mixed-wire",
+      id: "claude-sonnet-5",
+    }).adapter).toBe("openai-chat");
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "mixed-wire",
+      providers: { "mixed-wire": provider },
+      customModels: [{ provider: "mixed-wire", modelId: "claude-sonnet-5" }],
+    });
+    expect(models.find(model => model.id === "claude-sonnet-5")?.adapter).toBe("openai-chat");
+    expect(buildCatalogEntries(nativeTemplate(), [], models)
+      .find(entry => entry.slug === "claude-sonnet-5"))
+      .toBeUndefined();
+  });
+
+  test("emits one deterministic bare compatibility alias when providers share a model id", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "z-anthropic", adapter: "anthropic", id: "claude-sonnet-5", owned_by: "z-owner" },
+      { provider: "a-anthropic", adapter: "anthropic", id: "claude-sonnet-5", owned_by: "a-owner" },
+    ]);
+    const aliases = entries.filter(entry => entry.slug === "claude-sonnet-5");
+
+    expect(aliases).toHaveLength(1);
+    expect(aliases[0]).toMatchObject({
+      visibility: "hide",
+      owned_by: "a-owner",
+      opencodex_catalog_kind: "routed-context-compat-v1",
+      opencodex_routed_slug: "a-anthropic/claude-sonnet-5",
+    });
+    expect(entries.filter(entry => typeof entry.slug === "string" && entry.slug.endsWith("/claude-sonnet-5")))
+      .toHaveLength(2);
   });
 
   test("transient empty discovery preserves only aliases whose routed row survives", () => {

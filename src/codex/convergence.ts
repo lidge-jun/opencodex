@@ -34,6 +34,7 @@ import {
   isRoutedContextCompatEntry,
   legacyCatalogBackupPath,
   parseCatalogJson,
+  routedContextCompatTarget,
   type RawCatalog,
 } from "./catalog/parsing";
 import {
@@ -191,13 +192,25 @@ function prepareCatalog(
   );
   if (entries.length === nativeSlugs.length) {
     const configuredProviders = new Set(enabledProviders.map(([name]) => name));
-    const preserved = (active?.models ?? []).filter(entry => {
+    const activeEntries = active?.models ?? [];
+    const preserved = activeEntries.filter(entry => {
       if (typeof entry.slug !== "string" || !entry.slug.includes("/")) return false;
       const provider = entry.slug.slice(0, entry.slug.indexOf("/"));
       const description = typeof entry.description === "string" ? entry.description : "";
       return configuredProviders.has(provider) || !description.startsWith("Routed via opencodex → ");
     });
-    entries.push(...preserved);
+    const preservedTargets = new Set(preserved.flatMap(entry =>
+      typeof entry.slug === "string" ? [entry.slug] : []
+    ));
+    const preservedAliasSlugs = new Set<string>();
+    const preservedCompat = activeEntries.filter(entry => {
+      const target = routedContextCompatTarget(entry);
+      if (target === undefined || !preservedTargets.has(target) || typeof entry.slug !== "string") return false;
+      if (preservedAliasSlugs.has(entry.slug)) return false;
+      preservedAliasSlugs.add(entry.slug);
+      return true;
+    });
+    entries.push(...preserved, ...preservedCompat);
   }
   if (!hasPhysicalComboProvider) {
     const exact = exactComboSlugs;

@@ -29,13 +29,15 @@ bundled catalog never contains those rows.
 
 Anthropic-wire providers also emit one picker-hidden bare compatibility row for each bare model id
 so a selector persisted by Codex Desktop still resolves the routed row's context and compaction
-metadata. This row is derived from the provider adapter identity, not a provider-name convention.
+metadata. This row is derived from the effective per-model adapter identity (including configured
+model overrides), not a provider-name convention. When providers share a bare model id, the
+lexicographically smallest canonical routed slug owns the single compatibility row.
 It preserves the canonical row's `owned_by` value and is identified only by the nonsemantic
 `opencodex_catalog_kind = "routed-context-compat-v1"` marker plus its
-`opencodex_routed_slug` target. Empty-discovery protection retains the alias only while that target
-routed row survives; catalog convergence never promotes it into the native slug set; restore
-removes it with the routed rows. Repeated sync/convergence must therefore leave exactly one hidden
-alias and no visible native duplicate.
+`opencodex_routed_slug` target. Empty-discovery protection in both sync and convergence retains the
+alias only while that target routed row survives; catalog convergence never promotes it into the
+native slug set; restore removes it with the routed rows. Repeated sync/convergence must therefore
+leave exactly one hidden alias and no visible native duplicate.
 
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 

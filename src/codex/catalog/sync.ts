@@ -334,6 +334,16 @@ export function buildCatalogEntries(
   const comboPublicSlugs = new Set(goModels
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
+  const routedContextCompatWinnerByBareId = new Map<string, CatalogModel>();
+  for (const model of goModels) {
+    if (model.adapter !== "anthropic" || model.id.includes("/")) continue;
+    const slug = catalogModelSlug(model);
+    if (slug === model.id) continue;
+    const current = routedContextCompatWinnerByBareId.get(model.id);
+    if (!current || slug.localeCompare(catalogModelSlug(current)) < 0) {
+      routedContextCompatWinnerByBareId.set(model.id, model);
+    }
+  }
   for (const slug of gptSlugs) {
     const e = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
     if (rank.has(slug)) e.priority = rank.get(slug)!;
@@ -386,7 +396,7 @@ export function buildCatalogEntries(
     out.push(e);
     // Codex Desktop can persist Anthropic selections as bare ids. Preserve the
     // routed context/compaction metadata in a picker-hidden compatibility row.
-    if (m.adapter === "anthropic" && !m.id.includes("/") && slug !== m.id) {
+    if (routedContextCompatWinnerByBareId.get(m.id) === m) {
       const compat = JSON.parse(JSON.stringify(e)) as RawEntry;
       compat.slug = m.id;
       compat.display_name = m.id;

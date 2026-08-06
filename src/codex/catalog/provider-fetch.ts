@@ -36,6 +36,7 @@ import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { resolveWireProtocolOverride } from "../../server/adapter-resolve";
 import {
   COMBO_NAMESPACE,
   comboModelId,
@@ -565,7 +566,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
-    adapter: prov.adapter,
+    adapter: resolveWireProtocolOverride(name, model.id, prov).adapter,
     ...(configuredCap !== undefined
       ? {
         contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
@@ -1299,7 +1300,9 @@ async function gatherRoutedModelsUncached(
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
-      ...(enrichedProvider?.adapter ? { adapter: enrichedProvider.adapter } : {}),
+      ...(enrichedProvider?.adapter
+        ? { adapter: resolveWireProtocolOverride(cm.provider, cm.modelId, enrichedProvider).adapter }
+        : {}),
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
       ...(cm.displayName ? { displayName: cm.displayName } : {}),
       ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),

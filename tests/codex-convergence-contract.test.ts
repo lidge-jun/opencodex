@@ -187,6 +187,17 @@ test("repeated convergence keeps one hidden routed-context alias and no native d
     expect(committed.kind).toBe("committed");
   }
 
+  const emptyGather = structuredClone(routed);
+  emptyGather.providers["anthropic-compatible-default"]!.models = [];
+  saveConfig(emptyGather);
+  const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(emptyGather));
+  expect(gathered.kind).toBe("candidate");
+  const committed = await commitCodexCatalogCandidate(
+    (gathered as Extract<typeof gathered, { kind: "candidate" }>).candidate,
+    1_000,
+  );
+  expect(committed.kind).toBe("committed");
+
   const rows = (JSON.parse(readFileSync(join(codexHome, "opencodex-catalog.json"), "utf8")) as {
     models: Array<Record<string, unknown>>;
   }).models.filter(entry => entry.slug === "claude-sonnet-5");
