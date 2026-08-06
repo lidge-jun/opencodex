@@ -16,7 +16,7 @@ import {
   previousResponseReplayFailure,
   rememberResponseState,
 } from "../../responses/state";
-import { comboRouteDecisionTrace, NoEligiblePolicyCandidateError, routeModel, type RouteResult } from "../../router";
+import { comboRouteDecisionTrace, knownModelIdsForProvider, NoEligiblePolicyCandidateError, routeModel, type RouteResult } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import {
   advanceComboAfterFailure,
@@ -98,7 +98,7 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { routedSlug, slugsEquivalent } from "../../providers/slug-codec";
+import { decodeRoutedModelId, encodeRoutedModelId, routedSlug, slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -868,11 +868,19 @@ async function applyFinalRouteRequestNormalization(args: {
 
   // Preserve the final Codex-facing selector before upstream route normalization.
   // Bare routed response ids make Codex miss catalog context/compaction metadata.
+  const canonicalRoutedModelId = routedSlug(route.providerName, route.modelId);
+  const encodedModelIdIsReversible = !route.modelId.includes("/")
+    || decodeRoutedModelId(
+      encodeRoutedModelId(route.modelId),
+      knownModelIdsForProvider(route.providerName, route.provider),
+    ) === route.modelId;
   parsed._responseModelId = comboAttempt
     ? route.modelId
     : route.providerName === "openai" && isCanonicalOpenAiForwardProvider(route.provider)
       ? parsed.modelId
-      : routedSlug(route.providerName, route.modelId);
+      : encodedModelIdIsReversible
+        ? canonicalRoutedModelId
+        : `${route.providerName}/${route.modelId}`;
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -892,10 +900,6 @@ async function applyFinalRouteRequestNormalization(args: {
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
-  if (parsed._responseModelId !== route.modelId) {
-    logCtx.resolvedModel = route.modelId;
-    logCtx.preserveResolvedModelFromRoute = true;
-  }
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
@@ -916,6 +920,10 @@ async function applyFinalRouteRequestNormalization(args: {
   // Combo child requests are internal concrete-target dispatches. Preserve their historical
   // physical response identity; the parent request log retains the logical combo selector.
   if (comboAttempt) parsed._responseModelId = route.modelId;
+  if (parsed._responseModelId !== route.modelId) {
+    logCtx.resolvedModel = route.modelId;
+    logCtx.preserveResolvedModelFromRoute = true;
+  }
 
   // Fast mode override for OpenAI-routed models, only where the provider's Responses
   // route documents `service_tier` support (capability gate below strips everywhere else).

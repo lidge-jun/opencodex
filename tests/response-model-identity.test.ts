@@ -9,7 +9,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function routedConfig(providerName: string, adapter: OcxProviderConfig["adapter"]): OcxConfig {
+function routedConfig(providerName: string, adapter: OcxProviderConfig["adapter"], models?: string[]): OcxConfig {
   return {
     port: 0,
     defaultProvider: providerName,
@@ -19,6 +19,7 @@ function routedConfig(providerName: string, adapter: OcxProviderConfig["adapter"
         baseUrl: "https://provider.example.test/v1",
         authMode: "key",
         apiKey: "test-key",
+        ...(models ? { models } : {}),
       },
     },
   } as OcxConfig;
@@ -40,6 +41,7 @@ async function post(args: {
   model: string;
   providerName?: string;
   adapter?: OcxProviderConfig["adapter"];
+  models?: string[];
   stream?: boolean;
 }): Promise<{ response: Response; upstreamModel: unknown; logCtx: RequestLogContext }> {
   const providerName = args.providerName ?? "fixture-anthropic";
@@ -83,7 +85,7 @@ async function post(args: {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: args.model, input: "ping", stream }),
     }),
-    routedConfig(providerName, adapter),
+    routedConfig(providerName, adapter, args.models),
     logCtx,
     {},
   );
@@ -122,11 +124,25 @@ describe("routed response model identity", () => {
     const result = await post({
       model: "openrouter/anthropic/claude-sonnet-5",
       providerName: "openrouter",
+      models: ["anthropic/claude-sonnet-5"],
     });
 
     expect(result.upstreamModel).toBe("anthropic/claude-sonnet-5");
     expect((await result.response.json() as Record<string, unknown>).model)
       .toBe("openrouter/anthropic-claude-sonnet-5");
+  });
+
+  test("preserves a raw qualified selector when slash encoding collides with a native id", async () => {
+    const result = await post({
+      model: "collision/a/b",
+      providerName: "collision",
+      models: ["a/b", "a-b"],
+    });
+
+    expect(result.upstreamModel).toBe("a/b");
+    expect((await result.response.json() as Record<string, unknown>).model)
+      .toBe("collision/a/b");
+    expect(result.logCtx.resolvedModel).toBe("a/b");
   });
 
   test("all bridged SSE response snapshots use the canonical routed selector", async () => {

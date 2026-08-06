@@ -25,10 +25,12 @@ Responses-compatible streaming output.
 Model identity has two deliberately separate forms. Upstream requests and request logs use the
 final physical route model id. Client-facing Responses metadata uses the canonical public selector:
 native canonical OpenAI traffic keeps its selected bare id, while every routed provider uses the
-one-slash `routedSlug(provider, model)` codec (including legacy selectors whose model portion
-contains `/`). The client identity is applied consistently to bridged JSON/SSE, direct
-`openai-responses` passthrough JSON/SSE, image-loop output, web-search-loop output, and virtual-model
-responses. Internal combo child dispatches retain their historical physical response model while
+one-slash `routedSlug(provider, model)` codec when that alias uniquely decodes to the selected
+native id. A slash-containing id with an unknown or colliding encoding keeps its raw qualified
+selector to prevent a later turn from switching to a different native-exact model. The client
+identity is applied consistently to bridged JSON/SSE, direct `openai-responses` passthrough
+JSON/SSE, image-loop output, web-search-loop output, and virtual-model responses. Internal combo
+child dispatches retain their historical physical response model while
 the parent log retains the logical combo selector. Client rewrites never feed request-log
 inspection; log finalization is locked to the physical route identity when the two forms differ.
 
