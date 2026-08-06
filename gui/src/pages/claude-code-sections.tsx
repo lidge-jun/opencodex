@@ -170,6 +170,7 @@ export function ClaudeCodeSettingsCard({
                   { value: "auto", label: t("dash.backendAuto") },
                   { value: "openai", label: t("dash.backendOpenAI") },
                   { value: "anthropic", label: t("dash.backendAnthropic") },
+                  ...(key === "visionSidecar" ? [{ value: "chat", label: t("dash.backendChat") }] : []),
                 ]}
                 onChange={value => {
                   // Auto may exist as an empty in-memory draft so the model input

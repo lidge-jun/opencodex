@@ -1004,8 +1004,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
       if (section.backend !== undefined && section.backend !== null
-        && section.backend !== "openai" && section.backend !== "anthropic") {
-        return jsonResponse({ error: `${field}.backend must be openai, anthropic, or null` }, 400);
+        && section.backend !== "openai" && section.backend !== "anthropic" && (field !== "visionSidecar" || section.backend !== "chat")) {
+        const accepted = field === "visionSidecar" ? "openai, anthropic, chat, or null" : "openai, anthropic, or null";
+        return jsonResponse({ error: `${field}.backend must be ${accepted}` }, 400);
       }
       if (section.model !== undefined && typeof section.model !== "string") {
         return jsonResponse({ error: `${field}.model must be a string` }, 400);
@@ -1019,8 +1020,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         delete next[field];
         continue;
       }
-      const requested = section as { backend?: "openai" | "anthropic" | null; model?: string };
-      const override: NonNullable<OcxClaudeCodeConfig[typeof field]> = { ...next[field] };
+      const requested = section as { backend?: "openai" | "anthropic" | "chat" | null; model?: string };
+      const override = { ...(next[field] as Record<string, unknown> | undefined) } as Record<string, unknown>;
       if (requested.backend === null) delete override.backend;
       else if (requested.backend !== undefined) override.backend = requested.backend;
       if (requested.model === "") delete override.model;

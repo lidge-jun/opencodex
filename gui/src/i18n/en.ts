@@ -270,6 +270,7 @@ export const en = {
   "dash.backendAuto": "Auto",
   "dash.backendOpenAI": "OpenAI",
   "dash.backendAnthropic": "Anthropic",
+  "dash.backendChat": "Chat API",
   "dash.sidecarSaved": "Sidecar settings saved. Applied on the next request.",
   "dash.sidecarSaveFailed": "Failed to save sidecar settings.",
   "dash.injectionLabel": "Sub-agent delegation",

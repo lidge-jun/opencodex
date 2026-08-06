@@ -39,7 +39,7 @@ export async function requireJson<T>(res: Response, fallbackMessage?: string): P
 
 export interface HealthData { status: string; version: string; uptime: number }
 export interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
-export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string }
+export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string; disabled?: boolean }
 export interface SettingsData {
   codexAutoStart: boolean;
   port: number;
@@ -54,7 +54,7 @@ export interface SettingsData {
     diagnosticStale: boolean;
   };
 }
-export type SidecarBackend = "openai" | "anthropic";
+export type SidecarBackend = "openai" | "anthropic" | "chat";
 export interface SidecarSetting { backend?: SidecarBackend; model: string }
 export interface SidecarData { webSearch: SidecarSetting; vision: SidecarSetting }
 export interface SidecarPatch {
@@ -161,6 +161,20 @@ export function sidecarModelOptions(models: ModelInfo[]) {
   return out;
 }
 
+/** Vision can use enabled routed providers; namespaced values preserve provider selection. */
+export function visionSidecarModelOptions(models: ModelInfo[]) {
+  const out: Array<{ value: string; label: string }> = [];
+  for (const model of models) {
+    if (model.disabled === true) continue;
+    if (model.provider === "openai" || model.provider === "anthropic") {
+      out.push({ value: model.id, label: `${model.provider}/${model.id}` });
+    } else {
+      out.push({ value: model.namespaced, label: model.namespaced });
+    }
+  }
+  return out;
+}
+
 /** Options for shadow-call replacement models use the proxy's canonical routing id. */
 export function shadowCallModelOptions(models: ModelInfo[], current: string | undefined) {
   const out = [{ value: "", label: "—" }, ...models.map(model => ({ value: model.namespaced, label: model.namespaced }))];
@@ -169,7 +183,10 @@ export function shadowCallModelOptions(models: ModelInfo[], current: string | un
 }
 
 export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
-  return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+  const model = models.find(item => item.id === modelId || item.namespaced === modelId);
+  if (model?.provider === "anthropic") return "anthropic";
+  if (model?.provider === "openai") return "openai";
+  return "chat";
 }
 
 let lastInputWasKeyboard = false;

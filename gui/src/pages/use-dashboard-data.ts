@@ -46,6 +46,7 @@ import {
   readDashboardSectionFromHash,
   requireJson,
   sidecarModelOptions,
+  visionSidecarModelOptions,
   useModalDialog,
 } from "./dashboard-shared";
 
@@ -453,11 +454,18 @@ export function useDashboardData(apiBase: string) {
   }, [grouped, modelQuery]);
   const sidecarModels = useMemo(() => {
     const opts = sidecarModelOptions(models);
-    for (const id of [sidecar?.webSearch.model, sidecar?.vision.model]) {
-      if (id && !opts.some(option => option.value === id)) {
-        opts.unshift({ value: id, label: id });
-      }
+    const current = sidecar?.webSearch.model;
+    const currentModel = models.find(model => model.id === current || model.namespaced === current);
+    if (current && (currentModel?.provider === "openai" || currentModel?.provider === "anthropic")
+      && !opts.some(option => option.value === current)) {
+      opts.unshift({ value: current, label: current });
     }
+    return opts;
+  }, [models, sidecar]);
+  const visionSidecarModels = useMemo(() => {
+    const opts = visionSidecarModelOptions(models);
+    const current = sidecar?.vision.model;
+    if (current && !opts.some(option => option.value === current)) opts.unshift({ value: current, label: current });
     return opts;
   }, [models, sidecar]);
 
@@ -745,7 +753,7 @@ export function useDashboardData(apiBase: string) {
     updateCheck, updateError, updateJob, reconnecting, error,
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
-    filteredGroups, sidecarModels,
+    filteredGroups, sidecarModels, visionSidecarModels,
     saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
