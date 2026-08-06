@@ -31,6 +31,10 @@
 
 import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
+import {
+  resolveCurrentWindowsPrincipal,
+  resolveCurrentWindowsPrincipalAsync,
+} from "./windows-user-principal";
 
 const hardenedDirectories = new Map<string, HardenedIdentity>();
 const hardenedPaths = new Map<string, HardenedIdentity>();
@@ -393,18 +397,23 @@ function icaclsError(step: string, result: IcaclsResult): NodeJS.ErrnoException 
   return err;
 }
 
-/**
- * Return the current Windows username from the environment.
- * Falls back to USERDOMAIN\USERNAME if USERNAME alone is ambiguous.
- * The value is used directly in icacls arguments, so it must be present.
- */
-function currentWindowsUser(): string | undefined {
-  const username = env["USERNAME"];
-  const domain = env["USERDOMAIN"];
-  if (!username) return undefined;
-  // USERDOMAIN is the machine/domain name; USERNAME is the account name.
-  // icacls accepts "DOMAIN\User" or just "User" for local accounts.
-  return domain ? `${domain}\\${username}` : username;
+// POSIX CI deliberately drives the Windows ACL branch through platformOverride.
+// The synthetic SID exists only for that test seam; production Windows always
+// resolves the effective token and never falls back to USERDOMAIN/USERNAME.
+const FORCED_NON_WINDOWS_TEST_PRINCIPAL = "*S-1-5-21-1-2-3-1001";
+
+function currentWindowsPrincipal(deadline: number): string {
+  if (platformOverride === "win32" && platform !== "win32") {
+    return FORCED_NON_WINDOWS_TEST_PRINCIPAL;
+  }
+  return resolveCurrentWindowsPrincipal(deadline - nowFn());
+}
+
+async function currentWindowsPrincipalAsync(deadline: number): Promise<string> {
+  if (platformOverride === "win32" && platform !== "win32") {
+    return FORCED_NON_WINDOWS_TEST_PRINCIPAL;
+  }
+  return resolveCurrentWindowsPrincipalAsync(deadline - nowFn());
 }
 
 /**
@@ -424,10 +433,7 @@ function grantAce(user: string, directory: boolean): string {
 }
 
 function runIcacls(targetPath: string, directory: boolean, deadline: number): void {
-  const user = currentWindowsUser();
-  if (!user) {
-    throw new Error("Cannot determine current Windows user for ACL hardening");
-  }
+  const principal = currentWindowsPrincipal(deadline);
 
   // The deadline is owned by hardenEntry (total budget incl. retry + verification).
   const run = (step: string, args: string[]): IcaclsResult => {
@@ -444,7 +450,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
   // Step 1: grant current user full control BEFORE any destructive ACL change.
   // If this fails, inheritance is untouched and the writer keeps inherited access.
-  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory)]);
 
   // Step 2: disable inheritance and remove inherited ACEs. The explicit owner ACE
   // from step 1 survives this transition, so a later failure still leaves cleanup access.
@@ -473,10 +479,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
 /** Async counterpart of runIcacls — same step order and timeout/error classification (#612). */
 async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: number): Promise<void> {
-  const user = currentWindowsUser();
-  if (!user) {
-    throw new Error("Cannot determine current Windows user for ACL hardening");
-  }
+  const principal = await currentWindowsPrincipalAsync(deadline);
 
   const run = async (step: string, args: string[]): Promise<IcaclsResult> => {
     const remaining = deadline - nowFn();
@@ -490,7 +493,7 @@ async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: 
     if (!result.success) throw icaclsError(step, result);
   };
 
-  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory)]);
   await runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
 
   const removal = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
@@ -524,6 +527,8 @@ function sanitizeDiagnostics(error: unknown): string {
       return `ACL hardening failed (${code}) — permission denied running icacls`;
     case "EICACLS":
       return "ACL hardening failed (EICACLS) — icacls command error; filesystem may not support per-user NTFS ACLs";
+    case "EACLIDENTITY":
+      return "ACL hardening failed (EACLIDENTITY) — the effective Windows account SID could not be resolved";
     default:
       return `ACL hardening failed${code ? ` (${code})` : ""} — filesystem may not support per-user NTFS ACLs`;
   }

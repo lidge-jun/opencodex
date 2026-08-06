@@ -36,6 +36,10 @@ import { atomicWriteFile } from "../src/config";
 import { hardenStableLockFile } from "../src/codex/native-main-lock-file";
 import { nativeMainClaimPath, withNativeMainSharedClaim } from "../src/codex/native-main-claim";
 import { NATIVE_MAIN_OWNER_DB, retainNativeMainOwner } from "../src/codex/native-main-owner";
+import {
+  resetWindowsPrincipalForTests,
+  setWindowsPrincipalRunnerForTests,
+} from "../src/lib/windows-user-principal";
 
 let testDir = "";
 
@@ -113,6 +117,77 @@ describe("hardenSecretPath – required mode (required: true)", () => {
 
     expect(result.ok).toBe(true);
     expect(existsSync(filePath)).toBe(false);
+  });
+});
+
+describe("effective Windows principal integration", () => {
+  test("the owner grant uses a numeric SID even when USERDOMAIN says WORKGROUP", () => {
+    const filePath = join(testDir, "workgroup-secret.json");
+    writeFileSync(filePath, "data", "utf-8");
+    const oldDomain = process.env.USERDOMAIN;
+    const oldUser = process.env.USERNAME;
+    process.env.USERDOMAIN = "WORKGROUP";
+    process.env.USERNAME = "not-authoritative";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    const seen: string[][] = [];
+    setIcaclsRunnerForTests(args => {
+      seen.push(args);
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    try {
+      expect(hardenSecretPath(filePath, { required: true })).toEqual({ ok: true });
+      const grant = seen.find(args => args.includes("/grant:r"));
+      expect(grant).toBeDefined();
+      expect(grant![2]).toMatch(/^\*S-1-(?:\d+-)+\d+:\(F\)$/i);
+      expect(grant![2]).not.toContain("WORKGROUP");
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (oldDomain === undefined) delete process.env.USERDOMAIN;
+      else process.env.USERDOMAIN = oldDomain;
+      if (oldUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = oldUser;
+    }
+  });
+
+  test("identity lookup failure is fail-closed but never memoized as an icacls timeout", () => {
+    if (process.platform !== "win32") return;
+    const requiredPath = join(testDir, "identity-required.json");
+    const optionalPath = join(testDir, "identity-optional.json");
+    writeFileSync(requiredPath, "required", "utf-8");
+    writeFileSync(optionalPath, "optional", "utf-8");
+    let identityCalls = 0;
+    let icaclsCalls = 0;
+    setWindowsPrincipalRunnerForTests(() => {
+      identityCalls += 1;
+      return { success: false, exitCode: null, timedOut: true, stdout: "" };
+    });
+    setIcaclsRunnerForTests(() => {
+      icaclsCalls += 1;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    try {
+      expect(() => hardenSecretPath(requiredPath, { required: true }))
+        .toThrow(/EACLIDENTITY/);
+      expect(hardenSecretPath(optionalPath, { required: false })).toEqual({
+        ok: false,
+        diagnostics:
+          "ACL hardening failed (EACLIDENTITY) — the effective Windows account SID could not be resolved",
+      });
+      expect(identityCalls).toBe(2);
+      expect(icaclsCalls).toBe(0);
+      expect(timedOutSecretPathCountForTests()).toBe(0);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      setWindowsPrincipalRunnerForTests(null);
+      resetWindowsPrincipalForTests();
+    }
   });
 });
 
