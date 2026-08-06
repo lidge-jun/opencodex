@@ -279,4 +279,26 @@ describe("modelCosts management validation and DTO", () => {
     expect(rows && Object.keys(rows)).toContain("__proto__");
     expect(rows?.["__proto__"]).toEqual({ input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 });
   });
+
+  test("safeConfigDTO redacts secret-shaped model ids in modelCosts", () => {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      providers: {
+        blsc: {
+          ...providerBase,
+          modelCosts: {
+            "deepseek-v4-flash": VALID_COSTS["deepseek-v4-flash"],
+            "sk-abcdef1234567890": VALID_COSTS["deepseek-v4-flash"],
+          },
+        },
+      },
+    }));
+    const dto = safeConfigDTO(loadConfig()) as {
+      providers: Record<string, { modelCosts?: Record<string, unknown> }>;
+    };
+    const keys = Object.keys(dto.providers.blsc.modelCosts ?? {});
+    expect(keys).toContain("deepseek-v4-flash");
+    expect(keys).not.toContain("sk-abcdef1234567890");
+    expect(keys).toContain("[REDACTED]");
+  });
 });

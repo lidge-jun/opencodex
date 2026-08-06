@@ -107,7 +107,9 @@ function mergeLegacyOpenAiProviderRows(
     ...(openai?.selectedModels ?? []),
     ...(legacyMulti?.selectedModels ?? []),
   ]);
-  const modelCosts = openai?.modelCosts ?? legacyMulti?.modelCosts;
+  // Both rows can carry disjoint overlays; merge them (canonical openai wins on
+  // key conflicts) so legacy Multi prices are not silently dropped.
+  const modelCosts = { ...(legacyMulti?.modelCosts ?? {}), ...(openai?.modelCosts ?? {}) };
   const formerRows = [openai, legacyMulti].filter((row): row is OcxProviderConfig => row !== undefined);
   const disabled = formerRows.length > 0 && formerRows.every(row => row.disabled === true);
   return {

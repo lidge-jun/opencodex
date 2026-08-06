@@ -179,6 +179,20 @@ describe("OpenAI provider option migration matrix", () => {
         "openai-multi": { ...forward, modelCosts: multiCosts },
       },
     }));
+    // Disjoint overlays from both legacy rows survive the merge.
+    expect(result.config.providers.openai.modelCosts).toEqual({ ...multiCosts, ...costs });
+  });
+
+  test("canonical openai modelCosts wins on key conflicts over the legacy multi map", () => {
+    const costs = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const multiCosts = { "gpt-5.6": { input: 9, output: 9, cacheRead: 0.9, cacheWrite: 0.9 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
     expect(result.config.providers.openai.modelCosts).toEqual(costs);
   });
 
