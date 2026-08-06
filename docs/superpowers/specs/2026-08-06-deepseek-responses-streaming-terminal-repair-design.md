@@ -152,16 +152,18 @@ The repaired stream is also inspected for:
 A stream is eligible for synthetic success only when all conditions hold:
 
 1. No real Responses terminal has been observed.
-2. At least one `response.output_item.done` has been observed.
-3. Every added output index has exactly one corresponding done item.
-4. No done item exists for an index whose lifecycle is contradictory or
+2. A valid `response.created` event with an object-valued response snapshot
+   has been observed.
+3. At least one `response.output_item.done` has been observed.
+4. Every added output index has exactly one corresponding done item.
+5. No done item exists for an index whose lifecycle is contradictory or
    tainted by malformed duplicate events.
-5. Every retained item has `status: "completed"`.
-6. Item types are limited to `reasoning`, `message`, and `function_call`.
-7. A function call has a non-empty `name`, non-empty `call_id`, string
+6. Every retained item has `status: "completed"`.
+7. Item types are limited to `reasoning`, `message`, and `function_call`.
+8. A function call has a non-empty `name`, non-empty `call_id`, string
    `arguments`, and arguments that parse as JSON.
-8. A message contains only completed output content carried by its done item.
-9. The retained state remains inside the existing per-turn translator budget.
+9. A message contains only completed output content carried by its done item.
+10. The retained state remains inside the existing per-turn translator budget.
 
 Any malformed, contradictory, oversized, or unsupported item permanently
 taints synthetic success for that stream. A later real upstream terminal stays
