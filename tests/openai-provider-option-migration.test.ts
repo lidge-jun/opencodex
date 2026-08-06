@@ -36,6 +36,9 @@ describe("OpenAI provider option migration matrix", () => {
     const result = projectOpenAiTierMigration(input);
     expectCanonical(result, "pool");
     expect(Object.keys(result.config.providers)).toEqual(["openai"]);
+    // No overlays on either legacy row: the merge must not attach a spurious
+    // empty modelCosts: {} to the canonical row.
+    expect(result.config.providers.openai).not.toHaveProperty("modelCosts");
     expect(result.changed).toBe(true);
     expect(input).toEqual(before);
   });

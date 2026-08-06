@@ -580,7 +580,10 @@ function sanitizeModelCosts(costs: unknown): Record<string, ProviderCostOverlay>
     if (validRate(input) && validRate(output) && validRate(cacheRead) && validRate(cacheWrite)) {
       // The DTO is served to the dashboard; a model id shaped like a pasted key
       // must not be echoed back (validation errors already redact these).
-      out[redactSecretString(modelId)] = { input, output, cacheRead, cacheWrite };
+      // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
+      // distinct rows cannot collapse into one placeholder key.
+      if (redactSecretString(modelId) !== modelId) continue;
+      out[modelId] = { input, output, cacheRead, cacheWrite };
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;

@@ -58,9 +58,11 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
             cacheRead: cost4.cacheRead,
             cacheWrite: cost4.cacheWrite,
           },
-          // Display provenance only — redact token-shaped provider/model ids so
-          // neither the registry rows nor the refresh signature below can echo
-          // a pasted key or account id. Matching still uses the raw fields.
+          // Display provenance only: redact token-shaped provider/model ids so
+          // the source string can never echo a pasted key. Matching still uses
+          // the raw fields, and the change-detection signature below MUST keep
+          // them raw — distinct ids would otherwise collapse to "[REDACTED]"
+          // and skip the version bump.
           source: `config:providers.${redactSecretString(providerName)}.modelCosts[${redactSecretString(modelId)}]`,
           verifiedAt: "user-configured",
           status: "verified",
