@@ -1537,6 +1537,40 @@ async function handleResponsesInner(
     );
   }
 
+  // Input-size guard: refuse to forward an input that exceeds the model's advertised context
+  // window. The client compacts well before this limit, so an oversized body means abnormal
+  // duplication (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M).
+  // Forwarding it on Windows balloons bun RSS and can native-crash the whole proxy (upstream
+  // Bun memory bug, issue #314), taking every active thread down at once. Fail one request
+  // cleanly instead. Token estimate = UTF-8 bytes / 4 (Chinese ~3B/token, ASCII/code ~4B/token):
+  // the estimate undercounts near-limit traffic and over-counts nothing, so it only fires on
+  // genuine blowups. # ponytail: bytes/4 heuristic, replace with a real tokenizer if a
+  // 2x-class duplication ever needs catching at the margin.
+  const advertisedWindow = route.provider.modelContextWindows?.[route.modelId];
+  if (typeof advertisedWindow === "number" && advertisedWindow > 0) {
+    let inputBytes = 0;
+    for (const msg of parsed.context.messages) {
+      const content = msg.content;
+      if (typeof content === "string") {
+        inputBytes += Buffer.byteLength(content);
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+            inputBytes += Buffer.byteLength((part as { text: string }).text);
+          }
+        }
+      }
+    }
+    if (inputBytes / 4 > advertisedWindow) {
+      return formatErrorResponse(
+        413,
+        "request_too_large",
+        `input (≈${Math.round(inputBytes / 4)} tokens) exceeds ${route.modelId} context window (${advertisedWindow} tokens); refusing to forward`,
+        { code: "input_context_window_exceeded" },
+      );
+    }
+  }
+
   // Captured before normalization: whether the CLIENT asked for SSE. The
   // transport-neutral upstream-streaming policy below may force a bounded JSON
   // upstream for reliability (#875); the answer must then be reframed to SSE
