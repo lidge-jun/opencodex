@@ -16,6 +16,8 @@ ocx export --client pi
 
 输出会先显示 JSON，然后打印目标路径、合并警告、Pi 专用的启动前提示、模型总数，以及省略上下文限制的行数。
 
+在 Pi 的 schema 中，`openai-completions` 表示兼容 Chat Completions 的 API；对应的 opencodex adapter 名称是 `openai-chat`。
+
 ```json
 {
   "providers": {

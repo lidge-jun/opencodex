@@ -16,6 +16,8 @@ ocx export --client pi
 
 出力は JSON で始まり、宛先パス、マージ警告、Pi 固有の起動前ガイダンス、モデルの総数、およびコンテキスト制限を省略した行数を出力します。
 
+Pi スキーマの `openai-completions` は Chat Completions 互換 API を指し、対応する opencodex アダプター名は `openai-chat` です。
+
 ```json
 {
   "providers": {

@@ -9,11 +9,14 @@ file, and removes it again. Six clients work this way, each with a switch:
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
-| Pi | `~/.pi/agent/models.json` | JSON | new sessions | loopback placeholder |
+| Pi | `~/.pi/agent/models.json` | JSON | new sessions | non-secret `opencodex-loopback` placeholder |
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
+
+Pi's loopback connection normally needs no real admission key. Configure credentials
+for upstream providers in opencodex, not in Pi's generated provider block.
 
 Paths honor each client's own environment override where it has one, so a relocated
 `HERMES_HOME`, `KIMI_CODE_HOME` or `XDG_CONFIG_HOME` is followed rather than guessed

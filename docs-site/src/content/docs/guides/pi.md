@@ -19,6 +19,9 @@ ocx export --client pi
 The output leads with the JSON, then prints the destination path, the merge warning, Pi-specific
 pre-launch guidance, the total model count, and how many rows omit context limits.
 
+In Pi's schema, `openai-completions` names the Chat Completions-compatible API; the
+corresponding opencodex adapter name is `openai-chat`.
+
 ```json
 {
   "providers": {
