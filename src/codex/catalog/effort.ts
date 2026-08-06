@@ -111,9 +111,10 @@ export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
 
 export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
   if (!model) return;
-  // This marker survives strict catalog normalization and lets sync distinguish a stale
-  // bare combo alias from a genuine native model row.
-  if (model.provider === COMBO_NAMESPACE) entry.owned_by = model.owned_by ?? COMBO_NAMESPACE;
+  // Preserve upstream/provider ownership as semantic catalog metadata. Generated lifecycle
+  // markers must use opencodex_catalog_kind instead of overloading this field.
+  if (model.owned_by) entry.owned_by = model.owned_by;
+  else if (model.provider === COMBO_NAMESPACE) entry.owned_by = COMBO_NAMESPACE;
   // displayName is DISPLAY-ONLY: it relabels the picker row but never touches the routing
   // slug, alias, or provider. deriveEntry already stamped the slug as display_name; a
   // configured displayName overrides just the label. The `/` separator is rejected at every

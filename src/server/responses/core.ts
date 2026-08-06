@@ -172,6 +172,7 @@ import {
   restoreImageGenCallsInJson,
 } from "../responses-image-gen-repair";
 import { composeSsePayloadRewrites, relaySseWithPayloadRewrite } from "../sse-payload-rewrite";
+import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
@@ -861,17 +862,17 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
+  comboAttempt?: boolean;
 }): Promise<void> {
-  const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
+  const { parsed, route, config, req, logCtx, inboundWire, inboundTransport, comboAttempt } = args;
 
   // Preserve the final Codex-facing selector before upstream route normalization.
   // Bare routed response ids make Codex miss catalog context/compaction metadata.
-  const requestedProviderSeparator = parsed.modelId.indexOf("/");
-  const alreadyQualifiedForRoute = requestedProviderSeparator > 0
-    && parsed.modelId.slice(0, requestedProviderSeparator) === route.providerName;
-  parsed._responseModelId = route.providerName === "openai" || alreadyQualifiedForRoute
-    ? parsed.modelId
-    : routedSlug(route.providerName, route.modelId);
+  parsed._responseModelId = comboAttempt
+    ? route.modelId
+    : route.providerName === "openai" && isCanonicalOpenAiForwardProvider(route.provider)
+      ? parsed.modelId
+      : routedSlug(route.providerName, route.modelId);
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -891,10 +892,7 @@ async function applyFinalRouteRequestNormalization(args: {
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
-  if (
-    parsed._responseModelId !== route.modelId
-    && route.provider.adapter !== "openai-responses"
-  ) {
+  if (parsed._responseModelId !== route.modelId) {
     logCtx.resolvedModel = route.modelId;
     logCtx.preserveResolvedModelFromRoute = true;
   }
@@ -915,6 +913,9 @@ async function applyFinalRouteRequestNormalization(args: {
 
   // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
   applyOpenAiVirtualModel(parsed, route, logCtx);
+  // Combo child requests are internal concrete-target dispatches. Preserve their historical
+  // physical response identity; the parent request log retains the logical combo selector.
+  if (comboAttempt) parsed._responseModelId = route.modelId;
 
   // Fast mode override for OpenAI-routed models, only where the provider's Responses
   // route documents `service_tier` support (capability gate below strips everywhere else).
@@ -1553,6 +1554,7 @@ async function handleResponsesInner(
     logCtx,
     inboundWire,
     inboundTransport: options.inboundTransport,
+    comboAttempt: options.comboAttempt,
   });
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -2068,13 +2070,20 @@ async function handleResponsesInner(
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
-      const needsClientRewrite = imageGenCallAliases.size > 0 || hasResponsesItemIdRepair(repairConfig) || snapshotRepairEnabled;
+      const responseModelRewrite = parsed._responseModelId !== route.modelId
+        ? createResponsesModelPayloadRewrite(parsed._responseModelId!)
+        : undefined;
+      const needsClientRewrite = imageGenCallAliases.size > 0
+        || hasResponsesItemIdRepair(repairConfig)
+        || snapshotRepairEnabled
+        || responseModelRewrite !== undefined;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
           : undefined,
+        responseModelRewrite,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       // #893: sparse-snapshot gateways get field backfills AND lifecycle event
       // injection at the block level, after payload rewrites. Defaults come
@@ -2266,14 +2275,19 @@ async function handleResponsesInner(
       }
       const clientJson = (() => {
         const restored = restoreImageGenCallsInJson(text, imageGenCallAliases);
-        if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) return restored;
-        let outbound: unknown;
-        try {
-          outbound = JSON.parse(request.body);
-        } catch {
-          outbound = undefined;
-        }
-        return repairResponsesSnapshotJson(restored, outbound);
+        const repaired = (() => {
+          if (!hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)) return restored;
+          let outbound: unknown;
+          try {
+            outbound = JSON.parse(request.body);
+          } catch {
+            outbound = undefined;
+          }
+          return repairResponsesSnapshotJson(restored, outbound);
+        })();
+        return parsed._responseModelId !== route.modelId
+          ? rewriteResponsesModelJson(repaired, parsed._responseModelId!)
+          : repaired;
       })();
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON

@@ -31,6 +31,7 @@ import {
   catalogBackupPathFor,
   catalogHasRoutedEntries,
   findNativeTemplate,
+  isRoutedContextCompatEntry,
   legacyCatalogBackupPath,
   parseCatalogJson,
   type RawCatalog,
@@ -180,6 +181,7 @@ function prepareCatalog(
   const nativeSlugs = includeNativeOpenAi
     ? [...new Set((active?.models ?? catalog.models ?? []).flatMap(entry => (
         typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
+          && !isRoutedContextCompatEntry(entry)
           ? [entry.slug] : []
       )))]
     : [];

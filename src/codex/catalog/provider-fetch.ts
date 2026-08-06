@@ -565,6 +565,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const hinted = {
     ...model,
+    adapter: prov.adapter,
     ...(configuredCap !== undefined
       ? {
         contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
@@ -1293,10 +1294,12 @@ async function gatherRoutedModelsUncached(
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
   const customModels = (config.customModels ?? []).map(cm => {
     const rawProvider = config.providers[cm.provider];
+    const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
+      ...(enrichedProvider?.adapter ? { adapter: enrichedProvider.adapter } : {}),
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
       ...(cm.displayName ? { displayName: cm.displayName } : {}),
       ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
@@ -1327,7 +1330,6 @@ async function gatherRoutedModelsUncached(
     // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
     // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
     // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
-    const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
     if (enrichedProvider && modelInList(enrichedProvider.noVisionModels, merged.id)) {
       const current = merged.inputModalities ?? ["text"];
       if (!current.includes("image")) {

@@ -339,6 +339,7 @@ function attachLiveSidebandUpstream(
 // Source invariant for tests/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // const repairConfig = route.provider.responsesItemIdRepair;
+// const responseModelRewrite = parsed._responseModelId !== route.modelId
 // const needsClientRewrite = imageGenCallAliases.size > 0
 // #314 gated shape: win32 always uses the terminal-aware eager relay so a keep-alive
 // upstream cannot hold Codex open after response.completed; darwin no-rewrite traffic

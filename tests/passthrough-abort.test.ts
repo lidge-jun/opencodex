@@ -50,6 +50,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     // Windows no-rewrite traffic must honor the stream-mode/runtime gate so
     // legacy-tee remains a safety escape hatch for Bun#32111.
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
+    expect(sseBranch).toContain("const responseModelRewrite = parsed._responseModelId !== route.modelId");
     expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
     expect(sseBranch).toContain("new Response(eagerBody");
     expect(sseBranch).toContain("const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0");

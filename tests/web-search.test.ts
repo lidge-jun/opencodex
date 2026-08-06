@@ -411,6 +411,47 @@ function scriptedAdapter(firstPass: AdapterEvent[]): ProviderAdapter {
 }
 
 describe("BUG-R86 routed web-search timeout semantics", () => {
+  test("web-search-loop SSE snapshots preserve the canonical client selector", async () => {
+    const parsed = parseRequest({
+      model: "claude-sonnet-5",
+      input: "hi",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    });
+    parsed._responseModelId = "fixture-anthropic/claude-sonnet-5";
+    let upstreamModel = "";
+    const adapter: ProviderAdapter = {
+      name: "identity",
+      buildRequest: request => {
+        upstreamModel = request.modelId;
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        yield { type: "text_delta", text: "answer" };
+        yield { type: "done" };
+      },
+    };
+    const response = await runWithWebSearch({
+      parsed,
+      adapter,
+      forwardProvider,
+      hostedTool: { type: "web_search" },
+      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      maxSearches: 1,
+    });
+    const frames = await collectSse(response.body!);
+    const models = frames.flatMap(frame => {
+      const responseModel = (frame.data.response as { model?: unknown } | undefined)?.model;
+      return typeof responseModel === "string" ? [responseModel] : [];
+    });
+
+    expect(upstreamModel).toBe("claude-sonnet-5");
+    expect(models.length).toBeGreaterThan(0);
+    expect(new Set(models)).toEqual(new Set(["fixture-anthropic/claude-sonnet-5"]));
+  });
+
   test("translator overflow remains typed through the sidecar loop and bridge", async () => {
     const adapter: ProviderAdapter = {
       name: "overflow",

@@ -27,6 +27,16 @@ the rows being merged. This split is required because empty or partial provider 
 preserve routed entries and genuine user-native rows from the file that will be overwritten; a
 bundled catalog never contains those rows.
 
+Anthropic-wire providers also emit one picker-hidden bare compatibility row for each bare model id
+so a selector persisted by Codex Desktop still resolves the routed row's context and compaction
+metadata. This row is derived from the provider adapter identity, not a provider-name convention.
+It preserves the canonical row's `owned_by` value and is identified only by the nonsemantic
+`opencodex_catalog_kind = "routed-context-compat-v1"` marker plus its
+`opencodex_routed_slug` target. Empty-discovery protection retains the alias only while that target
+routed row survives; catalog convergence never promotes it into the native slug set; restore
+removes it with the routed rows. Repeated sync/convergence must therefore leave exactly one hidden
+alias and no visible native duplicate.
+
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,

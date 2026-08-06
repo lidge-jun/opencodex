@@ -433,7 +433,7 @@ describe("OpenAI provider-option integration spine", () => {
           reasoning: { effort: "high" },
         }, { authorization: "Bearer fixture-caller-main" });
         expect(response.status).toBe(200);
-        expect(await response.json()).toMatchObject({ model: row.wire });
+        expect(await response.json()).toMatchObject({ model: row.selected });
         const capture = captures.at(-1)!;
         expect(capture).toMatchObject({
           url: "https://api.openai.com/v1/responses",

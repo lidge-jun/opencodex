@@ -22,6 +22,16 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+Model identity has two deliberately separate forms. Upstream requests and request logs use the
+final physical route model id. Client-facing Responses metadata uses the canonical public selector:
+native canonical OpenAI traffic keeps its selected bare id, while every routed provider uses the
+one-slash `routedSlug(provider, model)` codec (including legacy selectors whose model portion
+contains `/`). The client identity is applied consistently to bridged JSON/SSE, direct
+`openai-responses` passthrough JSON/SSE, image-loop output, web-search-loop output, and virtual-model
+responses. Internal combo child dispatches retain their historical physical response model while
+the parent log retains the logical combo selector. Client rewrites never feed request-log
+inspection; log finalization is locked to the physical route identity when the two forms differ.
+
 The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
 resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
 the allowed Codex/OpenAI auth/session headers from the current request and short-circuits pool
@@ -48,8 +58,8 @@ Native passthrough SSE has TWO shapes, selected per request in
   selected by `selectEagerPath` in `src/lib/bun-stream-caps.ts`; the latter keeps
   `legacy-tee` and known-bad-runtime `auto` on tee as documented. When selected,
   `response.completed` closes the client stream even if upstream keeps HTTP/SSE
-  alive. Darwin uses it for no-client-rewrite traffic only (neither image-gen
-  aliases nor item-id repair) and is explicit-only: `auto` stays tee even after
+  alive. Darwin uses it for no-client-rewrite traffic only (no image-gen aliases, item-id repair,
+  snapshot repair, or public-model identity rewrite) and is explicit-only: `auto` stays tee even after
   a future threshold bump. One eager reader + byte-bounded
   client queue + post-cancel bounded discard-drain replaces the tee and goes
   directly to the response without a JS rewrite wrapper, preserving the full

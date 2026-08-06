@@ -144,6 +144,60 @@ test("commit is fixed-order, receipt-exact, and a consumed candidate cannot be r
   expect(manifest(root)).toEqual(after);
 });
 
+test("repeated convergence keeps one hidden routed-context alias and no native duplicate", async () => {
+  const routed: OcxConfig = {
+    port: 10100,
+    defaultProvider: "anthropic-compatible-default",
+    providers: {
+      "anthropic-compatible-default": {
+        adapter: "anthropic",
+        baseUrl: "https://anthropic.example.test/v1",
+        authMode: "key",
+        apiKey: "test-key",
+        liveModels: false,
+        models: ["claude-sonnet-5"],
+      },
+    },
+  };
+  saveConfig(routed);
+  writeFileSync(join(codexHome, "opencodex-catalog.json"), `${JSON.stringify({
+    models: [
+      JSON.parse(sourceCatalog()).models[0],
+      {
+        slug: "anthropic-compatible-default/claude-sonnet-5",
+        description: "Routed via opencodex → anthropic-compatible-default (anthropic).",
+      },
+      {
+        slug: "claude-sonnet-5",
+        visibility: "hide",
+        owned_by: "anthropic",
+        opencodex_catalog_kind: "routed-context-compat-v1",
+        opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
+      },
+    ],
+  }, null, 2)}\n`);
+
+  for (let pass = 0; pass < 2; pass++) {
+    const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(routed));
+    expect(gathered.kind).toBe("candidate");
+    const committed = await commitCodexCatalogCandidate(
+      (gathered as Extract<typeof gathered, { kind: "candidate" }>).candidate,
+      1_000,
+    );
+    expect(committed.kind).toBe("committed");
+  }
+
+  const rows = (JSON.parse(readFileSync(join(codexHome, "opencodex-catalog.json"), "utf8")) as {
+    models: Array<Record<string, unknown>>;
+  }).models.filter(entry => entry.slug === "claude-sonnet-5");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    visibility: "hide",
+    opencodex_catalog_kind: "routed-context-compat-v1",
+    opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
+  });
+});
+
 test("generation drift rejects before every catalog target write", async () => {
   const gathered = await candidate();
   const before = manifest(codexHome);

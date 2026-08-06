@@ -367,7 +367,7 @@ describe("OpenAI API compact transport", () => {
 });
 
 describe("OpenAI API Pro transport identities", () => {
-  test("HTTP JSON, HTTP SSE, and real WebSocket keep base wire/client identity and virtual logs", async () => {
+  test("HTTP JSON, HTTP SSE, and real WebSocket keep public client identity, base wire identity, and virtual logs", async () => {
     const originalFetch = globalThis.fetch;
     const home = mkdtempSync(join(tmpdir(), "ocx-openai-api-pro-"));
     process.env.OPENCODEX_HOME = home;
@@ -466,7 +466,7 @@ describe("OpenAI API Pro transport identities", () => {
         const beforeJsonUsage = readUsage().length;
         const json = await request(selected, false);
         expect(json.status).toBe(200);
-        expect(await json.json()).toMatchObject({ model: base });
+        expect(await json.json()).toMatchObject({ model: selected });
         await expectOnePersisted(beforeJsonLogs, beforeJsonUsage, selected, virtual, base);
 
         const beforeSseLogs = (await readLogs()).length;
@@ -474,15 +474,15 @@ describe("OpenAI API Pro transport identities", () => {
         const sse = await request(selected, true);
         expect(sse.status).toBe(200);
         const sseText = await sse.text();
-        expect(sseText).toContain(`\"model\":\"${base}\"`);
-        expect(sseText).not.toContain(`\"model\":\"${virtual}\"`);
+        expect(sseText).toContain(`\"model\":\"${selected}\"`);
+        expect(sseText).not.toContain(`\"model\":\"${base}\"`);
         await expectOnePersisted(beforeSseLogs, beforeSseUsage, selected, virtual, base);
 
         const beforeWsLogs = (await readLogs()).length;
         const beforeWsUsage = readUsage().length;
         const wsText = await wsTurn(selected);
-        expect(wsText).toContain(`\"model\":\"${base}\"`);
-        expect(wsText).not.toContain(`\"model\":\"${virtual}\"`);
+        expect(wsText).toContain(`\"model\":\"${selected}\"`);
+        expect(wsText).not.toContain(`\"model\":\"${base}\"`);
         await expectOnePersisted(beforeWsLogs, beforeWsUsage, selected, virtual, base);
 
         for (const capture of captures.slice(-3)) {
@@ -495,9 +495,9 @@ describe("OpenAI API Pro transport identities", () => {
 
       const prototypeHttp = await request("openai-apikey/constructor", false);
       expect(prototypeHttp.status).toBe(200);
-      expect(await prototypeHttp.json()).toMatchObject({ model: "constructor" });
+      expect(await prototypeHttp.json()).toMatchObject({ model: "openai-apikey/constructor" });
       const prototypeWs = await wsTurn("openai-apikey/toString");
-      expect(prototypeWs).toContain('"model":"toString"');
+      expect(prototypeWs).toContain('"model":"openai-apikey/toString"');
 
       for (const invalidReasoning of ["high", ["high"]]) {
         const before = captures.length;

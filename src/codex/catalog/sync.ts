@@ -30,7 +30,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedContextCompatEntry, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, ROUTED_CONTEXT_COMPAT_CATALOG_KIND, routedContextCompatTarget } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { applyNativeVisibility, disabledNativeSlugs, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
@@ -57,7 +57,6 @@ import { codexRuntimeStatePath } from "../runtime";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
-const ROUTED_CONTEXT_COMPAT_OWNER = "opencodex-routed-context-compat";
 
 export type SpawnAgentSurface = "v1" | "v2";
 
@@ -387,13 +386,14 @@ export function buildCatalogEntries(
     out.push(e);
     // Codex Desktop can persist Anthropic selections as bare ids. Preserve the
     // routed context/compaction metadata in a picker-hidden compatibility row.
-    if (m.provider === "anthropic" && !m.id.includes("/") && slug !== m.id) {
+    if (m.adapter === "anthropic" && !m.id.includes("/") && slug !== m.id) {
       const compat = JSON.parse(JSON.stringify(e)) as RawEntry;
       compat.slug = m.id;
       compat.display_name = m.id;
       compat.description = `Hidden routed metadata alias for ${slug}.`;
       compat.visibility = "hide";
-      compat.owned_by = ROUTED_CONTEXT_COMPAT_OWNER;
+      compat.opencodex_catalog_kind = ROUTED_CONTEXT_COMPAT_CATALOG_KIND;
+      compat.opencodex_routed_slug = slug;
       out.push(compat);
     }
   }
@@ -480,7 +480,7 @@ export function mergeCatalogEntriesForSync(
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
       && m.owned_by !== COMBO_NAMESPACE
-      && m.owned_by !== ROUTED_CONTEXT_COMPAT_OWNER
+      && !isRoutedContextCompatEntry(m)
       && !goIds.has(m.slug as string)
       && !isUnsupportedOpenAiNativeSlug(m.slug as string))
     .map(m => {
@@ -568,6 +568,19 @@ export function mergeCatalogEntriesForSync(
       const provider = (m.slug as string).slice(0, (m.slug as string).indexOf("/"));
       return !(isOcxAuthoredRoutedEntry(m) && !gatheredProviderNames.has(provider));
     });
+    const retainedRoutedSlugs = new Set(finalRoutedEntries.flatMap(entry =>
+      typeof entry.slug === "string" ? [entry.slug] : []
+    ));
+    const retainedCompatTargets = new Set<string>();
+    const retainedCompatEntries = catalogModels.filter(entry => {
+      const target = routedContextCompatTarget(entry);
+      if (target === undefined || !retainedRoutedSlugs.has(target) || retainedCompatTargets.has(target)) {
+        return false;
+      }
+      retainedCompatTargets.add(target);
+      return true;
+    });
+    finalRoutedEntries = [...finalRoutedEntries, ...retainedCompatEntries];
   } else {
     const preservedForeignRouted = catalogModels.filter(m => {
       if (typeof m.slug !== "string" || !m.slug.includes("/")) return false;
@@ -648,7 +661,7 @@ export function mergeCatalogEntriesForSync(
     isMultiAgentV2Enabled(),
   );
   for (const entry of finalized) {
-    if (entry.owned_by === ROUTED_CONTEXT_COMPAT_OWNER) entry.visibility = "hide";
+    if (isRoutedContextCompatEntry(entry)) entry.visibility = "hide";
   }
   return finalized;
 }
@@ -1032,14 +1045,14 @@ export function restoreCodexCatalogWithPermit(
   if (backup && Array.isArray(backup.models)) {
     const removed = (catalog.models ?? []).filter(m =>
       (typeof m.slug === "string" && m.slug.includes("/"))
-      || m.owned_by === ROUTED_CONTEXT_COMPAT_OWNER
+      || isRoutedContextCompatEntry(m)
     ).length;
     const backupSlugs = new Set(backup.models.flatMap(m => typeof m.slug === "string" ? [m.slug] : []));
     const userNativeAdditions = restoreAccountHiddenBareNatives(
       (catalog.models ?? []).filter(m =>
         typeof m.slug === "string"
         && !m.slug.includes("/")
-        && m.owned_by !== ROUTED_CONTEXT_COMPAT_OWNER
+        && !isRoutedContextCompatEntry(m)
         && !backupSlugs.has(m.slug)
       ),
       replacementVisibility,
@@ -1059,7 +1072,7 @@ export function restoreCodexCatalogWithPermit(
   const native = restoreAccountHiddenBareNatives(
     catalog.models.filter(m =>
       !(typeof m.slug === "string" && m.slug.includes("/"))
-      && m.owned_by !== ROUTED_CONTEXT_COMPAT_OWNER
+      && !isRoutedContextCompatEntry(m)
     ),
     replacementVisibility,
     disabledModels,

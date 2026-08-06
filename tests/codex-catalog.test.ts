@@ -751,6 +751,7 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       {
         provider: "anthropic",
+        adapter: "anthropic",
         id: "claude-sonnet-5",
         owned_by: "anthropic",
         contextWindow: 1_000_000,
@@ -765,11 +766,64 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
       slug: "claude-sonnet-5",
       display_name: "claude-sonnet-5",
       visibility: "hide",
-      owned_by: "opencodex-routed-context-compat",
+      owned_by: "anthropic",
+      opencodex_catalog_kind: "routed-context-compat-v1",
+      opencodex_routed_slug: "anthropic/claude-sonnet-5",
       context_window: 1_000_000,
       max_context_window: 1_000_000,
       auto_compact_token_limit: 900_000,
     });
+  });
+
+  test("derives the hidden alias from adapter identity for a custom provider name", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [{
+      provider: "anthropic-compatible-default",
+      adapter: "anthropic",
+      id: "claude-sonnet-5",
+      owned_by: "custom-owner",
+    }]);
+
+    expect(entries.find(entry => entry.slug === "claude-sonnet-5")).toMatchObject({
+      visibility: "hide",
+      owned_by: "custom-owner",
+      opencodex_catalog_kind: "routed-context-compat-v1",
+      opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
+    });
+  });
+
+  test("transient empty discovery preserves only aliases whose routed row survives", () => {
+    const existing = buildCatalogEntries(nativeTemplate(), [], [{
+      provider: "anthropic-compatible-default",
+      adapter: "anthropic",
+      id: "claude-sonnet-5",
+      owned_by: "custom-owner",
+    }]);
+    const orphan = {
+      ...existing.find(entry => entry.slug === "claude-sonnet-5")!,
+      slug: "claude-orphan-5",
+      opencodex_routed_slug: "anthropic-compatible-default/claude-orphan-5",
+    };
+    const merged = mergeCatalogEntriesForSync(
+      [...existing, orphan],
+      [],
+      new Map(),
+      [],
+      false,
+      new Set(),
+      null,
+      new Set(),
+      new Set(["anthropic-compatible-default"]),
+      "default",
+      new Set(),
+      false,
+      false,
+    );
+
+    expect(merged.find(entry => entry.slug === "claude-sonnet-5")).toMatchObject({
+      visibility: "hide",
+      opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
+    });
+    expect(merged.some(entry => entry.slug === "claude-orphan-5")).toBe(false);
   });
 
   test("Command Code routed models relabel the picker row with distinguishable slugs", () => {
@@ -1424,6 +1478,13 @@ describe("Codex catalog routed normalization", () => {
       expect(models.map(model => `${model.provider}/${model.id}`)).toEqual([
         "anthropic-compatible-default/claude-sonnet-5",
       ]);
+      expect(models[0]?.adapter).toBe("anthropic");
+      expect(buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "claude-sonnet-5"))
+        .toMatchObject({
+          visibility: "hide",
+          opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
+        });
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("anthropic-compatible-default");

@@ -47,7 +47,12 @@ describe("Codex catalog restore", () => {
       models: [
         { slug: "gpt-5.5" },
         { slug: "opencode-go/deepseek-v4-pro" },
-        { slug: "claude-sonnet-5", owned_by: "opencodex-routed-context-compat" },
+        {
+          slug: "claude-sonnet-5",
+          owned_by: "anthropic",
+          opencodex_catalog_kind: "routed-context-compat-v1",
+          opencodex_routed_slug: "anthropic/claude-sonnet-5",
+        },
         { slug: "user-native" },
       ],
     }, null, 2) + "\n");

@@ -88,6 +88,8 @@ export function isDefaultCatalogPath(path: string): boolean {
 export interface CatalogModel {
   id: string;
   provider: string;
+  /** Final provider adapter identity used to derive adapter-specific catalog rows. */
+  adapter?: OcxProviderConfig["adapter"];
   /** Public Codex-facing slug override (used by combo aliases). */
   alias?: string;
   /**
@@ -116,6 +118,18 @@ export interface CatalogModel {
 }
 
 export type RawEntry = Record<string, unknown>;
+
+export const ROUTED_CONTEXT_COMPAT_CATALOG_KIND = "routed-context-compat-v1";
+
+export function isRoutedContextCompatEntry(entry: RawEntry): boolean {
+  return entry.opencodex_catalog_kind === ROUTED_CONTEXT_COMPAT_CATALOG_KIND;
+}
+
+export function routedContextCompatTarget(entry: RawEntry): string | undefined {
+  return isRoutedContextCompatEntry(entry) && typeof entry.opencodex_routed_slug === "string"
+    ? entry.opencodex_routed_slug
+    : undefined;
+}
 
 export type RawCatalog = { models?: RawEntry[]; [k: string]: unknown };
 
