@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceInstallState, prepareServiceInstall, readWindowsSchedulerXmlState, repairService, resolveServiceListenPort, runLaunchctl, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
@@ -647,19 +647,58 @@ describe("launchd service plist", () => {
 });
 
 describe("service lifecycle cleanup ordering", () => {
-  test("service install stops the manager and tracked standalone proxy before loading assets", async () => {
-    const service = await readText("src/service.ts");
-    const installCase = service.slice(service.indexOf('case "install":'), service.indexOf('case "start":'));
+  test("service install stops the recorded backend, requested backend, and standalone before loading assets", async () => {
+    const calls: string[] = [];
+    const managerOps = (backend: "scheduler" | "native") => ({
+      status: () => { calls.push(`status:${backend}`); return "present"; },
+      stop: () => { calls.push(`stop:${backend}`); },
+    });
+    await installServiceSafely("native", () => { calls.push("install:native"); }, {
+      platform: "win32",
+      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
+      managerOps,
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
+    });
+    expect(calls).toEqual([
+      "status:scheduler", "stop:scheduler",
+      "status:native", "stop:native",
+      "stop:standalone", "install:native",
+    ]);
+  });
 
-    const managerStopAt = installCase.indexOf("ops.stop();");
-    const trackedStopAt = installCase.indexOf("await stopTrackedProxyForServiceCommand();");
-    const installAt = installCase.indexOf("await ops.install();");
-    expect(installCase).toContain("ops.status() !== null || isServiceInstalled()");
-    expect(managerStopAt).toBeGreaterThan(-1);
-    expect(trackedStopAt).toBeGreaterThan(-1);
-    expect(installAt).toBeGreaterThan(-1);
-    expect(managerStopAt).toBeLessThan(trackedStopAt);
-    expect(trackedStopAt).toBeLessThan(installAt);
+  test("service install fails closed before install on manager or standalone cleanup errors", async () => {
+    for (const failure of ["status", "stop", "standalone"] as const) {
+      let installed = false;
+      const run = installServiceSafely("scheduler", () => { installed = true; }, {
+        platform: "win32",
+        diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
+        managerOps: () => ({
+          status: () => {
+            if (failure === "status") throw new Error("status failed");
+            return "present";
+          },
+          stop: () => {
+            if (failure === "stop") throw new Error("stop failed");
+          },
+        }),
+        stopTrackedProxy: async () => {
+          if (failure === "standalone") throw new Error("standalone failed");
+        },
+      });
+      await expect(run).rejects.toThrow(`${failure} failed`);
+      expect(installed).toBe(false);
+    }
+  });
+
+  test("conflicting Windows install preparation stops both managers", async () => {
+    const stopped: string[] = [];
+    await prepareServiceInstall("scheduler", {
+      platform: "win32",
+      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: false, startable: false, stale: false, conflict: true, backend: "scheduler", summary: "test" }),
+      managerOps: backend => ({ status: () => "present", stop: () => { stopped.push(backend); } }),
+      stopTrackedProxy: async () => {},
+    });
+    expect(stopped).toEqual(["scheduler", "native"]);
   });
 
   test("direct service stop kills the tracked proxy before restoring native Codex", async () => {

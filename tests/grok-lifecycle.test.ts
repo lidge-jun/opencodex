@@ -33,11 +33,11 @@ describe("Grok fence lifecycle wiring", () => {
 
   test("ensure passes the observed bind host on the live branch and the configured host after spawning", () => {
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
-    const liveBranch = ensureFn.slice(0, ensureFn.indexOf("const pinPort"));
+    const syncFn = sliceFn(CLI_SOURCE, "async function syncLiveProxy(", "function grokSyncFailureMessage(");
     const spawnBranch = ensureFn.slice(ensureFn.indexOf("const pinPort"));
 
     // live.hostname is what the proxy ACTUALLY bound; config.hostname may have drifted.
-    expect(liveBranch).toContain("live.hostname ? { hostname: live.hostname }");
+    expect(syncFn).toContain("live.hostname ? { hostname: live.hostname }");
     expect(spawnBranch).toContain("config.hostname ? { hostname: config.hostname }");
   });
 
@@ -88,15 +88,19 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).not.toContain("process.exit(1)");
 
     const restartCase = sliceFn(CLI_SOURCE, 'case "restart"', 'case "health"');
-    const diagnoseAt = restartCase.indexOf("diagnoseService().installed");
+    const diagnoseAt = restartCase.indexOf("diagnoseService()");
     const stopAt = restartCase.indexOf("await handleStop()");
     const serviceStartAt = restartCase.indexOf('await serviceCommand("start")');
     const standaloneStartAt = restartCase.indexOf("await handleEnsure()");
     expect(diagnoseAt).toBeGreaterThan(-1);
     expect(diagnoseAt).toBeLessThan(stopAt);
     expect(serviceStartAt).toBeGreaterThan(stopAt);
-    expect(standaloneStartAt).toBeGreaterThan(serviceStartAt);
-    expect(restartCase).toContain("if (serviceWasInstalled)");
+    expect(standaloneStartAt).toBeGreaterThan(-1);
+    expect(restartCase).toMatch(
+      /if \(serviceBeforeRestart\.installed\) \{[\s\S]*?await serviceCommand\("start"\);[\s\S]*?await syncLiveProxy\([\s\S]*?requireCodexSync: true[\s\S]*?\} else \{\s*await handleEnsure\(\);\s*\}/,
+    );
+    expect(restartCase).toContain("serviceBeforeRestart.installed && !serviceBeforeRestart.startable");
+    expect(restartCase).toContain("preserving the live standalone proxy");
   });
 
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {

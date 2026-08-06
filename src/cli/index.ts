@@ -119,6 +119,33 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
   return null;
 }
 
+async function syncLiveProxy(
+  live: LiveProxy,
+  config: ReturnType<typeof loadConfig>,
+  options: { requireCodexSync?: boolean } = {},
+): Promise<void> {
+  let synced: Awaited<ReturnType<typeof syncModelsToCodex>> | null = null;
+  try {
+    synced = await syncModelsToCodex(live.port);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (options.requireCodexSync) throw new Error(`Codex model sync failed after service restart: ${detail}`);
+    console.error(`⚠️  Model sync skipped: ${detail}`);
+  }
+  if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+  // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
+  await injectSystemEnv(live.port, config).catch(() => {});
+  // Refresh the Grok Build fence too (same contract as start). live.hostname is the
+  // hostname the running proxy actually bound; config.hostname may have drifted.
+  try {
+    const { syncGrokConfig } = await import("../grok/sync");
+    const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
+    if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
+    else if (!g.ok) console.error(`⚠️  ${g.message}`);
+  } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
+  console.log(`✅ Proxy running on port ${live.port}`);
+}
+
 /**
  * A Grok fence sync that throws is best-effort by design — it must never block startup.
  * Reporting nothing, however, is what lets a STALE fence survive: `~/.grok/config.toml`
@@ -411,24 +438,9 @@ async function handleEnsure() {
   }
   const live = await findLiveProxy();
   if (live) {
-      const synced = await syncModelsToCodex(live.port).catch(e => {
-        console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
-        return null;
-      });
-      if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
-      // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-      await injectSystemEnv(live.port, config).catch(() => {});
-      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
-      // hostname the running proxy actually bound — config.hostname may have drifted.
-      try {
-        const { syncGrokConfig } = await import("../grok/sync");
-        const g = await syncGrokConfig(live.port, config, live.hostname ? { hostname: live.hostname } : {});
-        if (g.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
-        else if (!g.ok) console.error(`⚠️  ${g.message}`);
-      } catch (err) { console.error(`⚠️  ${grokSyncFailureMessage(err)}`); }
-      console.log(`✅ Proxy running on port ${live.port}`);
-      return;
-    }
+    await syncLiveProxy(live, config);
+    return;
+  }
 
   const pinPort = config.port ?? 10100;
   const child = spawn(process.execPath, startArgv(pinPort > 0 ? pinPort : undefined), {
@@ -1099,15 +1111,44 @@ switch (command) {
     break;
   }
   case "restart": {
-    const serviceWasInstalled = diagnoseService().installed;
+    const serviceBeforeRestart = diagnoseService();
+    if (serviceBeforeRestart.installed && !serviceBeforeRestart.startable) {
+      // Do not stop a working standalone proxy when the installed manager is stale,
+      // conflicting, or otherwise unsafe to start. Keep the live fallback and refresh
+      // its Codex integration; without one, fail closed and direct the user to repair.
+      if (await findLiveProxy()) {
+        console.warn(`⚠️  Installed service is not startable (${serviceBeforeRestart.summary}); preserving the live standalone proxy.`);
+        await handleEnsure();
+      } else {
+        console.error(`❌ Installed service is not startable (${serviceBeforeRestart.summary}). Run 'ocx service repair' before restarting.`);
+        process.exitCode = 1;
+      }
+      break;
+    }
     // A failed stop must not be followed by a re-inject: with a foreign service still running
     // (ownership mismatch) we would rewrite shared config we just declined to touch.
     if (await handleStop()) {
       // Preserve the installed supervision boundary. Starting via handleEnsure here
       // creates a detached standalone proxy after handleStop unloads the service,
       // so every routine restart silently loses login/crash protection.
-      if (serviceWasInstalled) await serviceCommand("start");
-      else await handleEnsure();
+      if (serviceBeforeRestart.installed) {
+        await serviceCommand("start");
+        if (process.exitCode && process.exitCode !== 0) break;
+        const live = await waitForProxy();
+        if (!live) {
+          console.error("❌ Background service did not become ready after restart.");
+          process.exitCode = 1;
+          break;
+        }
+        try {
+          await syncLiveProxy(live, loadConfig(), { requireCodexSync: true });
+        } catch (error) {
+          console.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
+          process.exitCode = 1;
+        }
+      } else {
+        await handleEnsure();
+      }
     }
     else console.error("↩️  Restart aborted: the proxy was not stopped cleanly.");
     break;

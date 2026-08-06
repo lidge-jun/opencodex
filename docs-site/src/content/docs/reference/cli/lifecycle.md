@@ -37,9 +37,11 @@ The same action is available from the web dashboard's **Stop** button (`POST /ap
 ### `ocx restart`
 
 Stop and restart the proxy while preserving its supervision mode. If a background service was
-installed, `restart` starts that service again so login and crash protection remain active. Without
-an installed service, it starts the standalone background proxy through `ensure`. Both paths sync
-the live port back into Codex.
+installed and is startable, `restart` starts that service again so login and crash protection remain
+active, then waits for the live proxy and Codex model sync before returning. Without an installed
+service, it starts the standalone background proxy through `ensure`. A stale or conflicting service
+is never started: an already-live standalone proxy is preserved and resynced, while no live fallback
+fails closed with a repair instruction.
 
 ### `ocx ensure`
 
@@ -235,10 +237,11 @@ A non-zero exit here means *registered but not serving* — not *not installed*.
 service manager accepted the job; the proxy behind it never bound the port. Read the
 log named in the message, and use `ocx start` to serve in the foreground meanwhile.
 
-Before `install` writes and loads new service assets, it stops any existing registered manager and
-any tracked standalone proxy. This prevents an old standalone listener from retaining the service
-port, forcing the newly installed manager into a restart loop, and making the old listener look like
-a successful service install.
+Before `install` writes and loads new service assets, it stops the recorded installed backend first,
+then any different requested or conflicting Windows backend, and finally any tracked standalone
+proxy. Manager status, manager stop, and standalone cleanup failures abort the install. This prevents
+an old listener from retaining the service port, forcing the newly installed manager into a restart
+loop, and making the old listener look like a successful service install.
 
 `ocx service status` reports the same three states rather than raw manager output:
 

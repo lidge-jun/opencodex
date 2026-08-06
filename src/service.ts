@@ -2177,6 +2177,11 @@ type ServiceOps = {
   status: () => string; uninstall: () => void;
 };
 
+type ServiceInstallCleanupOps = {
+  status: () => string | null;
+  stop: () => void;
+};
+
 function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
   if (process.platform === "darwin")
     return { install: installLaunchd, start: startLaunchd, stop: stopLaunchd, status: statusLaunchd, uninstall: uninstallLaunchd };
@@ -2198,6 +2203,60 @@ function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
       process.exit(1);
     }
     return { install: installSystemd, start: startSystemd, stop: stopSystemd, status: statusSystemd, uninstall: uninstallSystemd };
+  }
+  return null;
+}
+
+/**
+ * Install-only manager operations. Unlike the ordinary status/stop helpers, these
+ * distinguish confirmed absence from a failed manager query and propagate every
+ * non-benign stop failure. Installing new assets is unsafe while either answer is
+ * unknown because an old manager may still respawn a listener on the target port.
+ */
+function platformServiceInstallCleanupOps(backend: ServiceBackend): ServiceInstallCleanupOps | null {
+  if (process.platform === "darwin") {
+    return {
+      status: () => {
+        const listing = sh("launchctl list");
+        return listing.split("\n").some(line => line.includes(LABEL)) ? listing : null;
+      },
+      stop: () => { sh(`launchctl unload "${plistPath()}"`); },
+    };
+  }
+  if (process.platform === "win32") {
+    if (backend === "native") {
+      return {
+        status: () => {
+          const status = statusWinswRaw();
+          if (status === "unknown") throw new Error("Native service status could not be verified.");
+          return status === "nonexistent" ? null : status;
+        },
+        stop: stopWinswService,
+      };
+    }
+    return {
+      status: () => {
+        const probe = probeWindowsSchedulerTask(TASK);
+        if (probe.status === "unknown") throw new Error(`Task Scheduler status could not be verified: ${probe.detail}`);
+        return probe.status === "present" ? "present" : null;
+      },
+      stop: () => {
+        try {
+          schtasks(["/end", "/tn", TASK]);
+        } catch (error) {
+          if (!isWindowsSchedulerEndBenign(error)) throw error;
+        }
+      },
+    };
+  }
+  if (process.platform === "linux") {
+    return {
+      status: () => {
+        const listing = sh(`systemctl --user list-unit-files ${TASK} --no-legend`);
+        return listing || null;
+      },
+      stop: () => { sh(`systemctl --user stop ${TASK}`); },
+    };
   }
   return null;
 }
@@ -2295,6 +2354,60 @@ async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupR
     console.error(`⚠️  Failed to stop proxy: ${err instanceof Error ? err.message : String(err)}`);
     return "none";
   }
+}
+
+export interface ServiceInstallPreparationDeps {
+  diagnose?: () => ServiceDiagnostic;
+  managerOps?: (backend: ServiceBackend) => ServiceInstallCleanupOps | null;
+  stopTrackedProxy?: () => Promise<unknown>;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * Stop every manager that could own the install port, then stop the tracked
+ * standalone listener. Any unknown status or cleanup failure rejects, so callers
+ * cannot write assets or report success over a surviving old listener.
+ */
+export async function prepareServiceInstall(
+  requestedBackend: ServiceBackend,
+  deps: ServiceInstallPreparationDeps = {},
+): Promise<void> {
+  const diagnostic = (deps.diagnose ?? diagnoseService)();
+  const platform = deps.platform ?? process.platform;
+  const resolveOps = deps.managerOps ?? platformServiceInstallCleanupOps;
+  const backends: ServiceBackend[] = [];
+  const addBackend = (backend: ServiceBackend) => {
+    if (!backends.includes(backend)) backends.push(backend);
+  };
+
+  if (platform === "win32") {
+    // The recorded backend owns the old installation and must be stopped first.
+    // A conflicting diagnostic means both managers exist, so stop both even when
+    // the requested backend happens to match the recorded one.
+    if (diagnostic.backend === "scheduler" || diagnostic.backend === "native") {
+      addBackend(diagnostic.backend);
+      if (diagnostic.conflict) addBackend(diagnostic.backend === "scheduler" ? "native" : "scheduler");
+    }
+    addBackend(requestedBackend);
+  } else {
+    addBackend(requestedBackend);
+  }
+
+  for (const backend of backends) {
+    const manager = resolveOps(backend);
+    if (!manager) throw new Error(`Background service manager is unavailable for ${backend}.`);
+    if (manager.status() !== null) manager.stop();
+  }
+  await (deps.stopTrackedProxy ?? stopTrackedProxyIfRunning)();
+}
+
+export async function installServiceSafely(
+  requestedBackend: ServiceBackend,
+  install: () => void | Promise<void>,
+  deps: ServiceInstallPreparationDeps = {},
+): Promise<void> {
+  await prepareServiceInstall(requestedBackend, deps);
+  await install();
 }
 
 /**
@@ -2652,10 +2765,12 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // restart-loops on EADDRINUSE, and the old standalone process makes the install
       // verification report a false success.
       try {
-        if (ops.status() !== null || isServiceInstalled()) ops.stop();
-      } catch { /* absent or already stopped */ }
-      await stopTrackedProxyForServiceCommand();
-      await ops.install();
+        await installServiceSafely(backend, ops.install);
+      } catch (error) {
+        console.error(`❌ Service install cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+        break;
+      }
       // The wrapper was written moments ago in this process, so the configured port
       // and the baked one cannot have diverged yet — unlike `start`, which reads the
       // installed artifact instead.
