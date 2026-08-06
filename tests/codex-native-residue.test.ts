@@ -659,6 +659,17 @@ test("a referenced rollout with native first and latest metadata is clean", () =
   expect(classifyNativeRoutedResidue()).toEqual({ kind: "clean" });
 });
 
+test("a routed rollout without a trailing newline is residue", () => {
+  createHistoryDatabase("openai");
+  writeFileSync(pathInCodexHome("rollout.jsonl"), sessionMeta("thread-1", "opencodex"));
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "residue",
+    surface: "history",
+    path: pathInCodexHome("rollout.jsonl"),
+  });
+});
+
 test("an oversized referenced rollout is indeterminate without being loaded", () => {
   createHistoryDatabase("openai");
   truncateSync(pathInCodexHome("rollout.jsonl"), 64 * 1024 * 1024 + 1);

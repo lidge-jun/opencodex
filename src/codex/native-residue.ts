@@ -80,6 +80,7 @@ const JOURNAL_FILE_NAME = "opencodex-journal.json";
 const HISTORY_DATABASE_FILE_NAME = "state_5.sqlite";
 const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via opencodex → ";
 const MAX_ROLLOUT_INSPECTION_BYTES = 64 * 1024 * 1024;
+const ROLLOUT_READ_CHUNK_BYTES = 64 * 1024;
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -150,6 +151,26 @@ function indeterminate(
   reason: string,
 ): NativeRoutedResidueResult {
   return { kind: "indeterminate", surface, path, reason };
+}
+
+function rolloutSessionMetaPayload(
+  line: string,
+): { kind: "payload"; payload: Record<string, unknown> | null } | { kind: "malformed"; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch (error) {
+    return { kind: "malformed", reason: `malformed rollout JSONL: ${errorReason(error)}` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "malformed", reason: "rollout JSONL record is not an object" };
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.type !== "session_meta") return { kind: "payload", payload: null };
+  if (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) {
+    return { kind: "malformed", reason: "session_meta payload has an unknown shape" };
+  }
+  return { kind: "payload", payload: record.payload as Record<string, unknown> };
 }
 
 function classifyToml(
@@ -382,7 +403,10 @@ function classifyReferencedRollout(
     return indeterminate(surface, resolved.path, `unreadable rollout: ${errorReason(error)}`);
   }
 
-  let content: string;
+  let first: Record<string, unknown> | undefined;
+  let latest: Record<string, unknown> | undefined;
+  let partial = "";
+  let totalRead = 0;
   try {
     const opened = fstatSync(handle);
     if (opened.size > MAX_ROLLOUT_INSPECTION_BYTES) {
@@ -392,20 +416,46 @@ function classifyReferencedRollout(
         `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
       );
     }
-    const buffer = Buffer.allocUnsafe(opened.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const read = readSync(handle, buffer, offset, buffer.length - offset, offset);
-      if (read <= 0) {
+    const buffer = Buffer.allocUnsafe(ROLLOUT_READ_CHUNK_BYTES);
+    for (;;) {
+      const count = readSync(handle, buffer, 0, buffer.length, totalRead);
+      if (count === 0) break;
+      if (count < 0) {
         return indeterminate(surface, resolved.path, "rollout read ended before the observed size");
       }
-      offset += read;
+      totalRead += count;
+      partial += buffer.toString("utf8", 0, count);
+      let newline = partial.indexOf("\n");
+      while (newline !== -1) {
+        const line = partial.slice(0, newline);
+        partial = partial.slice(newline + 1);
+        if (line.trim()) {
+          const payload = rolloutSessionMetaPayload(line);
+          if (payload.kind === "malformed") {
+            return indeterminate(surface, resolved.path, payload.reason);
+          }
+          if (payload.payload !== null) {
+            first ??= payload.payload;
+            latest = payload.payload;
+          }
+        }
+        newline = partial.indexOf("\n");
+      }
+    }
+    if (partial.trim()) {
+      const payload = rolloutSessionMetaPayload(partial);
+      if (payload.kind === "malformed") {
+        return indeterminate(surface, resolved.path, payload.reason);
+      }
+      if (payload.payload !== null) {
+        first ??= payload.payload;
+        latest = payload.payload;
+      }
     }
     const after = fstatSync(handle);
     if (!sameStat(resolved.stat, after)) {
       return indeterminate(surface, resolved.path, "rollout changed while it was being observed");
     }
-    content = buffer.toString("utf8");
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
       return indeterminate(surface, resolved.path, "referenced rollout is absent");
@@ -419,29 +469,6 @@ function classifyReferencedRollout(
     }
   }
 
-  let first: Record<string, unknown> | undefined;
-  let latest: Record<string, unknown> | undefined;
-
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch (error) {
-      return indeterminate(surface, resolved.path, `malformed rollout JSONL: ${errorReason(error)}`);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return indeterminate(surface, resolved.path, "rollout JSONL record is not an object");
-    }
-    const record = parsed as Record<string, unknown>;
-    if (record.type !== "session_meta") continue;
-    if (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) {
-      return indeterminate(surface, resolved.path, "session_meta payload has an unknown shape");
-    }
-    const payload = record.payload as Record<string, unknown>;
-    first ??= payload;
-    latest = payload;
-  }
   if (!first || !latest) {
     return indeterminate(surface, resolved.path, "referenced rollout has no session_meta metadata");
   }
