@@ -1164,7 +1164,7 @@ export const ko: Record<TKey, string> = {
   "api.clientConfig.loading": "클라이언트 설정 생성 중…",
   "api.clientConfig.jsonLabel": "{client} 설정 JSON",
   "api.clientConfig.destination": "대상 파일",
-  "api.clientConfig.envHint": "실행 전 키 설정",
+  "api.clientConfig.envHint": "실행 전 안내",
   "api.clientConfig.mergeWarning": "대상 파일에 병합하세요. 덮어쓰면 기존 프로바이더와 MCP 설정이 사라집니다.",
   "api.clientConfig.modelCount": "모델 {count}개 내보냄",
   "api.clientConfig.missingLimits": "{total}개 중 {count}개 모델에 컨텍스트 한도가 없어 클라이언트 기본값이 적용됩니다.",

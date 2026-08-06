@@ -1157,7 +1157,7 @@ export const zh: Record<TKey, string> = {
   "api.clientConfig.loading": "正在生成客户端配置…",
   "api.clientConfig.jsonLabel": "{client} 配置 JSON",
   "api.clientConfig.destination": "目标文件",
-  "api.clientConfig.envHint": "启动前设置密钥",
+  "api.clientConfig.envHint": "启动前提示",
   "api.clientConfig.mergeWarning": "请合并到目标文件中。直接替换会丢失你已有的其他提供商和 MCP 配置。",
   "api.clientConfig.modelCount": "已导出 {count} 个模型",
   "api.clientConfig.missingLimits": "{total} 个模型中有 {count} 个没有上下文上限，客户端将使用自己的默认值。",

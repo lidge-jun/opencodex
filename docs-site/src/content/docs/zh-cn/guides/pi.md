@@ -3,7 +3,7 @@ title: Pi
 description: 在 Pi 中使用任意已路由模型 - `ocx export` 会为 Pi 的 `models.json` 写入一个自定义 provider 块，并连接到正在运行的代理。
 ---
 
-Pi 从一个全局 JSON 文件而不是环境变量中读取 providers，所以 opencodex 不会启动它。相反，`ocx export` 会序列化 `opencodex` provider 块 - 基础 URL、模型列表，以及一个占位准入 key - 然后你把它合并到自己的配置中。
+Pi 从一个全局 JSON 文件而不是环境变量中读取 providers，所以 opencodex 不会启动它。相反，`ocx export` 会序列化 `opencodex` provider 块——基础 URL、模型列表，以及一个非秘密的字面量 `apiKey` 占位值——然后你把它合并到自己的配置中。
 
 ## 快速开始
 

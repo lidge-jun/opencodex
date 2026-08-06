@@ -48,7 +48,7 @@ const PI_ENVELOPE_BASE = {
   filename: "pi-models.json",
   destination: "/home/dev/.pi/agent/models.json",
   apiKeyEnv: "",
-  exportHint: "Pi reads credentials from its models.json; loopback needs no key.",
+  exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
   modelCount: 2,
   modelsWithoutLimits: 1,
   format: "json",
@@ -476,7 +476,11 @@ test("no-key state is informational and leaves copy and download enabled", async
     .toContain("OPENCODEX_OPENCODE_API_KEY has no key behind it yet");
   await act(async () => { button(container, "Close").click(); });
   await act(async () => { rowButton(container, "Pi", "Details").click(); });
-  expect(container.querySelector(".awi-clientconfig-nokey")).toBeNull();
+  const piDialog = container.querySelector("dialog")!;
+  expect(piDialog.querySelector(".awi-clientconfig-nokey")).toBeNull();
+  expect(piDialog.textContent).toContain("Before launching");
+  expect(piDialog.textContent).toContain("Pi reads a non-secret placeholder from models.json; loopback needs no key.");
+  expect(piDialog.textContent).not.toContain("Set the key before launching");
 
   await act(async () => { root.unmount(); });
 });

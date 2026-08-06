@@ -81,8 +81,8 @@ export default function ClientConfigDialog({
         {!hasKeys && envelope.apiKeyEnv !== "" && (
           // Informational, never blocking: an agent may legitimately want the shape
           // first, so both actions stay enabled. A client with no env var at all
-          // (Pi, Kimi) reads its credential from its own file, so naming a
-          // variable there would render an empty name.
+          // (Pi, Kimi) carries its non-secret loopback placeholder in its own file,
+          // so naming a variable here would render an empty name.
           <p className="muted small awi-clientconfig-nokey">
             {t("api.clientConfig.noKeyYet", { env: envelope.apiKeyEnv })}
           </p>

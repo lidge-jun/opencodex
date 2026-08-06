@@ -150,8 +150,8 @@ Manage and apply the Grok Build model fence.
 
 Print a client config wired to the running proxy. opencode and [Pi](/guides/pi/) read providers
 from their own JSON config rather than environment variables, so this command serializes the
-`opencodex` provider block — base URL, model list, and the client's env reference — for you to
-merge into that file.
+`opencodex` provider block — base URL, model list, and the client's credential reference or
+loopback placeholder — for you to merge into that file.
 
 The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
 models Codex can currently see.

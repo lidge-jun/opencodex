@@ -5,7 +5,7 @@ description: Use any routed model from Pi — ocx export writes a custom provide
 
 Pi reads its providers from a single global JSON file rather than environment variables, so
 opencodex does not launch it. Instead, `ocx export` serializes the `opencodex` provider block —
-base URL, model list, and a placeholder admission key — and you merge it into your own config.
+base URL, model list, and a non-secret literal `apiKey` placeholder — and you merge it into your own config.
 
 ## Quickstart
 

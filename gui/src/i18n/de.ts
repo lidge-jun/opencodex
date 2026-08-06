@@ -1137,7 +1137,7 @@ export const de: Record<TKey, string> = {
   "api.clientConfig.loading": "Client-Konfiguration wird erstellt…",
   "api.clientConfig.jsonLabel": "{client}-Konfigurations-JSON",
   "api.clientConfig.destination": "Zieldatei",
-  "api.clientConfig.envHint": "Schlüssel vor dem Start setzen",
+  "api.clientConfig.envHint": "Vor dem Start",
   "api.clientConfig.mergeWarning": "Führe dies in die Zieldatei ein. Ein Ersetzen würde deine anderen Provider und MCP-Einstellungen entfernen.",
   "api.clientConfig.modelCount": "{count} Modell(e) exportiert",
   "api.clientConfig.missingLimits": "{count} von {total} Modell(en) haben kein Kontextlimit; der Client verwendet dafür seine eigenen Vorgaben.",

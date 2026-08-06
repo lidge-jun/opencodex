@@ -5,8 +5,8 @@ description: Pi에서 라우팅된 모델을 그대로 쓸 수 있습니다. `oc
 
 Pi는 provider를 환경 변수 대신 하나의 전역 JSON 파일에서 읽기 때문에,
 opencodex가 Pi를 직접 실행하지 않습니다. 대신 `ocx export`가 `opencodex` provider 블록,
-즉 base URL, 모델 목록, 그리고 placeholder 인증 키를 직렬화해서 사용자가
-자신의 설정에 병합하도록 합니다.
+즉 base URL, 모델 목록, 그리고 비밀이 아닌 리터럴 `apiKey` placeholder를 직렬화해서
+사용자가 자신의 설정에 병합하도록 합니다.
 
 ## 빠른 시작
 

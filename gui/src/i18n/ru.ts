@@ -1587,7 +1587,7 @@ export const ru: Record<TKey, string> = {
   "api.clientConfig.loading": "Формируется конфигурация клиента…",
   "api.clientConfig.jsonLabel": "JSON конфигурации {client}",
   "api.clientConfig.destination": "Целевой файл",
-  "api.clientConfig.envHint": "Задайте ключ перед запуском",
+  "api.clientConfig.envHint": "Перед запуском",
   "api.clientConfig.mergeWarning": "Объедините это с целевым файлом. Замена удалит ваши другие провайдеры и настройки MCP.",
   "api.clientConfig.modelCount": "Экспортировано моделей: {count}",
   "api.clientConfig.missingLimits": "У {count} из {total} моделей нет лимита контекста; клиент применит свои значения по умолчанию.",

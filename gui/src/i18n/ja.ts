@@ -1545,7 +1545,7 @@ export const ja: Record<TKey, string> = {
   "api.clientConfig.loading": "クライアント設定を生成中…",
   "api.clientConfig.jsonLabel": "{client} 設定 JSON",
   "api.clientConfig.destination": "配置先ファイル",
-  "api.clientConfig.envHint": "起動前にキーを設定",
+  "api.clientConfig.envHint": "起動前の案内",
   "api.clientConfig.mergeWarning": "配置先ファイルにマージしてください。置き換えると既存のプロバイダーや MCP 設定が失われます。",
   "api.clientConfig.modelCount": "{count} 件のモデルを書き出しました",
   "api.clientConfig.missingLimits": "{total} 件中 {count} 件のモデルにコンテキスト上限がないため、クライアント側の既定値が使われます。",

@@ -1600,7 +1600,7 @@ export const en = {
   "api.clientConfig.loading": "Building client config…",
   "api.clientConfig.jsonLabel": "{client} config JSON",
   "api.clientConfig.destination": "Destination file",
-  "api.clientConfig.envHint": "Set the key before launching",
+  "api.clientConfig.envHint": "Before launching",
   "api.clientConfig.mergeWarning": "Merge this into the destination file. Replacing it would drop your other providers and MCP settings.",
   "api.clientConfig.modelCount": "{count} model(s) exported",
   "api.clientConfig.missingLimits": "{count} of {total} model(s) ship without a context limit; the client applies its own defaults.",

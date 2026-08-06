@@ -12,7 +12,7 @@
  *   readability, not the client's native format. Every diagnostic — including the
  *   `--out` write note — goes to stderr.
  * - **Human** (no flag) and `--out`: the client's NATIVE serialization leads, then the
- *   destination path, the merge warning, the env export line, and the model/degraded
+ *   destination path, merge warning, client-specific pre-launch guidance, and model/degraded
  *   counts.
  *
  * The command never writes the user's real config path. `--out` is an explicit target and
@@ -20,9 +20,9 @@
  * (`--out ~/.config/opencode/opencode.json`) would silently destroy other providers.
  *
  * Serialization itself belongs to src/clients/config-export.ts; this module only resolves
- * the base URL, filters the catalog, and renders. No secret is ever serialized: the config
- * carries the client's documented env reference — or, for Kimi, which cannot hold one, a
- * loopback placeholder — and the real key stays in the environment.
+ * the base URL, filters the catalog, and renders. No secret is serialized: the config carries
+ * the client's documented env reference or, for loopback-only file clients, a non-secret
+ * placeholder. Real keys stay outside the generated file.
  */
 import { writeFileSync } from "node:fs";
 import { loadConfig } from "../config";

@@ -951,7 +951,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // Pi carries the placeholder literal in models.json (see
     // LOOPBACK_API_KEY_PLACEHOLDER), so there is no env var to export.
     apiKeyEnv: "",
-    exportHint: "Pi reads credentials from its models.json; loopback needs no key.",
+    exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
     build: buildPiClientConfig,
     format: "json",
     summarize: summarizePi,
