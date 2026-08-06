@@ -126,3 +126,14 @@ export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: s
   }
   return `${baseModelId}-${effortSuffix}`;
 }
+
+/**
+ * Compose the exact flattened id sent by AgentService/Run. Discovery normalizes Cursor's optional
+ * `cursor-` prefix only for catalog matching, but regular Grok 4.5 requests require that prefix on
+ * the wire. Keep this separate from {@link cursorWireModelIdWithEffort} so discovery can continue
+ * comparing canonical, prefix-free ids. Grok Fast uses requested_model parameters instead.
+ */
+export function cursorRequestWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
+  const flattened = cursorWireModelIdWithEffort(baseModelId, effortSuffix);
+  return baseModelId === "grok-4.5" ? `cursor-${flattened}` : flattened;
+}

@@ -10,7 +10,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRequestedModelParameter, CursorRunRequest } from "./types";
 import { cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
-import { cursorEffortSuffix, cursorWireModelIdWithEffort } from "./effort-map";
+import { cursorEffortSuffix, cursorRequestWireModelIdWithEffort } from "./effort-map";
 import {
   cursorMcpToolEncodedSize,
   cursorMcpToolsEncodedSize,
@@ -140,7 +140,7 @@ function normalizeCursorModelId(modelId: string, reasoning?: string): {
       ],
     };
   }
-  return { ...selection, modelId: suffix ? cursorWireModelIdWithEffort(id, suffix) : id };
+  return { ...selection, modelId: suffix ? cursorRequestWireModelIdWithEffort(id, suffix) : id };
 }
 
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {
