@@ -448,6 +448,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     if (seed) seed.codexAccountMode = raw.codexAccountMode;
     const canonicalCandidate = { ...raw };
     delete canonicalCandidate.responsesSnapshotRepair;
+    // modelCosts is a user-owned display overlay, not part of the canonical
+    // forward seed; it is validated separately below (providerModelCostsConfigError).
+    delete canonicalCandidate.modelCosts;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
@@ -575,7 +578,9 @@ function sanitizeModelCosts(costs: unknown): Record<string, ProviderCostOverlay>
     const cacheRead = rates.cacheRead;
     const cacheWrite = rates.cacheWrite;
     if (validRate(input) && validRate(output) && validRate(cacheRead) && validRate(cacheWrite)) {
-      out[modelId] = { input, output, cacheRead, cacheWrite };
+      // The DTO is served to the dashboard; a model id shaped like a pasted key
+      // must not be echoed back (validation errors already redact these).
+      out[redactSecretString(modelId)] = { input, output, cacheRead, cacheWrite };
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;

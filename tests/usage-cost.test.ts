@@ -863,28 +863,31 @@ describe("provider cost overlay (user-configured)", () => {
     refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   });
 
-  test("registry redacts token-shaped provider/model ids in source and signature, keeping matching raw", () => {
-    const config = {
-      providers: {
-        "sk-provider-123": {
-          modelCosts: { "sk-model-456": USER_PRICE },
-        },
-      },
-    } as unknown as OcxConfig;
-    refreshUserCostOverlays(config);
+  test("registry redacts token-shaped ids in display source but keeps raw matching and change detection", () => {
+    const configWith = (provider: string, model: string) => ({
+      providers: { [provider]: { modelCosts: { [model]: USER_PRICE } } },
+    }) as unknown as OcxConfig;
+    refreshUserCostOverlays(configWith("sk-provider-123", "sk-model-456"));
     const rows = activeUserCostOverlays();
     expect(rows).toHaveLength(1);
     // Matching fields stay raw so exact-name resolution still works.
     expect(rows[0].provider).toBe("sk-provider-123");
     expect(rows[0].modelId).toBe("sk-model-456");
+    // The display-only source redacts token-shaped ids.
     expect(rows[0].source).not.toContain("sk-provider-123");
     expect(rows[0].source).not.toContain("sk-model-456");
     expect(rows[0].source).toContain("[REDACTED]");
     expect(resolveMatchedPrice("sk-provider-123", "sk-model-456")?.source).toBe("user");
-    // The redacted projection keeps the no-op signature stable under refresh.
+    // Identical refresh stays a no-op.
     const versionBefore = userCostOverlayVersion();
-    refreshUserCostOverlays(config);
+    refreshUserCostOverlays(configWith("sk-provider-123", "sk-model-456"));
     expect(userCostOverlayVersion()).toBe(versionBefore);
+    // A DIFFERENT secret-shaped id with the same rates must still bump: the
+    // change-detection signature compares raw matching fields, not the redacted
+    // display strings (both would otherwise collapse to "[REDACTED]").
+    refreshUserCostOverlays(configWith("sk-provider-789", "sk-model-456"));
+    expect(userCostOverlayVersion()).toBe(versionBefore + 1);
+    expect(activeUserCostOverlays()[0].provider).toBe("sk-provider-789");
     // Leave the registry empty for the rest of the file.
     refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   });

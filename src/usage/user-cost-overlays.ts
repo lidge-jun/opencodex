@@ -73,12 +73,12 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   // would invalidate the /api/usage summary cache on unrelated reloads and
   // churn the cost memo. Only a real overlay change bumps the version, so the
   // cache survives reloads of an unchanged config.
-  const signature = JSON.stringify(rows.map(row => ({
-    provider: redactSecretString(row.provider),
-    modelId: redactSecretString(row.modelId),
-    cost4: row.cost4,
-    source: row.source,
-  })));
+  // The signature MUST compare the raw matching fields: two different
+  // secret-shaped ids would both redact to "[REDACTED]" and falsely look
+  // unchanged, skipping the version bump and serving stale estimates. The
+  // signature is process-local state and is never serialized to a response;
+  // only the display `source` above is redacted.
+  const signature = JSON.stringify(rows);
   if (signature === activeSignature) return;
   activeSignature = signature;
   active = rows;
