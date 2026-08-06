@@ -216,8 +216,19 @@ upstream Responses endpoint for bounded JSON on ANY client transport — WebSock
 HTTP/SSE. The bridge reframes that JSON into the same Responses event sequence
 (`src/server/responses-json-events.ts`): WS turns send the frames as WebSocket messages, while
 HTTP clients that requested streaming receive a synthesized terminal SSE body (created →
-output_item.done → terminal → `[DONE]`). DeepSeek V4 Flash uses this path because its Codex
-streaming response can deliver output without closing on a terminal event.
+output_item.done → terminal → `[DONE]`). This remains available for providers that explicitly
+declare the compatibility hint.
+
+DeepSeek V4 Flash instead keeps native Responses streaming for progressive reasoning, text, and
+tool-call delivery. Its registry entry enables a model-scoped terminal repair before the existing
+inspection/client split. A real `response.completed`, `response.failed`, or `response.incomplete`
+event always passes through unchanged. If every opened output item has a structurally complete
+`output_item.done` and no real terminal arrives for five seconds, the repair emits exactly one
+`response.completed` snapshot and closes the upstream reader. EOF or `[DONE]` uses the same strict
+completion check; open, malformed, duplicate, contradictory, or unknown output graphs fail closed
+as `response.incomplete`, never synthetic success. The repair shares the per-turn translator byte
+budget, preserves backpressure, and composes ahead of item-id/snapshot rewrites so HTTP/SSE and
+WebSocket clients observe the same canonical lifecycle.
 
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
