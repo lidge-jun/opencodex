@@ -615,7 +615,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.costTotal": "Listenpreis-Äquivalent",
   "logs.detail.totalTokens": "Tokens gesamt",
-  "logs.detail.matchedKey": "Zugeordneter jawcode-Schlüssel",
+  "logs.detail.matchedKey": "Zugeordneter Preisschlüssel",
   "logs.detail.priceSource": "Preisquelle",
   "logs.detail.unavailableReason": "Grund der Nichtverfügbarkeit",
   "logs.detail.copyRequestId": "Anfrage-ID kopieren",

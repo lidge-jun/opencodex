@@ -642,7 +642,7 @@ export const en = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.costTotal": "List-price equivalent",
   "logs.detail.totalTokens": "Total tokens",
-  "logs.detail.matchedKey": "Matched jawcode key",
+  "logs.detail.matchedKey": "Matched price key",
   "logs.detail.priceSource": "Price source",
   "logs.detail.unavailableReason": "Unavailable reason",
   "logs.detail.copyRequestId": "Copy request ID",

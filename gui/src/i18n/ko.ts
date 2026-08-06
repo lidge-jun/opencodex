@@ -634,7 +634,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.costTotal": "정가 환산치",
   "logs.detail.totalTokens": "전체 토큰",
-  "logs.detail.matchedKey": "매칭된 jawcode 키",
+  "logs.detail.matchedKey": "매칭된 가격 키",
   "logs.detail.priceSource": "가격 출처",
   "logs.detail.unavailableReason": "표시 불가 사유",
   "logs.detail.copyRequestId": "요청 ID 복사",
