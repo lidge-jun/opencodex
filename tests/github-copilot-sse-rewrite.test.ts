@@ -86,8 +86,10 @@ describe("GitHub Copilot Responses SSE repair", () => {
     ].join("");
 
     const budget = createTestTranslatorBudget();
+    const splitAt = upstream.indexOf("cipher-tool-input") + 5;
+    expect(splitAt).toBeGreaterThan(5);
     const rewritten = await readAll(relaySseWithBlockRewrite(
-      streamFromChunks(upstream.slice(0, 137), upstream.slice(137)),
+      streamFromChunks(upstream.slice(0, splitAt), upstream.slice(splitAt)),
       createGithubCopilotResponsesBlockRewrite(budget),
       budget,
     ));
@@ -112,6 +114,31 @@ describe("GitHub Copilot Responses SSE repair", () => {
     expect((events[3]!.payload.item as { id: string }).id).toBe("ctc-first");
     expect(rewritten).not.toContain("obfuscation");
     expect(rewritten).not.toContain("cipher-tool-input");
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("continues relaying when output-index retention reaches its count cap", async () => {
+    const upstream = Array.from({ length: 257 }, (_, outputIndex) => frame(
+      "response.output_item.added",
+      {
+        type: "response.output_item.added",
+        output_index: outputIndex,
+        item: { type: "message", id: `message-${outputIndex}`, role: "assistant", content: [] },
+      },
+    )).join("");
+    const budget = createTestTranslatorBudget();
+
+    const rewritten = await readAll(relaySseWithBlockRewrite(
+      streamFromChunks(upstream),
+      createGithubCopilotResponsesBlockRewrite(budget),
+      budget,
+    ));
+    const events = parsedFrames(rewritten);
+
+    expect(events).toHaveLength(257);
+    expect((events[0]!.payload.item as { id: string }).id).toBe("message-0");
+    expect((events[255]!.payload.item as { id: string }).id).toBe("message-255");
+    expect((events[256]!.payload.item as { id: string }).id).toBe("message-256");
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 

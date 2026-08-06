@@ -122,6 +122,7 @@ export function createGithubCopilotResponsesBlockRewrite(
   let itemStateBytes = 0;
   let callStateBytes = 0;
   let nextSequenceNumber = 0;
+  let itemTrackingTainted = false;
   let disposed = false;
 
   const ensureStateLimit = (nextBytes: number): void => {
@@ -175,8 +176,13 @@ export function createGithubCopilotResponsesBlockRewrite(
       existing.encryptedReasoning ||= encryptedReasoning;
       return existing;
     }
-    if (items.size >= MAX_TRACKED_ITEMS) {
-      throw new TranslatorBudgetExceededError("item_ids", RETAINED_STATE_LIMIT_BYTES);
+    if (itemTrackingTainted || items.size >= MAX_TRACKED_ITEMS) {
+      // Keep relaying client-visible events after the count cap, but stop
+      // retaining new output-index mappings. The current event still receives
+      // the provider id, while earlier retained mappings remain available for
+      // stable ids. Byte-budget failures stay hard failures.
+      itemTrackingTainted = true;
+      return { id: candidateId, type: itemType, encryptedReasoning };
     }
     chargeItemState(byteLength([outputIndex, candidateId, itemType ?? null]));
     const tracked = { id: candidateId, type: itemType, encryptedReasoning };
@@ -243,6 +249,7 @@ export function createGithubCopilotResponsesBlockRewrite(
     responseId = undefined;
     itemStateBytes = 0;
     callStateBytes = 0;
+    itemTrackingTainted = false;
   };
 
   const rewrite: SseBlockRewrite = (block) => {

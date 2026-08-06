@@ -77,6 +77,24 @@ describe("createSseInspector frame bounds", () => {
     inspector.dispose();
   });
 
+  test("keeps the upstream completed response id when pinning is not enabled", () => {
+    const completed: Array<{ id?: unknown }> = [];
+    const inspector = createSseInspector({
+      onCompletedResponse: response => completed.push(response),
+    });
+
+    inspector.feed(frame({
+      type: "response.created",
+      response: { id: "resp-client-visible", status: "in_progress", output: [] },
+    }));
+    inspector.feed(frame(completedEvent("resp-upstream-terminal", [{ type: "message", id: "msg-1" }])));
+
+    expect(completed).toEqual([
+      expect.objectContaining({ id: "resp-upstream-terminal" }),
+    ]);
+    inspector.dispose();
+  });
+
   test("oversized candidate is inspection-only: tee client bytes stay exact and the next event resynchronizes", async () => {
     const oversized = encoder.encode(`data: ${"x".repeat(MAX_INSPECTION_SSE_FRAME_BYTES)}x\n\n`);
     const terminal = frame(completedEvent("after-cap"));
