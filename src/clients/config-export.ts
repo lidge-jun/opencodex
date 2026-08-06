@@ -170,6 +170,49 @@ export function opencodeGlobalConfigPath(
   return join(xdg, "opencode", "opencode.json");
 }
 
+const OMP_PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const OMP_WINDOWS_RESERVED_PROFILE_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
+
+function ompProfileName(env: OpencodeLaunchEnv): string | undefined {
+  const raw = env.OMP_PROFILE?.trim() || env.PI_PROFILE?.trim();
+  const profile = raw?.trim();
+  if (!profile || profile === "default") return undefined;
+  if (
+    profile === "."
+    || profile === ".."
+    || profile.endsWith(".")
+    || !OMP_PROFILE_NAME_RE.test(profile)
+    || OMP_WINDOWS_RESERVED_PROFILE_RE.test(profile)
+  ) {
+    throw new ClientPathError(`Invalid OMP profile "${raw}"`);
+  }
+  return profile;
+}
+
+/** Resolve the global Oh My Pi agent directory using OMP's own env precedence. */
+export function ompAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const profile = ompProfileName(env);
+  if (!profile) {
+    const override = env.PI_CODING_AGENT_DIR?.trim();
+    if (override) return absoluteClientPath(override, home, "PI_CODING_AGENT_DIR");
+  }
+  const configDir = env.PI_CONFIG_DIR?.trim();
+  const root = configDir
+    ? (isAbsolute(configDir) || configDir === "~" || configDir.startsWith("~/") || configDir.startsWith("~\\")
+      ? absoluteClientPath(configDir, home, "PI_CONFIG_DIR")
+      : join(home, configDir))
+    : join(home, ".omp");
+  return profile ? join(root, "profiles", profile, "agent") : join(root, "agent");
+}
+
+/** OMP's canonical custom-provider catalog. */
+export function ompModelsConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const agentDir = ompAgentDir(env, home);
+  const yamlFallback = join(agentDir, "models.yaml");
+  const canonical = join(agentDir, "models.yml");
+  return !existsSync(canonical) && existsSync(yamlFallback) ? yamlFallback : canonical;
+}
+
 /** Compose the OpenAI-compatible proxy base URL from a live probe result. */
 export function opencodeProxyBaseUrl(port: number, hostname?: string): string {
   return `http://${probeHostname(hostname)}:${port}/v1`;
@@ -364,6 +407,7 @@ export interface ExportContext {
 export type ExportClientId =
   | "opencode"
   | "pi"
+  | "omp"
   | "hermes"
   | "openclaw"
   | "kimi"
@@ -894,6 +938,11 @@ function buildPiContribution(ctx: ExportContext): ManagedContribution {
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
+function buildOmpContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildPiClientConfig(ctx);
+  return singleFragment("omp", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
 function buildHermesContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildHermesClientConfig(ctx);
   return singleFragment("hermes", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
@@ -951,6 +1000,19 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     buildContribution: buildPiContribution,
     // No header field in Pi's provider block, so there is nowhere to put the
     // dedicated admission header a remote bind requires.
+    loopbackOnly: true,
+  },
+  omp: {
+    id: "omp",
+    filename: "omp-models.yaml",
+    destination: env => ompModelsConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "OMP reads credentials from models.yml; loopback needs no key.",
+    build: buildPiClientConfig,
+    format: "yaml",
+    summarize: summarizePi,
+    buildContribution: buildOmpContribution,
+    // OMP's provider block has no dedicated admission-header field.
     loopbackOnly: true,
   },
   hermes: {

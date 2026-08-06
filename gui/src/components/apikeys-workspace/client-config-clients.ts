@@ -8,12 +8,13 @@
  * with EXPORT_CLIENT_IDS by hand; adding a client server-side renders no row
  * until this tuple changes.
  */
-export const CLIENTS = ["opencode", "pi", "hermes", "openclaw", "kimi", "gajae"] as const;
+export const CLIENTS = ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"] as const;
 export type ExportClientId = (typeof CLIENTS)[number];
 
 export const CLIENT_LABEL_KEYS = {
   opencode: "api.clientConfig.clientOpencode",
   pi: "api.clientConfig.clientPi",
+  omp: "api.clientConfig.clientOmp",
   hermes: "api.clientConfig.clientHermes",
   openclaw: "api.clientConfig.clientOpenclaw",
   kimi: "api.clientConfig.clientKimi",

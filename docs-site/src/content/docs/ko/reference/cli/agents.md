@@ -131,7 +131,7 @@ Grok Build model fence를 관리하고 적용합니다.
 
 ## 클라이언트 설정 내보내기
 
-### `ocx export --client <opencode|pi>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
 실행 중인 프록시에 연결된 client config를 출력합니다. opencode와 [Pi](/guides/pi/)는 environment variable이 아니라 각자의 JSON config에서 provider를 읽으므로, 이 명령은 `opencodex` provider block, 즉 base URL, model list, 그리고 client의 env reference를 직렬화해서 해당 파일에 병합할 수 있게 해줍니다.
 
@@ -147,23 +147,25 @@ Grok Build model fence를 관리하고 적용합니다.
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
 ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ocx export --client omp --json > omp-models.yml  # OMP models.yml provider block
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-`--json`이 없으면 JSON이 먼저 나오고, 그다음 표준 대상 경로, merge 경고, env export 줄, 그리고 context limit을 생략한 row 수를 포함한 model count가 이어집니다(이 경우 client는 자체 기본값을 적용합니다).
+`--json`이 없으면 JSON이 먼저 나오고, 그다음 표준 대상 경로, merge 경고, 해당 client에 env 변수가 있는 경우 env export 줄, 그리고 context limit을 생략한 row 수를 포함한 model count가 이어집니다(이 경우 client는 자체 기본값을 적용합니다).
 
 | 클라이언트 | 표준 대상 경로 | 다운로드 파일명 | 환경 변수 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME`이 설정되어 있으면 우선합니다) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 없음 - 블록에 리터럴 `opencodex-loopback`이 들어갑니다 |
+| `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | 없음 - loopback placeholder |
 
-두 환경 변수 이름은 서로 다르며, 각 client는 자기 것만 보간합니다. opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 읽고, Pi는 `$OPENCODEX_API_KEY`를 읽습니다.
+opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 생성한 Pi 블록에는 환경 변수가 필요 없으며, 리터럴 placeholder인 `opencodex-loopback`이 들어갑니다. 이 값은 필수입니다. Pi는 모델 목록을 만들 때 `apiKey`를 해석하고, 기존 config에 설정되지 않은 env 참조가 있으면 provider 전체를 숨기기 때문입니다. 루프백에서 proxy는 생성된 placeholder를 검사하지 않습니다.
 
 :::caution[Merge, never replace]
 `ocx export`는 실제 client config를 절대 쓰지 않습니다. 대상 경로는 손으로 병합하라고 출력되며, `--out`은 `--force` 없이 기존 파일을 덮어쓰지 않습니다. config를 바꾸어 덮어쓰면 이미 들어 있던 다른 provider, agent, MCP entry가 사라지기 때문입니다.
 :::
 
-어떤 key도 직렬화되지 않습니다. config에는 client의 env reference만 들어가므로 secret은 환경 변수에 남습니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. reference는 단지 사용되지 않을 뿐입니다. proxy가 loopback을 넘어 바인딩할 때만 변수를 설정하십시오. admission key가 어떻게 발급되는지는 [Remote access](/reference/configuration/#remote-access)를 보십시오. upstream provider 자체의 key는 완전히 별개의 것으로, 각 [Providers](/guides/providers/)에 맞게 설정합니다.
+어떤 key도 직렬화되지 않습니다. opencode config에는 env reference만 들어가므로 secret은 환경 변수에 남고, Pi config에는 인증 정보가 아니라 placeholder가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. opencode 변수는 proxy가 loopback을 넘어 바인딩할 때만 설정하십시오. admission key가 어떻게 발급되는지는 [Remote access](/reference/configuration/#remote-access)를 보십시오. upstream provider 자체의 key는 완전히 별개의 것으로, 각 [Providers](/guides/providers/)에 맞게 설정합니다.
 
 같은 payload는 `GET /api/client-config`로 제공되고 dashboard의 API 탭에도 렌더링되므로, CLI, API, GUI가 모두 같은 바이트를 사용합니다.
 

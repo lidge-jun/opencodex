@@ -31,6 +31,7 @@ const TABS: readonly TabDefinition[] = [
   { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
   { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },
   { id: "pi", hash: "integrations/pi", labelKey: "integrations.tab.pi" },
+  { id: "omp", hash: "integrations/omp", labelKey: "integrations.tab.omp" },
   { id: "hermes", hash: "integrations/hermes", labelKey: "integrations.tab.hermes" },
   { id: "openclaw", hash: "integrations/openclaw", labelKey: "integrations.tab.openclaw" },
   { id: "kimi", hash: "integrations/kimi", labelKey: "integrations.tab.kimi" },
@@ -40,6 +41,7 @@ const TABS: readonly TabDefinition[] = [
 const FILE_CLIENTS = new Set<FileIntegrationClientId>([
   "opencode",
   "pi",
+  "omp",
   "hermes",
   "openclaw",
   "kimi",

@@ -146,7 +146,7 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | --- | --- | --- |
 | `GET /api/catalog` | Return the installed Codex catalog document | 404 catalog not found |
 | `GET /api/models` | Return the dashboard/CLI model rows | `catalog_busy` when gathering is saturated |
-| `GET /api/client-config?client=...` | Build a read-only OpenCode or Pi client-config document | 400 unsupported client; 503 catalog unavailable |
+| `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |
 | `PUT /api/model-visibility` | Atomically change provider- or model-level visibility | 400 invalid provider, scope, target, or body |
 | `GET, POST /api/custom-models` | List custom models or add one | 400 invalid fields; 404 provider missing; 409 duplicate model |

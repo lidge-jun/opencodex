@@ -29,6 +29,8 @@ interface ClientConfigEnvelope {
   exportHint: string;
   modelCount: number;
   modelsWithoutLimits: number;
+  format: string;
+  text: string;
   config: unknown;
 }
 
@@ -155,6 +157,21 @@ describe("GET /api/client-config", () => {
     expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(provider.models.map(model => model.id)).toContain("a/m1");
+  }, 15_000);
+
+  test("OMP returns the full routed catalog as models.yml YAML", async () => {
+    const response = await clientConfigApi(baseConfig(), "?client=omp");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+
+    expect(body.client).toBe("omp");
+    expect(body.filename).toBe("omp-models.yaml");
+    expect(body.format).toBe("yaml");
+    expect(body.text).toContain("providers:");
+    expect(body.text).toContain("a/m1");
+    const provider = (body.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID];
+    expect(provider.models.map(model => model.id)).toContain("a/m1");
+    expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {

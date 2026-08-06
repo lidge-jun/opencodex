@@ -146,40 +146,48 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
-Print a client config wired to the running proxy. opencode and [Pi](/guides/pi/) read providers
-from their own JSON config rather than environment variables, so this command serializes the
-`opencodex` provider block — base URL, model list, and the client's env reference — for you to
-merge into that file.
+Print a client config wired to the running proxy. The command serializes the
+`opencodex` provider block — base URL, model list, and the client's credential
+reference or loopback placeholder — in the selected client's native format.
 
 The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
 models Codex can currently see.
 
 | Flag | Action |
 | --- | --- |
-| `--client <opencode\|pi>` | Required. Selects the client dialect: opencode's keyed `provider` object or Pi's `providers` array. |
-| `--json` | Print only the config JSON on stdout, so a redirect captures byte-exact output. Every diagnostic, including the `--out` write note, goes to stderr. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` | Required. Selects the client config dialect. |
+| `--json` | Print only the generated config bytes on stdout, so a redirect captures byte-exact output. Every diagnostic, including the `--out` write note, goes to stderr. |
 | `--out <path>` | Write the config to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
 
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
 ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ocx export --client omp --json > omp-models.yml  # OMP models.yml provider block
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-Without `--json` the JSON leads, then the canonical destination path, the merge warning, the env
-export line, and a model count with how many rows omit context limits (the client applies its own
-defaults for those).
+Without `--json` the generated config leads, then the canonical destination path, the merge warning, the env
+export line where the client has one, and a model count with how many rows omit context limits (the
+client applies its own defaults for those).
 
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
+| `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE`, `PI_CONFIG_DIR`, and `PI_CODING_AGENT_DIR` are honored) | `omp-models.yaml` | none — loopback placeholder |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | none — loopback placeholder |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 
-The two env var names are different, and each client only interpolates its own. opencode reads
-`{env:OPENCODEX_OPENCODE_API_KEY}`; Pi reads `$OPENCODEX_API_KEY`.
+opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
+not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
+This is load-bearing because both clients resolve `apiKey` while building their model lists and
+hide the whole provider when an existing config contains an unset env reference. The proxy never
+checks the generated placeholder on loopback.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by
@@ -187,9 +195,10 @@ hand, and `--out` refuses to overwrite an existing file without `--force`, becau
 config destroys the other providers, agents, and MCP entries already in it.
 :::
 
-No key is ever serialized. The config carries only the client's env reference, so the secret stays
-in your environment. A loopback proxy (`127.0.0.1`, the default) requires no admission key at all —
-the reference is simply unused. Set the variable only when the proxy binds beyond loopback; see
+No key is ever serialized. Configs carry either a documented environment reference or a
+non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
+admission key at all. Set a referenced variable only when the client schema supports it and
+the proxy binds beyond loopback; see
 [Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).

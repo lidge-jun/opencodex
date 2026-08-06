@@ -148,7 +148,7 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | --- | --- | --- |
 | `GET /api/catalog` | Вернуть установленный документ каталога Codex | 404 catalog not found |
 | `GET /api/models` | Вернуть model-row'ы для дашборда и CLI | `catalog_busy`, когда сборка перегружена |
-| `GET /api/client-config?client=...` | Собрать read-only client-config document для OpenCode или Pi | 400 unsupported client; 503 catalog unavailable |
+| `GET /api/client-config?client=...` | Собрать read-only client config для любой поддерживаемой файловой интеграции | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Полностью заменить общий список disabled-models | 400 invalid JSON |
 | `PUT /api/model-visibility` | Атомарно изменить видимость на уровне провайдера или модели | 400 invalid provider, scope, target or body |
 | `GET, POST /api/custom-models` | Показать список custom-моделей или добавить одну | 400 invalid fields; 404 provider missing; 409 duplicate model |

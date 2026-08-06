@@ -130,7 +130,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/catalog` |インストールされている Codex カタログ ドキュメントを返します | 404 カタログが見つかりません |
 | `GET /api/models` |ダッシュボード/CLI モデルの行を返す |収集が飽和したときの `catalog_busy` |
-| `GET /api/client-config?client=...` |読み取り専用の OpenCode または Pi クライアント構成ドキュメントを作成する | 400 クライアントがサポートされていません。 503 カタログは利用できません |
+| `GET /api/client-config?client=...` |サポートされているファイル連携の読み取り専用クライアント設定を作成する | 400 クライアントがサポートされていません。 503 カタログは利用できません |
 | `PUT /api/disabled-models` |共有の無効モデル リストを置き換える | 400 無効な JSON |
 | `PUT /api/model-visibility` |プロバイダーレベルまたはモデルレベルの可視性をアトミックに変更 | 400 プロバイダー、スコープ、ターゲット、または本文が無効です。
 | `GET, POST /api/custom-models` |カスタム モデルをリストするか追加する | 400 個の無効なフィールド。 404 プロバイダーがありません。 409 複製モデル |

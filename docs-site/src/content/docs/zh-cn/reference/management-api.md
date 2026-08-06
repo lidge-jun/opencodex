@@ -130,7 +130,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/catalog` | 返回已安装的 Codex 目录文档 | 404 未找到目录 |
 | `GET /api/models` | 返回仪表板/CLI 模型行 | 收集饱和时返回 `catalog_busy` |
-| `GET /api/client-config?client=...` | 构建只读的 OpenCode 或 Pi client-config 文档 | 400 不支持的客户端；503 目录不可用 |
+| `GET /api/client-config?client=...` | 为任意支持的文件集成构建只读客户端配置 | 400 不支持的客户端；503 目录不可用 |
 | `PUT /api/disabled-models` | 替换共享的禁用模型列表 | 400 无效 JSON |
 | `PUT /api/model-visibility` | 原子性地更改 provider 级或 model 级可见性 | 400 provider、scope、target 或请求体无效 |
 | `GET, POST /api/custom-models` | 列出自定义模型或添加一个 | 400 字段无效；404 provider 缺失；409 模型重复 |

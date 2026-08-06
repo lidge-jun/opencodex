@@ -66,9 +66,9 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds exactly the same six ids", async () => {
+  test("every list of clients holds exactly the same seven ids", async () => {
     /*
-     * Five lists name the same six clients, and two of them are maintained by
+     * Five lists name the same seven clients, and two of them are maintained by
      * hand: the GUI cannot import the backend registry, because that would
      * pull node:os and node:path into the browser bundle. A client added
      * server-side renders no row until someone remembers the tuple, and the
@@ -78,7 +78,7 @@ describe("the client registries cannot drift apart", () => {
     const guiIntegrations = await import("../gui/src/pages/integrations/integration-api");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(6);
+    expect(expected).toHaveLength(7);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -125,6 +125,7 @@ describe("every client survives a full lifecycle", () => {
   const SEED: Record<IntegrationClientId, string> = {
     opencode: '{\n  "provider": {\n    "mine": { "npm": "keep-me" }\n  }\n}\n',
     pi: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
+    omp: "providers:\n  mine:\n    api: http://keep-me\n",
     hermes: "providers:\n  mine:\n    api: http://keep-me\n",
     openclaw: '{\n  models: {\n    providers: {\n      mine: { api: "http://keep-me" },\n    },\n  },\n}\n',
     kimi: '[providers.mine]\napi = "http://keep-me"\n',
@@ -675,7 +676,7 @@ describe("the store's own root stays tidy", () => {
 describe("the CLI names every client it supports", () => {
   test("export help and the top-level list are not stuck on opencode and Pi", () => {
     /*
-     * The command has accepted six clients since WP1, but its help said two.
+     * The command has accepted several clients since WP1, but its help said two.
      * A user reading it concluded the feature did not support their client —
      * the one failure mode a help string has.
      *

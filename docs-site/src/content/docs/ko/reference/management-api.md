@@ -130,7 +130,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/catalog` | 설치된 Codex catalog 문서를 반환합니다 | 404 catalog 없음 |
 | `GET /api/models` | 대시보드/CLI model 행을 반환합니다 | 수집이 포화 상태이면 `catalog_busy` |
-| `GET /api/client-config?client=...` | 읽기 전용 OpenCode 또는 Pi client-config 문서를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
+| `GET /api/client-config?client=...` | 지원되는 파일 연동의 읽기 전용 client config를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
 | `PUT /api/disabled-models` | 공유 disabled-model 목록을 교체합니다 | 400 잘못된 JSON |
 | `PUT /api/model-visibility` | provider 또는 model 수준의 visibility를 원자적으로 변경합니다 | 400 잘못된 provider, scope, target, 또는 본문 |
 | `GET, POST /api/custom-models` | custom model을 나열하거나 하나를 추가합니다 | 400 잘못된 필드; 404 provider 없음; 409 중복 model |

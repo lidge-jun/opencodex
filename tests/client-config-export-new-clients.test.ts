@@ -63,7 +63,7 @@ describe("no secret reaches a client config", () => {
     // client whose schema has no header field cannot authenticate remotely at
     // all. Saying so beats exporting a config that 401s.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "kimi", "gajae"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -268,7 +268,7 @@ describe("gajae", () => {
 
 describe("contributions name every fragment we own", () => {
   test("single-entry clients own exactly one path", () => {
-    for (const id of ["opencode", "pi", "hermes", "openclaw", "gajae"] as const) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "gajae"] as const) {
       expect(buildClientContribution(id, ctx()).fragments).toHaveLength(1);
     }
   });

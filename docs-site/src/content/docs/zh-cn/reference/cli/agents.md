@@ -126,7 +126,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ## Client config export
 
-### `ocx export --client <opencode|pi>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
 输出连接到正在运行代理的客户端配置。opencode 和 [Pi](/guides/pi/) 不是从环境变量，而是从各自的 JSON 配置中读取 providers，因此此命令会序列化 `opencodex` provider 块——基础 URL、模型列表以及客户端的环境引用——供你合并进那个文件。
 
@@ -142,23 +142,25 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
 ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ocx export --client omp --json > omp-models.yml  # OMP models.yml provider block
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-不使用 `--json` 时，JSON 会先输出，随后是规范目标路径、合并警告、环境变量导出行，以及一个模型计数，并标明有多少行省略了上下文限制（客户端会对这些项应用自己的默认值）。
+不使用 `--json` 时，JSON 会先输出，随后是规范目标路径、合并警告、客户端专属的启动前提示，以及一个模型计数，并标明有多少行省略了上下文限制（客户端会对这些项应用自己的默认值）。
 
 | 客户端 | 规范目标路径 | 下载文件名 | 环境变量 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json`（设置了 `XDG_CONFIG_HOME` 时以其为准） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 无 - 块中携带字面值 `opencodex-loopback` |
+| `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | 无 - loopback placeholder |
 
-这两个环境变量名称不同，而且每个客户端只会插入自己的那个。opencode 读取 `{env:OPENCODEX_OPENCODE_API_KEY}`；Pi 读取 `$OPENCODEX_API_KEY`。
+opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi 导出不需要环境变量，而是携带字面占位值 `opencodex-loopback`。这个值是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果已有配置包含未设置的环境变量引用，它就会隐藏整个 provider。回环上的代理从不校验生成的占位值。
 
 :::caution[合并，不要替换]
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。配置里只包含客户端的环境引用，因此密钥仍保留在你的环境中。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥——该引用只是不会被使用。只有当代理绑定到环回地址之外时才设置该变量；关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
+任何密钥都不会被序列化。opencode 配置里只包含环境引用，因此密钥仍保留在你的环境中；Pi 配置里携带的是占位值而不是任何凭据。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。只有当代理绑定到环回地址之外时才需要设置 opencode 的那个变量；关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
 
 同一份负载会通过 `GET /api/client-config` 提供，并在仪表盘的 API 选项卡中渲染，因此 CLI、API 和 GUI 使用的是同一字节内容。
 
