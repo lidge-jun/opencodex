@@ -862,4 +862,30 @@ describe("provider cost overlay (user-configured)", () => {
     // Leave the registry empty for the rest of the file.
     refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   });
+
+  test("registry redacts token-shaped provider/model ids in source and signature, keeping matching raw", () => {
+    const config = {
+      providers: {
+        "sk-provider-123": {
+          modelCosts: { "sk-model-456": USER_PRICE },
+        },
+      },
+    } as unknown as OcxConfig;
+    refreshUserCostOverlays(config);
+    const rows = activeUserCostOverlays();
+    expect(rows).toHaveLength(1);
+    // Matching fields stay raw so exact-name resolution still works.
+    expect(rows[0].provider).toBe("sk-provider-123");
+    expect(rows[0].modelId).toBe("sk-model-456");
+    expect(rows[0].source).not.toContain("sk-provider-123");
+    expect(rows[0].source).not.toContain("sk-model-456");
+    expect(rows[0].source).toContain("[REDACTED]");
+    expect(resolveMatchedPrice("sk-provider-123", "sk-model-456")?.source).toBe("user");
+    // The redacted projection keeps the no-op signature stable under refresh.
+    const versionBefore = userCostOverlayVersion();
+    refreshUserCostOverlays(config);
+    expect(userCostOverlayVersion()).toBe(versionBefore);
+    // Leave the registry empty for the rest of the file.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+  });
 });

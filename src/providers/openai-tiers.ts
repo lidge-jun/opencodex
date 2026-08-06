@@ -69,8 +69,10 @@ export class OpenAiTierMigrationCollisionError extends Error {
   }
 }
 
-function managedLegacyMultiOverlay(provider: OcxProviderConfig): Pick<OcxProviderConfig, "disabled" | "selectedModels"> | null {
-  const allowed = new Set(["adapter", "authMode", "baseUrl", "disabled", "selectedModels"]);
+function managedLegacyMultiOverlay(
+  provider: OcxProviderConfig,
+): Pick<OcxProviderConfig, "disabled" | "selectedModels" | "modelCosts"> | null {
+  const allowed = new Set(["adapter", "authMode", "baseUrl", "disabled", "selectedModels", "modelCosts"]);
   if (!Object.keys(provider).every(key => allowed.has(key))) return null;
   if (!isCanonicalOpenAiForwardProvider(provider)) return null;
   if (provider.disabled !== undefined && typeof provider.disabled !== "boolean") return null;
@@ -81,6 +83,7 @@ function managedLegacyMultiOverlay(provider: OcxProviderConfig): Pick<OcxProvide
   return {
     ...(provider.disabled !== undefined ? { disabled: provider.disabled } : {}),
     ...(provider.selectedModels !== undefined ? { selectedModels: [...provider.selectedModels] } : {}),
+    ...(provider.modelCosts !== undefined ? { modelCosts: provider.modelCosts } : {}),
   };
 }
 
@@ -104,12 +107,14 @@ function mergeLegacyOpenAiProviderRows(
     ...(openai?.selectedModels ?? []),
     ...(legacyMulti?.selectedModels ?? []),
   ]);
+  const modelCosts = openai?.modelCosts ?? legacyMulti?.modelCosts;
   const formerRows = [openai, legacyMulti].filter((row): row is OcxProviderConfig => row !== undefined);
   const disabled = formerRows.length > 0 && formerRows.every(row => row.disabled === true);
   return {
     ...canonicalCodexForwardProvider(mode),
     ...(disabled ? { disabled: true } : {}),
     ...(selectedModels && selectedModels.length > 0 ? { selectedModels } : {}),
+    ...(modelCosts ? { modelCosts } : {}),
   };
 }
 
