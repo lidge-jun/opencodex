@@ -10,6 +10,7 @@ import {
 } from "../src/config";
 import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
 import { activeUserCostOverlays, refreshUserCostOverlays, userCostOverlayVersion } from "../src/usage/user-cost-overlays";
+import type { OcxConfig } from "../src/types";
 
 const VALID_COSTS = {
   "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
