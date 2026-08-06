@@ -38,6 +38,43 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("preserves explicitly empty attempts through normalization", () => {
+    const normalized = normalizeUsageEntryForTest({
+      requestId: "ocx-empty-attempts",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+      attempts: [],
+    });
+    expect(normalized.attempts).toEqual([]);
+  });
+
+  test("normalizes bounded ingress spans and omits malformed or secret-like values", () => {
+    const valid = "AbCdEfGhIjKlMnOpQrStUvWx_0000000000000001";
+    const base = {
+      requestId: "ocx-ingress-normalization",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported" as const,
+    };
+    expect(normalizeUsageEntryForTest({ ...base, ingressSpan: ` ${valid} ` }).ingressSpan).toBe(valid);
+    for (const ingressSpan of [
+      "too-short",
+      "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      "Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",
+      "sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    ]) {
+      expect(normalizeUsageEntryForTest({ ...base, ingressSpan })).not.toHaveProperty("ingressSpan");
+    }
+  });
+
   test("persists the rate-limit-429 recovery kind on attempts", () => {
     const entry: PersistedUsageEntry = {
       requestId: "ocx-ratelimit-kind",

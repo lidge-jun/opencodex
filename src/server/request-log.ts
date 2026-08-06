@@ -36,9 +36,20 @@ import {
 import { matchesLogConversationId } from "./request-log-conversation";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
+const INGRESS_SPAN_RE = /^[A-Za-z0-9_-]{24}_[0-9a-f]{16}$/;
+
+/** Accept only the content-free app-server correlation token. */
+export function ingressSpanFromHeader(value: string | null): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const span = value.trim();
+  return INGRESS_SPAN_RE.test(span) ? span : undefined;
+}
+
 export interface RequestLogContext {
   model: string;
   provider: string;
+  /** Validated, content-free app-server ingress correlation token. */
+  ingressSpan?: string;
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
@@ -106,6 +117,8 @@ export interface RequestLogEntry {
   timestamp: number;
   model: string;
   provider: string;
+  /** Validated, content-free app-server ingress correlation token. */
+  ingressSpan?: string;
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   surface?: "claude" | "claude-desktop" | "grok";
@@ -226,6 +239,9 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     timestamp: entry.timestamp,
     model: entry.model,
     provider: entry.provider,
+    ...(ingressSpanFromHeader(entry.ingressSpan ?? null)
+      ? { ingressSpan: ingressSpanFromHeader(entry.ingressSpan ?? null) }
+      : {}),
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
     ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
@@ -252,7 +268,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
-    ...(entry.attempts?.length ? { attempts: entry.attempts } : {}),
+    ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
     ...(routeDecision ? { routeDecision } : {}),
   };
 }
@@ -318,6 +334,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       timestamp: entry.timestamp,
       provider: entry.provider,
       model: entry.model,
+      ...(entry.ingressSpan ? { ingressSpan: entry.ingressSpan } : {}),
       ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
       // This function REBUILDS the persisted row field by field rather than
       // spreading it, so a field missing here reaches /api/logs and never
@@ -346,7 +363,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
-      ...(entry.attempts?.length ? { attempts: entry.attempts } : {}),
+      ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
       ...failureDiagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
     });
@@ -805,6 +822,7 @@ export function addFinalRequestLog(
     timestamp: start,
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
+    ...(logCtx.ingressSpan ? { ingressSpan: logCtx.ingressSpan } : {}),
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
     ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),
@@ -832,7 +850,7 @@ export function addFinalRequestLog(
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
-    ...(attempts?.length ? { attempts } : {}),
+    ...(attempts !== undefined ? { attempts } : {}),
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),

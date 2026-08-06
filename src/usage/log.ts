@@ -49,6 +49,8 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
+  /** Validated, content-free app-server ingress correlation token. */
+  ingressSpan?: string;
   surface?: "claude" | "claude-desktop" | "grok";
   /** Matched configured key id; absent for environment/loopback admissions and
    *  for every row written before attribution existed. */
@@ -93,6 +95,14 @@ export interface PersistedUsageEntry {
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
+}
+
+const INGRESS_SPAN_RE = /^[A-Za-z0-9_-]{24}_[0-9a-f]{16}$/;
+
+function normalizeIngressSpan(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const span = value.trim();
+  return INGRESS_SPAN_RE.test(span) ? span : undefined;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -330,6 +340,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
+    ...(normalizeIngressSpan(entry.ingressSpan)
+      ? { ingressSpan: normalizeIngressSpan(entry.ingressSpan) }
+      : {}),
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
     ...(typeof entry.apiKeyId === "string" && entry.apiKeyId.trim()
       // Deliberately NOT capped. `capMetadataString` protects free-form metadata
@@ -385,7 +398,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
-    ...(attempts.length > 0 ? { attempts } : {}),
+    ...(Array.isArray(entry.attempts) ? { attempts } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),

@@ -1629,6 +1629,19 @@ async function handleResponsesInner(
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   logCtx.providerAdapter = adapter.name;
+  // Ordinary requests receive one durable attempt only after their final initial
+  // adapter is resolved. Combo children own their attempt and retries keep it.
+  if (!options.comboAttempt && !logCtx.activeAttempt) {
+    const attempt = beginRequestAttempt(
+      (logCtx.attempts?.length ?? 0) + 1,
+      logCtx.provider,
+      route.modelId,
+      adapter.name,
+    );
+    logCtx.activeAttempt = attempt;
+    logCtx.activeAttemptStartedAt = Date.now();
+    (logCtx.attempts ??= []).push(attempt);
+  }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
 

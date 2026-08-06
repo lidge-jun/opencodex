@@ -90,6 +90,7 @@ import {
   hydrateRequestLogsFromDisk,
   httpStatusForRequestLogTerminal,
   httpStatusForTerminalStatus,
+  ingressSpanFromHeader,
   inspectResponseLogSsePayload,
   nextRequestLogId,
   recordFirstOutput,
@@ -841,11 +842,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
+        const ingressSpan = ingressSpanFromHeader(req.headers.get("x-opencodex-ingress-span"));
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
           ...admissionFields(admission),
           inboundProtocol: "responses",
+          ...(ingressSpan ? { ingressSpan } : {}),
         };
         let logged = false;
         const finalizeNativePassthroughLog = (

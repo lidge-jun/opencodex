@@ -16,6 +16,7 @@ import {
   finishRequestAttempt,
   getRequestLogEntries,
   hydrateRequestLogsFromDisk,
+  ingressSpanFromHeader,
   noteAttemptSend,
   recordAdapterReasoning,
   recordFirstOutput,
@@ -53,6 +54,46 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("round-trips a valid ingress span and omits malformed input", () => {
+    const valid = "AbCdEfGhIjKlMnOpQrStUvWx_0000000000000001";
+    expect(ingressSpanFromHeader(valid)).toBe(valid);
+    for (const rejected of [
+      "too-short",
+      "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      "Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",
+      "sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    ]) expect(ingressSpanFromHeader(rejected)).toBeUndefined();
+
+    const projected = requestLogEntryFromPersistedUsage({
+      requestId: "ocx-ingress",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      ingressSpan: valid,
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+      attempts: [],
+    });
+    expect(projected.ingressSpan).toBe(valid);
+    expect(projected.attempts).toEqual([]);
+  });
+
+  test("does not project malformed persisted ingress spans", () => {
+    const projected = requestLogEntryFromPersistedUsage({
+      requestId: "ocx-bad-ingress",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      ingressSpan: "bad value",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+    });
+    expect(projected).not.toHaveProperty("ingressSpan");
+  });
+
   test("records the adapter's exact outbound reasoning parameter", () => {
     const attempt = beginRequestAttempt(1, "xai", "grok-4.5", "openai-chat");
     const logCtx: RequestLogContext = {

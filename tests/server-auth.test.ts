@@ -2841,9 +2841,11 @@ describe("server local API auth", () => {
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
 
+    let upstreamSends = 0;
     const upstream = Bun.serve({
       port: 0,
       fetch() {
+        upstreamSends += 1;
         return new Response(
           [
             "event: response.completed",
@@ -2873,7 +2875,10 @@ describe("server local API auth", () => {
     try {
       const response = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-opencodex-ingress-span": "AbCdEfGhIjKlMnOpQrStUvWx_0000000000000001",
+        },
         body: JSON.stringify({ model: "test-openai/gpt-5.5", input: "hello", stream: true }),
       });
 
@@ -2882,6 +2887,12 @@ describe("server local API auth", () => {
       const logs = logsFromApiBody(await fetch(new URL("/api/logs?tail=1", server.url), { headers: managementHeaders() }).then(r => r.json()));
       expect(logs.at(-1)).toMatchObject({
         status: 200,
+        ingressSpan: "AbCdEfGhIjKlMnOpQrStUvWx_0000000000000001",
+        attempts: [{
+          ordinal: 1,
+          sendCount: 1,
+          recoveryKinds: [],
+        }],
         terminalStatus: "completed",
         closeReason: "terminal",
         usageStatus: "reported",
@@ -2893,6 +2904,7 @@ describe("server local API auth", () => {
           reasoningOutputTokens: 2,
         },
       });
+      expect(upstreamSends).toBe(1);
 
       const usage = await fetch(new URL("/api/usage?range=all&surface=codex", server.url), { headers: managementHeaders() }).then(r => r.json()) as {
         surface: string;
