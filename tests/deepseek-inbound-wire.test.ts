@@ -20,6 +20,8 @@ import {
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses } from "../src/server/responses/core";
+import type { ResponsesTerminalRepairScheduler } from "../src/server/responses-terminal-repair";
+import { sendResponseToWebSocket } from "../src/server/ws-bridge";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -27,6 +29,68 @@ const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResp
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const MODEL = "deepseek-v4-flash";
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+class ManualTerminalScheduler implements ResponsesTerminalRepairScheduler {
+  private current = 0;
+  private nextId = 1;
+  private readonly jobs = new Map<number, { at: number; callback: () => void }>();
+
+  nowMs(): number { return this.current; }
+  schedule(callback: () => void, delayMs: number): unknown {
+    const id = this.nextId++;
+    this.jobs.set(id, { at: this.current + delayMs, callback });
+    return id;
+  }
+  cancel(handle: unknown): void { this.jobs.delete(handle as number); }
+  advance(ms: number): void {
+    this.current += ms;
+    for (const [id, job] of [...this.jobs.entries()]) {
+      if (job.at > this.current || !this.jobs.delete(id)) continue;
+      job.callback();
+    }
+  }
+}
+
+function sse(event: Record<string, unknown>): string {
+  return `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function controlledSse(): {
+  stream: ReadableStream<Uint8Array>;
+  push(text: string): void;
+  cancel(): void;
+} {
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  return {
+    stream: new ReadableStream<Uint8Array>({ start(next) { controller = next; } }),
+    push(text) { controller?.enqueue(encoder.encode(text)); },
+    cancel() { try { controller?.close(); } catch { /* already closed */ } },
+  };
+}
+
+async function readUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  pattern: string,
+): Promise<string> {
+  let out = "";
+  while (!out.includes(pattern)) {
+    const { done, value } = await reader.read();
+    if (done) throw new Error(`stream closed before ${pattern}`);
+    out += decoder.decode(value, { stream: true });
+  }
+  return out;
+}
+
+async function drainReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  let out = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return out + decoder.decode();
+    out += decoder.decode(value, { stream: true });
+  }
+}
 
 function deepseekProvider(): OcxProviderConfig {
   return { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
@@ -145,6 +209,186 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(websocket.body.stream).toBe(true);
   });
 
+  test("HTTP streams a DeepSeek delta before safely repairing a missing terminal", async () => {
+    const source = controlledSse();
+    const scheduler = new ManualTerminalScheduler();
+    const requestBodies: Record<string, unknown>[] = [];
+    const testAbort = new AbortController();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(source.stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const options = {
+      abortSignal: testAbort.signal,
+      responsesTerminalRepairScheduler: scheduler,
+    } as Parameters<typeof handleResponses>[3];
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      options,
+    );
+    const reader = response.body!.getReader();
+    try {
+      source.push([
+        sse({ type: "response.created", response: { id: "resp_http", status: "in_progress", output: [] }, sequence_number: 0 }),
+        sse({ type: "response.output_item.added", item: { type: "reasoning", id: "rs_http", status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+        sse({ type: "response.reasoning_text.delta", item_id: "rs_http", output_index: 0, delta: "thinking", sequence_number: 2 }),
+      ].join(""));
+      const first = await readUntil(reader, "response.reasoning_text.delta");
+      expect(first).toContain("thinking");
+      expect(requestBodies[0]?.stream).toBe(true);
+
+      source.push([
+        sse({
+          type: "response.output_item.done",
+          item: { type: "reasoning", id: "rs_http", status: "completed", content: [{ type: "reasoning_text", text: "thinking" }], summary: [] },
+          output_index: 0,
+          sequence_number: 3,
+        }),
+        sse({ type: "response.output_item.added", item: { type: "function_call", id: "fc_http", status: "in_progress", arguments: "", call_id: "call_http", name: "probe" }, output_index: 1, sequence_number: 4 }),
+        sse({ type: "response.function_call_arguments.done", item_id: "fc_http", output_index: 1, arguments: "{\"text\":\"OK\"}", sequence_number: 5 }),
+        sse({
+          type: "response.output_item.done",
+          item: { type: "function_call", id: "fc_http", status: "completed", arguments: "{\"text\":\"OK\"}", call_id: "call_http", name: "probe" },
+          output_index: 1,
+          sequence_number: 6,
+        }),
+      ].join(""));
+      await Bun.sleep(0);
+      scheduler.advance(5_000);
+      const remainder = await Promise.race([
+        drainReader(reader),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("terminal repair did not close")), 200)),
+      ]);
+      expect(remainder).toContain("response.completed");
+      expect(remainder).toContain("data: [DONE]");
+      expect(remainder).toContain('"call_id":"call_http"');
+    } finally {
+      testAbort.abort("test cleanup");
+      source.cancel();
+      try { await reader.cancel(); } catch { /* already closed */ }
+    }
+  });
+
+  test("WebSocket delivery preserves progressive DeepSeek frames and accepts the repaired tool result", async () => {
+    const source = controlledSse();
+    const scheduler = new ManualTerminalScheduler();
+    const requestBodies: Record<string, unknown>[] = [];
+    let requestNumber = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      requestNumber += 1;
+      if (requestNumber === 1) {
+        return new Response(source.stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return Response.json({
+        id: "resp_ws_followup",
+        object: "response",
+        status: "completed",
+        output: [],
+      });
+    }) as typeof fetch;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const abort = new AbortController();
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      {
+        abortSignal: abort.signal,
+        inboundTransport: "websocket",
+        responsesTerminalRepairScheduler: scheduler,
+      },
+    );
+    const sent: string[] = [];
+    const ws = {
+      readyState: 1,
+      data: {},
+      send(message: string) { sent.push(message); return 1; },
+    } as Parameters<typeof sendResponseToWebSocket>[0];
+    try {
+      const pump = sendResponseToWebSocket(ws, response, () => true);
+      source.push([
+        sse({ type: "response.created", response: { id: "resp_ws", status: "in_progress", output: [] }, sequence_number: 0 }),
+        sse({ type: "response.output_item.added", item: { type: "reasoning", id: "rs_ws", status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+        sse({ type: "response.reasoning_text.delta", item_id: "rs_ws", output_index: 0, delta: "thinking", sequence_number: 2 }),
+      ].join(""));
+      for (let i = 0; i < 20 && !sent.some(frame => JSON.parse(frame).type === "response.reasoning_text.delta"); i += 1) {
+        await Bun.sleep(0);
+      }
+      expect(sent.some(frame => JSON.parse(frame).type === "response.reasoning_text.delta")).toBe(true);
+      expect(sent.some(frame => JSON.parse(frame).type === "response.completed")).toBe(false);
+
+      source.push([
+        sse({
+          type: "response.output_item.done",
+          item: { type: "reasoning", id: "rs_ws", status: "completed", content: [{ type: "reasoning_text", text: "thinking" }], summary: [] },
+          output_index: 0,
+          sequence_number: 3,
+        }),
+        sse({ type: "response.output_item.added", item: { type: "function_call", id: "fc_ws", status: "in_progress", arguments: "", call_id: "call_ws", name: "probe" }, output_index: 1, sequence_number: 4 }),
+        sse({ type: "response.function_call_arguments.done", item_id: "fc_ws", output_index: 1, arguments: "{\"text\":\"OK\"}", sequence_number: 5 }),
+        sse({
+          type: "response.output_item.done",
+          item: { type: "function_call", id: "fc_ws", status: "completed", arguments: "{\"text\":\"OK\"}", call_id: "call_ws", name: "probe" },
+          output_index: 1,
+          sequence_number: 6,
+        }),
+      ].join(""));
+      for (let i = 0; i < 20 && !sent.some(frame => JSON.parse(frame).type === "response.output_item.done"); i += 1) {
+        await Bun.sleep(0);
+      }
+      scheduler.advance(5_000);
+      await pump;
+
+      const eventTypes = sent.map(frame => JSON.parse(frame).type as string);
+      expect(eventTypes.filter(type => type === "response.completed")).toHaveLength(1);
+      expect(eventTypes).toContain("response.output_item.done");
+
+      const followup = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: MODEL,
+            input: [
+              { type: "function_call", id: "fc_ws", call_id: "call_ws", name: "probe", arguments: "{\"text\":\"OK\"}" },
+              { type: "function_call_output", call_id: "call_ws", output: "OK" },
+            ],
+            stream: true,
+          }),
+        }),
+        config,
+        { model: "", provider: "" },
+        { inboundTransport: "websocket" },
+      );
+      await followup.text();
+      expect(requestBodies[1]?.input).toEqual([
+        { type: "function_call", call_id: "call_ws", name: "probe", arguments: "{\"text\":\"OK\"}" },
+        { type: "function_call_output", call_id: "call_ws", output: "OK" },
+      ]);
+    } finally {
+      abort.abort("test cleanup");
+      source.cancel();
+    }
+  });
+
   function completedWithPlaceholderIds(): Response {
     return Response.json({
       id: "resp_deepseek",
@@ -162,6 +406,72 @@ describe("the inbound scope survives the handleResponses replay", () => {
       ],
     });
   }
+
+  test("streaming terminal repair composes with canonical item-id repair", async () => {
+    const source = controlledSse();
+    const scheduler = new ManualTerminalScheduler();
+    globalThis.fetch = (async () => new Response(source.stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+    const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
+    const abort = new AbortController();
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { abortSignal: abort.signal, responsesTerminalRepairScheduler: scheduler },
+    );
+    const reader = response.body!.getReader();
+    const uuidReasoning = "1b9d6bcd-bbfd-4b2d-9b9d-5c0a2fb41a1b";
+    const uuidMessage = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const uuidFunction = "550e8400-e29b-41d4-a716-446655440000";
+    try {
+      source.push([
+        sse({ type: "response.created", response: { id: "resp_ids", status: "in_progress", output: [] }, sequence_number: 0 }),
+        sse({ type: "response.output_item.added", item: { type: "reasoning", id: uuidReasoning, status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+        sse({ type: "response.output_item.done", item: { type: "reasoning", id: uuidReasoning, status: "completed", content: [{ type: "reasoning_text", text: "thinking" }], summary: [] }, output_index: 0, sequence_number: 2 }),
+        sse({ type: "response.output_item.added", item: { type: "message", id: uuidMessage, role: "assistant", status: "in_progress", content: [] }, output_index: 1, sequence_number: 3 }),
+        sse({ type: "response.output_text.delta", item_id: uuidMessage, output_index: 1, delta: "hello", sequence_number: 4 }),
+        sse({ type: "response.output_item.done", item: { type: "message", id: uuidMessage, role: "assistant", status: "completed", content: [{ type: "output_text", text: "hello" }] }, output_index: 1, sequence_number: 5 }),
+        sse({ type: "response.output_item.added", item: { type: "function_call", id: uuidFunction, status: "in_progress", arguments: "", call_id: "call_stream", name: "probe" }, output_index: 2, sequence_number: 6 }),
+        sse({ type: "response.function_call_arguments.done", item_id: uuidFunction, output_index: 2, arguments: "{\"text\":\"OK\"}", sequence_number: 7 }),
+        sse({ type: "response.output_item.done", item: { type: "function_call", id: uuidFunction, status: "completed", arguments: "{\"text\":\"OK\"}", call_id: "call_stream", name: "probe" }, output_index: 2, sequence_number: 8 }),
+      ].join(""));
+      const prefix = await readUntil(reader, '"sequence_number":8');
+      scheduler.advance(5_000);
+      const text = prefix + await drainReader(reader);
+      const payloads = text
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map(line => JSON.parse(line.slice(6)) as Record<string, unknown>);
+      const reasoningAdded = payloads.find(event => event.type === "response.output_item.added" && event.output_index === 0)!;
+      const reasoningDone = payloads.find(event => event.type === "response.output_item.done" && event.output_index === 0)!;
+      const messageAdded = payloads.find(event => event.type === "response.output_item.added" && event.output_index === 1)!;
+      const messageDone = payloads.find(event => event.type === "response.output_item.done" && event.output_index === 1)!;
+      const completed = payloads.find(event => event.type === "response.completed")!;
+      const output = (completed.response as { output: Array<{ id: string; call_id?: string }> }).output;
+      const reasoningId = (reasoningAdded.item as { id: string }).id;
+      const messageId = (messageAdded.item as { id: string }).id;
+      expect(reasoningId).toMatch(/^rs_ocx_/);
+      expect(messageId).toMatch(/^msg_ocx_/);
+      expect((reasoningDone.item as { id: string }).id).toBe(reasoningId);
+      expect((messageDone.item as { id: string }).id).toBe(messageId);
+      expect(output[0]?.id).toBe(reasoningId);
+      expect(output[1]?.id).toBe(messageId);
+      expect(output[2]).toMatchObject({ id: uuidFunction, call_id: "call_stream" });
+      expect(text).not.toContain(uuidReasoning);
+      expect(text).not.toContain(uuidMessage);
+    } finally {
+      abort.abort("test cleanup");
+      source.cancel();
+      try { await reader.cancel(); } catch { /* already closed */ }
+    }
+  });
 
   test("a JSON fallback without id repair keeps its body byte-identical", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
