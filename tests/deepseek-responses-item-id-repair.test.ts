@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import {
@@ -6,8 +6,7 @@ import {
   hasResponsesItemIdRepair,
   repairResponsesJsonItemIds,
 } from "../src/server/responses-item-id-repair";
-import { handleResponses } from "../src/server/responses/core";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { OcxProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 const UUID_MSG = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
@@ -113,49 +112,5 @@ describe("registry-derived DeepSeek repair policy (#938)", () => {
     const output = repaired.output as { id: string }[];
     expect(output[0]!.id).toMatch(/^rs_ocx_/);
     expect(output[1]!.id).toMatch(/^msg_ocx_/);
-  });
-});
-
-describe("bounded-JSON HTTP path carries canonical ids (#938 + #875)", () => {
-  const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
-
-  test("the synthesized terminal SSE contains no upstream UUID item ids (un-enriched saved seed)", async () => {
-    // The live path must backfill the registry policy through routedProviderConfig —
-    // no manual enrichProviderFromRegistry (the ordinary saved-config shape).
-    const plainSeed = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
-    expect(plainSeed.responsesItemIdRepair).toBeUndefined();
-    globalThis.fetch = (async () => Response.json({
-      id: "resp_deepseek",
-      object: "response",
-      status: "completed",
-      output: [
-        { type: "reasoning", id: UUID_RS, summary: [] },
-        { type: "message", id: UUID_MSG, role: "assistant", status: "completed", content: [{ type: "output_text", text: "hi", annotations: [] }] },
-        { type: "function_call", id: UUID_FC, call_id: "call_keep", name: "search", arguments: "{}" },
-      ],
-    })) as typeof fetch;
-
-    const config = { providers: { deepseek: plainSeed } } as unknown as OcxConfig;
-    const response = await handleResponses(
-      new Request("http://localhost/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "deepseek-v4-flash", input: "ping", stream: true }),
-      }),
-      config,
-      { model: "", provider: "" },
-      {},
-    );
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
-    const text = await response.text();
-    expect(text).not.toContain(UUID_MSG);
-    expect(text).not.toContain(UUID_RS);
-    expect(text).toContain("msg_ocx_");
-    expect(text).toContain("rs_ocx_");
-    // function_call identity survives byte-for-byte.
-    expect(text).toContain(UUID_FC);
-    expect(text).toContain("call_keep");
-    expect(text).toContain("data: [DONE]");
   });
 });
