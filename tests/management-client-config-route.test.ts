@@ -158,7 +158,7 @@ describe("GET /api/client-config", () => {
     expect(provider.models.map(model => model.id)).toContain("a/m1");
   }, 15_000);
 
-  test("pi omits every canonical OpenAI row in Codex Direct mode", async () => {
+  test("pi omits canonical OpenAI rows and combos that can select them in Codex Direct mode", async () => {
     const poolConfig = baseConfig();
     const nativeIds = new Set(nativeModelRows(poolConfig).map(row => row.slug));
     const pool = await (await clientConfigApi(poolConfig, "?client=pi")).json() as ClientConfigEnvelope;
@@ -167,25 +167,61 @@ describe("GET /api/client-config", () => {
 
     const directConfig = baseConfig({
       providers: {
-        ...poolConfig.providers,
+        a: {
+          ...poolConfig.providers.a!,
+          modelContextWindows: { m1: 128_000, m2: 96_000 },
+        },
         openai: {
           adapter: "openai-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
           codexAccountMode: "direct",
-          disabled: true,
+          liveModels: false,
+          models: ["custom-direct"],
+          modelContextWindows: { "custom-direct": 96_000 },
         },
       },
       customModels: [
-        { id: "direct-custom", provider: "openai", modelId: "custom-direct" },
-        { id: "routed-custom", provider: "a", modelId: "custom-routed" },
+        {
+          id: "direct-custom",
+          provider: "openai",
+          modelId: "custom-direct",
+          contextWindow: 96_000,
+          inputModalities: ["text"],
+        },
+        {
+          id: "routed-custom",
+          provider: "a",
+          modelId: "custom-routed",
+          contextWindow: 96_000,
+          inputModalities: ["text"],
+        },
       ],
+      combos: {
+        "direct-fallback": {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "openai", model: "gpt-5.6-luna" },
+          ],
+        },
+        "routed-only": {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "a", model: "m2" },
+          ],
+        },
+      },
     });
+    const visibleIds = (await modelRows(directConfig)).map(model => model.namespaced);
+    expect(visibleIds).toContain("combo/direct-fallback");
+    expect(visibleIds).toContain("combo/routed-only");
     const direct = await (await clientConfigApi(directConfig, "?client=pi")).json() as ClientConfigEnvelope;
     const directModels = (direct.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID].models;
     const directIds = directModels.map(model => model.id);
     expect(directModels.some(model => nativeIds.has(model.id))).toBe(false);
     expect(directIds).not.toContain("openai/custom-direct");
+    expect(directIds).not.toContain("combo/direct-fallback");
+    expect(directIds).toContain("combo/routed-only");
     expect(directIds).toContain("a/custom-routed");
     expect(directIds).toContain("a/m1");
   }, 15_000);

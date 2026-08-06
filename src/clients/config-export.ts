@@ -397,6 +397,8 @@ export interface ExportClientSpec {
    * "anything that is not OpenCode must be Pi" branch was a latent bug.
    */
   summarize: (document: unknown) => { modelCount: number; modelsWithoutLimits: number };
+  /** Whether this file format can carry an authoritative limit per model. */
+  modelContextLimits: boolean;
   /**
    * The fragments opencodex owns inside this client's config. Only the builder
    * knows where a client keeps our entries, so ownership paths originate here
@@ -940,6 +942,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildOpencodeClientConfig,
     format: "json",
     summarize: summarizeOpencode,
+    modelContextLimits: true,
     buildContribution: buildOpencodeContribution,
     // carries the dedicated header in provider options
     loopbackOnly: false,
@@ -955,6 +958,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildPiClientConfig,
     format: "json",
     summarize: summarizePi,
+    modelContextLimits: true,
     buildContribution: buildPiContribution,
     // No header field in Pi's provider block, so there is nowhere to put the
     // dedicated admission header a remote bind requires.
@@ -969,6 +973,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildHermesClientConfig,
     format: "yaml",
     summarize: summarizeHermes,
+    modelContextLimits: false,
     buildContribution: buildHermesContribution,
     // extra_headers carries the dedicated header
     loopbackOnly: false,
@@ -982,6 +987,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildOpenclawClientConfig,
     format: "json5",
     summarize: summarizeOpenclaw,
+    modelContextLimits: true,
     buildContribution: buildOpenclawContribution,
     // headers carries the dedicated header
     loopbackOnly: false,
@@ -998,6 +1004,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildKimiClientConfig,
     format: "toml",
     summarize: summarizeKimi,
+    modelContextLimits: true,
     buildContribution: buildKimiContribution,
     // no header field, and credentials come only from this file
     loopbackOnly: true,
@@ -1011,6 +1018,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildGajaeClientConfig,
     format: "yaml",
     summarize: summarizeGajae,
+    modelContextLimits: true,
     buildContribution: buildGajaeContribution,
     // strict schema with no header field, so the dedicated header has nowhere to go
     loopbackOnly: true,

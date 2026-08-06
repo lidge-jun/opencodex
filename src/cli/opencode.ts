@@ -35,6 +35,7 @@ import type {
   OpencodeProviderBlock,
 } from "../clients/config-export";
 import { visibleNativeSlugs } from "../codex/catalog";
+import { modelRoutesThroughProvider } from "../combos";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -291,9 +292,10 @@ export async function fetchOpencodeProxyModels(
 }
 
 /**
- * Visible OpenCode catalog entries from proxy /api/models rows. Disabled rows
- * are omitted. In Codex Direct mode, every canonical OpenAI row is omitted:
- * native and custom Direct routes both require the caller's ChatGPT bearer.
+ * Visible OpenCode catalog entries from proxy `/api/models` rows. Disabled rows
+ * are omitted. In Codex Direct mode, every canonical OpenAI row and every combo
+ * that can select one are omitted because those routes require the caller's
+ * real ChatGPT bearer.
  */
 export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
@@ -305,7 +307,9 @@ export function opencodeCatalogFromProxyRows(
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
     if (!namespaced || row.disabled === true) continue;
-    if (omitDirectOpenAi && row.provider === "openai") continue;
+    if (omitDirectOpenAi && (
+      modelRoutesThroughProvider(config, { provider: row.provider ?? "", id: row.id ?? "" }, "openai")
+    )) continue;
     if (seen.has(namespaced)) continue;
     seen.add(namespaced);
     catalog.push({

@@ -124,7 +124,7 @@ describe("ocx export --json (accept criterion 1)", () => {
     expect(ids).toEqual(["anthropic/claude-opus-5", "custom/no-context", "gpt-5.6-luna"]);
   });
 
-  test("Codex Direct omits custom rows owned by the canonical OpenAI provider", async () => {
+  test("Codex Direct omits canonical OpenAI rows and combos that can select them", async () => {
     const proxy = fakeProxy([
       ...ROWS,
       {
@@ -132,6 +132,18 @@ describe("ocx export --json (accept criterion 1)", () => {
         id: "custom-direct",
         namespaced: "openai/custom-direct",
         custom: true,
+        disabled: false,
+      },
+      {
+        provider: "combo",
+        id: "direct-fallback",
+        namespaced: "combo/direct-fallback",
+        disabled: false,
+      },
+      {
+        provider: "combo",
+        id: "routed-only",
+        namespaced: "combo/routed-only",
         disabled: false,
       },
     ]);
@@ -145,13 +157,30 @@ describe("ocx export --json (accept criterion 1)", () => {
           codexAccountMode: "direct",
         },
       },
+      combos: {
+        "direct-fallback": {
+          targets: [
+            { provider: "openai", model: "custom-direct" },
+            { provider: "mock", model: "safe" },
+          ],
+        },
+        "routed-only": {
+          targets: [
+            { provider: "mock", model: "safe" },
+            { provider: "mock", model: "backup" },
+          ],
+        },
+      },
     });
     const result = await run(["--client", "pi", "--json"], {
       baseUrl: proxy.baseUrl,
       config: directConfig,
     });
     const parsed = JSON.parse(result.stdout) as { providers: Record<string, { models: Array<{ id: string }> }> };
-    expect(parsed.providers.opencodex!.models.map(model => model.id)).not.toContain("openai/custom-direct");
+    const ids = parsed.providers.opencodex!.models.map(model => model.id);
+    expect(ids).not.toContain("openai/custom-direct");
+    expect(ids).not.toContain("combo/direct-fallback");
+    expect(ids).toContain("combo/routed-only");
   });
 });
 
@@ -167,6 +196,14 @@ describe("ocx export human output (accept criterion 2)", () => {
     expect(result.stdout).toContain("export OPENCODEX_OPENCODE_API_KEY=");
     // Three visible models; only `custom/no-context` lacks an authoritative window.
     expect(result.stdout).toContain("3 models; 1 omit context limits");
+  });
+
+  test("Hermes reports that its selector-only format has no context-limit fields", async () => {
+    const proxy = fakeProxy();
+    const result = await run(["--client", "hermes"], { baseUrl: proxy.baseUrl });
+
+    expect(result.stdout).toContain("3 models; context limits are not represented in this client config.");
+    expect(result.stdout).not.toContain("0 omit context limits");
   });
 
   test("Pi names its own destination and needs no env var", async () => {

@@ -5,6 +5,7 @@ export {
   comboConfigIssues,
   comboDefaultEffort,
   comboModelId,
+  modelRoutesThroughProvider,
   comboPublicModelId,
   getCombo,
   isValidComboId,

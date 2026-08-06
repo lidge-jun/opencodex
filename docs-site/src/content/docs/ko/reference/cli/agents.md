@@ -150,7 +150,7 @@ ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-`--json`이 없으면 JSON이 먼저 나오고, 그다음 표준 대상 경로, merge 경고, 해당 client에 env 변수가 있는 경우 env export 줄, 그리고 context limit을 생략한 row 수를 포함한 model count가 이어집니다(이 경우 client는 자체 기본값을 적용합니다).
+`--json`이 없으면 JSON이 먼저 나오고, 그다음 표준 대상 경로, merge 경고, 해당 client의 실행 전 안내, model count가 이어집니다. 모델별 context limit을 지원하는 형식은 이를 생략한 row 수를 표시하고, selector만 저장하는 형식은 context limit을 표현하지 않는다고 명시합니다.
 
 | 클라이언트 | 표준 대상 경로 | 다운로드 파일명 | 환경 변수 |
 | --- | --- | --- | --- |

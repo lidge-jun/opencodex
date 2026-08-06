@@ -187,7 +187,9 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
       `Destination: ${spec.destination(process.env)}`,
       "Merge this provider block into that file; do not replace it.",
       `Before launching: ${spec.exportHint}`,
-      `${summary.modelCount} model${summary.modelCount === 1 ? "" : "s"}; ${summary.modelsWithoutLimits} omit context limits (the client applies its own defaults).`,
+      spec.modelContextLimits
+        ? `${summary.modelCount} model${summary.modelCount === 1 ? "" : "s"}; ${summary.modelsWithoutLimits} omit context limits (the client applies its own defaults).`
+        : `${summary.modelCount} model${summary.modelCount === 1 ? "" : "s"}; context limits are not represented in this client config.`,
     ]);
   });
 }

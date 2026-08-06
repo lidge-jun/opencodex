@@ -67,6 +67,21 @@ export function comboPublicModelId(id: string, combo: { alias?: string | null })
 }
 
 /**
+ * Whether a public model can route through `providerId`. Physical rows have one
+ * owner; combo rows can select any configured target and inherit every target's
+ * authentication requirements.
+ */
+export function modelRoutesThroughProvider(
+  config: Pick<OcxConfig, "combos">,
+  model: { provider: string; id: string },
+  providerId: string,
+): boolean {
+  if (model.provider === providerId) return true;
+  if (model.provider !== COMBO_NAMESPACE) return false;
+  return config.combos?.[model.id]?.targets.some(target => target.provider.trim() === providerId) ?? false;
+}
+
+/**
  * Resolve a client-requested model id to a combo config key. The canonical `combo/<id>`
  * form wins first (back-compat); otherwise an exact alias match across configured combos.
  */

@@ -169,9 +169,9 @@ ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-Without `--json` the JSON leads, then the canonical destination path, the merge warning, the env
-export line where the client has one, and a model count with how many rows omit context limits (the
-client applies its own defaults for those).
+Without `--json` the JSON leads, then the canonical destination path, the merge warning, the
+client-specific pre-launch guidance, and a model count. Formats with per-model context limits report
+how many rows omit them; selector-only formats state that context limits are not represented.
 
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |

@@ -11,6 +11,7 @@
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import type { ExportModel } from "../../clients/config-export";
+import { modelRoutesThroughProvider } from "../../combos";
 import { providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -107,17 +108,19 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
  * and the integration routes use, so the two can never disagree about which
  * models a client is told about.
  *
- * Disabled rows are absent because the proxy refuses to route them. All rows
- * owned by the canonical OpenAI provider are also absent in Codex Direct mode:
- * native and custom Direct routes require the caller's real ChatGPT bearer,
- * while file integrations authenticate their provider with a generated
- * loopback placeholder or admission credential. Advertising those rows would
- * forward the wrong Authorization value upstream.
+ * Direct-mode routes are also absent when they are owned by canonical OpenAI
+ * or are combo selectors that can choose it. Those targets require the caller's
+ * real ChatGPT bearer, while file integrations authenticate their provider with
+ * a generated loopback placeholder or admission credential. Advertising them
+ * would forward the wrong Authorization value upstream.
  */
 export async function loadExportModels(config: OcxConfig): Promise<ExportModel[]> {
   const rows = await listManagementModelRows(config);
   const omitDirectOpenAi = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
   return rows
-    .filter(row => !row.disabled && !(omitDirectOpenAi && row.provider === "openai"))
+    .filter(row => !row.disabled && !(
+      omitDirectOpenAi
+      && modelRoutesThroughProvider(config, row, "openai")
+    ))
     .map(toExportModel);
 }
