@@ -145,6 +145,13 @@ describe("ocx export human output (accept criterion 2)", () => {
     expect(result.stdout).toContain(join(".pi", "agent", "models.json"));
     expect(result.stdout).toContain("export OPENCODEX_API_KEY=");
   });
+
+  test("Oh My Pi names its own destination and env var", async () => {
+    const proxy = fakeProxy();
+    const result = await run(["--client", "omp"], { baseUrl: proxy.baseUrl });
+    expect(result.stdout).toContain(join(".omp", "agent", "models.yml"));
+    expect(result.stdout).toContain("export OPENCODEX_OMP_API_KEY=");
+  });
 });
 
 describe("ocx export --out (accept criterion 3)", () => {
@@ -202,7 +209,7 @@ describe("ocx export argument validation (accept criterion 4)", () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "cursor"], { baseUrl: proxy.baseUrl });
     expect(result.code).toBe(2);
-    for (const id of ["opencode", "pi", "hermes", "openclaw", "kimi", "gajae"]) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"]) {
       expect(result.stderr).toContain(id);
     }
     expect(result.stdout).toBe("");

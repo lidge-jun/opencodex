@@ -4,6 +4,8 @@ import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
   OPENCODE_PROVIDER_ID,
+  OMP_API_KEY_ENV,
+  OMP_API_KEY_ENV_REF,
   PI_API_KEY_ENV,
   PI_API_KEY_ENV_REF,
   buildClientConfig,
@@ -12,6 +14,7 @@ import {
   type ExportModel,
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
+  type OmpGeneratedConfig,
 } from "../src/clients/config-export";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
@@ -154,6 +157,24 @@ describe("GET /api/client-config", () => {
     const provider = (body.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID];
     expect(Array.isArray(provider.models)).toBe(true);
     expect(provider.apiKey).toBe(PI_API_KEY_ENV_REF);
+    expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
+    expect(provider.models.map(model => model.id)).toContain("a/m1");
+  }, 15_000);
+
+  test("omp returns the oh-my-pi models.yml provider block", async () => {
+    const response = await clientConfigApi(baseConfig(), "?client=omp");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+
+    expect(body.client).toBe("omp");
+    expect(body.filename).toBe("omp-models.yaml");
+    expect(body.apiKeyEnv).toBe(OMP_API_KEY_ENV);
+    expect(body.format).toBe("yaml");
+
+    const provider = (body.config as OmpGeneratedConfig).providers[OPENCODE_PROVIDER_ID];
+    expect(Array.isArray(provider.models)).toBe(true);
+    expect(provider.api).toBe("openai-completions");
+    expect(provider.apiKey).toBe(OMP_API_KEY_ENV_REF);
     expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(provider.models.map(model => model.id)).toContain("a/m1");
   }, 15_000);

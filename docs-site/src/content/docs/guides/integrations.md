@@ -1,15 +1,16 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, Hermes, OpenClaw, Kimi Code and Gajae Code from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, Oh My Pi, Hermes, OpenClaw, Kimi Code and Gajae Code from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Six clients work this way, each with a switch:
+file, and removes it again. Seven clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
 | Pi | `~/.pi/agent/models.json` | JSON | new sessions | `OPENCODEX_API_KEY` |
+| Oh My Pi | `~/.omp/agent/models.yml` | YAML | new sessions | `OPENCODEX_OMP_API_KEY` |
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
@@ -75,7 +76,7 @@ changed value and calling it success. You will see the file named and nothing on
 disk will have moved. Editing that file by hand still works; it is only our
 automatic rewrite that declines.
 
-**Pi, Kimi Code and Gajae Code only work against a loopback bind.** None of their config
+**Pi, Oh My Pi, Kimi Code and Gajae Code only work against a loopback bind.** None of their config
 schemas has a place for the `x-opencodex-api-key` header that a non-loopback bind
 requires, so a generated config would simply be rejected — and writing one by hand does
 not help, because there is nowhere in the file to put the header either. Reaching a

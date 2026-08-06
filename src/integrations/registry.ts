@@ -18,6 +18,8 @@ import {
   hermesHomeDir,
   kimiConfigPath,
   kimiHomeDir,
+  ompConfigPath,
+  ompHomeDir,
   opencodeGlobalConfigPath,
   openclawConfigPath,
   openclawHomeDir,
@@ -67,6 +69,11 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "pi",
     configPath: (_env = process.env, home = homedir()) => join(home, ".pi", "agent", "models.json"),
     detectDir: (_env = process.env, home = homedir()) => join(home, ".pi"),
+  },
+  omp: {
+    id: "omp",
+    configPath: (env = process.env, home = homedir()) => ompConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => ompHomeDir(env, home),
   },
   hermes: {
     id: "hermes",

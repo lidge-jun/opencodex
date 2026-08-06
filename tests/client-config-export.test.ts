@@ -8,6 +8,8 @@ import {
   OPENCODE_API_KEY_ENV_REF,
   PI_API_KEY_ENV,
   PI_API_KEY_ENV_REF,
+  OMP_API_KEY_ENV,
+  OMP_API_KEY_ENV_REF,
   SCHEMA_REQUIRED_OUTPUT_BUDGET,
   buildClientConfig,
   buildClientConfigText,
@@ -17,6 +19,7 @@ import {
   type ExportModel,
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
+  type OmpGeneratedConfig,
 } from "../src/clients/config-export";
 import { buildOpencodeProviderBlockFromCatalog, opencodeGlobalConfigPath } from "../src/cli/opencode";
 import type { OcxConfig } from "../src/types";
@@ -72,6 +75,10 @@ function opencodeConfig(context: ExportContext = ctx()): OpencodeGeneratedConfig
 
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
+}
+
+function ompConfig(context: ExportContext = ctx()): OmpGeneratedConfig {
+  return buildClientConfig("omp", context) as OmpGeneratedConfig;
 }
 
 describe("relocated OpenCode serializer (accept criterion 1)", () => {
@@ -282,8 +289,8 @@ describe("stable ordering (accept criterion 4)", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the six file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "hermes", "openclaw", "kimi", "gajae"]);
+  test("covers exactly the seven file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -391,6 +398,40 @@ describe("EXPORT_CLIENTS registry", () => {
 `);
   });
 
+  test("omp bytes are a yaml provider block for ~/.omp/agent/models.yml", () => {
+    const built = buildClientConfigText("omp", ctx({ config: cfg() }));
+    expect(built.format).toBe("yaml");
+    expect(built.text).toBe(`providers:
+  opencodex:
+    baseUrl: "http://127.0.0.1:10100/v1"
+    api: openai-completions
+    apiKey: "$OPENCODEX_OMP_API_KEY"
+    models:
+      - id: anthropic/claude-opus-5
+        name: "Claude Opus 5 (anthropic)"
+        input:
+          - text
+        contextWindow: 200000
+        maxTokens: 32000
+      - id: custom/no-context
+        name: "no-context (custom)"
+        input:
+          - text
+      - id: gpt-5.6-luna
+        name: "gpt-5.6-luna (native)"
+        input:
+          - text
+        contextWindow: 272000
+        maxTokens: 32000
+      - id: tiny/small-ctx
+        name: "small-ctx (tiny)"
+        input:
+          - text
+        contextWindow: 8000
+        maxTokens: 8000
+`);
+  });
+
   test("every spec declares a format, a summarizer and a contribution", () => {
     for (const id of EXPORT_CLIENT_IDS) {
       const spec = EXPORT_CLIENTS[id];
@@ -428,6 +469,7 @@ describe("EXPORT_CLIENTS registry", () => {
   test("filenames name the destination file, not the product", () => {
     expect(EXPORT_CLIENTS.opencode.filename).toBe("opencode.json");
     expect(EXPORT_CLIENTS.pi.filename).toBe("pi-models.json");
+    expect(EXPORT_CLIENTS.omp.filename).toBe("omp-models.yaml");
     expect(EXPORT_CLIENTS.hermes.filename).toBe("hermes-config.yaml");
     expect(EXPORT_CLIENTS.openclaw.filename).toBe("openclaw.json5");
     expect(EXPORT_CLIENTS.kimi.filename).toBe("kimi-config.toml");
@@ -446,11 +488,17 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(EXPORT_CLIENTS.pi.destination({} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".pi", "agent", "models.json"));
   });
 
+  test("the omp destination is the agent models.yml oh-my-pi 17 reads", () => {
+    expect(EXPORT_CLIENTS.omp.destination({} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".omp", "agent", "models.yml"));
+  });
+
   test("apiKeyEnv and exportHint name the variable the config references", () => {
     expect(EXPORT_CLIENTS.opencode.apiKeyEnv).toBe(OPENCODE_API_KEY_ENV);
     expect(EXPORT_CLIENTS.opencode.exportHint).toContain(OPENCODE_API_KEY_ENV);
     expect(EXPORT_CLIENTS.pi.apiKeyEnv).toBe(PI_API_KEY_ENV);
     expect(EXPORT_CLIENTS.pi.exportHint).toContain(PI_API_KEY_ENV);
+    expect(EXPORT_CLIENTS.omp.apiKeyEnv).toBe(OMP_API_KEY_ENV);
+    expect(EXPORT_CLIENTS.omp.exportHint).toContain(OMP_API_KEY_ENV);
     for (const id of EXPORT_CLIENT_IDS) {
       expect(EXPORT_CLIENTS[id].exportHint).not.toContain("ocx_");
     }
@@ -466,5 +514,6 @@ describe("EXPORT_CLIENTS registry", () => {
     const empty = ctx({ models: [] });
     expect(opencodeConfig(empty).provider.opencodex!.models).toEqual({});
     expect(piConfig(empty).providers.opencodex!.models).toEqual([]);
+    expect(ompConfig(empty).providers.opencodex!.models).toEqual([]);
   });
 });

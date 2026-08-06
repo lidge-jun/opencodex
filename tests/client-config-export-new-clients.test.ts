@@ -7,6 +7,9 @@ import {
   HERMES_API_KEY_ENV_REF,
   KIMI_LOOPBACK_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
+  ompAgentDir,
+  ompConfigPath,
+  ompHomeDir,
   OPENCODE_PROVIDER_ID,
   buildClientConfig,
   buildClientConfigText,
@@ -63,7 +66,7 @@ describe("no secret reaches a client config", () => {
     // client whose schema has no header field cannot authenticate remotely at
     // all. Saying so beats exporting a config that 401s.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "kimi", "gajae"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -266,9 +269,42 @@ describe("gajae", () => {
   });
 });
 
+describe("omp", () => {
+  test("with no override the agent config is ~/.omp/agent/models.yml", () => {
+    expect(ompHomeDir({}, "/home/u")).toBe(join("/home/u", ".omp"));
+    expect(ompAgentDir({}, "/home/u")).toBe(join("/home/u", ".omp", "agent"));
+    expect(ompConfigPath({}, "/home/u")).toBe(join("/home/u", ".omp", "agent", "models.yml"));
+  });
+
+  test("PI_CONFIG_DIR relocates the whole root, agent directory included", () => {
+    expect(ompConfigPath({ PI_CONFIG_DIR: "/srv/omp" }, "/home/u"))
+      .toBe(join("/srv/omp", "agent", "models.yml"));
+  });
+
+  test("PI_CODING_AGENT_DIR overrides the agent directory outright", () => {
+    expect(ompAgentDir({ PI_CODING_AGENT_DIR: "/data/agent" }, "/home/u")).toBe("/data/agent");
+    expect(ompConfigPath({ PI_CODING_AGENT_DIR: "/data/agent" }, "/home/u"))
+      .toBe(join("/data/agent", "models.yml"));
+  });
+
+  test("OMP_PROFILE wins over the agent-directory override, default stays unnamed", () => {
+    // omp's DirResolver drops the agent-dir override when a profile is active.
+    expect(ompAgentDir({ OMP_PROFILE: "work", PI_CODING_AGENT_DIR: "/data/agent" }, "/home/u"))
+      .toBe(join("/home/u", ".omp", "profiles", "work", "agent"));
+    // `default` is the unnamed profile, not a directory suffix.
+    expect(ompAgentDir({ OMP_PROFILE: "default" }, "/home/u"))
+      .toBe(join("/home/u", ".omp", "agent"));
+  });
+
+  test("PI_PROFILE is the legacy fallback for OMP_PROFILE", () => {
+    expect(ompAgentDir({ PI_PROFILE: "legacy" }, "/home/u"))
+      .toBe(join("/home/u", ".omp", "profiles", "legacy", "agent"));
+  });
+});
+
 describe("contributions name every fragment we own", () => {
   test("single-entry clients own exactly one path", () => {
-    for (const id of ["opencode", "pi", "hermes", "openclaw", "gajae"] as const) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "gajae"] as const) {
       expect(buildClientContribution(id, ctx()).fragments).toHaveLength(1);
     }
   });

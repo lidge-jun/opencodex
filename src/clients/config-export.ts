@@ -139,6 +139,12 @@ export const KIMI_LOOPBACK_PLACEHOLDER = "opencodex-loopback";
  */
 export const GAJAE_API_KEY_ENV = "OPENCODEX_GAJAE_API_KEY";
 
+/** Env var omp reads for the proxy admission key (bare `$VAR` interpolation). */
+export const OMP_API_KEY_ENV = "OPENCODEX_OMP_API_KEY";
+
+/** omp's reference form for the admission key. Never the value. */
+export const OMP_API_KEY_ENV_REF = `$${OMP_API_KEY_ENV}`;
+
 /** Pi's wire-dialect selector for an OpenAI-compatible endpoint. */
 const PI_API_DIALECT = "openai-completions";
 
@@ -340,6 +346,45 @@ export function gajaeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 }
 
 /**
+ * omp's config root: `~/.omp` (legacy `PI_CONFIG_DIR`/`.pi` no longer used by
+ * oh-my-pi 17.x; the agent directory moved to `~/.omp/agent`).
+ */
+export function ompHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.PI_CONFIG_DIR?.trim();
+  return override && override.length > 0 ? override : join(home, ".omp");
+}
+
+/**
+ * The agent directory omp actually reads settings from.
+ *
+ * omp's DirResolver computes: config root (`PI_CONFIG_DIR` or `~/.omp`), then
+ * `agent` beneath it, with `PI_CODING_AGENT_DIR` overriding the agent
+ * directory outright and `OMP_PROFILE`/`PI_PROFILE` switching to
+ * `<root>/profiles/<name>/agent`. Mirroring the environment selectors keeps
+ * the toggle writing where the running agent reads.
+ */
+export function ompAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const root = ompHomeDir(env, home);
+  const profile = env.OMP_PROFILE?.trim() ?? env.PI_PROFILE?.trim();
+  const agentOverride = env.PI_CODING_AGENT_DIR?.trim();
+  if (profile && profile !== "default") return join(root, "profiles", profile, "agent");
+  if (agentOverride && agentOverride.length > 0) return agentOverride;
+  return join(root, "agent");
+}
+
+/**
+ * The models config omp actually reads: `~/.omp/agent/models.yml`.
+ *
+ * omp 17.x reads its custom provider list from `models.yml` (or `models.yaml`)
+ * in the agent directory. This is where a user's hand-written
+ * `providers.<name>` blocks live, so a toggle must write here — not to the
+ * legacy `~/.pi/agent/models.json` the old Pi exporter targets.
+ */
+export function ompConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(ompAgentDir(env, home), "models.yml");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -370,6 +415,7 @@ export interface ExportContext {
 export type ExportClientId =
   | "opencode"
   | "pi"
+  | "omp"
   | "hermes"
   | "openclaw"
   | "kimi"
@@ -601,6 +647,24 @@ export interface PiGeneratedConfig {
 }
 
 /**
+ * omp's `~/.omp/agent/models.yml` custom-provider shape.
+ *
+ * `providers` is a keyed object; each entry declares the endpoint and the
+ * models the agent may route to. opencodex owns the `opencodex` key, exactly
+ * as it owns the `opencodex` provider key in every other client's config.
+ */
+export interface OmpProviderBlock {
+  baseUrl: string;
+  api: string;
+  apiKey: string;
+  models: PiModelEntry[];
+}
+
+export interface OmpGeneratedConfig {
+  providers: Record<string, OmpProviderBlock>;
+}
+
+/**
  * Hermes `~/.hermes/config.yaml`. We emit ONLY the provider entry — never
  * `model.default` — because hijacking the user's main model is not what a
  * connect action asks for.
@@ -735,6 +799,41 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
   };
 }
 
+/**
+ * omp's `~/.omp/agent/models.yml` shape. Same model entries as Pi (id, name,
+ * input) plus the provider's baseUrl/api/apiKey. omp validates strictly and
+ * drops the whole provider over one invalid model, so the same
+ * text|image-enum guard applies.
+ */
+function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
+  const models: PiModelEntry[] = [];
+  for (const model of normalizeExportModels(ctx.models)) {
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    if (input === null) continue;
+    const entry: PiModelEntry = {
+      id: model.namespaced,
+      name: exportModelLabel(model),
+      input,
+    };
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) {
+      entry.contextWindow = context;
+      entry.maxTokens = outputBudgetFor(context);
+    }
+    models.push(entry);
+  }
+  return {
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        baseUrl: ctx.baseUrl,
+        api: PI_API_DIALECT,
+        apiKey: OMP_API_KEY_ENV_REF,
+        models,
+      },
+    },
+  };
+}
+
 /** Extra headers a non-loopback bind needs, or nothing on loopback. */
 function proxyAdmissionHeaders(config: OcxConfig | undefined, envRef: string): Record<string, string> | undefined {
   return shouldInjectApiAuthHeader(config) ? { "x-opencodex-api-key": envRef } : undefined;
@@ -862,6 +961,11 @@ function summarizePi(document: unknown): { modelCount: number; modelsWithoutLimi
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
 }
 
+function summarizeOmp(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as OmpGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
 function summarizeHermes(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = (document as HermesGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   // Hermes carries selectors only; it has no per-model limit to be missing.
@@ -898,6 +1002,11 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildPiClientConfig(ctx);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildOmpContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildOmpClientConfig(ctx);
+  return singleFragment("omp", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
 function buildHermesContribution(ctx: ExportContext): ManagedContribution {
@@ -958,6 +1067,22 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // No header field in Pi's provider block (and the schema is unverified
     // against a real install), so there is nowhere to put the dedicated
     // admission header a remote bind requires.
+    loopbackOnly: true,
+  },
+  omp: {
+    id: "omp",
+    // The download name uses the canonical `.yaml` extension; the real file
+    // oh-my-pi reads stays `~/.omp/agent/models.yml` (same split Gajae uses).
+    filename: "omp-models.yaml",
+    destination: env => ompConfigPath(env),
+    apiKeyEnv: OMP_API_KEY_ENV,
+    exportHint: `export ${OMP_API_KEY_ENV}=<your key>`,
+    build: buildOmpClientConfig,
+    format: "yaml",
+    summarize: summarizeOmp,
+    buildContribution: buildOmpContribution,
+    // omp's provider block has no header field for the dedicated admission
+    // header, so a remote bind is refused the same way Pi's is.
     loopbackOnly: true,
   },
   hermes: {
