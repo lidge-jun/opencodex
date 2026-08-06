@@ -325,6 +325,42 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST overwrite preserves modelCosts when the payload omits it", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const costs = { "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 } };
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-costs",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", modelCosts: costs },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      // The dashboard's add/edit form does not send modelCosts; overwriting the
+      // provider must not silently erase the hand-edited price overlay.
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-costs",
+          provider: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1" },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers["custom-costs"]?.modelCosts).toEqual(costs);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider management rejects runtime metadata and accepts only canonical OpenAI option seeds", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
