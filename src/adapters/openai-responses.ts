@@ -1048,7 +1048,8 @@ function stripInputImagesDeep(value: unknown): unknown {
  */
 function buildRoutedCompactionBody(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, ...rest } = body;
+  // `text` goes with the tool fields: the summary must be prose, not schema-constrained JSON.
+  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, text: _text, ...rest } = body;
   const input = Array.isArray(body.input) ? body.input : [];
   const kept = input.filter(item => !isPlainObject(item)
     // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;

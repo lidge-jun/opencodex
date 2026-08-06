@@ -398,7 +398,9 @@ describe("routed compaction for key-mode openai-responses (#422)", () => {
     }) as typeof fetch;
 
     const res = await handleResponses(
-      compactionRequest(baseCompactionBody()),
+      compactionRequest(baseCompactionBody({
+        text: { format: { type: "json_schema", name: "answer", schema: { type: "object" } } },
+      })),
       keyProviderConfig(),
       { model: "", provider: "" },
     );
@@ -411,6 +413,8 @@ describe("routed compaction for key-mode openai-responses (#422)", () => {
     expect(sent.tools).toBeUndefined();
     expect(sent.tool_choice).toBeUndefined();
     expect(sent.parallel_tool_calls).toBeUndefined();
+    // The summarizer must stay prose: a surviving text.format would force schema JSON.
+    expect(sent.text).toBeUndefined();
     expect(JSON.stringify(input)).toContain("CONTEXT CHECKPOINT COMPACTION");
 
     const json = await res.json() as { output?: Array<{ type?: string }> };

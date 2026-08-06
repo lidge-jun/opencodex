@@ -138,6 +138,12 @@ non-empty `messages` array. It translates system, user, assistant, and tool mess
 Responses items; translates function tools, tool choice, images, reasoning effort, and supported
 response formats; runs the normal Responses routing pipeline; then translates the result back.
 
+Structured output is part of that translation: `response_format` with `json_object` or
+`json_schema` is forwarded to routed `openai-chat` models as-is, and rides the raw request body
+on native Responses routes. A backend without structured-output support returns its own error
+instead of the proxy rejecting the request locally. The same applies to `text.format` on
+`POST /v1/responses` when the model routes to an `openai-chat` provider.
+
 Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE objects with
 `object: "chat.completion.chunk"`, choice deltas, a terminal choice with `finish_reason`, and
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
