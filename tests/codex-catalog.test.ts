@@ -837,19 +837,22 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
   });
 
   test("transient empty discovery preserves only aliases whose routed row survives", () => {
-    const existing = buildCatalogEntries(nativeTemplate(), [], [{
-      provider: "anthropic-compatible-default",
-      adapter: "anthropic",
-      id: "claude-sonnet-5",
-      owned_by: "custom-owner",
-    }]);
+    const existing = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "z-anthropic", adapter: "anthropic", id: "claude-sonnet-5", owned_by: "z-owner" },
+      { provider: "a-anthropic", adapter: "anthropic", id: "claude-sonnet-5", owned_by: "a-owner" },
+    ]);
+    const duplicate = {
+      ...existing.find(entry => entry.slug === "claude-sonnet-5")!,
+      owned_by: "z-owner",
+      opencodex_routed_slug: "z-anthropic/claude-sonnet-5",
+    };
     const orphan = {
       ...existing.find(entry => entry.slug === "claude-sonnet-5")!,
       slug: "claude-orphan-5",
-      opencodex_routed_slug: "anthropic-compatible-default/claude-orphan-5",
+      opencodex_routed_slug: "a-anthropic/claude-orphan-5",
     };
     const merged = mergeCatalogEntriesForSync(
-      [...existing, orphan],
+      [...existing, duplicate, orphan],
       [],
       new Map(),
       [],
@@ -857,16 +860,19 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
       new Set(),
       null,
       new Set(),
-      new Set(["anthropic-compatible-default"]),
+      new Set(["a-anthropic", "z-anthropic"]),
       "default",
       new Set(),
       false,
       false,
     );
 
-    expect(merged.find(entry => entry.slug === "claude-sonnet-5")).toMatchObject({
+    const aliases = merged.filter(entry => entry.slug === "claude-sonnet-5");
+    expect(aliases).toHaveLength(1);
+    expect(aliases[0]).toMatchObject({
       visibility: "hide",
-      opencodex_routed_slug: "anthropic-compatible-default/claude-sonnet-5",
+      owned_by: "a-owner",
+      opencodex_routed_slug: "a-anthropic/claude-sonnet-5",
     });
     expect(merged.some(entry => entry.slug === "claude-orphan-5")).toBe(false);
   });

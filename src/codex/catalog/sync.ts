@@ -582,12 +582,20 @@ export function mergeCatalogEntriesForSync(
       typeof entry.slug === "string" ? [entry.slug] : []
     ));
     const retainedCompatTargets = new Set<string>();
-    const retainedCompatEntries = catalogModels.filter(entry => {
+    const retainedCompatSlugs = new Set<string>();
+    const retainedCompatEntries = catalogModels.flatMap(entry => {
       const target = routedContextCompatTarget(entry);
-      if (target === undefined || !retainedRoutedSlugs.has(target) || retainedCompatTargets.has(target)) {
-        return false;
-      }
+      return target !== undefined && retainedRoutedSlugs.has(target) && typeof entry.slug === "string"
+        ? [entry] : [];
+    }).sort((a, b) => {
+      const targetOrder = routedContextCompatTarget(a)!.localeCompare(routedContextCompatTarget(b)!);
+      return targetOrder !== 0 ? targetOrder : (a.slug as string).localeCompare(b.slug as string);
+    }).filter(entry => {
+      const target = routedContextCompatTarget(entry)!;
+      const slug = entry.slug as string;
+      if (retainedCompatTargets.has(target) || retainedCompatSlugs.has(slug)) return false;
       retainedCompatTargets.add(target);
+      retainedCompatSlugs.add(slug);
       return true;
     });
     finalRoutedEntries = [...finalRoutedEntries, ...retainedCompatEntries];
