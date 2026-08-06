@@ -24,8 +24,8 @@
  * so a long-lived proxy cannot grow without limit.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { resolveOpenCodexConfigDir } from "../lib/config-dir";
 
 const MAX_ENTRIES = 64;
@@ -205,9 +205,27 @@ function writePersisted(): void {
     try { chmodSync(persistPath, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
     persistWrites += 1;
     persistLastError = undefined;
+    cleanupStaleTempFiles();
   } catch (err) {
     persistLastError = err instanceof Error ? err.message : String(err);
   }
+}
+
+/** Remove temp files left behind by a crashed writer (unique names mean they
+ * can never be confused with a live write, but they should still be reclaimed). */
+function cleanupStaleTempFiles(): void {
+  try {
+    const dir = dirname(persistPath);
+    const base = basename(persistPath);
+    const cutoff = now() - 10 * 60 * 1000;
+    for (const name of readdirSync(dir)) {
+      if (!name.startsWith(`${base}.`) || name === base) continue;
+      const full = join(dir, name);
+      try {
+        if (statSync(full).mtimeMs < cutoff) unlinkSync(full);
+      } catch { /* best-effort per file */ }
+    }
+  } catch { /* best-effort */ }
 }
 
 function loadPersisted(): void {
@@ -289,6 +307,13 @@ export function getReasoningReplayStats(): ReasoningReplayStats {
 
 // Boot-time rehydration when persistence is opted in.
 if (persistEnabled) loadPersisted();
+
+// Synchronous best-effort flush so a normal process exit does not strand a
+// just-recorded call's reasoning when persistence is opted in (P2: flush
+// before exit). Bounded by the same caps as every other write.
+process.on("exit", () => {
+  if (persistEnabled) writePersisted();
+});
 
 // ── Test seams ────────────────────────────────────────────────────────────────
 

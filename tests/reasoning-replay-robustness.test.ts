@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
@@ -163,6 +163,20 @@ describe("reasoning replay — opt-in disk spill", () => {
     expect(existsSync(spillFile)).toBe(true);
     const remnants = readdirSync(spillDir).filter(f => f !== basename(spillFile));
     expect(remnants).toHaveLength(0);
+  });
+
+  test("stale spill temp files from a crashed writer are reclaimed on the next write", () => {
+    setReasoningReplayPersistenceForTests(true, spillFile);
+    const stale = `${spillFile}.9999.deadbeef`;
+    writeFileSync(stale, "junk", "utf8");
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+
+    rememberReasoningForCall("call_cleanup", REASONING, "thread-cleanup");
+    flushReasoningReplayCache();
+
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(spillFile)).toBe(true);
   });
 
   test("corrupt or unreadable spill file loads as an empty cache without throwing", () => {
