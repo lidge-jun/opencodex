@@ -365,10 +365,13 @@ export function ompHomeDir(env: OpencodeLaunchEnv = process.env, home: string = 
  */
 export function ompAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   const root = ompHomeDir(env, home);
-  const profile = env.OMP_PROFILE?.trim() ?? env.PI_PROFILE?.trim();
+  // A blank OMP_PROFILE is treated as unset so PI_PROFILE can fall through,
+  // matching omp's own env precedence (OMP_PROFILE wins when it names a
+  // profile; otherwise the legacy PI_PROFILE is consulted).
+  const profile = env.OMP_PROFILE?.trim() || env.PI_PROFILE?.trim();
   const agentOverride = env.PI_CODING_AGENT_DIR?.trim();
   if (profile && profile !== "default") return join(root, "profiles", profile, "agent");
-  if (agentOverride && agentOverride.length > 0) return agentOverride;
+  if (agentOverride && agentOverride.length > 0) return absoluteClientPath(agentOverride, home, "PI_CODING_AGENT_DIR");
   return join(root, "agent");
 }
 

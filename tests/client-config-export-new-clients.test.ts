@@ -300,6 +300,20 @@ describe("omp", () => {
     expect(ompAgentDir({ PI_PROFILE: "legacy" }, "/home/u"))
       .toBe(join("/home/u", ".omp", "profiles", "legacy", "agent"));
   });
+
+  test("a blank OMP_PROFILE is treated as unset so PI_PROFILE still applies", () => {
+    // omp's own precedence: OMP_PROFILE wins only when it names a profile; a
+    // trimmed blank value must fall through to the legacy PI_PROFILE.
+    expect(ompAgentDir({ OMP_PROFILE: "  ", PI_PROFILE: "legacy" }, "/home/u"))
+      .toBe(join("/home/u", ".omp", "profiles", "legacy", "agent"));
+  });
+
+  test("a relative PI_CODING_AGENT_DIR is refused, not silently anchored", () => {
+    // A relative agent-dir override would resolve against each process's own
+    // cwd — opencodex and omp could disagree about which models.yml is live.
+    expect(() => ompAgentDir({ PI_CODING_AGENT_DIR: "relative/agent" }, "/home/u"))
+      .toThrow(/PI_CODING_AGENT_DIR/);
+  });
 });
 
 describe("contributions name every fragment we own", () => {

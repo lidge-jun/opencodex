@@ -1,6 +1,6 @@
 ---
 title: Oh My Pi
-description: Use any routed model from Oh My Pi (omp) — ocx export writes a custom provider block for omp's ~/.omp/agent/models.yml, wired to the running proxy.
+description: Use any routed model from Oh My Pi (omp) — ocx export prints a custom provider block for omp's ~/.omp/agent/models.yml, wired to the running proxy.
 ---
 
 Oh My Pi (`omp`) reads custom providers from `~/.omp/agent/models.yml`, so
@@ -35,6 +35,11 @@ providers:
         contextWindow: 200000
         maxTokens: 32000
 ```
+
+`api: openai-completions` selects omp's OpenAI-compatible adapter, which talks
+to the proxy's `/v1` surface. `$OPENCODEX_OMP_API_KEY` is only omp's local
+provider key for the `opencodex` entry — it is not an opencodex OAuth or
+access-token credential, and opencodex never sees its value.
 
 Merge the `providers.opencodex` block into `~/.omp/agent/models.yml` (do not
 replace the rest of the file), then start a new omp session. The models appear

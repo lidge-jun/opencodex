@@ -84,6 +84,15 @@ describe("registered nested hashes", () => {
     expect(resolveAppHashChange("integrations/claude/desktop").replaceTo).toBeNull();
   });
 
+  test("the Oh My Pi route is registered instead of falling back to Overview", () => {
+    expect(INTEGRATION_TAB_HASHES).toContain("integrations/omp");
+    expect(hashBelongsToPage("integrations/omp", "integrations")).toBe(true);
+    expect(resolveAppHashChange("integrations/omp")).toEqual({
+      page: "integrations",
+      replaceTo: null,
+    });
+  });
+
   test("bare #integrations is Overview and has no suffix of its own", () => {
     expect(readPageFromHash("integrations")).toBe("integrations");
     expect(hashBelongsToPage("integrations", "integrations")).toBe(true);

@@ -76,6 +76,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/grok",
   "integrations/opencode",
   "integrations/pi",
+  "integrations/omp",
   "integrations/hermes",
   "integrations/openclaw",
   "integrations/kimi",
