@@ -11,6 +11,7 @@ import { clearAccountQuota, updateAccountQuota } from "../src/codex/quota";
 import { clearThreadAccountMap } from "../src/codex/routing";
 import { saveConfig } from "../src/config";
 import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
+import { CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE } from "../src/codex/auth-context";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { waitForNativeMainStartupGate } from "../src/codex/native-profile-startup";
 import { startServer } from "../src/server";
@@ -148,7 +149,7 @@ describe("native main profile scoped server admission", () => {
         mainWs.addEventListener("open", () => resolve(), { once: true });
         mainWs.addEventListener("error", () => reject(new Error("websocket failed to open")), { once: true });
       });
-      const mainRejected = waitForFrame(mainWs, "main profile is switching");
+      const mainRejected = waitForFrame(mainWs, CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
       mainWs.send(JSON.stringify({ type: "response.create", model: "gpt-test", input: "hello" }));
       expect(await mainRejected).toContain("503");
       mainWs.close();

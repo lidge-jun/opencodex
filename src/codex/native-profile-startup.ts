@@ -130,6 +130,14 @@ function ownerBlockedReason(owner: NativeMainOwnerSnapshot): "owner-conflict" | 
 
 async function runOwnedStageSweep(entry: StartupEntry): Promise<boolean> {
   if (typeof (entry.manager as Partial<NativeProfileManager>).sweepStages !== "function") return true;
+  // A fresh installation has no stage registry or staging tree. Avoid creating
+  // and contending on the profile transaction database for an inert subsystem.
+  // Real managers treat every present or uncertain artifact as sweep-required;
+  // partial test/library managers without the preflight keep the old behavior.
+  if (
+    typeof (entry.manager as Partial<NativeProfileManager>).stageSweepRequired === "function"
+    && !entry.manager.stageSweepRequired()
+  ) return true;
   try {
     const result = await withNativeMainOwnerOperation(entry.manager.context, () => entry.manager.sweepStages());
     return !result.plaintextMayRemain;

@@ -5,12 +5,14 @@ import { join } from "node:path";
 import {
   applyCodexAuthContextToProvider,
   assertCodexAuthContextNotCooled,
+  CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,
   CodexAccountCooldownError,
   CodexAuthContextError,
   CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
+  codexMainProfileDrainingResponse,
   cooldownErrorMessage,
   cooldownErrorResponse,
   headersForCodexAuthContext,
@@ -1222,6 +1224,18 @@ describe("Codex auth context", () => {
 // to say who is cooled, until when, and how to escape — without leaking the raw id to a
 // possibly remote data-plane client.
 describe("cooldown error surface", () => {
+  test("native-main maintenance identifies OpenCodex instead of upstream capacity", async () => {
+    const response = codexMainProfileDrainingResponse();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("1");
+    const body = await response.json() as { error?: { message?: string; code?: string } };
+    expect(body.error).toMatchObject({
+      message: CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,
+      code: "server_is_overloaded",
+    });
+  });
+
   test("message names the account, deadline, source, and escape command", () => {
     const until = Date.parse("2026-07-26T10:00:00.000Z");
     const err = new CodexAccountCooldownError("acct_9f3c21", until, "reset-derived");

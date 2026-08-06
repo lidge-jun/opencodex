@@ -36,6 +36,7 @@ import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
+import { CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE } from "../codex/auth-context";
 import {
   createTranslatorBudget,
   finalizeTranslatorBudgetResponse,
@@ -765,7 +766,7 @@ async function handleClaudeMessagesWithBudget(
     // share a backoff hint when the upstream omitted the header.
     const nativeMainFence = response.status === 503
       && upstreamRetryAfter?.trim() === "1"
-      && message === "Native Codex main profile is switching; retry this request";
+      && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
     const transient = !nativeMainFence && isTransientUpstreamStatus(response.status);
     const outStatus = nativeMainFence ? 503 : transient ? 529 : response.status;
     const out = new Response(JSON.stringify(anthropicErrorBody(outStatus, message)), {

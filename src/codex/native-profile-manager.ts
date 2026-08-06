@@ -913,6 +913,25 @@ export class NativeProfileManager {
     return { removed, live, cleanupFailed, plaintextMayRemain };
   }
 
+  /**
+   * Whether startup or the periodic cleaner has any stage state to inspect.
+   *
+   * Absence is the only lock-free result. Any entry or observation failure
+   * keeps the existing fail-closed sweep, so an unsafe/unreadable stage path
+   * can never be mistaken for an unused profile subsystem.
+   */
+  stageSweepRequired(): boolean {
+    for (const path of [this.context.stageRegistryPath, this.context.stagingRoot]) {
+      try {
+        lstatSync(path);
+        return true;
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") return true;
+      }
+    }
+    return false;
+  }
+
   async sweepStages(): Promise<NativeStageSweepResult> {
     return this.withLock(() => this.sweepStagesLocked());
   }
