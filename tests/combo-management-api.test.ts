@@ -519,6 +519,14 @@ describe("combo management API", () => {
       const config = baseConfig({
         disabledModels: ["gpt-5.6-sol", "combo/old", "gpt-5.5"],
         subagentModels: ["gpt-5.6-sol", "combo/old"],
+        injectionModel: "gpt-5.6-sol",
+        shadowCallIntercept: { enabled: true, model: "gpt-5.6-sol" },
+        claudeCode: {
+          model: "gpt-5.6-sol",
+          smallFastModel: "gpt-5.6-sol",
+          tierModels: { opus: "gpt-5.6-sol", sonnet: "combo/old" },
+          modelMap: { native: "gpt-5.6-sol", combo: "combo/old" },
+        },
         combos: {
           old: {
             ...VALID_COMBO,
@@ -543,7 +551,15 @@ describe("combo management API", () => {
 
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["gpt-5.6-sol", "combo/new", "gpt-5.5"]);
-      expect(config.subagentModels).toEqual(["gpt-5.6-terra"]);
+      expect(config.subagentModels).toEqual(["gpt-5.6-sol", "combo/new"]);
+      expect(config.injectionModel).toBe("gpt-5.6-sol");
+      expect(config.shadowCallIntercept?.model).toBe("gpt-5.6-sol");
+      expect(config.claudeCode).toMatchObject({
+        model: "gpt-5.6-sol",
+        smallFastModel: "gpt-5.6-sol",
+        tierModels: { opus: "gpt-5.6-sol", sonnet: "combo/new" },
+        modelMap: { native: "gpt-5.6-sol", combo: "combo/new" },
+      });
       expect(routeModel(config, "gpt-5.6-terra")).toMatchObject({
         providerName: "a",
         modelId: "m1",
@@ -624,7 +640,7 @@ describe("combo management API", () => {
         free: { ...VALID_COMBO, alias: "deepseek-v4-flash" },
       },
     });
-    config.providers.a!.liveModels = false;
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
     config.providers.a!.modelContextWindows = { m1: 128_000 };
 
     const response = await comboApi(config, "GET", "/api/models");
@@ -694,7 +710,7 @@ describe("combo management API", () => {
         },
       },
     });
-    config.providers.a!.liveModels = false;
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
     config.providers.a!.modelContextWindows = { m1: 128_000 };
 
     const response = await comboApi(config, "GET", "/api/models");

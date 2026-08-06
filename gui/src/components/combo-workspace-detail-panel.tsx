@@ -5,6 +5,7 @@ import {
   comboPublicModelId,
   draftEquals,
   intersectComboEfforts,
+  updateComboAliasDraft,
   validateComboDraft,
 } from "../combo-workspace-data";
 import { IconChevron, IconTrash } from "../icons";
@@ -201,11 +202,7 @@ export function DetailPanel({
                 value={draft.alias ?? ""}
                 placeholder={comboModelId(draft.id.trim() || "…")}
                 disabled={busy}
-                onChange={(e) => updateDraft((d) => ({
-                  ...d,
-                  alias: e.target.value.trim() ? e.target.value : null,
-                  model: comboPublicModelId(d.id, e.target.value),
-                }))}
+                onChange={(e) => updateDraft((d) => updateComboAliasDraft(d, e.target.value))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {t("cws.field.aliasHint")}

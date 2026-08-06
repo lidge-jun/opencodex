@@ -473,6 +473,39 @@ function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
 }
 
+function recoverableNativeSlug(entry: RawEntry): string | null {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  return SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)
+    && !isNativeAliasCatalogEntry(entry)
+    && entry.owned_by !== COMBO_NAMESPACE
+    ? slug
+    : null;
+}
+
+/**
+ * Append missing supported native rows from trusted catalog sources without importing routed or
+ * user-authored rows from those sources. Primary rows always retain their original order.
+ */
+export function mergeCatalogModelsWithNativeRecovery(
+  primaryCatalogModels: readonly RawEntry[],
+  nativeRecoverySources: readonly (readonly RawEntry[])[],
+): RawEntry[] {
+  const merged = [...primaryCatalogModels];
+  const recoveredNativeSlugs = new Set(primaryCatalogModels.flatMap(entry => {
+    const slug = recoverableNativeSlug(entry);
+    return slug === null ? [] : [slug];
+  }));
+  for (const source of nativeRecoverySources) {
+    for (const entry of source) {
+      const slug = recoverableNativeSlug(entry);
+      if (slug === null || recoveredNativeSlugs.has(slug)) continue;
+      merged.push(entry);
+      recoveredNativeSlugs.add(slug);
+    }
+  }
+  return merged;
+}
+
 export function mergeCatalogEntriesForSync(
   catalogModels: RawEntry[],
   routedEntries: RawEntry[],
@@ -611,7 +644,10 @@ export function mergeCatalogEntriesForSync(
     finalRoutedEntries = finalRoutedEntries.filter(entry => {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const comboOwned = slug.startsWith(`${COMBO_NAMESPACE}/`) || entry.owned_by === COMBO_NAMESPACE;
-      return !comboOwned || freshSlugs.has(slug);
+      const retainedNativeAlias = preservingExistingRouted
+        && isNativeAliasCatalogEntry(entry)
+        && exactComboSlugs.has(slug);
+      return !comboOwned || freshSlugs.has(slug) || retainedNativeAlias;
     });
   }
   finalRoutedEntries = finalRoutedEntries.filter(entry => {
@@ -828,28 +864,10 @@ function catalogModelsForMergeWithNativeRecovery(
   // Desktop's remote allowlist ignores `visibility: "hide"`. Keep current/pristine native recovery
   // sources beside the on-disk rows so re-enabling a model restores its real metadata. Routed and
   // user-authored rows still come only from the on-disk catalog.
-  const nativeRecoverySources = [catalog.models ?? [], readCatalogBackup(catalogPath)?.models ?? []];
-  const catalogModelsForMerge = [...primaryCatalogModels];
-  const recoveredNativeSlugs = new Set(primaryCatalogModels.flatMap(entry => (
-    typeof entry.slug === "string"
-      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(entry.slug)
-      && !isNativeAliasCatalogEntry(entry)
-      && entry.owned_by !== COMBO_NAMESPACE
-      ? [entry.slug]
-      : []
-  )));
-  for (const source of nativeRecoverySources) {
-    for (const entry of source) {
-      const slug = typeof entry.slug === "string" ? entry.slug : "";
-      if (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)
-        || isNativeAliasCatalogEntry(entry)
-        || entry.owned_by === COMBO_NAMESPACE
-        || recoveredNativeSlugs.has(slug)) continue;
-      catalogModelsForMerge.push(entry);
-      recoveredNativeSlugs.add(slug);
-    }
-  }
-  return catalogModelsForMerge;
+  return mergeCatalogModelsWithNativeRecovery(primaryCatalogModels, [
+    catalog.models ?? [],
+    readCatalogBackup(catalogPath)?.models ?? [],
+  ]);
 }
 
 function writeRetainedCatalogSync({

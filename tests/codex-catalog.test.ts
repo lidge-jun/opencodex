@@ -373,6 +373,59 @@ describe("combo catalog capability intersection", () => {
     expect(merged.some(entry => entry.slug === "gpt-5.5")).toBe(false);
   });
 
+  test("an empty routed gather preserves a configured native-alias row from disk", () => {
+    const alias = "gpt-5.6-sol";
+    const exact = new Set([alias]);
+    const model = deriveComboCatalogModel(
+      "nova-sol",
+      normalizedCombo({
+        alias,
+        nativeAlias: true,
+        displayName: "Nova1 - Sol",
+      }),
+      [memberA, memberB],
+    )!;
+    const existing = buildCatalogEntries(
+      nativeTemplate(),
+      [alias],
+      [model],
+      undefined,
+      false,
+      "default",
+      exact,
+    ).find(entry => entry.slug === alias)!;
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const merged = mergeCatalogEntriesForSync(
+        [existing],
+        [],
+        new Map(),
+        [],
+        false,
+        new Set(),
+        nativeTemplate(),
+        new Set(),
+        new Set(["a", "b"]),
+        "default",
+        exact,
+        false,
+        true,
+        [],
+        new Set([alias]),
+      );
+
+      expect(merged.filter(entry => entry.slug === alias)).toHaveLength(1);
+      expect(merged.find(entry => entry.slug === alias)).toMatchObject({
+        display_name: "Nova1 - Sol",
+        owned_by: "combo",
+        opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+      });
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("preserving 1 existing routed entry"));
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   test("a disabled native alias cannot resurrect a native row and removal restores it", () => {
     const alias = "gpt-5.6-sol";
     const native = { ...nativeTemplate(), slug: alias, display_name: "GPT-5.6-Sol" };
@@ -415,7 +468,7 @@ describe("combo catalog capability intersection", () => {
       [memberA, memberB],
     )!;
     const config = {
-      providers: { combo: {} },
+      providers: { combo: { adapter: "openai-chat", baseUrl: "http://127.0.0.1" } },
       disabledModels: ["gpt-5.6-sol"],
     };
 

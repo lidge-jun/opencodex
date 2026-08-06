@@ -11,6 +11,7 @@ import {
   isValidComboId,
   parseComboList,
   toPutBody,
+  updateComboAliasDraft,
   validateComboDraft,
 } from "../gui/src/combo-workspace-data";
 
@@ -251,21 +252,56 @@ describe("combo-workspace-data", () => {
       alias: "ordinary-alias",
       nativeAlias: true,
       displayName: "Nova1 - Sol",
-    }))).toBe("invalidAlias");
+    }))).toBe("unsupportedNativeAlias");
+    expect(validate(combo({
+      alias: "gpt-unknown",
+      nativeAlias: true,
+      displayName: "Nova1 - Unknown",
+    }))).toBe("unsupportedNativeAlias");
     expect(validate(combo({
       alias: "gpt-5.6-sol",
       nativeAlias: true,
       displayName: null,
-    }))).toBe("invalidAlias");
+    }))).toBe("missingNativeAliasDisplayName");
     expect(validate(combo({
       alias: "gpt-5.6-sol",
       nativeAlias: true,
       displayName: `Nova1${String.fromCharCode(10)}Sol`,
-    }))).toBe("invalidAlias");
+    }))).toBe("invalidDisplayName");
     // Slashed ids in the same families are fine — only BARE names collide with natives.
     expect(validate(combo({ alias: "openai/gpt-5" }))).toBeNull();
     expect(validate(combo({ alias: "taken" }), { existingAliases: ["taken"] })).toBe("duplicateAlias");
     expect(validate(combo({ alias: "taken" }), { existingAliases: ["other"] })).toBeNull();
+  });
+
+  test("alias edits can convert a hidden native alias back to an ordinary combo", () => {
+    const native = combo({
+      alias: "gpt-5.6-sol",
+      nativeAlias: true,
+      displayName: "Nova1 - Sol",
+    });
+
+    const ordinary = updateComboAliasDraft(native, "fast-chat");
+    expect(ordinary).toMatchObject({
+      alias: "fast-chat",
+      model: "fast-chat",
+      nativeAlias: false,
+      displayName: null,
+    });
+    expect(validate(ordinary)).toBeNull();
+    expect(toPutBody(ordinary).combo).not.toHaveProperty("nativeAlias");
+    expect(toPutBody(ordinary).combo).not.toHaveProperty("displayName");
+
+    expect(updateComboAliasDraft(native, "")).toMatchObject({
+      alias: null,
+      model: "combo/free",
+      nativeAlias: false,
+      displayName: null,
+    });
+    expect(updateComboAliasDraft(native, "gpt-5.6-terra")).toMatchObject({
+      nativeAlias: true,
+      displayName: "Nova1 - Sol",
+    });
   });
 
   test("create drafts support bare, custom-prefixed, and default public names", () => {

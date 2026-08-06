@@ -16,7 +16,7 @@ const USAGE = `Usage:
   ocx combo set <id> --targets <provider/model[:weight],...>
       [--strategy <failover|round-robin>] [--sticky <1-100>]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--alias <name|->]
-      [--native-alias --display-name <label>]
+      [--native-alias] [--display-name <label|->]
       [--rename-from <id>] [--json]
   ocx combo remove <id> --yes [--json]`;
 

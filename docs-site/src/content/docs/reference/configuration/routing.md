@@ -64,7 +64,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | Applied only when the caller omits effort and the selected target advertises the requested rung. |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
-| `nativeAlias?` | `boolean` | `false` | Explicitly allow a currently supported bare native alias to take precedence over canonical OpenAI routing. |
+| `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Account-qualified and provider-qualified OpenAI routes remain distinct. |
 | `displayName?` | `string` | — | Display-only catalog label, required and non-empty for a native alias. |
 
 ```json

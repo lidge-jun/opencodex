@@ -55,7 +55,7 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 | `stickyLimit?` | `number` | `1` |成功したリクエストは 1 つのラウンドロビン バッチに保持されます。範囲は 1 ～ 100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` |設定を解除する |呼び出し元が努力を省略し、選択されたターゲットが要求されたラングをアドバタイズする場合にのみ適用されます。 |
 | `alias?` | `string` | — |正規のピッカー スラグの代わりのオプションのパブリック モデル ID。 |
-| `nativeAlias?` | `boolean` | `false` | 現在サポートされている bare native alias の明示的な Desktop 互換優先権。 |
+| `nativeAlias?` | `boolean` | `false` | 現在サポートされている bare native id に限り、その未修飾 id で優先します。アカウント修飾およびプロバイダー修飾の OpenAI ルートは別のままです。 |
 | `displayName?` | `string` | — | catalog 表示専用ラベル。native alias では空でない値が必須です。 |
 
 ```json

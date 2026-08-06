@@ -58,7 +58,7 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
 | `alias?` | `string` | — | 可选的公开 model id，用于替代规范化的选择器 slug。 |
-| `nativeAlias?` | `boolean` | `false` | 显式允许当前受支持的裸原生 alias 优先于规范 OpenAI 路由。 |
+| `nativeAlias?` | `boolean` | `false` | 仅让当前受支持的裸原生 id 对该不带限定前缀的 id 优先；带账号或提供方限定的 OpenAI 路由仍是独立路由。 |
 | `displayName?` | `string` | — | 仅用于 catalog 展示的标签；native alias 必须提供非空值。 |
 
 ```json

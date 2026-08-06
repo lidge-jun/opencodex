@@ -405,6 +405,7 @@ describe("deterministic combo selection", () => {
 
   test("an explicitly configured native alias resolves before canonical OpenAI routing", () => {
     const config = baseConfig({
+      codexAccountNamespaces: { main: "@main" },
       combos: {
         nova: {
           alias: "gpt-5.6-sol",
@@ -414,6 +415,11 @@ describe("deterministic combo selection", () => {
         },
       },
     });
+    config.providers.openai = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      codexAccountMode: "direct",
+    };
 
     expect(routeModel(config, "gpt-5.6-sol")).toMatchObject({
       providerName: "a",
@@ -424,6 +430,12 @@ describe("deterministic combo selection", () => {
       providerName: "a",
       modelId: "m1",
     });
+    const accountQualified = routeModel(config, "main/gpt-5.6-sol");
+    expect(accountQualified).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.6-sol",
+    });
+    expect(accountQualified.combo).toBeUndefined();
   });
 
   test("eligibility, exclusions, and state reset are deterministic", () => {

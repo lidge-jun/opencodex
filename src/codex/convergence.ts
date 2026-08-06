@@ -34,13 +34,15 @@ import {
   legacyCatalogBackupPath,
   parseCatalogJson,
   type RawCatalog,
+  type RawEntry,
 } from "./catalog/parsing";
 import {
   buildCatalogEntries,
+  mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
 } from "./catalog/sync";
 import { exactComboCatalogSlugs } from "./catalog/aggregation";
-import { disabledNativeSlugs } from "./catalog/metadata";
+import { disabledNativeSlugs, isNativeAliasCatalogEntry } from "./catalog/metadata";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
@@ -162,6 +164,7 @@ function prepareCatalog(
   source: Extract<CatalogSourceForGather, { kind: "available" }>,
   active: RawCatalog | null,
   routedModels: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>,
+  nativeRecoverySources: readonly (readonly RawEntry[])[] = [],
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
@@ -177,9 +180,29 @@ function prepareCatalog(
     name === "openai" && isCanonicalOpenAiForwardProvider(provider)
   ));
   const disabledNative = disabledNativeSlugs(config);
+  const preservingExistingRouted = ordered.length === 0;
+  const preservedNativeAliases = preservingExistingRouted
+    ? (active?.models ?? []).filter(entry => (
+        typeof entry.slug === "string"
+        && exactComboSlugs.has(entry.slug)
+        && isNativeAliasCatalogEntry(entry)
+      ))
+    : [];
+  const preservedNativeAliasSlugs = new Set(preservedNativeAliases.flatMap(entry => (
+    typeof entry.slug === "string" ? [entry.slug] : []
+  )));
+  const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
+    active?.models ?? catalog.models ?? [],
+    [catalog.models ?? [], ...nativeRecoverySources],
+  );
   const nativeSlugs = includeNativeOpenAi
-    ? [...new Set((active?.models ?? catalog.models ?? []).flatMap(entry => (
-        typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
+    ? [...new Set(nativeCatalogModels.flatMap(entry => (
+        typeof entry.slug === "string"
+          && !entry.slug.includes("/")
+          && entry.owned_by !== COMBO_NAMESPACE
+          && !isNativeAliasCatalogEntry(entry)
+          && !disabledNative.has(entry.slug)
+          && !preservedNativeAliasSlugs.has(entry.slug)
           ? [entry.slug] : []
       )))]
     : [];
@@ -187,10 +210,12 @@ function prepareCatalog(
     template ? JSON.parse(JSON.stringify(template)) : null,
     nativeSlugs, ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
   );
-  if (entries.length === nativeSlugs.length) {
+  if (preservingExistingRouted) {
     const configuredProviders = new Set(enabledProviders.map(([name]) => name));
     const preserved = (active?.models ?? []).filter(entry => {
-      if (typeof entry.slug !== "string" || !entry.slug.includes("/")) return false;
+      if (typeof entry.slug !== "string") return false;
+      if (isNativeAliasCatalogEntry(entry)) return exactComboSlugs.has(entry.slug);
+      if (!entry.slug.includes("/")) return false;
       const provider = entry.slug.slice(0, entry.slug.indexOf("/"));
       const description = typeof entry.description === "string" ? entry.description : "";
       return configuredProviders.has(provider) || !description.startsWith("Routed via opencodex → ");
@@ -255,7 +280,10 @@ export async function gatherCodexCatalogCandidate(
     }
 
     const active = catalogFrom(activeBytes);
-    const preparedCatalog = prepareCatalog(snapshot.config, source, active, routedModels);
+    const preparedCatalog = prepareCatalog(snapshot.config, source, active, routedModels, [
+      catalogFrom(keyedBackupBytes)?.models ?? [],
+      catalogFrom(legacyBackupBytes)?.models ?? [],
+    ]);
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
     const preparedCacheBytes = `${JSON.stringify({
       fetched_at: "2000-01-01T00:00:00Z",

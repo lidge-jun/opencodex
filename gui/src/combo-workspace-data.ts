@@ -3,6 +3,10 @@
  * No network — transforms GET /api/combos rows into rail groups + attention.
  */
 
+import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
+
+export { SUPPORTED_NATIVE_OPENAI_SLUGS };
+
 export type ComboStrategy = "failover" | "round-robin";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
@@ -99,6 +103,19 @@ export function comboModelId(id: string): string {
 export function comboPublicModelId(id: string, alias: string | null | undefined): string {
   const trimmed = typeof alias === "string" ? alias.trim() : "";
   return trimmed || comboModelId(id);
+}
+
+/** Apply an alias-field edit and discard hidden native-alias metadata once it becomes ordinary. */
+export function updateComboAliasDraft(item: ComboItem, rawAlias: string): ComboItem {
+  const trimmed = rawAlias.trim();
+  const leavesNativeAliasFamily = item.nativeAlias
+    && (!trimmed || trimmed.includes("/") || !NATIVE_OPENAI_FAMILY_RE.test(trimmed));
+  return {
+    ...item,
+    alias: trimmed ? rawAlias : null,
+    model: comboPublicModelId(item.id, rawAlias),
+    ...(leavesNativeAliasFamily ? { nativeAlias: false, displayName: null } : {}),
+  };
 }
 
 function normalizeAlias(raw: unknown): string | null {
@@ -265,6 +282,9 @@ export type ComboDraftError =
   | "invalidAlias"
   | "aliasReservedNamespace"
   | "aliasNativeFamily"
+  | "unsupportedNativeAlias"
+  | "missingNativeAliasDisplayName"
+  | "invalidDisplayName"
   | "duplicateAlias"
   | "noTargets"
   | "incompleteTarget"
@@ -307,12 +327,10 @@ export function validateComboDraft(
   });
   if (item.displayName !== null
     && (displayName.length > 128 || displayNameHasControlCharacter)) {
-    return "invalidAlias";
+    return "invalidDisplayName";
   }
-  if (item.nativeAlias
-    && (!alias || alias.includes("/") || !NATIVE_OPENAI_FAMILY_RE.test(alias) || !displayName)) {
-    return "invalidAlias";
-  }
+  if (item.nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) return "unsupportedNativeAlias";
+  if (item.nativeAlias && !displayName) return "missingNativeAliasDisplayName";
   if (item.targets.length < 1) return "noTargets";
 
   for (const t of item.targets) {

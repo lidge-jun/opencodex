@@ -157,33 +157,35 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     nextCombos[id] = stored;
     config.combos = nextCombos;
     let shouldSyncClaudeAgentDefs = false;
-    const migratedModels = new Set<string>();
-    if (oldPublicModel && oldPublicModel !== newPublicModel) {
-      migratedModels.add(oldPublicModel);
+    const migratedModels = new Map<string, string>();
+    if (oldPublicModel && oldPublicModel !== newPublicModel && previous?.nativeAlias !== true) {
+      migratedModels.set(oldPublicModel, newPublicModel);
     }
-    if (renameFrom) migratedModels.add(comboModelId(renameFrom));
-    if (migratedModels.size > 0) {
-      const migrateReference = (model: string): string => (
-        migratedModels.has(model) ? newPublicModel : model
+    if (renameFrom) {
+      // A bare native id is ambiguous after the alias changes. Preserve it as a native route,
+      // while the unambiguous canonical combo reference follows the renamed combo.
+      migratedModels.set(
+        comboModelId(renameFrom),
+        previous?.nativeAlias === true ? comboModelId(id) : newPublicModel,
       );
+    }
+    if (migratedModels.size > 0) {
+      const migrateReference = (model: string): string => migratedModels.get(model) ?? model;
       const migrateAgentReference = (model: string): string => {
         const migrated = migrateReference(model);
         if (migrated !== model) shouldSyncClaudeAgentDefs = true;
         return migrated;
       };
-      const migrateReferences = (models: string[]): string[] => [
-        ...new Set(models.map(migrateReference)),
-      ];
       if (config.subagentModels) {
         config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
       }
       if (config.injectionModel && migratedModels.has(config.injectionModel)) {
-        config.injectionModel = newPublicModel;
+        config.injectionModel = migrateReference(config.injectionModel);
       }
       if (config.shadowCallIntercept?.model && migratedModels.has(config.shadowCallIntercept.model)) {
         config.shadowCallIntercept = {
           ...config.shadowCallIntercept,
-          model: newPublicModel,
+          model: migrateReference(config.shadowCallIntercept.model),
         };
       }
       if (config.claudeCode) {

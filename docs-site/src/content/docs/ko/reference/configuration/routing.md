@@ -54,7 +54,7 @@ selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy g
 | `stickyLimit?` | `number` | `1` | 한 round-robin 배치에서 유지되는 성공 요청 수입니다. 범위는 1–100입니다. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 호출자가 effort를 생략했고 선택된 대상이 요청한 rung를 광고할 때만 적용됩니다. |
 | `alias?` | `string` | — | 정규화된 picker slug 대신 쓰는 선택적 공개 model id입니다. |
-| `nativeAlias?` | `boolean` | `false` | 현재 지원되는 bare native alias의 명시적 Desktop 호환 우선권입니다. |
+| `nativeAlias?` | `boolean` | `false` | 현재 지원되는 bare native id가 해당 비수식 id에만 우선하도록 합니다. 계정 또는 프로바이더로 수식된 OpenAI route는 별도로 유지됩니다. |
 | `displayName?` | `string` | — | catalog 표시 전용 label이며 native alias에서는 비어 있지 않아야 합니다. |
 
 ```json
