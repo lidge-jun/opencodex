@@ -23,7 +23,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 설치된 shim을 교체한 뒤 복원합니다. 환경 변수로 끌 수 있습니다: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App history 호환성입니다. 원래 메타데이터는 `ocx stop` / `ocx restore`가 백업하고 복원합니다. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 인식된 Codex 보조/섀도 호출을 선택한 모델로 낮은 노력 수준에서 다시 보냅니다. 기본 source prefix는 `gpt-5.4-mini`와 `gpt-5.6-luna`입니다. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 인식된 Codex 보조/섀도 호출을 선택한 모델로 낮은 노력 수준에서 다시 보냅니다. 기본 source prefix는 `gpt-5.6-luna`입니다. 0.144.x 이하의 이전 클라이언트는 `gpt-5.4-mini`를 사용했으며 `sourceModels`로 복원할 수 있습니다. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | 웹 검색 사이드카 옵션입니다. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | 이미지 설명 사이드카 옵션입니다. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Codex `image_gen`용 독립형 Images 릴레이 옵션입니다. |
@@ -105,7 +105,7 @@ Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```

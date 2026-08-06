@@ -24,7 +24,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `codexAutoStart?` | `boolean` | `true` | Разрешает shim'у Codex запускать `ocx ensure` перед стартом Codex. При false `ensure` становится no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает установленный shim после завершённого внешнего обновления Codex, которое заменило его. Для отключения через окружение: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Обратимый режим совместимости истории Codex App. Исходные metadata резервируются и восстанавливаются через `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с low effort. Source-prefix'ы по умолчанию: `gpt-5.4-mini` и `gpt-5.6-luna`. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с low effort. Source-prefix по умолчанию: `gpt-5.6-luna`; клиенты до 0.144.x включительно использовали `gpt-5.4-mini`, который можно восстановить через `sourceModels`. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
@@ -132,7 +132,7 @@ Codex использует маленькие helper-model'и для задач 
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```

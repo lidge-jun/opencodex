@@ -317,7 +317,16 @@ async function handleStart(options: { block?: boolean } = {}) {
   installShellHook();
 
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
-  await syncCodexOnStartIfEnabled(port, config);
+  const startupSync = await syncCodexOnStartIfEnabled(port, config);
+  // #1046: one warning per startup, after BOTH writes. The server's cache
+  // invalidation happens first and the catalog sync second, so the mtime is only
+  // final here — and neither write site warns on its own, or a boot that hits
+  // both would warn twice.
+  const { consumeStartupCacheInvalidationWrite } = await import("../server");
+  if (consumeStartupCacheInvalidationWrite() || startupSync.catalogWritten || startupSync.cacheSynced) {
+    const { warnIfStaleCodexAppServersAfterStartupWrite } = await import("../codex/app-server-processes");
+    warnIfStaleCodexAppServersAfterStartupWrite({ log: console });
+  }
   if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();
   }

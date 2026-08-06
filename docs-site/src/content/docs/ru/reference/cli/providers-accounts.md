@@ -299,7 +299,7 @@ management API и требуют, чтобы прокси уже работал 
 | `provider <name> <on\|off>` | `--json` | Включить или выключить сразу все модели одного провайдера одним действием. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Прочитать или заменить allowlist моделей провайдера. `--clear` удаляет allowlist, и тогда доступны все модели. |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | Прочитать или задать context-window cap глобально либо по провайдерам. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-5.4-mini` и `gpt-5.6-luna`). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-5.6-luna`; `gpt-5.4-mini` для клиентов до 0.144.x включительно можно восстановить явным переопределением `sourceModels`). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

@@ -767,10 +767,18 @@ const UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE =
 // branch of the passthrough return path). 32 MiB matches the continuation snapshot read
 // bound and is far above any legitimate non-streaming completion, including base64 image
 // payloads. The stall deadlines only govern the body transfer — generation time before
-// the response headers is untouched.
+// the response headers is untouched. Generation after early/chunked headers but before
+// the first body byte previously used the 30-second inactivity deadline; this call site
+// gives it the full body deadline instead.
 const MAX_UPSTREAM_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS = 180_000;
 const UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS = 30_000;
+export const UPSTREAM_JSON_BODY_READ_OPTIONS = {
+  maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
+  totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
+  inactivityTimeoutMs: UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS,
+  firstByteTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
+};
 
 function unreadableEncryptedAgentTaskResponse(): Response {
   return new Response(
@@ -1395,8 +1403,8 @@ async function handleResponsesInner(
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
-  // Shadow call intercept: rewrite Codex's hard-coded helper calls
-  // (gpt-5.4-mini on older clients, gpt-5.6-luna on 0.145.0+)
+  // Shadow call intercept: rewrite Codex 0.145.0+ helper calls (gpt-5.6-luna).
+  // Ancient clients using gpt-5.4-mini remain configurable via sourceModels.
   const _sci = config.shadowCallIntercept;
   if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
     parsed.modelId,
@@ -2278,11 +2286,7 @@ async function handleResponsesInner(
       // without limit. This path is no longer rare — WebSocket turns for models whose
       // streaming terminal event is unreliable are deliberately answered with bounded JSON.
       // Oversize and stall deadlines both fail closed; a partial body is never parsed.
-      const bounded = await readBoundedResponseBody(upstreamResponse, {
-        maxBytes: MAX_UPSTREAM_JSON_BODY_BYTES,
-        totalTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
-        inactivityTimeoutMs: UPSTREAM_JSON_BODY_INACTIVITY_TIMEOUT_MS,
-      });
+      const bounded = await readBoundedResponseBody(upstreamResponse, UPSTREAM_JSON_BODY_READ_OPTIONS);
       if (bounded.oversized) {
         return formatErrorResponse(502, "upstream_error", "upstream JSON response exceeded the safe body limit");
       }

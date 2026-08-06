@@ -236,7 +236,7 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 | `provider <name> <on\|off>` | `--json` | 한 제공자의 모든 모델을 한 번의 쓰기로 활성화하거나 비활성화합니다. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 제공자 모델 허용 목록을 읽거나 교체합니다. `--clear`는 허용 목록을 제거해 모든 모델을 제공하도록 합니다. |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | 전역 또는 제공자별로 컨텍스트 창 한도를 읽거나 설정합니다. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-5.4-mini`와 `gpt-5.6-luna`). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-5.6-luna`; 0.144.x 이하 클라이언트가 사용한 `gpt-5.4-mini`는 명시적인 `sourceModels` 재정의로 복원할 수 있습니다). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

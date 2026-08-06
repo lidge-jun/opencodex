@@ -27,7 +27,17 @@ import type { OcxClientIntegrationsConfig, OcxConfig } from "../types";
 export type DurableIntentClientId = keyof OcxClientIntegrationsConfig;
 
 /** Injectable for tests; production passes the real sync. */
-export type CodexStartupSync = (port: number) => Promise<unknown>;
+/**
+ * The startup sync result the caller needs to decide whether anything was
+ * actually written (#1046). It used to be `unknown`, so "a write happened" was
+ * not observable at the startup boundary and no post-write action could be
+ * gated on it.
+ */
+export interface CodexStartupSyncOutcome {
+  catalogWritten: boolean;
+  cacheSynced: boolean;
+}
+export type CodexStartupSync = (port: number) => Promise<CodexStartupSyncOutcome | undefined>;
 
 export type CodexDesiredStateResult =
   | { readonly ok: true; readonly status: "committed" | "unchanged"; readonly enabled: boolean }
@@ -143,19 +153,29 @@ export function setGrokIntegrationEnabled(enabled: boolean): CodexDesiredStateRe
  * Swallowing the user's decision was not.
  *
  * Returns whether the sync ran, so a caller — or a test — can tell "skipped
- * because the user turned it off" from "ran and quietly failed".
+ * because the user turned it off" from "ran and quietly failed", plus what it
+ * wrote when it did run (#1046 — the caller warns about stale app-servers only
+ * after a real write).
  */
 export async function syncCodexOnStartIfEnabled(
   port: number,
   config: Pick<OcxConfig, "clientIntegrations">,
   sync: CodexStartupSync = defaultStartupSync,
-): Promise<boolean> {
-  if (!codexIntegrationEnabled(config)) return false;
-  await sync(port).catch(() => {});
-  return true;
+): Promise<{ ran: boolean; catalogWritten: boolean; cacheSynced: boolean }> {
+  if (!codexIntegrationEnabled(config)) {
+    return { ran: false, catalogWritten: false, cacheSynced: false };
+  }
+  // The `.catch` is deliberate and stays: a failure to APPLY must not stop the
+  // proxy from coming up. A failed sync simply reports no writes.
+  const outcome = await sync(port).catch(() => undefined);
+  return {
+    ran: true,
+    catalogWritten: outcome?.catalogWritten === true,
+    cacheSynced: outcome?.cacheSynced === true,
+  };
 }
 
-async function defaultStartupSync(port: number): Promise<unknown> {
+async function defaultStartupSync(port: number): Promise<CodexStartupSyncOutcome> {
   const { syncModelsToCodex } = await import("./sync");
   return syncModelsToCodex(port);
 }

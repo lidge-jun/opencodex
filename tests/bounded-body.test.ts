@@ -4,6 +4,7 @@ import {
 	boundedBodyBufferGrowthsForTests,
 	readBoundedResponseBody,
 } from "../src/lib/bounded-body";
+import { UPSTREAM_JSON_BODY_READ_OPTIONS } from "../src/server/responses/core";
 
 const encoder = new TextEncoder();
 
@@ -18,6 +19,11 @@ function responseFromChunks(...chunks: Uint8Array[]): Response {
 }
 
 describe("readBoundedResponseBody", () => {
+	test("the bounded JSON caller allows a full total deadline for its first byte", () => {
+		expect(UPSTREAM_JSON_BODY_READ_OPTIONS.firstByteTimeoutMs)
+			.toBe(UPSTREAM_JSON_BODY_READ_OPTIONS.totalTimeoutMs);
+	});
+
 	test("reads multiple chunks and flushes split UTF-8", async () => {
 		const bytes = encoder.encode("alpha 한글 🌍");
 		const response = responseFromChunks(bytes.subarray(0, 8), bytes.subarray(8, 11), bytes.subarray(11));
@@ -50,6 +56,83 @@ describe("readBoundedResponseBody", () => {
 		expect(result.inactivityTimedOut).toBe(true);
 		expect(result.totalTimedOut).toBe(false);
 		expect(cancelled).toBe(true);
+	});
+
+	test("allows the first byte to arrive after the inter-chunk inactivity deadline", async () => {
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				setTimeout(() => {
+					controller.enqueue(encoder.encode("first byte"));
+					controller.close();
+				}, 30);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 15,
+			firstByteTimeoutMs: 60,
+		});
+
+		expect(result.text).toBe("first byte");
+		expect(result.truncated).toBe(false);
+		expect(result.inactivityTimedOut).toBe(false);
+	});
+
+	test("times out when the first byte misses its dedicated deadline", async () => {
+		const response = new Response(new ReadableStream<Uint8Array>({}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 60,
+			firstByteTimeoutMs: 15,
+		});
+
+		expect(result.inactivityTimedOut).toBe(true);
+		expect(result.totalTimedOut).toBe(false);
+	});
+
+	test("keeps the inter-chunk inactivity deadline after the first byte", async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode("first"));
+				timer = setTimeout(() => controller.enqueue(encoder.encode("late")), 30);
+			},
+			cancel() {
+				if (timer) clearTimeout(timer);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 15,
+			firstByteTimeoutMs: 60,
+		});
+
+		expect(result.text).toBe("first");
+		expect(result.truncated).toBe(true);
+		expect(result.inactivityTimedOut).toBe(true);
+	});
+
+	test("uses the inactivity deadline for the first byte by default", async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			start(controller) {
+				timer = setTimeout(() => controller.enqueue(encoder.encode("late")), 30);
+			},
+			cancel() {
+				if (timer) clearTimeout(timer);
+			},
+		}));
+
+		const result = await readBoundedResponseBody(response, {
+			totalTimeoutMs: 100,
+			inactivityTimeoutMs: 15,
+		});
+
+		expect(result.inactivityTimedOut).toBe(true);
+		expect(result.totalTimedOut).toBe(false);
 	});
 
 	test("a partial body followed by silence times out and flushes UTF-8", async () => {

@@ -271,7 +271,7 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 | `provider <name> <on\|off>` | `--json` | 一次写入中启用或禁用某个提供方的全部模型。 |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 读取或替换提供方模型允许列表。`--clear` 会移除允许列表，使所有模型都可提供。 |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | 读取或设置上下文窗口上限，可全局设置或按提供方设置。 |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-5.4-mini` 和 `gpt-5.6-luna`）。 |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-5.6-luna`；0.144.x 及更早客户端使用的 `gpt-5.4-mini` 可通过显式 `sourceModels` 覆盖恢复）。 |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

@@ -236,7 +236,7 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | `provider <name> <on\|off>` | `--json` | 1 つのプロバイダーのすべてのモデルを 1 回の書き込みで有効または無効にします。 |
 | `selected <provider>` | `--set <id,id...>`、`--clear`、`--json` |プロバイダー モデルのホワイトリストを読み取るか置き換えます。 `--clear` はホワイトリストを削除し、すべてのモデルが提供されるようにします。 |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` |コンテキスト ウィンドウ キャップをグローバルに、またはプロバイダーごとに読み取りまたは設定します。 |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、ヘルパースラッグはプロキシをインターセプトします (デフォルト: `gpt-5.4-mini` および `gpt-5.6-luna`)。 |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、プロキシがインターセプトするヘルパースラッグを示します (デフォルト: `gpt-5.6-luna`; 0.144.x 以前のクライアントが使用した `gpt-5.4-mini` は明示的な `sourceModels` オーバーライドで復元できます)。 |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

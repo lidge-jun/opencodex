@@ -359,6 +359,27 @@ export interface StartServerDeps {
   liveSidebandWebSocketFactory?: LiveSidebandWebSocketFactory;
 }
 
+/*
+ * #1046. `startServer` rewrites the Codex models cache during boot, and an
+ * app-server that started earlier keeps its own in-memory model list. The stale
+ * warning is not emitted here: `handleStart` runs a catalog sync moments later,
+ * so warning now would read an mtime that write is about to move, and both sites
+ * calling the helper independently would warn twice. This records the fact; the
+ * CLI start path owns the single decision.
+ *
+ * A caller that starts a server without `handleStart` (tests, embedded use)
+ * deliberately gets no warning — lifecycle diagnostics belong to whoever owns
+ * the lifecycle.
+ */
+let startupCacheInvalidationWrote = false;
+
+/** #1046: did this process's startup cache invalidation actually write? */
+export function consumeStartupCacheInvalidationWrite(): boolean {
+  const wrote = startupCacheInvalidationWrote;
+  startupCacheInvalidationWrote = false;
+  return wrote;
+}
+
 export function startServer(port?: number, deps: StartServerDeps = {}) {
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
   setLiveStateStoreConfig(config);
@@ -407,8 +428,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   // otherwise turn "no Codex installed" into "proxy will not start".
   try {
     const startupCodexHome = getCodexHome();
-    withCatalogWriteSerialization(startupCodexHome, permit =>
+    // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
+    // with the later startup sync and warns ONCE about stale app-servers; warning
+    // here instead would read a catalog mtime the sync is about to move.
+    const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
       invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
+    // A refused permit is not a write; only a completed run that returned true is.
+    startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
   } catch { /* no readable Codex home: nothing to invalidate */ }
   // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
   // the server can serve a request, and AFTER the startup migrations above — those run
