@@ -12,8 +12,9 @@ import { IconChevron, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
-import { EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { EffortSelect, PublicModelPreview, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { clampedNumberInput } from "./combo-workspace-utils";
+import { useCopyFeedback } from "./use-copy-feedback";
 
 type DetailTab = "config" | "about";
 
@@ -57,6 +58,7 @@ export function DetailPanel({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const t = useT();
+  const { outcomeFor, copy } = useCopyFeedback<string>();
   const [tab, setTab] = useState<DetailTab>("config");
 
   /*
@@ -79,7 +81,6 @@ export function DetailPanel({
   const [draft, setDraft] = useState<ComboItem>(baseline);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
   const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.nativeAlias}:${baseline.displayName ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
   const effortMap = useMemo(() => {
@@ -111,15 +112,6 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: key captures baseline payload
   }, [baselineSyncKey]);
 
-  const copyModel = async () => {
-    try {
-      await navigator.clipboard.writeText(baseline.model);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* ignore */
-    }
-  };
 
   const save = async () => {
     const code = validateComboDraft(draft, {
@@ -163,6 +155,14 @@ export function DetailPanel({
   const headerModel = isCreate
     ? (draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : t("cws.addTitle"))
     : baseline.model;
+  // Public model id clients request — same string PublicModelPreview copies.
+  const copyModelId = baseline.model;
+  const copyOutcome = outcomeFor(copyModelId);
+  const copyLabel = copyOutcome === "copied"
+    ? t("cws.copied")
+    : copyOutcome === "unavailable"
+      ? t("cws.copyUnavailable")
+      : t("cws.copyModel");
 
   return (
     <div className="combos-workspace-detail">
@@ -175,8 +175,13 @@ export function DetailPanel({
         )}
         <h2 className="combos-workspace-detail-title">{headerModel}</h2>
         {!isCreate && (
-          <button type="button" className="chip cwi-copy-chip" onClick={() => { void copyModel(); }} title={t("cws.copyModel")}>
-            {copied ? t("cws.copied") : t("cws.copyModel")}
+          <button
+            type="button"
+            className="chip cwi-copy-chip"
+            onClick={() => copy(copyModelId, copyModelId)}
+            title={copyLabel}
+          >
+            <span aria-live="polite">{copyLabel}</span>
           </button>
         )}
         <div className="combos-workspace-detail-actions">
@@ -251,9 +256,7 @@ export function DetailPanel({
                 }))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {isCreate
-                  ? t("cws.field.idInternalHint")
-                  : t("cws.field.idHintEdit", { model: comboPublicModelId(draft.id, draft.alias) })}
+                {isCreate ? t("cws.field.idInternalHint") : t("cws.field.idHintEdit")}
               </p>
             </div>
             <div className="cwi-field">
@@ -269,6 +272,9 @@ export function DetailPanel({
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {t("cws.field.aliasHint")}
               </p>
+              <PublicModelPreview
+                model={draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : "…"}
+              />
             </div>
             <div className="cwi-field">
               <label htmlFor="cwi-edit-native-alias">
