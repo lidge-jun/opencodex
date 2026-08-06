@@ -25,6 +25,7 @@ import {
   type HermesGeneratedConfig,
   type KimiGeneratedConfig,
   type OpenclawGeneratedConfig,
+  type OmpGeneratedConfig,
 } from "../src/clients/config-export";
 import type { OcxConfig } from "../src/types";
 
@@ -313,6 +314,30 @@ describe("omp", () => {
     // cwd — opencodex and omp could disagree about which models.yml is live.
     expect(() => ompAgentDir({ PI_CODING_AGENT_DIR: "relative/agent" }, "/home/u"))
       .toThrow(/PI_CODING_AGENT_DIR/);
+  });
+
+  test("emits an omp thinking block when the model carries reasoning efforts", () => {
+    const doc = buildClientConfig("omp", {
+      baseUrl: "http://127.0.0.1:10100/v1",
+      models: [
+        { namespaced: "command-code/deepseek-deepseek-v4-flash", provider: "command-code", id: "deepseek/deepseek-v4-flash", contextWindow: 1_000_000, reasoningEfforts: ["high", "max"], defaultReasoningEffort: "high" },
+        { namespaced: "command-code/moonshotai-Kimi-K3", provider: "command-code", id: "moonshotai/Kimi-K3", contextWindow: 1_000_000, reasoningEfforts: ["high", "max"] },
+        // No reasoning metadata: the model stays plain so omp applies its own defaults.
+        { namespaced: "command-code/claude-fable-5", provider: "command-code", id: "claude-fable-5", contextWindow: 1_000_000 },
+      ],
+      config: LOOPBACK,
+    }) as OmpGeneratedConfig;
+    const models = doc.providers[OPENCODE_PROVIDER_ID]!.models;
+    const deepseek = models.find(m => m.id === "command-code/deepseek-deepseek-v4-flash")!;
+    expect(deepseek.thinking).toEqual({
+      mode: "effort",
+      efforts: ["high", "max"],
+      defaultLevel: "high",
+    });
+    const kimi = models.find(m => m.id === "command-code/moonshotai-Kimi-K3")!;
+    expect(kimi.thinking).toEqual({ mode: "effort", efforts: ["high", "max"] });
+    const fable = models.find(m => m.id === "command-code/claude-fable-5")!;
+    expect(fable.thinking).toBeUndefined();
   });
 });
 

@@ -13,6 +13,10 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-2",
   },
+  "moonshotai/Kimi-K3": {
+    efforts: ["high", "max"],
+    profileUrl: "https://commandcode.ai/models/kimi-k3",
+  },
 } as const;
 
 /**

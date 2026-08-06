@@ -402,6 +402,10 @@ export interface ExportModel {
   displayName?: string;
   contextWindow?: number;
   inputModalities?: string[];
+  /** Reasoning levels the proxy will accept for this model (wire vocabulary). */
+  reasoningEfforts?: string[];
+  /** Default reasoning level, when the model carries one. */
+  defaultReasoningEffort?: string;
 }
 
 export interface ExportContext {
@@ -636,6 +640,12 @@ export interface PiModelEntry {
   input: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** omp thinking block; present only when the model carries reasoning efforts. */
+  thinking?: {
+    mode: "effort";
+    efforts: string[];
+    defaultLevel?: string;
+  };
 }
 
 export interface PiProviderBlock {
@@ -647,6 +657,17 @@ export interface PiProviderBlock {
 
 export interface PiGeneratedConfig {
   providers: Record<string, PiProviderBlock>;
+}
+
+/**
+ * omp's effort vocabulary is `minimal|low|medium|high|xhigh|max`; anything else
+ * would fail its schema and take the whole provider down, so out-of-range wire
+ * values (e.g. `ultra` or `none`) are dropped rather than emitted.
+ */
+const OMP_EFFORT_VOCABULARY = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function ompAcceptsEffort(effort: string): boolean {
+  return OMP_EFFORT_VOCABULARY.has(effort.trim().toLowerCase());
 }
 
 /**
@@ -822,6 +843,18 @@ function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
     if (context !== undefined) {
       entry.contextWindow = context;
       entry.maxTokens = outputBudgetFor(context);
+    }
+    // omp only exposes reasoning-effort controls when the model declares a
+    // thinking block; without it omp sends no reasoning_effort at all.
+    const efforts = model.reasoningEfforts?.filter(effort => ompAcceptsEffort(effort)) ?? [];
+    if (efforts.length > 0) {
+      entry.thinking = {
+        mode: "effort",
+        efforts,
+        ...(model.defaultReasoningEffort && ompAcceptsEffort(model.defaultReasoningEffort)
+          ? { defaultLevel: model.defaultReasoningEffort }
+          : {}),
+      };
     }
     models.push(entry);
   }

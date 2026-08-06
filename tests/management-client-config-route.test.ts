@@ -45,6 +45,8 @@ interface ModelRow {
   displayName?: string;
   contextWindow?: number;
   inputModalities?: string[];
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
 }
 
 /**
@@ -111,6 +113,8 @@ function toExportModel(row: ModelRow): ExportModel {
     ...(row.displayName ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
+    ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),
+    ...(row.defaultReasoningEffort ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),
   };
 }
 
