@@ -81,6 +81,7 @@ export function relayResponsesSseWithTerminalRepair(
   let tainted = false;
   let disposed = false;
   let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let activeRead: Promise<void> | null = null;
 
   const onUpstreamAbort = (): void => {
     if (disposed) return;
@@ -260,8 +261,11 @@ export function relayResponsesSseWithTerminalRepair(
     return "ordinary";
   };
 
-  const emitBlocks = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
+  const emitBlocks = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): { closed: boolean; emitted: boolean } => {
     let next: ReturnType<typeof nextSseBlock>;
+    let emitted = false;
     while ((next = nextSseBlock(buffer))) {
       replaceBuffer(next.rest);
       const kind = inspectPayload(sseDataPayload(next.block));
@@ -269,17 +273,18 @@ export function relayResponsesSseWithTerminalRepair(
         emitSynthetic(completeCandidate() ? "completed" : "incomplete", controller);
       }
       controller.enqueue(encoder.encode(next.block + next.delimiter));
+      emitted = true;
       if (kind === "done") {
         reader.cancel("Responses stream ended with DONE").catch(() => {});
         dispose();
         controller.close();
-        return true;
+        return { closed: true, emitted };
       }
     }
-    return false;
+    return { closed: false, emitted };
   };
 
-  const pump = async (controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> => {
+  const readOnce = async (controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> => {
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -302,7 +307,8 @@ export function relayResponsesSseWithTerminalRepair(
           return;
         }
         appendBuffer(decoder.decode(value, { stream: true }));
-        if (emitBlocks(controller)) return;
+        const result = emitBlocks(controller);
+        if (result.closed || result.emitted) return;
       }
     } catch (error) {
       if (disposed) return;
@@ -319,7 +325,13 @@ export function relayResponsesSseWithTerminalRepair(
         return;
       }
       upstream.signal.addEventListener("abort", onUpstreamAbort, { once: true });
-      void pump(controller);
+    },
+    pull(controller) {
+      if (disposed) return;
+      if (!activeRead) {
+        activeRead = readOnce(controller).finally(() => { activeRead = null; });
+      }
+      return activeRead;
     },
     cancel(reason) {
       dispose();

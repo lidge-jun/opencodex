@@ -486,4 +486,26 @@ describe("DeepSeek Responses terminal repair", () => {
     await expect(readAll(repaired)).rejects.toMatchObject({ code: "translation_buffer_limit" });
     expect(budget.snapshot().currentBytes).toBe(0);
   });
+
+  test("the wrapper does not continuously read ahead without downstream pulls", async () => {
+    let pulls = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 5) controller.enqueue(encoder.encode(`: heartbeat ${pulls}\n\n`));
+      },
+    });
+    const repaired = relayResponsesSseWithTerminalRepair(
+      source,
+      new AbortController(),
+      POLICY,
+      createTestTranslatorBudget(),
+      new ManualScheduler(),
+    );
+
+    await settle();
+    // One chunk may be prefetched by each Web Stream layer; continuous read-ahead must stop there.
+    expect(pulls).toBeLessThanOrEqual(2);
+    await repaired.cancel("test cleanup");
+  });
 });
