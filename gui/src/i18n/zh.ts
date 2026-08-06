@@ -622,7 +622,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.costTotal": "标价折算",
   "logs.detail.totalTokens": "Token 总数",
-  "logs.detail.matchedKey": "匹配的 jawcode 键",
+  "logs.detail.matchedKey": "匹配的价格键",
   "logs.detail.priceSource": "价格来源",
   "logs.detail.unavailableReason": "不可用原因",
   "logs.detail.copyRequestId": "复制请求 ID",

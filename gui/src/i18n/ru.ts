@@ -627,7 +627,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.costTotal": "Эквивалент по прайс-листу",
   "logs.detail.totalTokens": "Всего токенов",
-  "logs.detail.matchedKey": "Совпавший ключ jawcode",
+  "logs.detail.matchedKey": "Совпавший ключ цены",
   "logs.detail.priceSource": "Источник цены",
   "logs.detail.unavailableReason": "Причина недоступности",
   "logs.detail.copyRequestId": "Копировать ID запроса",

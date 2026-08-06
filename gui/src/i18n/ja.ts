@@ -595,7 +595,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.costTotal": "定価相当額",
   "logs.detail.totalTokens": "合計トークン",
-  "logs.detail.matchedKey": "一致した jawcode キー",
+  "logs.detail.matchedKey": "一致した価格キー",
   "logs.detail.priceSource": "価格ソース",
   "logs.detail.unavailableReason": "利用不可の理由",
   "logs.detail.copyRequestId": "リクエスト ID をコピー",
