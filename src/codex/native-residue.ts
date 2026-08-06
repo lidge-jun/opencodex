@@ -416,15 +416,19 @@ function classifyReferencedRollout(
         `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
       );
     }
+    const decoder = new TextDecoder();
     const buffer = Buffer.allocUnsafe(ROLLOUT_READ_CHUNK_BYTES);
-    for (;;) {
-      const count = readSync(handle, buffer, 0, buffer.length, totalRead);
-      if (count === 0) break;
+    while (totalRead < opened.size) {
+      const remaining = Math.min(buffer.length, opened.size - totalRead);
+      const count = readSync(handle, buffer, 0, remaining, totalRead);
+      if (count === 0) {
+        return indeterminate(surface, resolved.path, "rollout read ended before the observed size");
+      }
       if (count < 0) {
         return indeterminate(surface, resolved.path, "rollout read ended before the observed size");
       }
       totalRead += count;
-      partial += buffer.toString("utf8", 0, count);
+      partial += decoder.decode(buffer.subarray(0, count), { stream: true });
       let newline = partial.indexOf("\n");
       while (newline !== -1) {
         const line = partial.slice(0, newline);
@@ -442,6 +446,7 @@ function classifyReferencedRollout(
         newline = partial.indexOf("\n");
       }
     }
+    partial += decoder.decode();
     if (partial.trim()) {
       const payload = rolloutSessionMetaPayload(partial);
       if (payload.kind === "malformed") {

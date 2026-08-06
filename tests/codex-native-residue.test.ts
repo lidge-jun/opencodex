@@ -670,6 +670,24 @@ test("a routed rollout without a trailing newline is residue", () => {
   });
 });
 
+test("a routed rollout with a non-ASCII id split across the read chunk is residue", () => {
+  createHistoryDatabase("openai");
+  const boundary = 64 * 1024;
+  const prefix = `{"timestamp":"2026-08-04T00:00:00.000Z","type":"session_meta","payload":{"description":"`;
+  const suffix = `","id":"thread-1","model_provider":"opencodex","source":"cli"}}\n`;
+  const paddingLength = boundary - Buffer.byteLength(prefix) - 1; // 🚀 starts at byte 65535, straddling 64 KiB
+  const content = `${prefix}${"x".repeat(paddingLength)}🚀${suffix}`;
+  const emojiByteOffset = Buffer.from(content, "utf8").indexOf(Buffer.from("🚀", "utf8"));
+  expect(emojiByteOffset).toBe(boundary - 1);
+  writeFileSync(pathInCodexHome("rollout.jsonl"), content);
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "residue",
+    surface: "history",
+    path: pathInCodexHome("rollout.jsonl"),
+  });
+});
+
 test("an oversized referenced rollout is indeterminate without being loaded", () => {
   createHistoryDatabase("openai");
   truncateSync(pathInCodexHome("rollout.jsonl"), 64 * 1024 * 1024 + 1);
