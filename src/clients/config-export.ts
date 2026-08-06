@@ -640,6 +640,8 @@ export interface PiModelEntry {
   input: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** omp requires `reasoning: true` before it honors a thinking block. */
+  reasoning?: boolean;
   /** omp thinking block; present only when the model carries reasoning efforts. */
   thinking?: {
     mode: "effort";
@@ -848,6 +850,7 @@ function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
     // thinking block; without it omp sends no reasoning_effort at all.
     const efforts = model.reasoningEfforts?.filter(effort => ompAcceptsEffort(effort)) ?? [];
     if (efforts.length > 0) {
+      entry.reasoning = true;
       entry.thinking = {
         mode: "effort",
         efforts,

@@ -329,12 +329,14 @@ describe("omp", () => {
     }) as OmpGeneratedConfig;
     const models = doc.providers[OPENCODE_PROVIDER_ID]!.models;
     const deepseek = models.find(m => m.id === "command-code/deepseek-deepseek-v4-flash")!;
+    expect(deepseek.reasoning).toBe(true);
     expect(deepseek.thinking).toEqual({
       mode: "effort",
       efforts: ["high", "max"],
       defaultLevel: "high",
     });
     const kimi = models.find(m => m.id === "command-code/moonshotai-Kimi-K3")!;
+    expect(kimi.reasoning).toBe(true);
     expect(kimi.thinking).toEqual({ mode: "effort", efforts: ["high", "max"] });
     const fable = models.find(m => m.id === "command-code/claude-fable-5")!;
     expect(fable.thinking).toBeUndefined();
