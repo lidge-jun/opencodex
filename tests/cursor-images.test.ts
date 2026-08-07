@@ -26,7 +26,7 @@ import {
   resetCursorBlobStateForTests,
 } from "../src/adapters/cursor/native-exec";
 import { cursorRequestMessagesFromRaw } from "../src/adapters/cursor/request-builder";
-import { activePromptText } from "../src/adapters/cursor/protobuf-request";
+import { activePromptText, encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
 import {
   AgentClientMessageSchema,
   GetBlobArgsSchema,
@@ -371,6 +371,14 @@ describe("Cursor image resolver", () => {
     ]);
     expect(sniffCursorImageDimensions(png)).toEqual({ width: 2, height: 3 });
 
+    // Standalone RST0 before SOF0 must not be parsed as a length-bearing segment.
+    const jpegWithRst = Uint8Array.from([
+      0xff, 0xd8, // SOI
+      0xff, 0xd0, // RST0 (no length)
+      0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x02, 0x03, 0x01, 0x11, 0x00, // SOF0 2x3
+    ]);
+    expect(sniffCursorImageDimensions(jpegWithRst)).toEqual({ width: 2, height: 3 });
+
     const [selected] = buildSelectedImages([{
       data: png,
       mimeType: "image/png",
@@ -554,5 +562,49 @@ describe("Cursor image resolver", () => {
       messages,
       rawMessages: raw,
     })).toBe(CURSOR_VISION_IMAGE_OMITTED);
+  });
+
+  test("live-transport image phase: prepare rawMessages then resolve SelectedImage", async () => {
+    // Mirrors live-transport.ts: prepareCursorRawMessages → resolveActiveCursorImages
+    // without injecting selectedImages into encode.
+    const collab = "<multi_agent_mode>Preferred sub-agent: model \"cursor/grok-4.5\"</multi_agent_mode>";
+    const rawIn = [
+      { role: "user" as const, content: "What is in this image?", timestamp: 1 },
+      {
+        role: "assistant" as const,
+        model: "cursor/grok-4.5",
+        timestamp: 2,
+        content: [{ type: "toolCall" as const, id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+      },
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_view",
+        toolName: "view_image",
+        content: [{ type: "image" as const, imageUrl: PNG_DATA_URL, detail: "high" }],
+        isError: false,
+        timestamp: 3,
+      },
+      { role: "developer" as const, content: collab, timestamp: 4 },
+    ];
+    const rawMessages = await prepareCursorRawMessages(rawIn);
+    const messages = cursorRequestMessagesFromRaw(rawMessages);
+    const selectedImages = await resolveActiveCursorImages(rawMessages);
+    expect(selectedImages).toHaveLength(1);
+
+    resetCursorBlobStateForTests();
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c-wire",
+      system: ["You are helpful."],
+      messages,
+      rawMessages,
+      selectedImages,
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    if (run?.action?.action.case !== "userMessageAction") throw new Error("expected userMessageAction");
+    expect(run.action.action.value.userMessage?.text).toBe(CURSOR_VISION_PROMOTE_NUDGE);
+    expect(run.action.action.value.userMessage?.selectedContext?.selectedImages.length).toBe(1);
   });
 });

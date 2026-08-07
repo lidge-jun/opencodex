@@ -118,7 +118,7 @@ function jpegQualitiesForDetail(detail: string | undefined): readonly number[] {
   return isHighDetail(detail) ? CURSOR_VISION_JPEG_QUALITIES_HIGH : CURSOR_VISION_JPEG_QUALITIES_DEFAULT;
 }
 
-function decodeDataUrl(url: string): { data: Uint8Array; mimeType: string } {
+export function decodeCursorImageDataUrl(url: string): { data: Uint8Array; mimeType: string } {
   const comma = url.indexOf(",");
   if (comma < 0) throw new CursorImageError("Image data URL is malformed.");
   const header = url.slice(5, comma);
@@ -284,7 +284,7 @@ export async function resolveCursorImages(
       throw new CursorImageError("Image URL is missing.");
     }
     const resolved = url.toLowerCase().startsWith("data:")
-      ? decodeDataUrl(url)
+      ? decodeCursorImageDataUrl(url)
       : await fetchHttpsImageBytes(url, signal);
     if (resolved.data.byteLength === 0) {
       throw new CursorImageError("Image input is empty.");
@@ -461,6 +461,11 @@ export function sniffCursorImageDimensions(
     while (offset + 8 < data.byteLength) {
       if (data[offset] !== 0xff) break;
       const marker = data[offset + 1]!;
+      // Standalone markers (TEM, RSTn, SOI, EOI) carry no length payload.
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+        offset += 2;
+        continue;
+      }
       const length = (data[offset + 2]! << 8) | data[offset + 3]!;
       if (marker === 0xc0 || marker === 0xc2) {
         const height = (data[offset + 5]! << 8) | data[offset + 6]!;
@@ -648,7 +653,7 @@ export async function prepareCursorImageDataUrl(
 ): Promise<{ status: "ready"; imageUrl: string } | { status: "omitted"; reason: string }> {
   if (!imageUrl.toLowerCase().startsWith("data:")) return { status: "ready", imageUrl };
   try {
-    const decoded = decodeDataUrl(imageUrl);
+    const decoded = decodeCursorImageDataUrl(imageUrl);
     if (decoded.data.byteLength === 0) {
       return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
     }

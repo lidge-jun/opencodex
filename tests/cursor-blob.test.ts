@@ -31,6 +31,7 @@ import {
 import {
   CURSOR_VISION_MCP_IMAGE_OMITTED,
   CURSOR_VISION_PROMOTE_NUDGE,
+  MAX_CURSOR_IMAGE_DECODE_BYTES,
 } from "../src/adapters/cursor/images";
 import { estimateTokens } from "../src/lib/token-estimate";
 import {
@@ -882,6 +883,51 @@ describe("Cursor blob handshake", () => {
     if (content[1]?.content.case !== "image") throw new Error("expected image");
     expect(content[1].content.value.mimeType).toBe("image/png");
     expect(Array.from(content[1].content.value.data)).toEqual(Array.from(imageBytes));
+  });
+
+  test("omits oversize tool-result data URLs from McpImageContent via shared decoder", () => {
+    resetCursorBlobStateForTests();
+    const huge = Buffer.alloc(MAX_CURSOR_IMAGE_DECODE_BYTES + 1024, 0x41);
+    const imageUrl = `data:image/png;base64,${huge.toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      rawMessages: [
+        { role: "user", content: "describe", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "image loaded" },
+            { type: "image", imageUrl, detail: "auto" },
+          ],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.every(item => item.content.case !== "image")).toBe(true);
+    expect(content.some(item => item.content.case === "text" && item.content.value.text === "image loaded")).toBe(true);
   });
 
   test("forwards grok-4.5 view_image tool-result data URLs as McpImageContent", () => {
