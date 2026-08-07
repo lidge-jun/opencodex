@@ -306,7 +306,7 @@ describe("fetchProviderQuotaReports", () => {
           total_used: 0,
           total_available: 0,
           unlimited_quota: true,
-          expires_at: 0,
+          expires_at: "2027-01-01T00:00:00Z",
         } },
     ), { status: 200 })) as typeof fetch;
 
@@ -319,6 +319,7 @@ describe("fetchProviderQuotaReports", () => {
       remaining: 0,
       percent: 0,
       unlimited: true,
+      expiresAt: Date.parse("2027-01-01T00:00:00Z"),
     });
     expect(result.reports[0]?.quota.customWindows).toEqual([{
       label: "Unlimited API credits",
