@@ -36,4 +36,21 @@ describe("key login preserves user-configured price overlays", () => {
     const merged = mergeKeyLoginProviderRow(replacement, existing);
     expect(merged.modelCosts).toEqual({});
   });
+
+  test("the merge returns a fresh row so the proxy notify cannot diverge from disk", () => {
+    const replacement = providerConfigFromKeyLoginProvider(KEY_LOGIN_PROVIDERS.umans, "sk-fresh");
+    const existing: OcxProviderConfig = {
+      adapter: "anthropic",
+      baseUrl: "https://api.code.umans.ai",
+      apiKey: "sk-old",
+      modelCosts: { "umans-coder": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } },
+    };
+    const merged = mergeKeyLoginProviderRow(replacement, existing);
+    // handleKeyLogin assigns the merged row and passes the same object to
+    // notifyRunningProxy; if the helper mutated the preset row instead, the
+    // notification would silently use catalog prices until a config reload.
+    expect(merged).not.toBe(replacement);
+    expect(merged.modelCosts).toEqual(existing.modelCosts);
+    expect(replacement.modelCosts).toBeUndefined();
+  });
 });
