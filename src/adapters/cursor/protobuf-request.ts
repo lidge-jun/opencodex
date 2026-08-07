@@ -13,6 +13,7 @@ import {
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
+import { buildSelectedContext } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import {
   AgentClientMessageSchema,
@@ -318,7 +319,7 @@ function contentText(message: OcxMessage): string {
     .map(part => {
       if (part.type === "text") return part.text;
       if (part.type === "thinking") return part.thinking;
-      if (part.type === "image") return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
+      if (part.type === "image") return undefined;
       return undefined;
     })
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -328,7 +329,8 @@ function contentText(message: OcxMessage): string {
 function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
-    .map(part => part.type === "text" ? part.text : `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`)
+    .map(part => part.type === "text" ? part.text : undefined)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
 }
 
@@ -582,6 +584,7 @@ function buildPreparedCursorRunRequest(
   const actionCase = !lastRawIsToolResult && text.trim().length > 0
     ? "userMessageAction"
     : "resumeAction";
+  const selectedContext = buildSelectedContext(request.selectedImages ?? []);
   const action = create(ConversationActionSchema, {
     action: actionCase === "userMessageAction"
       ? {
@@ -590,6 +593,7 @@ function buildPreparedCursorRunRequest(
             userMessage: create(UserMessageSchema, {
               text,
               messageId: crypto.randomUUID(),
+              ...(selectedContext ? { selectedContext } : {}),
             }),
             requestContext: buildRequestContext(),
           }),

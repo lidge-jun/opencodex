@@ -1,6 +1,7 @@
 import type { OcxUsage } from "../../types";
 import type { OcxMessage, OcxRequestOptions, OcxTool } from "../../types";
 import type { CursorRoutingLevel } from "./discovery";
+import type { ResolvedCursorImage } from "./images";
 
 export interface CursorRequestedModelParameter {
   id: string;
@@ -17,6 +18,11 @@ export interface CursorRunRequest {
   system: string[];
   messages: CursorRequestMessage[];
   rawMessages?: OcxMessage[];
+  /**
+   * Images for the active user turn, inlined as SelectedImage.data under
+   * UserMessage.selected_context. History stays text-only.
+   */
+  selectedImages?: readonly ResolvedCursorImage[];
   tools?: OcxTool[];
   toolChoice?: OcxRequestOptions["toolChoice"];
   parallelToolCalls?: boolean;

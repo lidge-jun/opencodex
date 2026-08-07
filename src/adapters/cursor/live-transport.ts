@@ -13,6 +13,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
+import { resolveActiveCursorImages } from "./images";
 import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
@@ -569,9 +570,11 @@ class LiveCursorTransport implements CursorTransport {
       clearPrior: request.contextUsageReset === true,
       storeCheckpoints: request.contextUsageStoreCheckpoints !== false,
     });
+    const selectedImages = await resolveActiveCursorImages(request.rawMessages, signal);
+    const preparedRequest = { ...request, selectedImages };
     // Build the payload once. The estimate is only worth deriving when there is no
     // carry-forward to fall back on — with a carry present it would never be used (#373).
-    const prepared = prepareCursorRunRequest(request, {
+    const prepared = prepareCursorRunRequest(preparedRequest, {
       estimateInputTokens: contextUsage.carryForwardTokens === undefined,
     });
     this.blobRequestScope = prepared.blobRequestScope;
