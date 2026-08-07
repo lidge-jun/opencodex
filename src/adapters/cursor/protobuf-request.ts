@@ -27,6 +27,7 @@ import {
   McpArgsSchema,
   McpSuccessSchema,
   McpTextContentSchema,
+  McpImageContentSchema,
   McpToolCallSchema,
   McpToolResultContentItemSchema,
   McpToolResultSchema,
@@ -334,6 +335,73 @@ function contentToText(content: OcxToolResultMessage["content"]): string {
     .join("\n");
 }
 
+function toolResultHasImage(content: OcxToolResultMessage["content"]): boolean {
+  if (typeof content === "string") return false;
+  return content.some(part => part.type === "image"
+    && typeof part.imageUrl === "string"
+    && part.imageUrl.length > 0);
+}
+
+function syntheticToolCallFromResult(
+  message: OcxToolResultMessage,
+): Extract<OcxAssistantContentPart, { type: "toolCall" }> {
+  return {
+    type: "toolCall",
+    id: message.toolCallId,
+    name: message.toolName,
+    ...(message.toolNamespace ? { namespace: message.toolNamespace } : {}),
+    arguments: {},
+  };
+}
+
+function toolResultContentItems(content: OcxToolResultMessage["content"]) {
+  if (typeof content === "string") {
+    return [create(McpToolResultContentItemSchema, {
+      content: { case: "text", value: create(McpTextContentSchema, { text: content }) },
+    })];
+  }
+
+  const items = content.flatMap(part => {
+    if (part.type === "text" && part.text.length > 0) {
+      return [create(McpToolResultContentItemSchema, {
+        content: { case: "text", value: create(McpTextContentSchema, { text: part.text }) },
+      })];
+    }
+    if (part.type === "image" && typeof part.imageUrl === "string" && part.imageUrl.length > 0) {
+      try {
+        if (!part.imageUrl.toLowerCase().startsWith("data:")) return [];
+        const comma = part.imageUrl.indexOf(",");
+        if (comma < 0) return [];
+        const header = part.imageUrl.slice(5, comma);
+        const payload = part.imageUrl.slice(comma + 1).replace(/\s/g, "");
+        if (!/;base64/i.test(header) || payload.length === 0) return [];
+        const mimeType = (header.split(";")[0] || "").trim().toLowerCase() || "image/png";
+        if (!mimeType.startsWith("image/")) return [];
+        const data = Buffer.from(payload, "base64");
+        if (data.byteLength === 0) return [];
+        return [create(McpToolResultContentItemSchema, {
+          content: {
+            case: "image",
+            value: create(McpImageContentSchema, {
+              data,
+              mimeType,
+            }),
+          },
+        })];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  return items.length > 0
+    ? items
+    : [create(McpToolResultContentItemSchema, {
+        content: { case: "text", value: create(McpTextContentSchema, { text: "" }) },
+      })];
+}
+
 function toolResultToText(message: OcxToolResultMessage): string {
   return [
     "[tool_result]",
@@ -389,9 +457,7 @@ function toolResultPart(message: OcxToolResultMessage) {
       case: "success",
       value: create(McpSuccessSchema, {
         isError: message.isError,
-        content: [create(McpToolResultContentItemSchema, {
-          content: { case: "text", value: create(McpTextContentSchema, { text: contentToText(message.content) }) },
-        })],
+        content: toolResultContentItems(message.content),
       }),
     },
   });
@@ -461,6 +527,10 @@ function conversationTurns(
           // Working external-model clients replay only assistant text. Native mcpToolCall and
           // ThinkingMessage structures are Composer state and cause external workers to hydrate
           // the blobs, reach stepCompleted, then reject the turn with invalid_argument.
+          if (part.type === "toolCall") {
+            pendingToolCalls.set(part.id, part);
+            continue;
+          }
           if (part.type === "text" && part.text.length > 0) {
             current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
               message: {
@@ -483,6 +553,12 @@ function conversationTurns(
     if (message.role === "toolResult") {
       if (!current) continue;
       if (externalModel) {
+        if (toolResultHasImage(message.content)) {
+          const priorCall = pendingToolCalls.get(message.toolCallId) ?? syntheticToolCallFromResult(message);
+          current.steps.push(toolCallStep(priorCall, requestScope, message));
+          pendingToolCalls.delete(message.toolCallId);
+          continue;
+        }
         const prefix = message.isError ? "[Tool Error]" : "[Tool Result]";
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
@@ -490,6 +566,7 @@ function conversationTurns(
             value: create(AssistantMessageSchema, { text: `${prefix}\n${contentToText(message.content)}` }),
           },
         })), requestScope));
+        pendingToolCalls.delete(message.toolCallId);
         continue;
       }
       const priorCall = pendingToolCalls.get(message.toolCallId);
@@ -511,6 +588,8 @@ function conversationTurns(
       userMessage: storeCursorBlob(toBinary(UserMessageSchema, create(UserMessageSchema, {
         text: contentText(message),
         messageId: crypto.randomUUID(),
+        selectedContext: buildSelectedContext(),
+        mode: 1,
       })), requestScope),
       steps: [],
     };
@@ -594,7 +673,9 @@ function buildPreparedCursorRunRequest(
             userMessage: create(UserMessageSchema, {
               text,
               messageId: crypto.randomUUID(),
-              ...(selectedContext ? { selectedContext } : {}),
+              selectedContext,
+              // OmniRoute / cursor-agent always send mode=1 on UserMessage.
+              mode: 1,
             }),
             requestContext: buildRequestContext(),
           }),
@@ -680,7 +761,7 @@ function buildPreparedCursorRunRequest(
     // the event-state `clientToolNames` use (live-transport.ts). Advertising the raw `request.tools`
     // here would let mcp_tools expose a tool that the event state does not recognize for a generic
     // tool-count prompt, so a call to it would be rejected as an unknown Responses tool.
-    ...(mcpToolDefs.length > 0 ? { mcpTools: create(McpToolsSchema, { mcpTools: mcpToolDefs }) } : {}),
+    mcpTools: create(McpToolsSchema, { mcpTools: mcpToolDefs }),
   });
 
   const message = create(AgentClientMessageSchema, {

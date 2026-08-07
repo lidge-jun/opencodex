@@ -115,13 +115,25 @@ function actionText(bytes: Uint8Array): string | undefined {
   return action?.case === "userMessageAction" ? action.value.userMessage?.text : undefined;
 }
 
-function activeSelectedImages(bytes: Uint8Array) {
+function activeUserMessage(bytes: Uint8Array) {
   const msg = fromBinary(AgentClientMessageSchema, bytes);
   const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
   const action = run?.action?.action;
-  return action?.case === "userMessageAction"
-    ? action.value.userMessage?.selectedContext?.selectedImages
-    : undefined;
+  return action?.case === "userMessageAction" ? action.value.userMessage : undefined;
+}
+
+function activeSelectedImages(bytes: Uint8Array) {
+  return activeUserMessage(bytes)?.selectedContext?.selectedImages;
+}
+
+function conversationToolCallSteps(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  return (run?.conversationState?.turns ?? []).flatMap(turnId => {
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnId));
+    if (turn.turn.case !== "agentConversationTurn") return [];
+    return turn.turn.value.steps.map(stepId => fromBinary(ConversationStepSchema, blobData(stepId)));
+  }).filter(step => step.message.case === "toolCall");
 }
 
 function nativeTurnUserMessages(bytes: Uint8Array) {
@@ -190,12 +202,31 @@ describe("Cursor blob handshake", () => {
     });
 
     expect(actionText(bytes)).toBe("see this");
+    const userMessage = activeUserMessage(bytes);
+    expect(userMessage?.mode).toBe(1);
+    expect(userMessage?.selectedContext).toBeDefined();
     const images = activeSelectedImages(bytes);
     expect(images?.length).toBe(1);
     expect(images?.[0]?.uuid).toBe("img-uuid-1");
     expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.path).toBe("");
     expect(images?.[0]?.dataOrBlobId.case).toBe("data");
     expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(imageBytes));
+  });
+
+  test("encodeCursorRunRequest always sends empty selectedContext and mode=1 on text-only turns", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const userMessage = activeUserMessage(bytes);
+    expect(userMessage?.text).toBe("hi");
+    expect(userMessage?.mode).toBe(1);
+    expect(userMessage?.selectedContext).toBeDefined();
+    expect(userMessage?.selectedContext?.selectedImages.length).toBe(0);
   });
 
   test("encodeCursorRunRequest keeps selectedContext only on the active user turn", () => {
@@ -234,8 +265,12 @@ describe("Cursor blob handshake", () => {
 
     const historicalUser = nativeTurnUserMessages(bytes)[0];
     expect(historicalUser?.text).toBe("old turn");
-    expect(historicalUser?.selectedContext).toBeUndefined();
+    expect(historicalUser?.mode).toBe(1);
+    expect(historicalUser?.selectedContext).toBeDefined();
+    expect(historicalUser?.selectedContext?.selectedImages.length).toBe(0);
 
+    const activeMessage = activeUserMessage(bytes);
+    expect(activeMessage?.mode).toBe(1);
     const images = activeSelectedImages(bytes);
     expect(images?.length).toBe(1);
     expect(images?.[0]?.uuid).toBe("active-img");
@@ -780,6 +815,115 @@ describe("Cursor blob handshake", () => {
 
     expect(run?.action?.action.case).toBe("resumeAction");
   });
+
+  test("forwards view_image tool-result data URLs as McpImageContent", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      rawMessages: [
+        { role: "user", content: "describe the image", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "image loaded" },
+            { type: "image", imageUrl, detail: "auto" },
+          ],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.length).toBe(2);
+    expect(content[0]?.content.case).toBe("text");
+    expect(content[1]?.content.case).toBe("image");
+    if (content[1]?.content.case !== "image") throw new Error("expected image");
+    expect(content[1].content.value.mimeType).toBe("image/png");
+    expect(Array.from(content[1].content.value.data)).toEqual(Array.from(imageBytes));
+  });
+
+  test("forwards grok-4.5 view_image tool-result data URLs as McpImageContent", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      rawMessages: [
+        { role: "user", content: "describe the image", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "image loaded" },
+            { type: "image", imageUrl, detail: "auto" },
+          ],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.length).toBe(2);
+    expect(content[0]?.content.case).toBe("text");
+    expect(content[1]?.content.case).toBe("image");
+    if (content[1]?.content.case !== "image") throw new Error("expected image");
+    expect(content[1].content.value.mimeType).toBe("image/png");
+    expect(Array.from(content[1].content.value.data)).toEqual(Array.from(imageBytes));
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(run?.conversationState?.turns[0] ?? new Uint8Array()));
+    expect(turn.turn.case).toBe("agentConversationTurn");
+    const steps = turn.turn.case === "agentConversationTurn" ? turn.turn.value.steps : [];
+    expect(steps).toHaveLength(1);
+    const step = fromBinary(ConversationStepSchema, blobData(steps[0] ?? new Uint8Array()));
+    expect(step.message.case).toBe("toolCall");
+    expect(step.message.case === "toolCall" && step.message.value.tool.case).toBe("mcpToolCall");
+    expect(run?.action?.action.case).toBe("resumeAction");
+  });
 });
 
 describe("Cursor AgentRunRequest.mcp_tools channel", () => {
@@ -811,7 +955,7 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
     expect(mcpToolNames(bytes)).toEqual(["exec_command"]);
   });
 
-  test("leaves mcp_tools unset when tools are empty", () => {
+  test("sends empty mcp_tools wrapper when tools are empty", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "gpt-5.6-luna-high",
       conversationId: "c1",
@@ -819,10 +963,14 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
       messages: [{ role: "user", content: "hi" }],
       tools: [],
     });
-    expect(mcpToolNames(bytes)).toBeUndefined();
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.mcpTools).toBeDefined();
+    expect(run?.mcpTools?.mcpTools.length).toBe(0);
+    expect(mcpToolNames(bytes)).toEqual([]);
   });
 
-  test("leaves mcp_tools unset when toolChoice is none", () => {
+  test("sends empty mcp_tools wrapper when toolChoice is none", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "gpt-5.6-luna-high",
       conversationId: "c1",
@@ -831,7 +979,11 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
       toolChoice: "none",
       tools: [{ name: "js", namespace: "mcp__node_repl", description: "Run JS", parameters: {} }],
     });
-    expect(mcpToolNames(bytes)).toBeUndefined();
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.mcpTools).toBeDefined();
+    expect(run?.mcpTools?.mcpTools.length).toBe(0);
+    expect(mcpToolNames(bytes)).toEqual([]);
   });
 });
 
