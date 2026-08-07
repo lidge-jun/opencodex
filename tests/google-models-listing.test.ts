@@ -163,6 +163,47 @@ describe("Antigravity live model discovery", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("degrades malformed CCA agent IDs to the configured static catalog", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-malformed-discovery-"));
+    process.env.OPENCODEX_HOME = home;
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3_600_000,
+            projectId: "project-id",
+          },
+        }],
+      },
+    }));
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => Response.json({
+      models: { "bad\u0000model": { maxTokens: 1_048_576 } },
+      agentModelSorts: [{ groups: [{ modelIds: ["bad\u0000model"] }] }],
+    })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels(configWith("google-antigravity", {
+        adapter: "google",
+        authMode: "oauth",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        liveModels: true,
+        models: ["configured-only"],
+      }));
+
+      expect(models.filter(model => model.provider === "google-antigravity").map(model => model.id))
+        .toEqual(["configured-only"]);
+      expect(getStaleCached("google-antigravity")).toBeNull();
+    } finally {
+      warning.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildModelsRequest anthropic routing", () => {

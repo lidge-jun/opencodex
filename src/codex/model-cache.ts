@@ -159,7 +159,8 @@ export function getStaleCached(provider: string): CatalogModel[] | null {
 
 /** Capture the cache generation before an asynchronous provider discovery starts. */
 export function captureModelCacheGeneration(provider: string): string {
-  return `${globalCacheGeneration}:${providerCacheGenerations.get(provider) ?? 0}`;
+  if (!providerCacheGenerations.has(provider)) providerCacheGenerations.set(provider, 0);
+  return `${globalCacheGeneration}:${providerCacheGenerations.get(provider)!}`;
 }
 
 /** Whether a discovery started under {@link captureModelCacheGeneration} may still write. */
@@ -218,17 +219,20 @@ export function reconcileModelCacheProviders(
 ): number {
   if (generation <= lastReconciledGeneration) return 0;
   const removedProviders = new Set<string>();
-  for (const store of [failureAt, discoveryStatus, liveModelCounts]) {
-    for (const provider of store.keys()) {
-      if (validProviders.has(provider)) continue;
-      store.delete(provider);
-      removedProviders.add(provider);
-    }
-  }
-  for (const provider of cache.keys()) {
+  const trackedProviders = new Set([
+    ...providerCacheGenerations.keys(),
+    ...failureAt.keys(),
+    ...discoveryStatus.keys(),
+    ...liveModelCounts.keys(),
+    ...cache.keys(),
+  ]);
+  for (const provider of trackedProviders) {
     if (validProviders.has(provider)) continue;
     providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
     deleteCachedProvider(provider);
+    failureAt.delete(provider);
+    discoveryStatus.delete(provider);
+    liveModelCounts.delete(provider);
     removedProviders.add(provider);
   }
   lastReconciledGeneration = generation;

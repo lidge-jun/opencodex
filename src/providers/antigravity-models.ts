@@ -1,3 +1,5 @@
+import { isValidModelDiscoveryModelId, MODEL_DISCOVERY_MAX_MODELS } from "./model-discovery-limits";
+
 // Google Antigravity (Cloud Code Assist) bundled model list.
 //
 // Single source of truth: the Antigravity `:fetchAvailableModels` backend, the same one the `agy`
@@ -165,7 +167,10 @@ function antigravityPositiveInteger(value: unknown): number | undefined {
  * command, commit-message, transcription, and standalone image-generation models; those are not
  * callable through the CCA agent envelope and must not be published to the Codex catalog.
  */
-export function parseAntigravityAvailableModels(payload: unknown): AntigravityAvailableModel[] | null {
+export function parseAntigravityAvailableModels(
+  payload: unknown,
+  maxModels = MODEL_DISCOVERY_MAX_MODELS,
+): AntigravityAvailableModel[] | null {
   const body = antigravityRecord(payload);
   if (!body) return null;
   const models = antigravityRecord(body?.models);
@@ -180,7 +185,8 @@ export function parseAntigravityAvailableModels(payload: unknown): AntigravityAv
       const modelIds = antigravityRecord(group)?.modelIds;
       if (!Array.isArray(modelIds)) continue;
       for (const id of modelIds) {
-        if (typeof id === "string" && id) ids.push(id);
+        if (!isValidModelDiscoveryModelId(id) || ids.length >= maxModels) return null;
+        ids.push(id);
       }
     }
   }
@@ -188,6 +194,7 @@ export function parseAntigravityAvailableModels(payload: unknown): AntigravityAv
   // image generation in the discovery response.
   if (Array.isArray(body.imageGenerationModelIds)
     && body.imageGenerationModelIds.includes("gemini-3.1-flash-image")) {
+    if (ids.length >= maxModels) return null;
     ids.push("gemini-3.1-flash-image");
   }
 

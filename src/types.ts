@@ -583,8 +583,8 @@ export interface OcxConfig {
   defaultProvider: string;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
   openaiProviderTierVersion?: 1 | 2;
-  /** One-time migration marker for Antigravity's static catalog default. */
-  googleAntigravityStaticCatalogVersion?: 1;
+  /** One-time migration marker for Antigravity's static-catalog defaults. */
+  googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
   /**

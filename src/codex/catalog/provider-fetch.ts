@@ -933,10 +933,10 @@ async function fetchProviderModelsWithAuth(
     if (isCurrentCacheGeneration()) {
       markModelsFetchFailure(name);
       markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(
+        `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
+      );
     }
-    console.warn(
-      `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
-    );
     const staleCursor = getStaleCached(name);
     return observed(
       staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured,
@@ -1046,7 +1046,7 @@ async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     const antigravity = cloudCodeAssist
-      ? parseAntigravityAvailableModels(bounded.value)
+      ? parseAntigravityAvailableModels(bounded.value, discovery.maxModels)
       : undefined;
     if (cloudCodeAssist && !antigravity) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });

@@ -1057,9 +1057,8 @@ const configSchema = z.object({
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
-  // Invalid hand edits must not discard an otherwise usable config. Treat them as
-  // pre-migration so startup can safely re-run the one-time normalization.
-  googleAntigravityStaticCatalogVersion: z.literal(1).optional().catch(undefined),
+  // Invalid hand edits must not discard an otherwise usable config.
+  googleAntigravityStaticCatalogVersion: z.union([z.literal(1), z.literal(2)]).optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
@@ -2004,8 +2003,8 @@ function googleAntigravityStaticCatalogVersionError(value: unknown): string | nu
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "googleAntigravityStaticCatalogVersion")) return null;
   const version = raw.googleAntigravityStaticCatalogVersion;
-  if (version === undefined || version === 1) return null;
-  return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1 or omitted";
+  if (version === undefined || version === 1 || version === 2) return null;
+  return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1, 2, or omitted";
 }
 
 function codexAccountPickerEnabledError(value: unknown): string | null {

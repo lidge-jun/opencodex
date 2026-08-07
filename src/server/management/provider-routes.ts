@@ -561,7 +561,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
               : "upstream model discovery returned invalid JSON",
         });
       }
-      const ccaModels = antigravity ? parseAntigravityAvailableModels(bounded.value) : undefined;
+      const ccaModels = antigravity ? parseAntigravityAvailableModels(bounded.value, discovery.maxModels) : undefined;
       if (antigravity && !ccaModels) {
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }

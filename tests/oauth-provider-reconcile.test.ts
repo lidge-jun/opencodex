@@ -77,7 +77,7 @@ describe("OAuth provider reconciliation", () => {
     expect(reconcileOAuthProviders(config)).toBe(false);
   });
 
-  test("preserves an explicit Antigravity liveModels override during reconcile and re-login", () => {
+  test("migrates the version-1 canonical Antigravity static row to live discovery", () => {
     const config = {
       port: 10100,
       defaultProvider: "google-antigravity",
@@ -85,17 +85,35 @@ describe("OAuth provider reconciliation", () => {
       providers: {
         "google-antigravity": {
           ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
-          liveModels: true,
+          liveModels: false,
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(true);
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+    expect(config.googleAntigravityStaticCatalogVersion).toBe(2);
+
+    upsertOAuthProvider(config, "google-antigravity");
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+    expect(config.providers["google-antigravity"].models).toHaveLength(6);
+  });
+
+  test("preserves an explicit Antigravity static opt-out without the legacy migration marker", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          liveModels: false,
         },
       },
     } satisfies OcxConfig;
 
     expect(reconcileOAuthProviders(config)).toBe(false);
-    expect(config.providers["google-antigravity"].liveModels).toBe(true);
-
     upsertOAuthProvider(config, "google-antigravity");
-    expect(config.providers["google-antigravity"].liveModels).toBe(true);
-    expect(config.providers["google-antigravity"].models).toHaveLength(6);
+    expect(config.providers["google-antigravity"].liveModels).toBe(false);
   });
 
   test("preserves explicit Antigravity live discovery when authMode is omitted or non-OAuth", () => {

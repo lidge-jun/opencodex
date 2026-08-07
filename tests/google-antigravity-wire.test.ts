@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels } from "../src/providers/antigravity-models";
+import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -136,6 +137,23 @@ describe("antigravity CCA envelope", () => {
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-high",
     ]);
+  });
+
+  test("rejects malformed and oversized CCA agent-model lists", () => {
+    const payload = (modelIds: unknown[]) => ({
+      models: Object.fromEntries(modelIds.map(id => [String(id), { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    });
+
+    for (const invalidId of [" ", "bad\u0000id", "x".repeat(MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH + 1)]) {
+      expect(parseAntigravityAvailableModels(payload([invalidId]))).toBeNull();
+    }
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{
+        modelIds: Array.from({ length: MODEL_DISCOVERY_MAX_MODELS + 1 }, (_, index) => `model-${index}`),
+      }] }],
+    })).toBeNull();
   });
 
   test("throws when no project id is available", async () => {

@@ -741,6 +741,9 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "preserveReasoningContentModels",
 ];
 
+const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
+const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;
+
 /** Only migrate the three-model experimental seed; an operator's later `liveModels: false` wins. */
 function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean {
   return provider.liveModels === false
@@ -748,8 +751,34 @@ function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean 
     && JSON.stringify(provider.models) === JSON.stringify(["deepseek-v4-flash", "kimi-k3", "glm-5.2"]);
 }
 
+function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean {
+  return provider.liveModels === false
+    && provider.adapter === "google"
+    && provider.baseUrl === "https://daily-cloudcode-pa.googleapis.com"
+    && provider.authMode === "oauth"
+    && provider.googleMode === "cloud-code-assist"
+    && provider.defaultModel === "gemini-3.6-flash"
+    && JSON.stringify(provider.models) === JSON.stringify([
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "gemini-3.1-flash-image",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+    ]);
+}
+
+/** Promote only the versioned canonical static seed; unmarked `liveModels: false` remains user intent. */
+function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
+  if (config.googleAntigravityStaticCatalogVersion !== 1) return false;
+  const provider = config.providers[GOOGLE_ANTIGRAVITY_PROVIDER];
+  if (provider && isLegacyAntigravityStaticCatalog(provider)) provider.liveModels = true;
+  config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION;
+  return true;
+}
+
 export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = false;
+  let changed = migrateLegacyAntigravityStaticCatalog(config);
   for (const [name, prov] of Object.entries(config.providers)) {
     const def = OAUTH_PROVIDERS[name];
     if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
@@ -838,6 +867,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
+  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
   if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
