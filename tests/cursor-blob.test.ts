@@ -36,6 +36,7 @@ import {
   GetBlobArgsSchema,
   KvServerMessageSchema,
   SetBlobArgsSchema,
+  UserMessageSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 
 beforeEach(() => {
@@ -123,6 +124,16 @@ function activeSelectedImages(bytes: Uint8Array) {
     : undefined;
 }
 
+function nativeTurnUserMessages(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  return (run?.conversationState?.turns ?? []).map(turnId => {
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnId));
+    if (turn.turn.case !== "agentConversationTurn") return undefined;
+    return fromBinary(UserMessageSchema, blobData(turn.turn.value.userMessage));
+  }).filter((message): message is NonNullable<typeof message> => message !== undefined);
+}
+
 /** The `toolName`s advertised in the top-level AgentRunRequest.mcp_tools channel (undefined when unset). */
 function mcpToolNames(bytes: Uint8Array): string[] | undefined {
   const msg = fromBinary(AgentClientMessageSchema, bytes);
@@ -185,6 +196,51 @@ describe("Cursor blob handshake", () => {
     expect(images?.[0]?.mimeType).toBe("image/png");
     expect(images?.[0]?.dataOrBlobId.case).toBe("data");
     expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(imageBytes));
+  });
+
+  test("encodeCursorRunRequest keeps selectedContext only on the active user turn", () => {
+    const activeImageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "active turn" }],
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "old turn" },
+            { type: "image", imageUrl: "data:image/png;base64,old", detail: "auto" },
+          ],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        { role: "user", content: "active turn", timestamp: 3 },
+      ],
+      selectedImages: [{
+        data: activeImageBytes,
+        mimeType: "image/png",
+        uuid: "active-img",
+      }],
+    });
+
+    const roots = decodeRootMessages(bytes) as Array<{ role?: string; selectedContext?: unknown }>;
+    expect(roots.some(root => root.selectedContext !== undefined)).toBe(false);
+
+    const historicalUser = nativeTurnUserMessages(bytes)[0];
+    expect(historicalUser?.text).toBe("old turn");
+    expect(historicalUser?.selectedContext).toBeUndefined();
+
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("active-img");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("data");
+    expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(activeImageBytes));
   });
 
   test("caps external root replay while preserving system and newest history", () => {
