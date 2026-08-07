@@ -1988,9 +1988,10 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
-  test("Google Antigravity uses its static registry catalog and suppresses stale discovery (#723)", async () => {
+  test("Google Antigravity honors an explicit static catalog and suppresses stale discovery", async () => {
     const providerName = "google-antigravity";
     const provider = structuredClone(OAUTH_PROVIDERS[providerName].providerConfig);
+    provider.liveModels = false;
     const config = {
       port: 10100,
       defaultProvider: providerName,

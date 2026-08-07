@@ -20,6 +20,7 @@ import {
 } from "../model-cache";
 import {
   buildModelsRequest,
+  getValidAccessTokenSnapshot,
   observeActiveOAuthAccessToken,
   resolveModelsAuthToken,
   type OAuthActiveTokenObservation,
@@ -29,7 +30,8 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
+import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
@@ -118,6 +120,7 @@ interface ModelsAuthResolution {
   readonly apiKey: string | undefined;
   readonly observed: boolean;
   readonly oauthApiBaseUrl?: string;
+  readonly oauthProjectId?: string;
 }
 
 type ModelsAuthResolver =
@@ -132,7 +135,7 @@ type ModelsAuthResolverFactory = (
 ) => ModelsAuthResolver;
 
 interface CapturedModelsRequest {
-  readonly method: "GET";
+  readonly method: "GET" | "POST";
   readonly url: string;
   readonly headersWithoutCredential: Readonly<Record<string, string>>;
   readonly headersWithCredential: Readonly<Record<string, string>>;
@@ -359,11 +362,12 @@ function captureModelsRequest(
     : undefined;
   const withoutCredential = buildModelsRequest(provider, undefined, name, observed);
   const withCredential = buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
-  if (withoutCredential.url !== withCredential.url) {
+  const method = withoutCredential.method ?? "GET";
+  if (withoutCredential.url !== withCredential.url || method !== (withCredential.method ?? "GET")) {
     throw new TypeError(`Provider model discovery URL for ${name} depends on credential bytes.`);
   }
   return detachedFrozen({
-    method: "GET" as const,
+    method,
     url: withoutCredential.url,
     headersWithoutCredential: withoutCredential.headers,
     headersWithCredential: withCredential.headers,
@@ -830,6 +834,7 @@ function observedModelsAuthResolver(
         apiKey: observation.snapshot.accessToken,
         observed: true,
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
+        ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
       };
     },
   };
@@ -864,7 +869,15 @@ async function fetchProviderModelsWithAuth(
     return observed(configured, "authoritative");
   }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
+    ? effectiveGoogleMode(name, prov) === "cloud-code-assist"
+      ? await getValidAccessTokenSnapshot(name)
+        .then(snapshot => ({
+          apiKey: snapshot.accessToken,
+          observed: false,
+          ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
+        }))
+        .catch(() => ({ apiKey: undefined, observed: false }))
+      : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   // A configured default is a real callable selector and must remain discoverable when a
@@ -927,6 +940,7 @@ async function fetchProviderModelsWithAuth(
     // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
     return observed(configured, "degraded");
   }
+  if (effectiveGoogleMode(name, prov) === "cloud-code-assist" && !auth.oauthProjectId) return configured;
   const fresh = getFreshCached(name, ttlMs);
   if (fresh) {
     return observed(
@@ -969,10 +983,19 @@ async function fetchProviderModelsWithAuth(
     };
   };
   try {
-    const res = await providerOutboundGet(name, prov, url, {
-      headers,
-      signal: AbortSignal.timeout(8000),
-    });
+    const providerFetch = (prov as OcxProviderConfig & { fetch?: typeof fetch }).fetch;
+    const res = request.method === "POST"
+      ? await (providerFetch ?? globalThis.fetch)(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ project: auth.oauthProjectId }),
+        redirect: "manual",
+        signal: AbortSignal.timeout(8000),
+      })
+      : await providerOutboundGet(name, prov, url, {
+        headers,
+        signal: AbortSignal.timeout(8000),
+      });
     const redirectError = await providerRedirectError(res, url);
     if (redirectError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
@@ -1010,6 +1033,32 @@ async function fetchProviderModelsWithAuth(
         );
       }
       return observed(models, "degraded");
+    }
+    const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist"
+      ? parseAntigravityAvailableModels(bounded.value)
+      : undefined;
+    if (effectiveGoogleMode(name, prov) === "cloud-code-assist" && !antigravity) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" returned malformed CCA model data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
+      return models;
+    }
+    if (antigravity) {
+      const live = antigravity.map(model => applyProviderConfigHints(name, prov, {
+        id: model.id,
+        provider: name,
+        // CCA only exposes a numeric thinking budget. Until the adapter owns an exact Codex
+        // effort-to-wire mapping for a newly discovered model, do not advertise a false ladder.
+        reasoningEfforts: [],
+        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+        ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
+      }, contextCap));
+      markProviderDiscoveryOk(name, live.length);
+      setCached(name, live);
+      return live;
     }
     const extracted = extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {

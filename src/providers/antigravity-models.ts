@@ -19,6 +19,14 @@ const ANTIGRAVITY_WIRE_MODELS = [
   "gpt-oss-120b-medium",
 ];
 
+const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
+  "gemini-3.6-flash-low": "gemini-3.6-flash",
+  "gemini-3.6-flash-medium": "gemini-3.6-flash",
+  "gemini-3.6-flash-high": "gemini-3.6-flash",
+  "gemini-3.1-pro-low": "gemini-3.1-pro",
+  "gemini-pro-agent": "gemini-3.1-pro",
+};
+
 // ── Effort ladders per collapsed base model ──
 // Gemini models: effort → wire model suffix (official agy UI pattern).
 // Claude Opus: effort → thinkingConfig.thinkingLevel (CLIProxyAPI proven pattern).
@@ -100,8 +108,8 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3.1-pro-low": 1_048_576,
   "gemini-pro-agent": 1_048_576,
   "gemini-3.1-flash-image": 1_048_576,
-  "claude-sonnet-4-6": 200_000,
-  "claude-opus-4-6-thinking": 1_000_000,
+  "claude-sonnet-4-6": 250_000,
+  "claude-opus-4-6-thinking": 250_000,
   "gpt-oss-120b-medium": 131_072,
 };
 
@@ -118,6 +126,82 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
     ]),
   ),
 };
+
+export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "gemini-3.6-flash": ["text", "image"],
+  "gemini-3.1-pro": ["text", "image"],
+  "gemini-3.1-flash-image": ["text", "image"],
+  "claude-sonnet-4-6": ["text", "image"],
+  "claude-opus-4-6-thinking": ["text", "image"],
+  "gpt-oss-120b-medium": ["text"],
+};
+
+export interface AntigravityAvailableModel {
+  id: string;
+  contextWindow?: number;
+  inputModalities?: string[];
+}
+
+function antigravityRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function antigravityPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Extract the CCA models that are valid for agent requests. The endpoint also returns tab,
+ * command, commit-message, transcription, and standalone image-generation models; those are not
+ * callable through the CCA agent envelope and must not be published to the Codex catalog.
+ */
+export function parseAntigravityAvailableModels(payload: unknown): AntigravityAvailableModel[] | null {
+  const body = antigravityRecord(payload);
+  if (!body) return null;
+  const models = antigravityRecord(body?.models);
+  const sorts = Array.isArray(body?.agentModelSorts) ? body.agentModelSorts : undefined;
+  if (!models || !sorts) return null;
+
+  const ids: string[] = [];
+  for (const sort of sorts) {
+    const groups = antigravityRecord(sort)?.groups;
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      const modelIds = antigravityRecord(group)?.modelIds;
+      if (!Array.isArray(modelIds)) continue;
+      for (const id of modelIds) {
+        if (typeof id === "string" && id) ids.push(id);
+      }
+    }
+  }
+  // This model is exposed by Antigravity's agent chat surface even though it is grouped under
+  // image generation in the discovery response.
+  if (Array.isArray(body.imageGenerationModelIds)
+    && body.imageGenerationModelIds.includes("gemini-3.1-flash-image")) {
+    ids.push("gemini-3.1-flash-image");
+  }
+
+  const out: AntigravityAvailableModel[] = [];
+  const seen = new Set<string>();
+  for (const wireId of ids) {
+    const info = antigravityRecord(models[wireId]);
+    if (!info) continue;
+    const id = ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID[wireId] ?? wireId;
+    // Legacy compatibility aliases are deliberately routed to newer wire ids for saved
+    // selections. They are not safe as independently discovered picker rows.
+    if (ANTIGRAVITY_MODEL_ALIASES[wireId] && ANTIGRAVITY_MODEL_ALIASES[wireId] !== wireId) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      ...(antigravityPositiveInteger(info.maxTokens) ? { contextWindow: antigravityPositiveInteger(info.maxTokens) } : {}),
+      inputModalities: info.supportsImages === true ? ["text", "image"] : ["text"],
+    });
+  }
+  return out;
+}
 
 export function resolveAntigravityWireModelId(modelId: string): string {
   return ANTIGRAVITY_MODEL_ALIASES[modelId] ?? modelId;

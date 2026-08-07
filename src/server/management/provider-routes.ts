@@ -26,9 +26,10 @@ import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
+import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
-import { providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
+import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
   extractProviderModelItems,
@@ -506,19 +507,35 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // credential resolution/network access for providers such as Antigravity.
       return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     }
-    const { resolveModelsAuthToken, buildModelsRequest } = await import("../../oauth");
-    const apiKey = await resolveModelsAuthToken(name, prov);
+    const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
+    const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
+    const snapshot = antigravity
+      ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
+      : undefined;
+    const apiKey = snapshot?.accessToken ?? await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
-    const { url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
+    if (antigravity && !snapshot?.projectId) {
+      return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
+    }
+    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
-      const res = await providerOutboundGet(name, prov, modelsUrl, {
-        headers,
-        signal: AbortSignal.timeout(8000),
-      });
+      const providerFetch = (prov as OcxProviderConfig & { fetch?: typeof fetch }).fetch;
+      const res = method === "POST"
+        ? await (providerFetch ?? globalThis.fetch)(modelsUrl, {
+          method,
+          headers,
+          body: JSON.stringify({ project: snapshot!.projectId }),
+          redirect: "manual",
+          signal: AbortSignal.timeout(8000),
+        })
+        : await providerOutboundGet(name, prov, modelsUrl, {
+          headers,
+          signal: AbortSignal.timeout(8000),
+        });
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
       if (redirectError) {
@@ -534,7 +551,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         } catch {
           // Best-effort release for non-conforming response streams.
         }
-        return jsonResponse({ ok: false, latencyMs, error: `upstream /models returned ${res.status}` });
+        return jsonResponse({ ok: false, latencyMs, error: `upstream model discovery returned ${res.status}` });
       }
       const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
       if (!bounded.ok) {
@@ -542,9 +559,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           ok: false,
           latencyMs,
           error: bounded.reason === "response_too_large"
-            ? `upstream /models exceeded the ${discovery.maxResponseBytes}-byte response limit`
-            : "upstream /models returned invalid JSON",
+              ? `upstream model discovery exceeded the ${discovery.maxResponseBytes}-byte response limit`
+              : "upstream model discovery returned invalid JSON",
         });
+      }
+      const ccaModels = antigravity ? parseAntigravityAvailableModels(bounded.value) : undefined;
+      if (antigravity && !ccaModels) {
+        return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
       // as catalog discovery. Google's /v1beta/models uses `models[].name` and remains a
@@ -552,10 +573,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
         ? bounded.value as Record<string, unknown>
         : undefined;
-      const extracted = Array.isArray(bounded.value) || Array.isArray(record?.data)
+      const extracted = ccaModels
+        ? undefined
+        : Array.isArray(bounded.value) || Array.isArray(record?.data)
         ? extractProviderModelItems(bounded.value, discovery)
         : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
-      if (!extracted.ok) {
+      if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,
           latencyMs,
@@ -564,7 +587,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             : "upstream /models returned an unexpected shape",
         });
       }
-      const models = "items" in extracted ? extracted.items.length : extracted.rows.length;
+      const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
       return jsonResponse({
         ok: true,
         latencyMs,
