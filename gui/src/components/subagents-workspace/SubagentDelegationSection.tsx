@@ -10,6 +10,7 @@ import { Select } from "../../ui";
 import { useT } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
 import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
+import type { UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
 
 export interface SubagentDelegationSectionProps {
   model: string;
@@ -20,6 +21,8 @@ export interface SubagentDelegationSectionProps {
   syncCodexDefaults: boolean;
   saving: boolean;
   onSave: (patch: DelegationPatch) => void;
+  ultraMode: UltraModeState;
+  onUltraModeSave: (patch: UltraModePatch) => void;
 }
 
 export default function SubagentDelegationSection({
@@ -31,8 +34,11 @@ export default function SubagentDelegationSection({
   syncCodexDefaults,
   saving,
   onSave,
+  ultraMode,
+  onUltraModeSave,
 }: SubagentDelegationSectionProps) {
   const t = useT();
+  const ultraOn = ultraMode.hintText !== null;
 
   return (
     <div className="swi-delegation">
@@ -100,6 +106,48 @@ export default function SubagentDelegationSection({
           <span className="knob" />
         </button>
       </div>
+
+      <div className="swi-delegation-row">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.ultraMode")}</div>
+          <div className="muted setting-hint">{t("sub.ultraModeHint")}</div>
+        </div>
+        <button
+          type="button"
+          className={`switch ${ultraOn ? "on" : ""}`}
+          onClick={() => onUltraModeSave({ multiAgentModeHintText: ultraOn ? null : ULTRA_MODE_PRESET })}
+          disabled={saving || !ultraMode.multiAgentV2Enabled}
+          aria-label={t("sub.ultraMode")}
+          aria-pressed={ultraOn}
+          title={ultraMode.multiAgentV2Enabled ? undefined : t("sub.ultraModeV2Required")}
+        >
+          <span className="knob" />
+        </button>
+      </div>
+      {ultraOn && (
+        <div className="swi-delegation-row swi-ultra-mode-editor">
+          <textarea
+            className="input swi-ultra-mode-textarea"
+            value={ultraMode.hintText ?? ""}
+            onChange={e => onUltraModeSave({ multiAgentModeHintText: e.target.value || null })}
+            disabled={saving}
+            rows={4}
+            aria-label={t("sub.ultraModeText")}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => onUltraModeSave({ multiAgentModeHintText: ULTRA_MODE_PRESET })}
+            disabled={saving}
+          >
+            {t("sub.ultraModePreset")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
+
+/** Canonical Proactive delegation text mirrored from codex-rs (multi_agent_mode_instructions.rs). */
+export const ULTRA_MODE_PRESET =
+  "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.";

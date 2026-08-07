@@ -530,6 +530,13 @@ export const ja: Record<TKey, string> = {
   "sub.workspace.selectModel": "モデルを選択",
   "sub.workspace.selectModelDesc": "一覧からモデルを選んで詳細を確認し、spawn_agent のおすすめに設定します。",
   "sub.workspace.selector": "公開セレクター",
+  "sub.ultraMode": "ウルトラモード",
+  "sub.ultraModeHint": "すべてのモデルと reasoning effort で Proactive マルチエージェント委任ポリシーを有効にします（reasoning effort 自体は変更しません）。config.toml に multi_agent_mode_hint_text を書き込みます。",
+  "sub.ultraModeV2Required": "multi_agent_v2 機能が必要です — 先に ocx v2 on で有効にしてください。",
+  "sub.ultraModeText": "ウルトラモード委任テキスト",
+  "sub.ultraModePreset": "プリセットを復元",
+  "sub.ultraModeLoadFail": "ウルトラモード設定を読み込めませんでした — プロキシは実行中ですか？",
+  "sub.ultraModeSaveFail": "ウルトラモード設定の保存に失敗しました",
 
   // logs
   "logs.title": "リクエストログ",

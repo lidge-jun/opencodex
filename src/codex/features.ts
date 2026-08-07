@@ -591,12 +591,19 @@ export function setAgentsMaxDepth(value: number | null, configPath?: string): Co
  * Reads both the dedicated-table and inline forms; dedicated wins, mirroring
  * `getMaxConcurrentThreads` precedence.
  */
-export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+/**
+ * Read a string-valued `features.multi_agent_v2` scalar (dedicated table or inline
+ * form; dedicated wins, mirroring `getMaxConcurrentThreads` precedence). Returns
+ * `null` when the key is absent or the config is unreadable. A present empty string
+ * round-trips faithfully — some upstream keys treat `""` and `null` differently.
+ */
+function getV2StringField(key: string, configPath?: string): string | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
   const table = tomlTableBody(content, "features.multi_agent_v2");
   if (table !== null) {
-    const m = table.match(/^\s*subagent_developer_instructions\s*=\s*/m);
+    const keyRe = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*`, "m");
+    const m = table.match(keyRe);
     if (m) {
       const valueStart = m.index! + m[0].length;
       const token = table.slice(valueStart, scanTomlValueEnd(table, valueStart)).trim();
@@ -611,9 +618,22 @@ export function getSubagentDeveloperInstructions(configPath?: string): string | 
   const openIdx = m.index! + m[0].length - 1;
   const closeIdx = findInlineTableEnd(features, openIdx);
   if (closeIdx === -1) return null;
-  const entry = findInlineEntry(features, openIdx + 1, closeIdx, "subagent_developer_instructions");
+  const entry = findInlineEntry(features, openIdx + 1, closeIdx, key);
   if (!entry) return null;
   return decodeTomlStringToken(features.slice(entry.valueStart, entry.valueEnd).trim());
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+  return getV2StringField("subagent_developer_instructions", configPath);
+}
+
+/** Current `features.multi_agent_v2.multi_agent_mode_hint_text`, or null when unset. */
+export function getMultiAgentModeHintText(configPath?: string): string | null {
+  return getV2StringField("multi_agent_mode_hint_text", configPath);
 }
 
 /**
@@ -627,14 +647,14 @@ export function getSubagentDeveloperInstructions(configPath?: string): string | 
  * carries `#[serde(deny_unknown_fields)]`, so a misspelling is not ignored — it is
  * a hard config-parse failure for the user's Codex.
  */
-export function setSubagentDeveloperInstructions(value: string | null, configPath?: string): ConfigEditResult {
+function setV2StringField(key: string, value: string | null, configPath?: string): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
   const content = readConfigText(path);
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const encoded = value === null ? null : encodeTomlBasicString(value);
 
   if (tomlTableBody(content, "features.multi_agent_v2") !== null) {
-    const next = editScalarInTable(content, "features.multi_agent_v2", "subagent_developer_instructions", encoded);
+    const next = editScalarInTable(content, "features.multi_agent_v2", key, encoded);
     if (next === content) return { ok: true, changed: false };
     atomicWriteFile(path, next);
     return { ok: true, changed: true };
@@ -655,7 +675,7 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
         const openIdx = inlineMatch[0].length - 1;
         const closeIdx = findInlineTableEnd(line, openIdx);
         if (closeIdx === -1) return { ok: false, error: "malformed multi_agent_v2 inline table" };
-        const entry = findInlineEntry(line, openIdx + 1, closeIdx, "subagent_developer_instructions");
+        const entry = findInlineEntry(line, openIdx + 1, closeIdx, key);
         if (encoded === null) {
           if (!entry) return { ok: true, changed: false };
           let start = entry.keyStart;
@@ -682,8 +702,8 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
           while (insertPos > openIdx + 1 && line[insertPos - 1] === " ") insertPos--;
           const hasEntries = line.slice(openIdx + 1, insertPos).trim().length > 0;
           const insertion = hasEntries
-            ? `, subagent_developer_instructions = ${encoded} `
-            : ` subagent_developer_instructions = ${encoded} `;
+            ? `, ${key} = ${encoded} `
+            : ` ${key} = ${encoded} `;
           lines[i] = line.slice(0, insertPos) + insertion + line.slice(closeIdx);
         }
         atomicWriteFile(path, applyEol(lines.join("\n"), eol));
@@ -692,7 +712,7 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
       const boolMatch = line.match(/^(\s*)multi_agent_v2\s*=\s*(true|false)(\s*(?:#.*)?)$/);
       if (boolMatch) {
         if (encoded === null) return { ok: true, changed: false };
-        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, subagent_developer_instructions = ${encoded} }${boolMatch[3]}`;
+        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, ${key} = ${encoded} }${boolMatch[3]}`;
         atomicWriteFile(path, applyEol(lines.join("\n"), eol));
         return { ok: true, changed: true };
       }
@@ -702,9 +722,23 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
   if (encoded === null) return { ok: true, changed: false };
   const suffix = content.endsWith("\n") || content.length === 0 ? "" : eol;
   const separator = content.length > 0 && !content.endsWith(`${eol}${eol}`) ? eol : "";
-  const tableText = `[features.multi_agent_v2]${eol}subagent_developer_instructions = ${encoded}${eol}`;
+  const tableText = `[features.multi_agent_v2]${eol}${key} = ${encoded}${eol}`;
   atomicWriteFile(path, `${content}${suffix}${separator}${tableText}`);
   return { ok: true, changed: true };
+}
+
+export function setSubagentDeveloperInstructions(value: string | null, configPath?: string): ConfigEditResult {
+  return setV2StringField("subagent_developer_instructions", value, configPath);
+}
+
+/**
+ * Persist `features.multi_agent_v2.multi_agent_mode_hint_text`, or remove the key
+ * when `value` is null. Same encoding coverage and upstream-name discipline as
+ * `setSubagentDeveloperInstructions`; the upstream struct rejects unknown fields,
+ * so the key spelling must match codex-rs exactly.
+ */
+export function setMultiAgentModeHintText(value: string | null, configPath?: string): ConfigEditResult {
+  return setV2StringField("multi_agent_mode_hint_text", value, configPath);
 }
 
 function editAgentsMaxThreads(value: number | null, configPath?: string, migratedComment?: string): ConfigEditResult {

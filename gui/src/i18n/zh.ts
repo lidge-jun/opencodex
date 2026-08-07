@@ -557,6 +557,13 @@ export const zh: Record<TKey, string> = {
   "sub.workspace.selectModel": "选择模型",
   "sub.workspace.selectModelDesc": "从列表中选择一个模型以查看详情，并将其设为 spawn_agent 的精选模型。",
   "sub.workspace.selector": "公开选择器",
+  "sub.ultraMode": "超级模式",
+  "sub.ultraModeHint": "为所有模型和推理力度启用主动多代理委派策略（不改变推理力度本身）。将 multi_agent_mode_hint_text 写入 config.toml。",
+  "sub.ultraModeV2Required": "需要 multi_agent_v2 功能 — 请先通过 ocx v2 on 启用。",
+  "sub.ultraModeText": "超级模式委派文本",
+  "sub.ultraModePreset": "恢复预设",
+  "sub.ultraModeLoadFail": "无法加载超级模式设置 — 代理是否在运行？",
+  "sub.ultraModeSaveFail": "保存超级模式设置失败",
 
   // logs
   "logs.title": "请求日志",

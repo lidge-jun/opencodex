@@ -562,6 +562,13 @@ export const ru: Record<TKey, string> = {
   "sub.workspace.selectModel": "Выберите модель",
   "sub.workspace.selectModelDesc": "Выберите модель из списка, чтобы увидеть детали и добавить её в избранные для spawn_agent.",
   "sub.workspace.selector": "Публичный селектор",
+  "sub.ultraMode": "Ультра-режим",
+  "sub.ultraModeHint": "Включает политику упреждающего делегирования мультиагентов для всех моделей и уровней reasoning effort (сам reasoning effort не меняется). Записывает multi_agent_mode_hint_text в config.toml.",
+  "sub.ultraModeV2Required": "Требуется функция multi_agent_v2 — сначала включите её через ocx v2 on.",
+  "sub.ultraModeText": "Текст делегирования ультра-режима",
+  "sub.ultraModePreset": "Восстановить пресет",
+  "sub.ultraModeLoadFail": "Не удалось загрузить настройки ультра-режима — работает ли прокси?",
+  "sub.ultraModeSaveFail": "Не удалось сохранить настройки ультра-режима",
 
   // logs
   "logs.title": "Журнал запросов",

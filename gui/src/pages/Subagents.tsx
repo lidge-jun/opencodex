@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
@@ -6,7 +6,7 @@ import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-worksp
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
-import { useSubagentDelegation } from "./use-subagent-delegation";
+import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[] };
 
@@ -25,6 +25,57 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
   const delegation = useSubagentDelegation(apiBase);
+  const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
+  const [ultraSaving, setUltraSaving] = useState(false);
+
+  // Load /api/v2 state (multi-agent v2 flag + mode hint) once on mount.
+  const loadUltraMode = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/v2`);
+      const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
+      if (!data) return;
+      setUltraMode({
+        enabled: data.enabled ?? false,
+        hintText: data.multiAgentModeHintText ?? null,
+        multiAgentV2Enabled: data.enabled ?? false,
+      });
+    } catch { /* keep defaults; panel still renders */ }
+  }, [apiBase, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch(`${apiBase}/api/v2`);
+      const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
+      if (cancelled) return;
+      if (!data) return;
+      setUltraMode({
+        enabled: data.enabled ?? false,
+        hintText: data.multiAgentModeHintText ?? null,
+        multiAgentV2Enabled: data.enabled ?? false,
+      });
+    })().catch(() => { /* keep defaults; panel still renders */ });
+    return () => { cancelled = true; };
+  }, [apiBase, t]);
+
+  const saveUltraMode = async (patch: UltraModePatch) => {
+    if (ultraSaving) return;
+    setUltraSaving(true);
+    try {
+      const res = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
+      await loadUltraMode();
+    } catch (error) {
+      setOk(false);
+      setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
+    } finally {
+      setUltraSaving(false);
+    }
+  };
 
   const loadSubagents = useCallback(async (): Promise<CachedSubagents> => {
     const res = await fetch(`${apiBase}/api/subagent-models`);
@@ -134,6 +185,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           syncCodexDefaults: delegation.syncCodexDefaults,
           saving: delegation.saving,
           onSave: patch => { void delegation.save(patch); },
+          ultraMode,
+          onUltraModeSave: patch => { void saveUltraMode(patch); },
         }}
       />
     </>

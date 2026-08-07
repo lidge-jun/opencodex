@@ -15,6 +15,7 @@ import {
   getAgentsMaxThreads,
   getLogicalMaxThreads,
   getMaxConcurrentThreads,
+  getMultiAgentModeHintText,
   getSubagentDeveloperInstructions,
   hasAgentsMaxThreads,
   isDefaultModeRequestUserInputEnabled,
@@ -24,6 +25,7 @@ import {
   setAgentsEnabled,
   setAgentsMaxDepth,
   setMaxConcurrentThreads,
+  setMultiAgentModeHintText,
   setSubagentDeveloperInstructions,
   transitionMultiAgentV2,
   v1ChildLimitToV2TotalLimit,
@@ -227,6 +229,87 @@ describe("max_concurrent_threads_per_session reader/writer", () => {
     // Two transitions × several atomic writes; on Windows each write runs icacls and
     // can exceed bun's 5s default under CI load.
   }, { timeout: 20_000 });
+});
+
+describe("multi_agent_mode_hint_text reader/writer", () => {
+  const PRESET = "Proactive multi-agent delegation is active.";
+  const TABLE = "# keep me\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 17 # tuned\n\n[notice]\nhide = true\n";
+
+  test("reader: present, absent key, absent table, empty string", () => {
+    const present = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"Proactive delegation\"\n");
+    expect(getMultiAgentModeHintText(present)).toBe("Proactive delegation");
+    expect(getMultiAgentModeHintText(fixtureConfig(TABLE))).toBe(null);
+    expect(getMultiAgentModeHintText(fixtureConfig("[features]\nmulti_agent_v2 = true\n"))).toBe(null);
+    // A present empty string round-trips (upstream treats "" as a present override).
+    const empty = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\n");
+    expect(getMultiAgentModeHintText(empty)).toBe("");
+  });
+
+  test("writer sets in a dedicated table, preserving comments and neighbors", () => {
+    const path = fixtureConfig(TABLE);
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"`);
+    expect(out).toContain("# keep me");
+    expect(out).toContain("max_concurrent_threads_per_session = 17 # tuned");
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+  });
+
+  test("writer is idempotent: equal value -> no write, changed:false", () => {
+    const path = fixtureConfig(`[features.multi_agent_v2]\nmulti_agent_mode_hint_text = "${PRESET}"\n`);
+    const before = readFileSync(path, "utf8");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("writer clears with null: removes the key, keeps siblings", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = \"Proactive delegation\"\nmax_concurrent_threads_per_session = 17\n");
+    expect(setMultiAgentModeHintText(null, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).not.toContain("multi_agent_mode_hint_text");
+    expect(out).toContain("enabled = true");
+    expect(out).toContain("max_concurrent_threads_per_session = 17");
+    expect(getMultiAgentModeHintText(path)).toBe(null);
+    // Clearing when already absent is a no-op.
+    expect(setMultiAgentModeHintText(null, fixtureConfig(TABLE))).toEqual({ ok: true, changed: false });
+  });
+
+  test("writer upgrades the bare boolean form and preserves enabled", () => {
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = true\n");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain("multi_agent_v2 = { enabled = true,");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"`);
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+  });
+
+  test("writer supports inline-table form and values containing braces/commas/quotes", () => {
+    const tricky = "Use sub-agents {parallel}, \"quoted\", when needed.";
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 8 } # keep\n");
+    expect(setMultiAgentModeHintText(tricky, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain("# keep");
+    expect(out).toContain("max_concurrent_threads_per_session = 8");
+    expect(getMultiAgentModeHintText(path)).toBe(tricky);
+  });
+
+  test("writer creates the dedicated table when no v2 config exists", () => {
+    const path = fixtureConfig("[notice]\nhide = true\n");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain("[features.multi_agent_v2]");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"`);
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+  });
+
+  test("writer preserves CRLF files", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\r\nenabled = true\r\n");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"\r\n`);
+    expect(out).not.toMatch(/[^\r]\n/);
+  });
 });
 
 describe("thread-limit-preserving v1/v2 transition", () => {
@@ -765,6 +848,7 @@ describe("management API parity surface for the WP2 keys", () => {
         agentsEnabled: null,
         agentsMaxDepth: 2,
         subagentDeveloperInstructions: null,
+        multiAgentModeHintText: null,
         agentsMaxDepthAppliesWhenV2Disabled: true,
       });
       const v2Path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
@@ -785,6 +869,13 @@ describe("management API parity surface for the WP2 keys", () => {
       const instructions = await handleManagementAPI(put({ subagentDeveloperInstructions: "be thorough" }), new URL("http://localhost/api/v2"), config, deps);
       expect(instructions?.status).toBe(200);
       expect(getSubagentDeveloperInstructions(path)).toBe("be thorough");
+      const hint = await handleManagementAPI(put({ multiAgentModeHintText: "Proactive multi-agent delegation is active." }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hint?.status).toBe(200);
+      expect(await hint?.json()).toMatchObject({ multiAgentModeHintText: "Proactive multi-agent delegation is active." });
+      expect(getMultiAgentModeHintText(path)).toBe("Proactive multi-agent delegation is active.");
+      const cleared = await handleManagementAPI(put({ multiAgentModeHintText: null }), new URL("http://localhost/api/v2"), config, deps);
+      expect(cleared?.status).toBe(200);
+      expect(getMultiAgentModeHintText(path)).toBe(null);
     });
   });
 
@@ -795,6 +886,15 @@ describe("management API parity surface for the WP2 keys", () => {
       const cleared = await handleManagementAPI(put({ subagentDeveloperInstructions: null }), new URL("http://localhost/api/v2"), config, deps);
       expect(await cleared?.json()).toMatchObject({ subagentDeveloperInstructions: null });
       expect(getSubagentDeveloperInstructions(path)).toBe(null);
+      // multiAgentModeHintText rejects empty/whitespace strings (present empty string would
+      // suppress even the Ultra-derived Proactive message upstream).
+      const hintEmpty = await handleManagementAPI(put({ multiAgentModeHintText: "" }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hintEmpty?.status).toBe(400);
+      const hintSpace = await handleManagementAPI(put({ multiAgentModeHintText: "   " }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hintSpace?.status).toBe(400);
+      const hintSet = await handleManagementAPI(put({ multiAgentModeHintText: "custom" }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hintSet?.status).toBe(200);
+      expect(getMultiAgentModeHintText(path)).toBe("custom");
     });
   });
 
@@ -806,6 +906,7 @@ describe("management API parity surface for the WP2 keys", () => {
         { agentsMaxDepth: 1.5 },
         { agentsMaxDepth: 2_147_483_648 },
         { subagentDeveloperInstructions: 42 },
+        { multiAgentModeHintText: 42 },
       ]) {
         const res = await handleManagementAPI(put(payload), new URL("http://localhost/api/v2"), config, deps);
         expect(res?.status).toBe(400);
@@ -997,6 +1098,25 @@ describe("cli surface", () => {
     expect(out).toContain("agents.enabled: false");
     expect(out).toContain("agents.max_depth: 2 (V1-only — ignored while multi_agent_v2 is enabled)");
     expect(out).toContain("subagent_developer_instructions: (unset — children inherit)");
+    expect(out).toContain("multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)");
+  });
+
+  test("mode-hint writes, echoes, and clears via --clear", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    const logs: string[] = [];
+    const log = { log: (m?: unknown) => { logs.push(String(m)); }, error: (m?: unknown) => { logs.push(String(m)); } };
+    try {
+      expect(await cmdV2(["mode-hint", "Proactive multi-agent delegation is active."], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe("Proactive multi-agent delegation is active.");
+      expect(await cmdV2(["status"], { log })).toBe(0);
+      expect(logs.join("\n")).toContain('multi_agent_mode_hint_text: "Proactive multi-agent delegation is active."');
+      expect(await cmdV2(["mode-hint", "--clear"], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe(null);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
   });
 
   test("status renders empty-string instructions distinctly from unset", async () => {

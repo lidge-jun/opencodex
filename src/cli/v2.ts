@@ -12,7 +12,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
-import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
+import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, setMultiAgentModeHintText, transitionMultiAgentV2 } from "../codex/features";
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { loadConfig, saveConfig } from "../config";
@@ -121,9 +121,38 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     log.log(`agents.max_depth: ${maxDepth ?? "(unset — upstream default 1)"}${v2Active ? " (V1-only — ignored while multi_agent_v2 is enabled)" : ""}`);
     const instructions = getSubagentDeveloperInstructions();
     log.log(`subagent_developer_instructions: ${instructions === null ? "(unset — children inherit)" : instructions === "" ? '"" (clears inherited instructions)' : JSON.stringify(instructions)}`);
+    const modeHint = getMultiAgentModeHintText();
+    log.log(`multi_agent_mode_hint_text: ${modeHint === null ? "(unset — effort-derived policy: ultra=proactive, else explicit)" : JSON.stringify(modeHint)}`);
     if (isEnabled() && hasMaxThreads()) {
       log.log("WARNING: [agents] max_threads is set — codex refuses to start while multi_agent_v2 is enabled. Remove it from config.toml (concurrency lives in features.multi_agent_v2.max_concurrent_threads_per_session).");
     }
+    return 0;
+  }
+  if (verb === "mode-hint") {
+    const flag = (args[1] ?? "").trim();
+    if (flag === "--clear" || flag === "") {
+      const result = setMultiAgentModeHintText(null);
+      if (!result.ok) {
+        log.error(`v2 mode-hint: ${result.error}`);
+        return 1;
+      }
+      log.log(result.changed
+        ? "multi_agent_mode_hint_text cleared — effort-derived policy resumes (new sessions)."
+        : "multi_agent_mode_hint_text already unset — nothing to do.");
+      return 0;
+    }
+    if (flag.startsWith("-")) {
+      log.error("v2 mode-hint: pass the hint text, or --clear to unset it.");
+      return 1;
+    }
+    const result = setMultiAgentModeHintText(flag);
+    if (!result.ok) {
+      log.error(`v2 mode-hint: ${result.error}`);
+      return 1;
+    }
+    log.log(result.changed
+      ? `multi_agent_mode_hint_text set (new sessions).`
+      : "multi_agent_mode_hint_text already set — nothing to do.");
     return 0;
   }
   if (verb === "threads") {
@@ -170,7 +199,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     return 0;
   }
   if (verb !== "on" && verb !== "off") {
-    log.error(`v2: unknown verb '${verb}' (expected status|on|off|mode <v1|default|v2>|threads <n>)`);
+    log.error(`v2: unknown verb '${verb}' (expected status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>)`);
     return 1;
   }
 

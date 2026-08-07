@@ -27,7 +27,7 @@ import { modelLabel } from "../../model-display";
 import { SectionTabs } from "../section-tabs";
 import { sectionAnchorId } from "../../section-anchors";
 import SubagentDelegationSection from "./SubagentDelegationSection";
-import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
+import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
 
 export interface SubagentsWorkspaceProps {
   available: string[];
@@ -45,6 +45,8 @@ export interface SubagentsWorkspaceProps {
     syncCodexDefaults: boolean;
     saving: boolean;
     onSave: (patch: DelegationPatch) => void;
+    ultraMode: UltraModeState;
+    onUltraModeSave: (patch: UltraModePatch) => void;
   };
 }
 
@@ -224,6 +226,8 @@ export default function SubagentsWorkspace({
             syncCodexDefaults={delegation.syncCodexDefaults}
             saving={delegation.saving}
             onSave={delegation.onSave}
+            ultraMode={delegation.ultraMode}
+            onUltraModeSave={delegation.onUltraModeSave}
           />
         </section>
       </div>
