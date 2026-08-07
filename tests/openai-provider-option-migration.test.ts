@@ -244,6 +244,24 @@ describe("OpenAI provider option migration matrix", () => {
     expect(result.config.providers.openai.modelCosts).toEqual(costs);
   });
 
+  test.each([
+    ["bare first", { "gpt-5.6": 1, "openai-multi/gpt-5.6": 9 }],
+    ["prefixed first", { "openai-multi/gpt-5.6": 9, "gpt-5.6": 1 }],
+  ] as const)("bare modelCosts key wins inside one legacy row regardless of property order (%s)", (_label, raw) => {
+    const bare = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 };
+    const prefixed = { input: 9, output: 9, cacheRead: 0.9, cacheWrite: 0.9 };
+    const modelCosts = Object.fromEntries(
+      Object.entries(raw).map(([key, marker]) => [key, marker === 1 ? bare : prefixed]),
+    ) as Record<string, typeof bare>;
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual({ "gpt-5.6": bare });
+  });
+
   test("legacy multi with an out-of-bound overlay rate collides", () => {
     const input = cfg({
       openaiProviderTierVersion: 1,
