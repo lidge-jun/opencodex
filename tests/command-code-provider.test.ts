@@ -145,6 +145,7 @@ describe("Command Code provider", () => {
     const body = JSON.parse(built.body);
     expect(built.url).toBe("https://api.commandcode.ai/alpha/generate");
     expect(built.headers.Authorization).toBe("Bearer secret-command-key");
+    expect(built.headers["x-cmd-zdr"]).toBe("1");
     expect(body.params).toMatchObject({ model: "deepseek/deepseek-v4-flash", reasoning_effort: "high", max_tokens: 100, stream: true });
     expect(body.params.tools[0]).toMatchObject({ name: "lookup" });
     expect(built.body).not.toContain("secret-command-key");
@@ -234,10 +235,14 @@ describe("Command Code provider", () => {
   });
 
   test("refreshes a stale official effort record only after a reasoning rejection and retries without it", async () => {
-    const requests: Array<{ url: string; body?: string }> = [];
+    const requests: Array<{ url: string; body?: string; zdr?: string }> = [];
     const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);
-      requests.push({ url: href, body: typeof init?.body === "string" ? init.body : undefined });
+      requests.push({
+        url: href,
+        body: typeof init?.body === "string" ? init.body : undefined,
+        zdr: new Headers(init?.headers).get("x-cmd-zdr") ?? undefined,
+      });
       if (href.includes("commandcode.ai/models/")) {
         return new Response("Reasoning efforts high are supported; no other reasoning settings.");
       }
@@ -252,6 +257,28 @@ describe("Command Code provider", () => {
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
     const generated = requests.filter(request => request.url.endsWith("/alpha/generate"));
     expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
+    expect(generated.map(request => request.zdr)).toEqual(["1", "1"]);
+  });
+
+  test("fails closed on a ZDR-capability 422 without retrying or consuming its body", async () => {
+    const upstreamBody = JSON.stringify({
+      error: {
+        code: "cmd_zdr_no_providers",
+        message: "No ZDR-capable providers available; invalid reasoning_effort cannot be served",
+      },
+    });
+    let calls = 0;
+    const fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      expect(new Headers(init?.headers).get("x-cmd-zdr")).toBe("1");
+      return new Response(upstreamBody, { status: 422 });
+    }) as typeof globalThis.fetch;
+    const adapter = createCommandCodeAdapter({ ...provider, fetch } as OcxProviderConfig);
+    const request = await adapter.buildRequest(parsed());
+    const response = await adapter.fetchResponse!(request);
+    expect(calls).toBe(1);
+    expect(response.status).toBe(422);
+    expect(await response.text()).toBe(upstreamBody);
   });
 
   test("omits effort when the caller did not choose one", async () => {

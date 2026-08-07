@@ -240,7 +240,9 @@ Nscale service token은 [Nscale Console](https://console.nscale.com)에서 만�
 256개로 제한합니다. `ocx login command-code`는 브라우저 OAuth 로그인을 지원하며(기존 Command Code
 CLI 사용자는 `~/.commandcode/auth.json`의 로컬 CLI 자격 증명을 가져올 수 있음), 모델 카탈로그는
 계정 단위이며 로그인 후 인증된 discovery 엔드포인트에서 가져옵니다. 채팅 요청은 설정된 bearer
-키를 사용합니다. 키는 [Command Code Studio](https://commandcode.ai/studio/)에서 생성합니다.
+키와 `x-cmd-zdr: 1`을 항상 사용합니다. 선택한 모델에 ZDR 가능한 upstream이 없으면
+`422 cmd_zdr_no_providers`를 비-ZDR 재시도 없이 반환합니다. 키는
+[Command Code Studio](https://commandcode.ai/studio/)에서 생성합니다.
 
 **SambaNova Cloud 검색:** 프리셋은 고정 API 호스트의 SambaNova Cloud 공개 `/v1/models` 목록을 읽고, 프로바이더
 네이티브 ID를 보존하며 discovery를 128 KiB와 raw 행 128개로 제한합니다. 카탈로그에는 인증이 필요하지 않으므로

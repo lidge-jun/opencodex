@@ -321,7 +321,8 @@ the fixed Provider API host, preserves provider-native ids, and caps discovery a
 rows. `ocx login command-code` supports OAuth via browser sign-in (with optional local CLI credential
 import from `~/.commandcode/auth.json` for existing Command Code CLI users); the model catalog is
 account-scoped and comes from the authenticated discovery endpoint after login. Chat requests use the
-configured Bearer key. Create keys at
+configured Bearer key and always send `x-cmd-zdr: 1`. If the selected model has no ZDR-capable
+upstream, the resulting `422 cmd_zdr_no_providers` is returned without a non-ZDR retry. Create keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
 **SambaNova Cloud discovery.** The preset reads SambaNova Cloud's public `/v1/models` list from the fixed API

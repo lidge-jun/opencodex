@@ -21,6 +21,11 @@ const COMMAND_CODE_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "glm-5.2": "zai-org/GLM-5.2",
 };
 
+/** Command Code privacy contract: every generation must use a ZDR-capable upstream or fail closed. */
+const COMMAND_CODE_ZDR_HEADER = "x-cmd-zdr";
+const COMMAND_CODE_ZDR_VALUE = "1";
+const COMMAND_CODE_ZDR_ERROR_CODE = "cmd_zdr_no_providers";
+
 /** Flatten tool-result content for the text-only wire output, keeping an `[image]` marker per image part in content order. */
 function toolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
@@ -285,6 +290,10 @@ function isReasoningEffortRejection(status: number, payload: string): boolean {
   return (status === 400 || status === 422) && /reasoning[_ -]?effort|unsupported effort|invalid effort/i.test(payload);
 }
 
+function isZdrUnavailableResponse(status: number, payload: string): boolean {
+  return status === 422 && payload.includes(COMMAND_CODE_ZDR_ERROR_CODE);
+}
+
 function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest | undefined {
   try {
     const body = JSON.parse(request.body) as { params?: Record<string, unknown> };
@@ -367,6 +376,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         "x-cli-environment": "production",
         "x-taste-learning": "false",
         "x-co-flag": "false",
+        // This is intentionally not configurable. Command Code must never receive a
+        // generation from this adapter unless its selected upstream guarantees ZDR.
+        [COMMAND_CODE_ZDR_HEADER]: COMMAND_CODE_ZDR_VALUE,
         "x-session-id": randomUUID(),
       };
       if (cwd) headers["x-project-slug"] = projectSlug(cwd);
@@ -390,6 +402,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         if (!observed.displaySafe) return response;
         body = observed.text;
       } catch { return response; }
+      // A ZDR-capability failure is final. Check it before the compatibility retry so
+      // even an upstream message mentioning reasoning effort cannot trigger another call.
+      if (isZdrUnavailableResponse(response.status, body)) return response;
       if (!isReasoningEffortRejection(response.status, body)) return response;
       const modelId = (() => {
         try { return (JSON.parse(request.body) as { params?: { model?: unknown } }).params?.model; } catch { return undefined; }
