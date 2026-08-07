@@ -214,6 +214,15 @@ describe("Command Code provider", () => {
     expect(JSON.parse(legacy.body).params.reasoning_effort).toBe("high");
   });
 
+  test("treats prototype property names as literal model ids", async () => {
+    for (const modelId of ["__proto__", "constructor", "toString"]) {
+      const built = await builtRequest(parsed(modelId));
+      const params = JSON.parse(built.body).params;
+      expect(params.model).toBe(modelId);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    }
+  });
+
   test("filters tool declarations when tool_choice disables tools", async () => {
     const built = await builtRequest({ ...parsed(), options: { toolChoice: "none" } });
     expect(JSON.parse(built.body).params.tools).toEqual([]);

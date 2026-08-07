@@ -31,7 +31,8 @@ function keyFor(modelId: string): string {
 
 export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
   const key = keyFor(modelId);
-  return refreshedEfforts.get(key) ?? COMMAND_CODE_MODEL_REASONING_EFFORTS[key];
+  return refreshedEfforts.get(key)
+    ?? (Object.hasOwn(COMMAND_CODE_MODEL_REASONING_EFFORTS, key) ? COMMAND_CODE_MODEL_REASONING_EFFORTS[key] : undefined);
 }
 
 function parsedProfileEfforts(page: string): string[] | undefined {
@@ -59,7 +60,9 @@ export async function refreshCommandCodeReasoningEfforts(
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<readonly string[] | undefined> {
   const key = keyFor(modelId);
-  const profile = COMMAND_CODE_MODEL_EFFORTS[key as keyof typeof COMMAND_CODE_MODEL_EFFORTS];
+  const profile = Object.hasOwn(COMMAND_CODE_MODEL_EFFORTS, key)
+    ? COMMAND_CODE_MODEL_EFFORTS[key as keyof typeof COMMAND_CODE_MODEL_EFFORTS]
+    : undefined;
   if (!profile) return undefined;
   try {
     const response = await fetchFn(profile.profileUrl, {
