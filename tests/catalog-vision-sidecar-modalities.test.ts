@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { applyProviderConfigHints, gatherRoutedModels } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
 import type { OcxProviderConfig } from "../src/types";
+import { modelInList } from "../src/types";
 import { deriveComboCatalogModel } from "../src/codex/catalog";
-import { CURSOR_STATIC_MODELS } from "../src/adapters/cursor/discovery";
+import { CURSOR_NO_VISION_MODELS, CURSOR_STATIC_MODELS } from "../src/adapters/cursor/discovery";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import type { CatalogModel } from "../src/types";
@@ -16,6 +17,28 @@ const base: OcxProviderConfig = {
   baseUrl: "https://opencode.ai/zen/go/v1",
   noVisionModels: ["glm-5.2"],
 };
+
+const openAiSidecarFixture = {
+  providerName: "openai",
+  provider: { adapter: "openai-responses" as const, baseUrl: "https://chatgpt.test/v1", authMode: "forward" as const },
+  accountMode: "direct" as const,
+  authContext: { kind: "main" as const, accountId: null },
+  headers: new Headers({ authorization: "Bearer chatgpt" }),
+};
+
+function cursorImageParsed(model: string) {
+  return parseRequest({
+    model,
+    input: [{
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "What is in this screenshot?" },
+        { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+      ],
+    }],
+  });
+}
 
 describe("vision-sidecar catalog modalities", () => {
   test("noVisionModels models advertise image input (sidecar gives them eyes)", () => {
@@ -235,20 +258,36 @@ describe("vision-capable provider models feed combo modalities", () => {
   });
 });
 
-describe("Cursor native vision registry", () => {
-  test("Cursor models advertise image through modelInputModalities, not noVisionModels", () => {
+describe("Cursor native vs sidecar vision registry", () => {
+  test("curates noVisionModels for Auto/Composer/GLM while advertising image for all static ids", () => {
     const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
-    expect(cursor?.noVisionModels).toBeUndefined();
-    for (const model of ["auto", "composer-2.5", "gpt-5.5", "gemini-3-pro"]) {
+    expect(cursor?.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
+    for (const model of ["auto", "composer-1", "composer-2.5", "composer-2.5-fast", "composer-9-future", "glm-5.2"]) {
+      expect(modelInList(cursor?.noVisionModels, model), `${model} should match noVision`).toBe(true);
+    }
+    for (const model of ["auto", "composer-2.5", "glm-5.2", "gpt-5.5", "gemini-3-pro", "grok-4.5", "kimi-k3"]) {
       expect(cursor?.modelInputModalities?.[model]).toEqual(["text", "image"]);
-      expect(cursor?.noVisionModels ?? []).not.toContain(model);
+    }
+    for (const model of ["gpt-5.5", "gemini-3-pro", "grok-4.5", "kimi-k3"]) {
+      expect(modelInList(cursor?.noVisionModels, model)).toBe(false);
     }
     for (const model of CURSOR_STATIC_MODELS) {
       expect(cursor?.modelInputModalities?.[model.id]).toEqual(["text", "image"]);
     }
   });
 
-  test("Cursor catalog hints do not force sidecar image augmentation", () => {
+  test("Cursor catalog hints advertise image for sidecar-covered Composer", () => {
+    const cursor = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cursor")!);
+    const hinted = applyProviderConfigHints("cursor", cursor, {
+      id: "composer-2.5",
+      provider: "cursor",
+      contextWindow: 200_000,
+      inputModalities: ["text"],
+    });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("Cursor catalog hints keep native image modalities for Grok", () => {
     const cursor = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cursor")!);
     const hinted = applyProviderConfigHints("cursor", cursor, {
       id: "gpt-5.5",
@@ -259,7 +298,7 @@ describe("Cursor native vision registry", () => {
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
 
-  test("Cursor image requests skip the vision sidecar", () => {
+  test("Cursor Auto/Composer image requests plan the vision sidecar", () => {
     const config = {
       port: 10100,
       defaultProvider: "cursor",
@@ -267,24 +306,24 @@ describe("Cursor native vision registry", () => {
         cursor: providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cursor")!),
       },
     };
-    const route = routeModel(config, "cursor/auto");
-    const parsed = parseRequest({
-      model: "cursor/auto",
-      input: [{
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: "What is in this screenshot?" },
-          { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
-        ],
-      }],
-    });
-    expect(planVisionSidecar(config, route.provider, route.modelId, parsed, {
-      providerName: "openai",
-      provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" },
-      accountMode: "direct",
-      authContext: { kind: "main", accountId: null },
-      headers: new Headers({ authorization: "Bearer chatgpt" }),
-    })).toBeUndefined();
+    for (const model of ["cursor/auto", "cursor/composer-2.5", "cursor/glm-5.2"] as const) {
+      const route = routeModel(config, model);
+      const plan = planVisionSidecar(config, route.provider, route.modelId, cursorImageParsed(model), openAiSidecarFixture);
+      expect(plan, `${model} should plan the vision sidecar`).toBeDefined();
+    }
+  });
+
+  test("Cursor Grok/GPT image requests skip the vision sidecar", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "cursor",
+      providers: {
+        cursor: providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cursor")!),
+      },
+    };
+    for (const model of ["cursor/grok-4.5", "cursor/gpt-5.5"] as const) {
+      const route = routeModel(config, model);
+      expect(planVisionSidecar(config, route.provider, route.modelId, cursorImageParsed(model), openAiSidecarFixture)).toBeUndefined();
+    }
   });
 });

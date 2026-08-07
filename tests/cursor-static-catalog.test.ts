@@ -115,7 +115,7 @@ describe("Cursor static Codex catalog", () => {
     for (const modelId of ["auto", "composer-2.5", "gpt-5.5", "gemini-3-pro"]) {
       expect(
         entries.find(item => item.slug === `cursor/${modelId}`)?.input_modalities,
-        `cursor/${modelId} should advertise native image input`,
+        `cursor/${modelId} should advertise image input`,
       ).toEqual(["text", "image"]);
     }
   });

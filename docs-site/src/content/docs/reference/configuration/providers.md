@@ -268,6 +268,16 @@ Cursor-specific model parameters:
 Explicit variants send Cursor's `default` model with its `optimization` parameter, preserving the
 selection on every request. They remain available when live discovery omits `default`.
 
+### Vision
+
+Native Cursor vision uses `SelectedImage` (JPEG soft-cap + `blobIdWithData`) for models that can see
+images natively — Claude, Gemini, GPT, Kimi, and Grok among them. `auto` and `composer-*` stay on
+the curated `noVisionModels` list and use the vision describe sidecar instead.
+
+After pulling Cursor vision fixes, run `ocx ensure` so the proxy PID is the workspace `src/cli`
+binary rather than a stale install. Stale `providers.cursor.noVisionModels` stamps that list every
+Cursor model are healed back to the curated Auto/Composer/GLM set on OAuth reconcile.
+
 Cursor server-driven local tools are disabled by default. Codex continues using its own tools such as
 `apply_patch` and `exec_command` with its own approval and sandbox policy:
 

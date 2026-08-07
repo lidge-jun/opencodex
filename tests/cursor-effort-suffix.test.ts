@@ -98,6 +98,13 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/grok-4.5", "high")).toBe("cursor-grok-4.5-high");
     expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("cursor-grok-4.5-high");
     expect(modelIdFor("cursor/grok-4.5")).toBe("cursor-grok-4.5-high");
+    // Connect rejects bare grok-4.5; Codex effort "none" must clamp to the lowest tier.
+    expect(modelIdFor("cursor/grok-4.5", "none")).toBe("cursor-grok-4.5-low");
+    expect(modelIdFor("cursor/grok-4.5", "minimal")).toBe("cursor-grok-4.5-low");
+    expect(selectionFor("cursor/grok-4.5", "none")).toEqual({
+      modelId: "cursor-grok-4.5-low",
+      parameters: undefined,
+    });
     expect(selectionFor("cursor/grok-4.5", "high")).toEqual({
       modelId: "cursor-grok-4.5-high",
       parameters: undefined,

@@ -8,6 +8,7 @@ import {
   ALIBABA_CODING_BASE_URL_CHOICES, ALIBABA_CODING_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
+  CURSOR_NO_VISION_MODELS,
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
   cursorModelIds,
@@ -865,6 +866,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
     modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
+    // Blind Cursor models (Auto routers, Composer, GLM-5.2) go through the vision sidecar;
+    // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. Catalog still
+    // advertises image for noVision members so Codex can attach (sidecar option B).
+    noVisionModels: [...CURSOR_NO_VISION_MODELS],
     // Kimi K3 documents `max` as its API default, and its Cursor ladder has no `medium`
     // rung — so applyReasoningLevels' medium->high->first fallback would settle the catalog
     // default on `high`, the picker would send `high` explicitly, and the request builder's
