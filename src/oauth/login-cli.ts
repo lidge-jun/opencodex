@@ -107,6 +107,22 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
   };
 }
 
+/**
+ * Merge a freshly built key-login provider row with a previously saved row,
+ * carrying operator-owned fields the key-provider preset cannot know about.
+ * Currently that is the user-configured modelCosts overlay: rotating the API
+ * key must not silently revert Logs/Usage estimates to catalog prices.
+ */
+export function mergeKeyLoginProviderRow(
+  provider: OcxProviderConfig,
+  existing: OcxProviderConfig | undefined,
+): OcxProviderConfig {
+  return {
+    ...provider,
+    ...(existing?.modelCosts !== undefined ? { modelCosts: existing.modelCosts } : {}),
+  };
+}
+
 async function handleKeyLogin(name: string): Promise<void> {
   const def = KEY_LOGIN_PROVIDERS[name];
   const preflightConfig = loadConfig();
@@ -149,7 +165,7 @@ async function handleKeyLogin(name: string): Promise<void> {
     console.error(`Error: ${commitCollision}.`);
     process.exit(1);
   }
-  config.providers[name] = provider;
+  config.providers[name] = mergeKeyLoginProviderRow(provider, config.providers[name]);
   saveConfig(config);
   await notifyRunningProxy(name, provider);
   console.log(`✅ ${def.label} added. Try: ocx sync`);
