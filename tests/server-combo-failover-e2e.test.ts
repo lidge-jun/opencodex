@@ -1304,6 +1304,23 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bHits).toBe(2);
   });
 
+  test("disabled image input rejects the request before any combo target is called", async () => {
+    let hits = 0;
+    const a = serve(() => {
+      hits += 1;
+      return chatSuccess("unexpected", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("does not accept image input");
+    expect(hits).toBe(0);
+  });
+
   test("fresh child reparsing recomputes vision and effort per target", async () => {
     const bodies: Array<{ provider: string; body: Record<string, unknown> }> = [];
     const a = serve(async request => {

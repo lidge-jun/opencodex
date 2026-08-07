@@ -60,6 +60,11 @@ export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget 
   };
 }
 
+
+function normalizeImageInput(value: unknown): "auto" | "disabled" {
+  return value === "disabled" ? "disabled" : "auto";
+}
+
 export interface ComboItem {
   id: string;
   /** Wire id shown to clients, e.g. combo/free */
@@ -73,6 +78,7 @@ export interface ComboItem {
   strategy: ComboStrategy;
   stickyLimit: number;
   defaultEffort: ComboEffort | null;
+  imageInput?: "auto" | "disabled";
   targets: ComboTarget[];
 }
 
@@ -177,6 +183,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       strategy: normalizeStrategy(r.strategy),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
       defaultEffort: normalizeDefaultEffort(r.defaultEffort),
+      imageInput: normalizeImageInput(r.imageInput),
       targets,
     });
   }
@@ -236,6 +243,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     || a.strategy !== b.strategy
     || a.stickyLimit !== b.stickyLimit
     || a.defaultEffort !== b.defaultEffort
+    || (a.imageInput ?? "auto") !== (b.imageInput ?? "auto")
   ) return false;
   if (a.targets.length !== b.targets.length) return false;
   return a.targets.every((t, i) => {
@@ -252,6 +260,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     strategy: ComboStrategy;
     stickyLimit?: number;
     defaultEffort: ComboEffort | null;
+    imageInput?: "disabled";
     alias?: string;
     nativeAlias?: true;
     displayName?: string;
@@ -266,6 +275,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
         : { provider: target.provider.trim(), model: target.model.trim() }),
       strategy: item.strategy,
       defaultEffort: item.defaultEffort,
+      ...(item.imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
       ...(item.strategy === "round-robin" ? { stickyLimit: item.stickyLimit } : {}),
       ...(item.alias && item.alias.trim() ? { alias: item.alias.trim() } : {}),
       ...(item.nativeAlias ? { nativeAlias: true } : {}),
@@ -372,6 +382,7 @@ export function emptyDraft(id = ""): ComboItem {
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: null,
+    imageInput: "auto",
     targets: [newComboTarget()],
   };
 }

@@ -959,6 +959,12 @@ export interface OcxComboConfig {
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
   /**
+   * Disable image input even when every target supports it.
+   * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
+   * the target intersection includes image).
+   */
+  imageInput?: "auto" | "disabled";
+  /**
    * Optional public model name replacing the default `combo/<id>` slug. Bare names
    * without "/" are allowed (e.g. "deepseek-v4-flash") so the combo can answer to a
    * mandated model id; exact-match requests route here before any provider resolution.

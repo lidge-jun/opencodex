@@ -154,6 +154,18 @@ describe("live model provenance (#448 custom-model misclassification)", () => {
 });
 
 describe("combo catalog capability intersection", () => {
+
+  test("imageInput disabled strips image even when every member supports it", () => {
+    const visionMembers = [
+      { provider: "a", id: "m1", contextWindow: 128_000, maxInputTokens: 100_000, inputModalities: ["text", "image"], reasoningEfforts: ["low"] },
+      { provider: "b", id: "m2", contextWindow: 128_000, maxInputTokens: 100_000, inputModalities: ["text", "image"], reasoningEfforts: ["low"] },
+    ];
+    expect(deriveComboCatalogModel("text-only", normalizedCombo({ imageInput: "disabled" }), visionMembers))
+      .toEqual(expect.objectContaining({ inputModalities: ["text"] }));
+    expect(deriveComboCatalogModel("vision", normalizedCombo({ imageInput: "auto" }), visionMembers))
+      .toEqual(expect.objectContaining({ inputModalities: expect.arrayContaining(["text", "image"]) }));
+  });
+
   const memberA = {
     provider: "a",
     id: "m1",

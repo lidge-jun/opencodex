@@ -124,10 +124,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     });
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(body.combo as import("../../types").OcxComboConfig);
+    // Persist only non-default identity/capability fields so config stays sparse.
     const {
       alias: normalizedAlias,
       nativeAlias: normalizedNativeAlias,
       displayName: normalizedDisplayName,
+      imageInput: normalizedImageInput,
       ...normalizedBase
     } = normalized;
     const stored: import("../../types").OcxComboConfig = {
@@ -135,6 +137,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),
       ...(normalizedNativeAlias ? { nativeAlias: true } : {}),
       ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),
+      ...(normalizedImageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
     };
     const sourceId = renameFrom ?? id;
     const previous = config.combos?.[sourceId];
