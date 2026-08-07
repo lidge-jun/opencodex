@@ -318,6 +318,34 @@
   overflow-wrap: anywhere;
 }
 
+/* Effective public model clients request — mono id + copy under id/alias fields. */
+.cwi-public-model-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.cwi-public-model-preview-text {
+  margin: 0;
+  font-size: 12px;
+  max-width: var(--prose-measure);
+  overflow-wrap: anywhere;
+}
+
+.cwi-public-model-preview-value {
+  font-size: inherit;
+  padding: 1px 5px;
+  border-radius: var(--radius);
+  background: var(--surface-soft, var(--raised));
+}
+
+.cwi-public-model-preview-copy {
+  flex-shrink: 0;
+}
+
+
 .cwi-target-list {
   display: flex;
   flex-direction: column;

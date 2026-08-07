@@ -6,11 +6,12 @@ import {
   intersectComboEfforts,
   validateComboDraft,
 } from "../combo-workspace-data";
+import { PUBLIC_MODEL_PREVIEW_PLACEHOLDER } from "../combo-public-model";
 import { IconX } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
-import { EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { EffortSelect, PublicModelPreview, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { clampedNumberInput } from "./combo-workspace-utils";
 
 export function AddComboModal({
@@ -139,11 +140,9 @@ export function AddComboModal({
             <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t("cws.field.aliasHint")}
             </p>
-            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-              {t("cws.field.idHint", {
-                model: draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : "…",
-              })}
-            </p>
+            <PublicModelPreview
+              model={draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : PUBLIC_MODEL_PREVIEW_PLACEHOLDER}
+            />
           </div>
           <div className="cwi-field">
             <span className="field-label">{t("cws.strategy")}</span>

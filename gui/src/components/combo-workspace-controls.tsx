@@ -1,11 +1,13 @@
 import { useState } from "react";
 import type { ComboEffort, ComboStrategy, ComboTarget } from "../combo-workspace-data";
+import { canCopyPublicModelId } from "../combo-public-model";
 import { COMBO_EFFORTS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { clampedNumberInput, enabledProviders, modelsForProvider } from "./combo-workspace-utils";
+import { useCopyFeedback } from "./use-copy-feedback";
 
 export function StrategySeg({
   value,
@@ -258,6 +260,43 @@ export function TargetEditor({
         onClick={() => onChange([...targets, newComboTarget()])}
       >
         <IconPlus width={14} height={14} /> {t("cws.target.add")}
+      </button>
+    </div>
+  );
+}
+
+/** Effective public model id clients will request — mono value + copy. */
+export function PublicModelPreview({ model }: { model: string }) {
+  const t = useT();
+  const { outcomeFor, copy } = useCopyFeedback<string>();
+  const canCopy = canCopyPublicModelId(model);
+  const outcome = outcomeFor(model);
+  const copyLabel = outcome === "copied"
+    ? t("cws.copiedPublicModel")
+    : outcome === "unavailable"
+      ? t("cws.copyUnavailable")
+      : t("cws.copyPublicModel");
+  // Split around a sentinel so the model token stays mono in any locale word order.
+  const sentinel = "\u0001";
+  const [before, after = ""] = t("cws.field.publicModelPreview", { model: sentinel }).split(sentinel);
+
+  return (
+    <div className="cwi-public-model-preview">
+      <p className="muted cwi-public-model-preview-text">
+        {before}
+        <code className="mono cwi-public-model-preview-value">{model}</code>
+        {after}
+      </p>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm cwi-public-model-preview-copy"
+        disabled={!canCopy}
+        onClick={() => {
+          if (canCopy) copy(model, model);
+        }}
+        title={copyLabel}
+      >
+        <span aria-live="polite">{copyLabel}</span>
       </button>
     </div>
   );
