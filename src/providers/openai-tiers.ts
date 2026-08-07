@@ -1,4 +1,4 @@
-import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
+import type { CodexAccountMode, OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { OPENAI_PROVIDER_TIER_VERSION } from "../types";
 import { MAX_COST4_RATE } from "../usage/expected-prices";
 
@@ -117,6 +117,21 @@ function rewriteLegacyOpenAiModelList(values: string[] | undefined): string[] | 
   return [...new Set(values.map(rewriteLegacyOpenAiSelectedId))];
 }
 
+/**
+ * Rewrite legacy `openai-multi/<model>` keys in a modelCosts overlay so the
+ * prices still match after the migration resolves logs as provider `openai`
+ * with the bare model id. Keys without the legacy prefix pass through.
+ */
+function rewriteLegacyOpenAiCostKeys(costs: Record<string, ProviderCostOverlay> | undefined): Record<string, ProviderCostOverlay> {
+  const rewritten: Record<string, ProviderCostOverlay> = {};
+  if (costs) {
+    for (const [key, value] of Object.entries(costs)) {
+      rewritten[rewriteLegacyOpenAiSelectedId(key)] = value;
+    }
+  }
+  return rewritten;
+}
+
 function mergeLegacyOpenAiProviderRows(
   openai: OcxProviderConfig | undefined,
   legacyMulti: OcxProviderConfig | undefined,
@@ -127,8 +142,13 @@ function mergeLegacyOpenAiProviderRows(
     ...(legacyMulti?.selectedModels ?? []),
   ]);
   // Both rows can carry disjoint overlays; merge them (canonical openai wins on
-  // key conflicts) so legacy Multi prices are not silently dropped.
-  const modelCosts = { ...(legacyMulti?.modelCosts ?? {}), ...(openai?.modelCosts ?? {}) };
+  // key conflicts) so legacy Multi prices are not silently dropped. Keys are
+  // rewritten first so `openai-multi/<model>` entries still resolve after the
+  // provider is canonicalized to `openai`.
+  const modelCosts = {
+    ...rewriteLegacyOpenAiCostKeys(legacyMulti?.modelCosts),
+    ...rewriteLegacyOpenAiCostKeys(openai?.modelCosts),
+  };
   const hasModelCosts = Object.keys(modelCosts).length > 0;
   const formerRows = [openai, legacyMulti].filter((row): row is OcxProviderConfig => row !== undefined);
   const disabled = formerRows.length > 0 && formerRows.every(row => row.disabled === true);
