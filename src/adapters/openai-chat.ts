@@ -947,8 +947,14 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // Yields adapter events and returns "terminate" for a terminal frame ([DONE] / error) that
       // must end the stream, or "continue" otherwise. Mutates the closure's terminal-signal state.
       const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
-        if (!line.startsWith("data: ")) return "continue";
-        const payload = line.slice(6).trim();
+        // SSE field syntax: the value may begin immediately after the colon; one optional
+        // leading space is stripped when present. Some OpenAI-compatible upstreams emit
+        // `data:{...}` / `data:[DONE]` without that space, and every frame was dropped.
+        if (!line.startsWith("data:")) return "continue";
+        const payload = line.slice(5).trim();
+        // A bare `data:` line carries nothing (heartbeat-style keep-alive on some gateways);
+        // it is not a malformed frame, just nothing to parse.
+        if (payload.length === 0) return "continue";
         if (payload === "[DONE]") {
           yield* flushToolCalls();
           const stopReason = stopReasonFor(finishReason);

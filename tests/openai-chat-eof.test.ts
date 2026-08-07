@@ -293,3 +293,49 @@ describe("openai-chat EOF mid tool call (#735)", () => {
     expect(events.at(-1)?.type).toBe("done");
   });
 });
+
+describe("openai-chat SSE data-field framing (#1170)", () => {
+  // The SSE spec strips at most one optional space after the colon, so `data:{...}` is a valid
+  // data field. Some OpenAI-compatible gateways emit that framing; the parser must accept it
+  // exactly like the spaced form.
+  test("unspaced data:{...} frames with a final finish_reason and no [DONE] complete", async () => {
+    const response = new Response([
+      'data:{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n',
+      'data:{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data:{"id":"x","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n\n',
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.find(e => e.type === "text_delta")).toMatchObject({ type: "text_delta", text: "hi" });
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
+  test("unspaced data:[DONE] sentinel terminates the stream", async () => {
+    const response = new Response([
+      'data:{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n',
+      "data:[DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
+  test("a bare data: line is ignored, not reported as a malformed frame", async () => {
+    const response = new Response([
+      "data:\n\n",
+      'data:{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n',
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
+  test("unspaced truncated stream with no terminal signal still fails closed", async () => {
+    const response = new Response(
+      'data:{"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n',
+    );
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+});
