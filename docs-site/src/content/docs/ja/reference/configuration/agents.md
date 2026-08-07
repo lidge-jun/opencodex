@@ -17,6 +17,7 @@ description: マルチエージェント サーフェス、委任ガイダンス
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | opencodex が作成した v1/v2 開発者ガイダンスのみを制御します。ネイティブ エージェントのデフォルト、ツール、ルーティング、ロスター、またはエフォート キャップは変更されません。 |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` |同期/再起動中に、Codex のネイティブ デフォルトとして `injectionModel` およびオプションの `injectionEffort` を書き込むようにオプトインします。 `injectionModel`が必要です。 |
 | `subagentModelFallback?` | `string[]` | `[]` |生成された子ターンの優先順位付きグローバル フォールバック モデル。 |
+| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | 要求されたプライマリ モデル id をキーとするモデル単位のフォールバックチェーン。ロール単位のフォールバックメタデータの推奨場所です。Codex の agent TOML に `model_fallback` を書くと Codex 0.146+ がロールをスキップします（#1190）。 |
 | `subagentModelFallbackPollMs?` | `number` | `60000` |可用性プローブのキャッシュ間隔。 1000 ミリ秒未満の値はデフォルトに戻ります。 |
 | `effortCap?` | `string` | — | v2 のメイン ターンとマークされた子ターンの条件を満たすためのハード シーリング。 `low` ～ `ultra` を受け入れます。 |
 | `subagentEffortCap?` | `string` | — |スポーンされた子のターンのみの追加の上限。両方の上限が適用される場合は、低い方が優先されます。 |
@@ -44,8 +45,13 @@ V1 ガイダンスは、`max` または `ultra` でのみプロアクティブ �
 生成された子のフォールバック順序は次のとおりです。
 
 1. 要求されたプライマリ モデル。
-2. ロールレベル `model_fallback` から `$CODEX_HOME/agents/*.toml`;それから
+2. `subagentModelFallbackByModel` によるモデル単位のチェーン（プライマリ モデルがキー）;それから
 3. グローバル `subagentModelFallback` エントリ。
+
+ロール単位のフォールバックチェーンは opencodex 構成に置く必要があります。`model_fallback` を
+`$CODEX_HOME/agents/*.toml` に書くと、Codex 0.146+ が未知フィールドとしてロールファイル全体を
+拒否し、ロールをスキップします（#1190）。TOML 内のレガシー `model_fallback` 行は後方互換性の
+ために引き続き読み取られますが、`ocx doctor` がそれをフラグ付けします。
 
 opencodex は、無効、ルーティング不能、異常、冷却期間、またはクォータしきい値の候補をスキップします。可用性スナップショットは `subagentModelFallbackPollMs` に対してキャッシュされます。暗号化された子タスクは、チェーンを正規のネイティブ ChatGPT ターゲットに制限できます。暗号化されたペイロードを読み取ることができる人がいない場合、読み取り不可能な暗号文が別の場所にルーティングされる代わりに、リクエストは失敗します。
 
@@ -57,6 +63,9 @@ opencodex は、無効、ルーティング不能、異常、冷却期間、ま�
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
   "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallbackByModel": {
+    "gpt-5.5": ["gpt-5.4-mini"]
+  },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }

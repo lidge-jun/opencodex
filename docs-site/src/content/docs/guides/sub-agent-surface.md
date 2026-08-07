@@ -86,8 +86,16 @@ write. External provider managers and user-owned root routing also remain author
 For a spawned worker, opencodex builds this priority order:
 
 1. The requested primary model.
-2. The role's `model_fallback` list from its `$CODEX_HOME/agents/*.toml` definition.
+2. A per-model chain from `subagentModelFallbackByModel` in opencodex config, keyed by
+   the requested primary model.
 3. The global `subagentModelFallback` list in opencodex config.
+
+Per-role fallback chains belong in opencodex config, not in
+`$CODEX_HOME/agents/*.toml`. Codex 0.146+ strictly deserializes agent role files and
+rejects `model_fallback` as an unknown field, which skips the entire role definition
+(#1190). opencodex can still read a legacy `model_fallback` line from the TOML for
+backwards compatibility, but `ocx doctor` warns about it and Codex itself will ignore
+the affected role.
 
 Duplicate model ids are removed while preserving the first occurrence. During selection, opencodex
 skips candidates that are disabled, unroutable, backed by a disabled provider, marked unhealthy,

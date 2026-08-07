@@ -13,6 +13,8 @@ import {
   readCodexAgentModelFallback,
   resetSubagentModelFallbackStateForTests,
   resolveAgentModelFallbackForPrimary,
+  resolveConfiguredModelFallbackForPrimary,
+  scanCodexAgentRolesWithTomlModelFallback,
   selectAvailableSubagentModel,
   setSubagentQuotaPrimeForTests,
   subagentFallbackGuidanceText,
@@ -918,6 +920,87 @@ describe("subagent model fallback chain", () => {
     expect(readCodexAgentModelFallback("executor", dir)).toEqual([
       "alibaba-token-plan/qwen3.8-max",
     ]);
+  });
+
+  test("config-keyed per-model fallback resolves for the primary model", () => {
+    const config = cfg({
+      subagentModelFallbackByModel: {
+        "gpt-5.6-sol": ["alibaba-token-plan/qwen3.8-max", "kimi/k3"],
+        "other-model": ["xai/grok-4.5"],
+      },
+    });
+    expect(resolveConfiguredModelFallbackForPrimary("gpt-5.6-sol", config)).toEqual([
+      "alibaba-token-plan/qwen3.8-max",
+      "kimi/k3",
+    ]);
+    expect(resolveConfiguredModelFallbackForPrimary("other-model", config)).toEqual([
+      "xai/grok-4.5",
+    ]);
+    expect(resolveConfiguredModelFallbackForPrimary("unlisted", config)).toEqual([]);
+  });
+
+  test("config-keyed fallback dedupes across keys and preserves account-selector case", () => {
+    const config = cfg({
+      codexAccountNamespaces: { work: "account-a", Work: "account-b" },
+      subagentModelFallbackByModel: {
+        "gpt-5.6-sol": ["work/gpt-5.5", "Work/gpt-5.5", "work/GPT-5.5", "kimi/k3"],
+        "openrouter/anthropic/claude": ["xai/grok-4.5"],
+        "openrouter/anthropic-claude": ["kimi/k3", "xai/grok-4.5"],
+      },
+    });
+    expect(resolveConfiguredModelFallbackForPrimary("gpt-5.6-sol", config)).toEqual([
+      "work/gpt-5.5",
+      "Work/gpt-5.5",
+      "kimi/k3",
+    ]);
+    expect(resolveConfiguredModelFallbackForPrimary("openrouter/anthropic/claude", config)).toEqual([
+      "xai/grok-4.5",
+      "kimi/k3",
+    ]);
+  });
+
+  test("applySubagentModelFallback prefers config-keyed chains over TOML model_fallback", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "executor.toml"), [
+      "name = \"executor\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    updateAccountQuota("pool-a", 95);
+    const parsed = {
+      modelId: "gpt-5.6-sol",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "gpt-5.6-sol" },
+    };
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModelFallbackByModel: {
+          "gpt-5.6-sol": ["alibaba-token-plan/qwen3.8-max"],
+        },
+      }),
+    );
+    expect(result?.to).toBe("alibaba-token-plan/qwen3.8-max");
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback reports only roles carrying the field", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "with_fallback.toml"), [
+      "name = \"with_fallback\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "clean.toml"), [
+      "name = \"clean\"",
+      "model = \"gpt-5.6-sol\"",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir)).toEqual(["with_fallback"]);
   });
 
   test("subagentFallbackGuidanceText renders configured chain", () => {

@@ -418,6 +418,37 @@ function subagentQuotaPrimeBlockedByHostCircuit(config: OcxConfig): boolean {
 }
 
 /**
+ * Per-primary-model fallback chains from opencodex config (#1190).
+ *
+ * Storing `model_fallback` inside `$CODEX_HOME/agents/*.toml` makes Codex >= 0.146
+ * reject the whole role file as an unknown field. The config-keyed map is the
+ * supported home for that metadata; keys match the requested primary model id,
+ * using the same raw/encoded slug tolerance as the TOML role lookup.
+ */
+export function resolveConfiguredModelFallbackForPrimary(
+  primary: string,
+  config: OcxConfig,
+): string[] {
+  const byModel = config.subagentModelFallbackByModel;
+  if (!byModel || typeof byModel !== "object") return [];
+  const entries: string[] = [];
+  const seen = new Set<string>();
+  const push = (model: string) => {
+    const trimmed = model.trim();
+    if (trimmed === "") return;
+    const key = fallbackChainKey(trimmed, config.codexAccountNamespaces);
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(trimmed);
+  };
+  for (const [key, chain] of Object.entries(byModel)) {
+    if (!slugsEquivalent(key, primary)) continue;
+    for (const model of chain) push(model);
+  }
+  return entries;
+}
+
+/**
  * Best-effort quota refresh before subagent model selection.
  * Concurrent callers share one in-flight promise. The success TTL is updated only
  * after a successful refresh so failures remain retryable. Errors are swallowed so
@@ -479,11 +510,17 @@ export function applySubagentModelFallback(
   accountUsabilityOptions?: CodexAccountUsabilityOptions,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
-  const roleFallback = resolveAgentModelFallbackForPrimary(
+  const tomlRoleFallback = resolveAgentModelFallbackForPrimary(
     parsed.modelId,
     getCodexHome(),
     config.codexAccountNamespaces,
   );
+  // Config-keyed chains are the supported per-role home (#1190); TOML `model_fallback`
+  // stays readable for backwards compatibility with homes written before Codex 0.146.
+  const roleFallback = [
+    ...resolveConfiguredModelFallbackForPrimary(parsed.modelId, config),
+    ...tomlRoleFallback,
+  ];
   const globalFallback = config.subagentModelFallback ?? [];
   if (globalFallback.length === 0 && roleFallback.length === 0) return null;
   const selection = selectAvailableSubagentModel(
@@ -543,6 +580,17 @@ export function readCodexAgentModelFallback(role: string, codexHome = CODEX_HOME
   const file = join(codexHome, "agents", `${role}.toml`);
   if (!existsSync(file)) return [];
   return readAgentModelFallback(file) ?? [];
+}
+
+/**
+ * Roles whose TOML still carries `model_fallback`. Codex >= 0.146 rejects the
+ * entire role file as an unknown field (#1190), so these files are skipped by
+ * the native runtime even though opencodex can still read them.
+ */
+export function scanCodexAgentRolesWithTomlModelFallback(codexHome = CODEX_HOME): string[] {
+  return listCodexAgentRoles(codexHome).filter(
+    role => readCodexAgentModelFallback(role, codexHome).length > 0,
+  );
 }
 
 export function listCodexAgentRoles(codexHome = CODEX_HOME): string[] {
