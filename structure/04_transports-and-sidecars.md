@@ -218,6 +218,8 @@ HTTP/SSE. The bridge reframes that JSON into the same Responses event sequence
 HTTP clients that requested streaming receive a synthesized terminal SSE body (created →
 output_item.done → terminal → `[DONE]`). DeepSeek V4 Flash uses this path because its Codex
 streaming response can deliver output without closing on a terminal event.
+Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
+encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a

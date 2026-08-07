@@ -191,7 +191,7 @@ import {
   relaySseWithBlockRewrite,
 } from "../sse-payload-rewrite";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
-import { responsesJsonToSseBody } from "../responses-json-events";
+import { responsesJsonToSseStream } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /**
@@ -2323,25 +2323,46 @@ async function handleResponsesInner(
         && options.inboundTransport !== "websocket"
         && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
         && route.provider.adapter === "openai-responses") {
+        let completed: Record<string, unknown> | undefined;
         try {
-          let completed = JSON.parse(clientJson) as Record<string, unknown>;
+          const parsedCompleted = JSON.parse(clientJson) as unknown;
+          if (!parsedCompleted || typeof parsedCompleted !== "object" || Array.isArray(parsedCompleted)) {
+            throw new TypeError("bounded Responses JSON is not an object");
+          }
+          let candidate = parsedCompleted as Record<string, unknown>;
           // The bounded-JSON answer bypasses the SSE relay, so it also bypasses
           // the SSE item-id rewrite. Apply the same client-facing normalization
           // here or this policy would silently disable id repair for the very
           // providers that need it (raw record already happened above).
           if (hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)) {
-            completed = repairResponsesJsonItemIds(completed, route.provider.responsesItemIdRepair!, translatorBudget);
+            candidate = repairResponsesJsonItemIds(candidate, route.provider.responsesItemIdRepair!, translatorBudget);
+          }
+          completed = candidate;
+        } catch {
+          // Non-JSON despite content-type: fall through to the plain relay.
+        }
+        if (completed) {
+          let stream: ReadableStream<Uint8Array>;
+          try {
+            stream = responsesJsonToSseStream(completed);
+          } catch (error) {
+            if (error instanceof RangeError) {
+              return formatErrorResponse(
+                502,
+                "upstream_error",
+                "upstream JSON response exceeded the synthesized SSE item limit",
+              );
+            }
+            throw error;
           }
           const sseHeaders = sanitizePassthroughHeaders(headers);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
-          return new Response(responsesJsonToSseBody(completed), {
+          return new Response(stream, {
             status: upstreamResponse.status,
             statusText: upstreamResponse.statusText,
             headers: sseHeaders,
           });
-        } catch {
-          // Non-JSON despite content-type: fall through to the plain relay.
         }
       }
       // WS turns reframe this JSON into events in the bridge, which is the
