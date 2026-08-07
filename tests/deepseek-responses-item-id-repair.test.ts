@@ -6,6 +6,7 @@ import {
   hasResponsesItemIdRepair,
   repairResponsesJsonItemIds,
 } from "../src/server/responses-item-id-repair";
+import { MAX_SYNTHESIZED_OUTPUT_ITEMS } from "../src/server/responses-json-events";
 import { handleResponses } from "../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -157,5 +158,34 @@ describe("bounded-JSON HTTP path carries canonical ids (#938 + #875)", () => {
     expect(text).toContain(UUID_FC);
     expect(text).toContain("call_keep");
     expect(text).toContain("data: [DONE]");
+  });
+
+  test("fails closed when bounded JSON would synthesize too many SSE frames", async () => {
+    const plainSeed = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_deepseek",
+      object: "response",
+      status: "completed",
+      output: Array.from({ length: MAX_SYNTHESIZED_OUTPUT_ITEMS + 1 }, () => null),
+    })) as typeof fetch;
+
+    const config = { providers: { deepseek: plainSeed } } as unknown as OcxConfig;
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "deepseek-v4-flash", input: "ping", stream: true }),
+      }),
+      config,
+      { model: "", provider: "" },
+      {},
+    );
+    expect(response.status).toBe(502);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const text = await response.text();
+    const body = JSON.parse(text) as { error?: { type?: string; message?: string } };
+    expect(body.error?.type).toBe("server_error");
+    expect(body.error?.message).toContain("synthesized SSE item limit");
+    expect(text).not.toContain("data: [DONE]");
   });
 });
