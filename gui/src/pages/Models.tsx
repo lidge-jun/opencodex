@@ -178,7 +178,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [contextModalModels, setContextModalModels] = useState<string[]>([]);
   const [contextModelId, setContextModelId] = useState("");
   const [contextDefaultDraft, setContextDefaultDraft] = useState("");
-  const [contextModelDraft, setContextModelDraft] = useState("");
+  const [contextModelDrafts, setContextModelDrafts] = useState<Record<string, string>>({});
   const [contextSaving, setContextSaving] = useState(false);
   const [contextError, setContextError] = useState("");
   const [hoveredModel, setHoveredModel] = useState<{ namespaced: string; rect: DOMRect } | null>(null);
@@ -359,18 +359,15 @@ export default function Models({ apiBase }: { apiBase: string }) {
     setContextModalModels(modelIds);
     setContextModelId(modelId);
     setContextDefaultDraft(group.contextWindow ? String(group.contextWindow) : "");
-    setContextModelDraft(modelId && group.modelContextWindows?.[modelId]
-      ? String(group.modelContextWindows[modelId])
-      : "");
+    setContextModelDrafts(Object.fromEntries(
+      Object.entries(group.modelContextWindows ?? {})
+        .map(([model, window]) => [model, String(window)]),
+    ));
     setContextError("");
   };
 
   const selectContextModel = (modelId: string) => {
-    const group = groups.find(candidate => candidate.provider === contextModalProvider);
     setContextModelId(modelId);
-    setContextModelDraft(group?.modelContextWindows?.[modelId]
-      ? String(group.modelContextWindows[modelId])
-      : "");
   };
 
   const parseContextWindowDraft = (raw: string): number | null | undefined => {
@@ -385,7 +382,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const saveContextSettings = async () => {
     if (!contextModalProvider) return;
     const providerWindow = parseContextWindowDraft(contextDefaultDraft);
-    const modelWindow = parseContextWindowDraft(contextModelDraft);
+    const modelWindow = parseContextWindowDraft(contextModelDrafts[contextModelId] ?? "");
     if (providerWindow === undefined || modelWindow === undefined) {
       setContextError(t("models.contextInvalid"));
       return;
@@ -412,13 +409,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
         },
       );
       await readJsonOrThrow(response, t("models.contextSaveFailed"));
-      const refreshed = await load(true);
-      if (!refreshed) {
-        setContextError(t("models.loadFail"));
-        return;
-      }
       setContextModalProvider(null);
       publishFeedback(true, t("models.contextSaved"));
+      await load(true);
     } catch (error) {
       setContextError(error instanceof Error ? error.message : t("models.contextSaveFailed"));
     } finally {
@@ -1294,8 +1287,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
                     <input
                       className="input"
                       inputMode="numeric"
-                      value={contextModelDraft}
-                      onChange={event => setContextModelDraft(event.target.value)}
+                      value={contextModelDrafts[contextModelId] ?? ""}
+                      onChange={event => setContextModelDrafts(current => ({
+                        ...current,
+                        [contextModelId]: event.target.value,
+                      }))}
                       disabled={contextSaving}
                       placeholder={t("models.contextAutomatic")}
                     />

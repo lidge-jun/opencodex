@@ -219,16 +219,35 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     const contextDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
     const contextInputs = contextDialog.querySelectorAll<HTMLInputElement>("input");
     expect([...contextInputs].map(input => input.value)).toEqual(["256000", "64000"]);
+    const setValue = Object.getOwnPropertyDescriptor(
+      testWindow.HTMLInputElement.prototype,
+      "value",
+    )!.set!;
     await act(async () => {
-      const setValue = Object.getOwnPropertyDescriptor(
-        testWindow.HTMLInputElement.prototype,
-        "value",
-      )!.set!;
       setValue.call(contextInputs[0]!, "350000");
       contextInputs[0]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
       setValue.call(contextInputs[1]!, "100000");
       contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
     });
+    const pickContextModel = async (modelId: string) => {
+      await act(async () => {
+        contextDialog.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Model"]')!.click();
+      });
+      const option = [...testWindow.document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+        .find(candidate => candidate.textContent === modelId)!;
+      await act(async () => option.click());
+    };
+    await pickContextModel("claude-sonnet");
+    expect(contextInputs[1]!.value).toBe("");
+    await act(async () => {
+      setValue.call(contextInputs[1]!, "80000");
+      contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await pickContextModel("claude-opus");
+    expect(contextInputs[1]!.value).toBe("100000");
+    await pickContextModel("claude-sonnet");
+    expect(contextInputs[1]!.value).toBe("80000");
+    await pickContextModel("claude-opus");
     const applyContext = [...contextDialog.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Apply")!;
     await act(async () => {
@@ -240,6 +259,20 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       modelContextWindows: { "claude-opus": 100_000 },
     });
     expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).toBeNull();
+
+    await act(async () => buttonText("Context windows").click());
+    const refreshFailureDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    failCatalog = true;
+    await act(async () => {
+      [...refreshFailureDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies).toHaveLength(2);
+    expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).toBeNull();
+    expect(container.textContent).toContain("Context windows updated");
+    failCatalog = false;
 
     await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Shadow Call Intercept"]')?.click());
     // The workspace Select portals its listbox to document.body, so the options are not inside
