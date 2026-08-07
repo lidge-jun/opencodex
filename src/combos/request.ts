@@ -23,6 +23,17 @@ export function comboIdFromRawBody(body: unknown, config: OcxConfig): string | n
   return resolveComboId(config, model);
 }
 
+export function comboRequestHasImageInput(body: unknown): boolean {
+  const visit = (value: unknown): boolean => {
+    if (!value || typeof value !== "object") return false;
+    if (Array.isArray(value)) return value.some(visit);
+    const record = value as Record<string, unknown>;
+    if (record.type === "input_image") return true;
+    return Object.values(record).some(visit);
+  };
+  return visit(body);
+}
+
 export function concreteComboRequestBody(
   body: unknown,
   target: Pick<OcxComboTarget, "provider" | "model">,

@@ -65,6 +65,16 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
+
+/** Management wire shape: omit default imageInput "auto" (persist/response sparse). */
+function sparseComboConfig<T extends { imageInput?: "auto" | "disabled" }>(combo: T): Omit<T, "imageInput"> & { imageInput?: "disabled" } {
+  const { imageInput, ...rest } = combo;
+  return {
+    ...rest,
+    ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
+  };
+}
+
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -75,7 +85,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       return {
         id,
         model: comboPublicModelId(id, combo),
-        ...combo,
+        ...sparseComboConfig(combo),
       };
     }) });
   }
@@ -122,9 +132,16 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     });
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(body.combo as import("../../types").OcxComboConfig);
-    const stored: import("../../types").OcxComboConfig = normalized.alias === null
-      ? (({ alias: _alias, ...rest }) => rest)(normalized)
-      : normalized;
+    // Persist only non-default capability fields so config stays sparse.
+    const stored: import("../../types").OcxComboConfig = (({
+      alias,
+      imageInput,
+      ...rest
+    }) => ({
+      ...rest,
+      ...(alias === null ? {} : { alias }),
+      ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
+    }))(normalized);
     const sourceId = renameFrom ?? id;
     const previous = config.combos?.[sourceId];
     const oldPublicModel = previous ? comboPublicModelId(sourceId, previous) : null;
@@ -197,7 +214,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     }
     const catalogRefresh = await convergeCodexCatalog();
     if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
-    return jsonResponse({ success: true, id, model: newPublicModel, combo: normalized, catalogRefresh });
+    return jsonResponse({ success: true, id, model: newPublicModel, combo: sparseComboConfig(normalized), catalogRefresh });
   }
 
   if (url.pathname === "/api/combos" && req.method === "DELETE") {

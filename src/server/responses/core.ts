@@ -23,6 +23,7 @@ import {
   comboDefaultEffort,
   comboFailureDecision,
   comboIdFromRawBody,
+  comboRequestHasImageInput,
   concreteComboRequestBody,
   getCombo,
   isComboTargetInCooldown,
@@ -1003,6 +1004,32 @@ export async function handleComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // Expand previous_response_id before image policy and child dispatch so a
+  // continuation that only references prior images still fails closed when
+  // imageInput is disabled (and so targets see the full replayed input).
+  const body = expandPreviousResponseInput(rawBody);
+  if (previousResponseReplayFailure(body)) {
+    return formatErrorResponse(
+      400,
+      "previous_response_not_found",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+    );
+  }
+  // expandPreviousResponseInput leaves previous_response_id in place when state
+  // is missing (no failure marker). For image-disabled combos that would let a
+  // target resolve prior images out of band — reject unresolved continuations.
+  const unresolvedPrevious = typeof (body as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
+    && (body as { previous_response_id: string }).previous_response_id.trim().length > 0;
+  if (combo.imageInput === "disabled" && unresolvedPrevious) {
+    return formatErrorResponse(
+      400,
+      "previous_response_not_found",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+    );
+  }
+  if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
+    return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
+  }
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
     // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
@@ -1019,7 +1046,7 @@ export async function handleComboResponses(
   };
 
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
-    (rawBody as { input?: unknown } | undefined)?.input,
+    (body as { input?: unknown } | undefined)?.input,
   );
   const canDecryptUnreadableAgentTask = (target: (typeof combo.targets)[number]): boolean => {
     const provider = config.providers[target.provider];
@@ -1061,7 +1088,7 @@ export async function handleComboResponses(
     };
     const targetRoute = routeModel(config, `${pick.target.provider}/${pick.target.model}`);
     const childBody = concreteComboRequestBody(
-      rawBody,
+      body,
       pick.target,
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),

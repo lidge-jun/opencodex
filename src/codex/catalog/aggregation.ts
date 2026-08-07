@@ -128,9 +128,13 @@ export function deriveComboCatalogModel(
 ): CatalogModel | null {
   if (comboCatalogOmissionReason(combo, members) !== null) return null;
 
-  const inputModalities = intersectStrings(
+  const derivedInputModalities = intersectStrings(
     members.map(member => member.inputModalities ?? ["text"]),
   );
+  const inputModalities = combo.imageInput === "disabled"
+    ? derivedInputModalities.filter(modality => modality !== "image")
+    : derivedInputModalities;
+  if (inputModalities.length === 0) return null;
   const reasoningEfforts = intersectStrings(
     members.map(member => member.reasoningEfforts ?? []),
   );

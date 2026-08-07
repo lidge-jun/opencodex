@@ -36,6 +36,7 @@ export {
 } from "./failover";
 export {
   comboIdFromRawBody,
+  comboRequestHasImageInput,
   concreteComboRequestBody,
   resetComboEffortWarningStateForTests,
 } from "./request";

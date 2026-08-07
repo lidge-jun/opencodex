@@ -13,6 +13,7 @@ export type ModelOption = {
   id: string;
   namespaced?: string;
   reasoningEfforts?: string[];
+  inputModalities?: string[];
 };
 
 export interface ComboWorkspaceProps {
