@@ -281,11 +281,15 @@ selection on every request. They remain available when live discovery omits `def
 
 Native Cursor vision uses `SelectedImage` (JPEG soft-cap + `blobIdWithData`) for models that can see
 images natively — Claude, Gemini, GPT, Kimi, and Grok among them. `auto` and `composer-*` stay on
-the curated `noVisionModels` list and use the vision describe sidecar instead.
+the curated `noVisionModels` list and use the vision describe sidecar instead. Trailing non-image
+`developer` injections (Codex Desktop multi-agent guidance after `view_image`) are transparent for
+SelectedImage promotion so the continuation still carries the image and promote nudge.
 
 After pulling Cursor vision fixes, run `ocx ensure` so the proxy PID is the workspace `src/cli`
 binary rather than a stale install. Stale `providers.cursor.noVisionModels` stamps that list every
-Cursor model are healed back to the curated Auto/Composer/GLM set on OAuth reconcile.
+Cursor model are healed back to the curated Auto/Composer/GLM set on OAuth reconcile. For
+`cursor/grok-4.5`, Codex effort `none`/`minimal` maps to wire tier `medium` (some plans reject
+`-low` with Connect `not_found`); explicit `low` still passes through when the account exposes it.
 
 Cursor server-driven local tools are disabled by default. Codex continues using its own tools such as
 `apply_patch` and `exec_command` with its own approval and sandbox policy:

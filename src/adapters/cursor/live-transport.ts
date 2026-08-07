@@ -13,7 +13,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
-import { prepareCursorRawMessages, resolveActiveCursorImages } from "./images";
+import { prepareCursorRawMessages, resolveActiveCursorImages, cursorIsTrailingToolResultContinuation } from "./images";
 import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
@@ -391,7 +391,7 @@ export function finalizeAfterDrain(state: ReturnType<typeof createCursorProtobuf
 }
 
 export function clientToolFinalizeGraceMsForRequest(request: CursorRunRequest, baseGraceMs = CLIENT_TOOL_FINALIZE_GRACE_MS): number {
-  if (request.rawMessages?.at(-1)?.role === "toolResult") return baseGraceMs;
+  if (cursorIsTrailingToolResultContinuation(request.rawMessages)) return baseGraceMs;
   const text = activePromptText(request);
   if (!cursorRequestHasShellAlias(request.tools) || !isGenericToolUseCountDemoPrompt(text)) return baseGraceMs;
   const requestedCount = requestedCursorToolUseCount(text);

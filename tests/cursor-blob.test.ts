@@ -998,6 +998,55 @@ describe("Cursor blob handshake", () => {
     )).toBe(true);
   });
 
+  test("promotes view_image SelectedImage when multi_agent developer trails the toolResult", () => {
+    // Mirrors Desktop: injectDeveloperMessage appends after view_image output.
+    resetCursorBlobStateForTests();
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const collab = "<multi_agent_mode>Preferred sub-agent: model \"cursor/grok-4.5\", reasoning_effort \"high\"</multi_agent_mode>";
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      selectedImages: [{ uuid: "from-view", mimeType: "image/png", data: imageBytes }],
+      rawMessages: [
+        { role: "user", content: "What is in this image? Do not guess.", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [{ type: "image", imageUrl: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`, detail: "high" }],
+          isError: false,
+          timestamp: 3,
+        },
+        { role: "developer", content: collab, timestamp: 4 },
+      ],
+    });
+
+    expect(activeSelectedImages(bytes)?.length).toBe(1);
+    expect(actionText(bytes)).toBe(CURSOR_VISION_PROMOTE_NUDGE);
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    expect(result.result.value.content.every(item => item.content.case !== "image")).toBe(true);
+    expect(result.result.value.content.some(item =>
+      item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
+    )).toBe(true);
+  });
+
   test("image-only user attach keeps empty action text", () => {
     resetCursorBlobStateForTests();
     const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);

@@ -15,9 +15,11 @@ import {
   extractTrailingToolResultImagePromotion,
   prepareCursorImageForWire,
   prepareCursorRawMessages,
+  isTransparentCursorVisionSuffix,
   resolveActiveCursorImages,
   resolveCursorImages,
   sniffCursorImageDimensions,
+  stripTrailingTransparentDeveloperMessages,
 } from "../src/adapters/cursor/images";
 import {
   handleCursorNativeKv,
@@ -85,7 +87,7 @@ describe("Cursor image resolver", () => {
     });
   });
 
-  test("prep-before-cap accepts PNG over 1 MiB that JPEG-encodes under the wire cap", async () => {
+  test("prep-before-cap accepts PNG over 1 MiB that JPEG-encodes under the soft and wire caps", async () => {
     const png = await oversizedDecodablePng();
     expect(png.byteLength).toBeGreaterThan(MAX_CURSOR_IMAGE_BYTES);
     const url = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
@@ -93,6 +95,7 @@ describe("Cursor image resolver", () => {
     expect(resolved).toHaveLength(1);
     expect(resolved[0]?.mimeType).toBe("image/jpeg");
     expect(resolved[0]!.data.byteLength).toBeLessThan(png.byteLength);
+    expect(resolved[0]!.data.byteLength).toBeLessThanOrEqual(CURSOR_VISION_SOFT_MAX_BYTES);
     expect(resolved[0]!.data.byteLength).toBeLessThanOrEqual(MAX_CURSOR_IMAGE_BYTES);
   });
 
@@ -241,6 +244,50 @@ describe("Cursor image resolver", () => {
     ]);
     expect(resolved).toHaveLength(1);
     expect(resolved[0]?.data.byteLength).toBeGreaterThan(0);
+  });
+
+  test("transparent developer suffix does not block view_image SelectedImage promotion", async () => {
+    // Desktop injects <multi_agent_mode> after toolResult; that must stay transparent for vision.
+    const collab = "<multi_agent_mode>Preferred sub-agent: model \"cursor/grok-4.5\", reasoning_effort \"high\"</multi_agent_mode>";
+    const messages = [
+      { role: "user" as const, content: "What is in this image? Do not guess.", timestamp: 1 },
+      {
+        role: "assistant" as const,
+        model: "cursor/grok-4.5",
+        timestamp: 2,
+        content: [{ type: "toolCall" as const, id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+      },
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_view",
+        toolName: "view_image",
+        content: [{ type: "image" as const, imageUrl: PNG_DATA_URL, detail: "high" }],
+        isError: false,
+        timestamp: 3,
+      },
+      { role: "developer" as const, content: collab, timestamp: 4 },
+    ];
+    expect(isTransparentCursorVisionSuffix(messages[3]!)).toBe(true);
+    expect(stripTrailingTransparentDeveloperMessages(messages).at(-1)?.role).toBe("toolResult");
+    const resolved = await resolveActiveCursorImages(messages);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.data.byteLength).toBeGreaterThan(0);
+  });
+
+  test("user message after toolResult is not transparent (does not promote stale tool images)", async () => {
+    const resolved = await resolveActiveCursorImages([
+      { role: "user", content: "first", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "call_view",
+        toolName: "view_image",
+        content: [{ type: "image", imageUrl: PNG_DATA_URL }],
+        isError: false,
+        timestamp: 2,
+      },
+      { role: "user", content: "new question without an image", timestamp: 3 },
+    ]);
+    expect(resolved).toEqual([]);
   });
 
   test("resolveActiveCursorImages collects consecutive trailing image toolResults", async () => {
