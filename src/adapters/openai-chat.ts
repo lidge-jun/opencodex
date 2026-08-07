@@ -347,6 +347,15 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           // recorded under every call id — join unique texts only.
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
+          } else {
+            // Fallback (extends #950, closes #1193): the replay cache is
+            // bounded (64 entries / 256 KiB / 1 h TTL) and always misses on
+            // long sessions, and some tool rounds carry no recorded reasoning
+            // at all. DeepSeek thinking mode rejects ANY tool_call assistant
+            // message missing reasoning_content with HTTP 400, so inject a
+            // minimal placeholder rather than emit a bare continuation the
+            // upstream will reject.
+            reasoningContent = " ";
           }
         }
         if (reasoningContent.length > 0 && modelInList(provider.preserveReasoningContentModels, parsed.modelId)) {
@@ -413,10 +422,17 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
             toolCallId && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
               ? peekReasoningForCall(toolCallId, replayCacheScope)
               : undefined;
+          // Same fallback as the main-assistant path: never emit a bare orphan
+          // tool_call continuation on a thinking-mode provider — inject a
+          // placeholder when the replay cache missed (the bounded cache can
+          // always miss on long sessions), or DeepSeek thinking mode 400s.
+          const orphanReasoning =
+            cachedReasoning
+            ?? (modelInList(provider.preserveReasoningContentModels, parsed.modelId) ? " " : undefined);
           out.push({
             role: "assistant",
             content: emptyAssistantContent(provider),
-            ...(cachedReasoning ? { reasoning_content: cachedReasoning } : {}),
+            ...(orphanReasoning ? { reasoning_content: orphanReasoning } : {}),
             tool_calls: [{
               id: toolCallId,
               type: "function",

@@ -135,10 +135,64 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     expect(retry!["reasoning_content"]).toBe(REASONING);
   });
 
-  test("documented non-bug: opaque encrypted-only reasoning is intentionally not replayed", () => {
+  test("GAP D (issue #1193): replay cache MISS on the main assistant path injects a placeholder", () => {
+    // The replay cache is bounded (64 entries / 256 KiB / 1 h TTL) and always
+    // misses on long sessions. DeepSeek thinking mode rejects ANY tool_call
+    // assistant message without reasoning_content (HTTP 400), so a cache miss
+    // must degrade to a minimal placeholder instead of a bare continuation.
+    const { messages } = wireFor([
+      userMessage(),
+      { type: "compaction", encrypted_content: "ocx1:c3VtbWFyeQ==" },
+      functionCallItem(),
+      functionCallOutputItem(),
+    ]);
+    const assistant = toolCallAssistant(messages);
+    expect(assistant).toBeDefined();
+    expect(assistant!["reasoning_content"]).toBe(" ");
+  });
+
+  test("GAP E (issue #1193): replay cache MISS on the orphan-repair path injects a placeholder", () => {
+    // Same invariant for the synthesized orphan tool_call: with nothing
+    // recorded under the call id, repair still must not emit a bare
+    // continuation a thinking-mode provider will 400 on.
+    const { messages } = wireFor([userMessage(), functionCallOutputItem()]);
+    const assistant = toolCallAssistant(messages);
+    expect(assistant).toBeDefined();
+    expect(assistant!["reasoning_content"]).toBe(" ");
+  });
+
+  test("negative control: models outside preserveReasoningContentModels never get a placeholder", () => {
+    // The placeholder fallback is scoped to thinking-mode providers; other
+    // models keep the previous bare-continuation behavior. Use a custom
+    // provider so no registry preset seeds a preserve list.
+    const parsed = parseRequest({ model: "custom-chat/plain-model", input: [userMessage(), functionCallOutputItem()], stream: true });
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "custom-chat",
+      providers: {
+        "custom-chat": {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid/v1",
+          apiKey: "key",
+          models: ["plain-model"],
+        },
+      },
+    };
+    const route = routeModel(config, parsed.modelId);
+    parsed.modelId = route.modelId;
+    const req = createOpenAIChatAdapter(route.provider).buildRequest(parsed as OcxParsedRequest);
+    const { messages } = JSON.parse(req.body as string) as { messages: Array<Record<string, unknown>> };
+    const assistant = toolCallAssistant(messages);
+    expect(assistant).toBeDefined();
+    expect(assistant!["reasoning_content"]).toBeUndefined();
+  });
+
+  test("documented non-bug: opaque encrypted-only reasoning degrades to the placeholder, not invented plaintext", () => {
     // Native (non-ocxr1) encrypted reasoning has no readable text; the parser
-    // deliberately degrades instead of inventing replayable plaintext. Not a
-    // candidate for the opencode-go path (its reasoning is plaintext/ocxr1).
+    // deliberately degrades instead of inventing replayable plaintext. On a
+    // thinking-mode provider the fallback now attaches the minimal placeholder
+    // (issue #1193) rather than replaying anything, so the continuation stays
+    // valid without fabricating reasoning text.
     const { messages } = wireFor([
       userMessage(),
       { type: "reasoning", id: "rs_1", encrypted_content: "some-opaque-blob" },
@@ -147,7 +201,7 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     ]);
     const assistant = toolCallAssistant(messages);
     expect(assistant).toBeDefined();
-    expect(assistant!["reasoning_content"]).toBeUndefined();
+    expect(assistant!["reasoning_content"]).toBe(" ");
   });
 });
 
