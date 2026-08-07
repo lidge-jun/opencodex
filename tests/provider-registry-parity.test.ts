@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex/catalog";
+import { CURSOR_STATIC_MODELS, cursorModelInputModalities } from "../src/adapters/cursor/discovery";
 import { getModelMetadata, resolveMetadataProvider } from "../src/generated/model-metadata";
 import { buildInitProviders } from "../src/cli/init";
 import { OAUTH_PROVIDERS } from "../src/oauth";
@@ -596,6 +597,18 @@ describe("provider registry parity", () => {
     expect(seed.modelContextWindows?.["gpt-5.6-luna"]).toBe(1_000_000);
     expect(seed.modelReasoningEfforts?.["gpt-5.5"]).toEqual(["low", "medium", "high"]);
     expect(seed.modelReasoningEfforts?.["gpt-5.6-sol"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cursor?.noVisionModels).toBeUndefined();
+    expect(seed.noVisionModels).toBeUndefined();
+    expect(seed.modelInputModalities?.auto).toEqual(["text", "image"]);
+    expect(seed.modelInputModalities?.["composer-2.5"]).toEqual(["text", "image"]);
+    expect(seed.modelInputModalities?.["gpt-5.5"]).toEqual(["text", "image"]);
+    expect(seed.modelInputModalities?.["gemini-3-pro"]).toEqual(["text", "image"]);
+    for (const model of CURSOR_STATIC_MODELS) {
+      expect(
+        seed.modelInputModalities?.[model.id],
+        `Cursor registry seed must advertise native image input for ${model.id}`,
+      ).toEqual(cursorModelInputModalities(CURSOR_STATIC_MODELS)[model.id]);
+    }
 
     const savedCursor: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
     enrichProviderFromCatalog("cursor", savedCursor);
