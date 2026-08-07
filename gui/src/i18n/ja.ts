@@ -621,7 +621,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.reason.usage_unsupported": "このプロバイダーは使用量を報告しません。",
   "logs.detail.reason.output_missing": "正の出力トークン数が報告されませんでした。",
   "logs.detail.reason.invalid_duration": "リクエストの所要時間が有効ではありません。",
-  "logs.detail.reason.price_unmatched": "一致する jawcode 価格が見つかりませんでした。",
+  "logs.detail.reason.price_unmatched": "一致する価格が見つかりませんでした。",
   "logs.detail.reason.invalid_cache_breakdown": "キャッシュトークンの詳細が合計入力トークンと矛盾しています。",
   "logs.detail.reason.invalid_usage": "使用量に無効なトークン値が含まれています。",
   "logs.detail.reason.combo_attempt_unavailable": "少なくとも 1 つのコンボ試行に価格を設定できませんでした。",

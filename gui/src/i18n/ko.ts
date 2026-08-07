@@ -655,7 +655,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.reason.usage_unsupported": "이 프로바이더는 usage 보고를 지원하지 않습니다.",
   "logs.detail.reason.output_missing": "양수 출력 토큰 수가 보고되지 않았습니다.",
   "logs.detail.reason.invalid_duration": "요청 소요 시간이 유효하지 않습니다.",
-  "logs.detail.reason.price_unmatched": "매칭되는 jawcode 가격을 찾지 못했습니다.",
+  "logs.detail.reason.price_unmatched": "매칭되는 가격을 찾지 못했습니다.",
   "logs.detail.reason.invalid_cache_breakdown": "캐시 토큰 상세가 전체 입력 토큰과 모순됩니다.",
   "logs.detail.reason.invalid_usage": "usage에 유효하지 않은 토큰 값이 있습니다.",
   "logs.detail.reason.combo_attempt_unavailable": "하나 이상의 combo 시도 비용을 계산할 수 없습니다.",

@@ -636,7 +636,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.reason.usage_unsupported": "Dieser Anbieter meldet keine Nutzung.",
   "logs.detail.reason.output_missing": "Es wurden keine positiven Ausgabe-Tokens gemeldet.",
   "logs.detail.reason.invalid_duration": "Die Anfragedauer ist ungültig.",
-  "logs.detail.reason.price_unmatched": "Kein passender jawcode-Preis gefunden.",
+  "logs.detail.reason.price_unmatched": "Kein passender Preis gefunden.",
   "logs.detail.reason.invalid_cache_breakdown": "Cache-Token-Details widersprechen den Eingabe-Tokens.",
   "logs.detail.reason.invalid_usage": "Die Nutzung enthält einen ungültigen Token-Wert.",
   "logs.detail.reason.combo_attempt_unavailable": "Mindestens ein Combo-Versuch konnte nicht bepreist werden.",

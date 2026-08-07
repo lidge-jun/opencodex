@@ -663,7 +663,7 @@ export const en = {
   "logs.detail.reason.usage_unsupported": "This provider does not report usage.",
   "logs.detail.reason.output_missing": "No positive output token count was reported.",
   "logs.detail.reason.invalid_duration": "The request duration is not valid.",
-  "logs.detail.reason.price_unmatched": "No matching jawcode price was found.",
+  "logs.detail.reason.price_unmatched": "No matching price was found.",
   "logs.detail.reason.invalid_cache_breakdown": "Cache token details conflict with total input tokens.",
   "logs.detail.reason.invalid_usage": "Usage contains an invalid token value.",
   "logs.detail.reason.combo_attempt_unavailable": "At least one combo attempt could not be priced.",
