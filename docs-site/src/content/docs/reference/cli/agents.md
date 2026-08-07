@@ -17,7 +17,7 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
 
@@ -30,6 +30,8 @@ Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent s
 | `mode default` | Respect upstream model surface pins. |
 | `mode v2` | Force all models to v2, enable native v2, and preserve the active thread limit. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
+| `mode-hint <text>` | Set the Proactive delegation hint (Ultra mode) for every model and effort. |
+| `mode-hint --clear` | Remove the hint so the effort-derived policy (ultra = proactive) resumes. |
 
 ```bash
 ocx v2 status
@@ -37,12 +39,22 @@ ocx v2 mode v1
 ocx v2 mode default
 ocx v2 on
 ocx v2 threads 16
+ocx v2 mode-hint "Proactive multi-agent delegation is active."
+ocx v2 mode-hint --clear
 ```
 
 The `mode` subcommand writes `multiAgentMode` to the opencodex config and resyncs the Codex catalog.
 Mode and flag transitions move the current numeric thread limit between the valid v1/v2 Codex keys;
 a failed transition restores the original `config.toml`. Changes apply to new Codex sessions, while
 running sessions keep their pinned surface.
+
+`mode-hint` writes `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
+`$CODEX_HOME/config.toml`. The hint overrides codex-rs's effort-derived multi-agent
+policy, so any model and any reasoning effort receives the Proactive delegation
+prompt. It does **not** change reasoning effort itself. A missing argument or a
+whitespace-only value is rejected; only `--clear` removes the hint. This is the
+Ultra mode toggle exposed in the Subagents dashboard, which also requires the
+`multi_agent_v2` feature (see `ocx v2 on`).
 
 ## Combo routing
 

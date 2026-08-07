@@ -129,8 +129,12 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     return 0;
   }
   if (verb === "mode-hint") {
-    const flag = (args[1] ?? "").trim();
-    if (flag === "--clear" || flag === "") {
+    const value = args[1];
+    if (value === undefined) {
+      log.error("v2 mode-hint: pass the hint text, or --clear to unset it.");
+      return 1;
+    }
+    if (value === "--clear") {
       const result = setMultiAgentModeHintText(null);
       if (!result.ok) {
         log.error(`v2 mode-hint: ${result.error}`);
@@ -141,11 +145,11 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         : "multi_agent_mode_hint_text already unset — nothing to do.");
       return 0;
     }
-    if (flag.startsWith("-")) {
+    if (value.trim().length === 0 || value.startsWith("-")) {
       log.error("v2 mode-hint: pass the hint text, or --clear to unset it.");
       return 1;
     }
-    const result = setMultiAgentModeHintText(flag);
+    const result = setMultiAgentModeHintText(value);
     if (!result.ok) {
       log.error(`v2 mode-hint: ${result.error}`);
       return 1;

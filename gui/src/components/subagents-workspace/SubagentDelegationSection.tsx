@@ -6,6 +6,7 @@
  * better next to the roster it affects: the roster picks who may be called, this picks who
  * gets called first.
  */
+import { useState } from "react";
 import { Select } from "../../ui";
 import { useT } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
@@ -22,6 +23,7 @@ export interface SubagentDelegationSectionProps {
   saving: boolean;
   onSave: (patch: DelegationPatch) => void;
   ultraMode: UltraModeState;
+  ultraSaving: boolean;
   onUltraModeSave: (patch: UltraModePatch) => void;
 }
 
@@ -35,6 +37,7 @@ export default function SubagentDelegationSection({
   saving,
   onSave,
   ultraMode,
+  ultraSaving,
   onUltraModeSave,
 }: SubagentDelegationSectionProps) {
   const t = useT();
@@ -116,35 +119,86 @@ export default function SubagentDelegationSection({
           type="button"
           className={`switch ${ultraOn ? "on" : ""}`}
           onClick={() => onUltraModeSave({ multiAgentModeHintText: ultraOn ? null : ULTRA_MODE_PRESET })}
-          disabled={saving || !ultraMode.multiAgentV2Enabled}
+          disabled={saving || ultraSaving || !ultraMode.multiAgentV2Enabled}
           aria-label={t("sub.ultraMode")}
           aria-pressed={ultraOn}
-          title={ultraMode.multiAgentV2Enabled ? undefined : t("sub.ultraModeV2Required")}
         >
           <span className="knob" />
         </button>
+        {!ultraMode.multiAgentV2Enabled && (
+          <div className="muted setting-hint">{t("sub.ultraModeV2Required")}</div>
+        )}
       </div>
       {ultraOn && (
         <div className="swi-delegation-row swi-ultra-mode-editor">
-          <textarea
-            className="input swi-ultra-mode-textarea"
-            value={ultraMode.hintText ?? ""}
-            onChange={e => onUltraModeSave({ multiAgentModeHintText: e.target.value || null })}
-            disabled={saving}
-            rows={4}
-            aria-label={t("sub.ultraModeText")}
+          <UltraModeEditor
+            key={ultraMode.hintText}
+            initialHint={ultraMode.hintText ?? ""}
+            disabled={saving || ultraSaving}
+            onSave={onUltraModeSave}
+            preset={ULTRA_MODE_PRESET}
+            labels={{
+              text: t("sub.ultraModeText"),
+              preset: t("sub.ultraModePreset"),
+              save: t("common.save"),
+            }}
           />
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => onUltraModeSave({ multiAgentModeHintText: ULTRA_MODE_PRESET })}
-            disabled={saving}
-          >
-            {t("sub.ultraModePreset")}
-          </button>
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Local-draft editor for the Ultra mode hint. Drafts are owned here and committed
+ * explicitly; the parent remounts this editor (via `key`) whenever the committed
+ * server value changes, so a stale draft never survives a reload or toggle flip.
+ */
+function UltraModeEditor({
+  initialHint,
+  disabled,
+  onSave,
+  preset,
+  labels,
+}: {
+  initialHint: string;
+  disabled: boolean;
+  onSave: (patch: UltraModePatch) => void;
+  preset: string;
+  labels: { text: string; preset: string; save: string };
+}) {
+  const [draft, setDraft] = useState(initialHint);
+  const commit = () => {
+    if (draft.trim().length === 0) return;
+    onSave({ multiAgentModeHintText: draft });
+  };
+  return (
+    <>
+      <textarea
+        className="input swi-ultra-mode-textarea"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        disabled={disabled}
+        rows={4}
+        aria-label={labels.text}
+      />
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        onClick={() => setDraft(preset)}
+        disabled={disabled}
+      >
+        {labels.preset}
+      </button>
+      <button
+        type="button"
+        className="btn btn-primary btn-sm"
+        onClick={commit}
+        disabled={disabled || draft.trim().length === 0}
+      >
+        {labels.save}
+      </button>
+    </>
   );
 }
 

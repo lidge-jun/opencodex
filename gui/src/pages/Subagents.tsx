@@ -28,35 +28,32 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
   const [ultraSaving, setUltraSaving] = useState(false);
 
-  // Load /api/v2 state (multi-agent v2 flag + mode hint) once on mount.
+  // Shared loader for /api/v2 state (multi-agent v2 flag + mode hint). Initial-load
+  // failures surface sub.ultraModeLoadFail; refresh failures are rethrown so
+  // saveUltraMode can report them against the save action.
   const loadUltraMode = useCallback(async () => {
-    try {
-      const res = await fetch(`${apiBase}/api/v2`);
-      const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
-      if (!data) return;
-      setUltraMode({
-        enabled: data.enabled ?? false,
-        hintText: data.multiAgentModeHintText ?? null,
-        multiAgentV2Enabled: data.enabled ?? false,
-      });
-    } catch { /* keep defaults; panel still renders */ }
+    const res = await fetch(`${apiBase}/api/v2`);
+    const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
+    if (!data) return;
+    setUltraMode({
+      enabled: data.enabled ?? false,
+      hintText: data.multiAgentModeHintText ?? null,
+      multiAgentV2Enabled: data.enabled ?? false,
+    });
   }, [apiBase, t]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const res = await fetch(`${apiBase}/api/v2`);
-      const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
-      if (cancelled) return;
-      if (!data) return;
-      setUltraMode({
-        enabled: data.enabled ?? false,
-        hintText: data.multiAgentModeHintText ?? null,
-        multiAgentV2Enabled: data.enabled ?? false,
-      });
-    })().catch(() => { /* keep defaults; panel still renders */ });
+      await loadUltraMode();
+    })().catch(() => {
+      if (!cancelled) {
+        setOk(false);
+        setStatus(t("sub.ultraModeLoadFail"));
+      }
+    });
     return () => { cancelled = true; };
-  }, [apiBase, t]);
+  }, [loadUltraMode, t]);
 
   const saveUltraMode = async (patch: UltraModePatch) => {
     if (ultraSaving) return;
@@ -186,6 +183,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           saving: delegation.saving,
           onSave: patch => { void delegation.save(patch); },
           ultraMode,
+          ultraSaving,
           onUltraModeSave: patch => { void saveUltraMode(patch); },
         }}
       />

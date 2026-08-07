@@ -653,6 +653,16 @@ function setV2StringField(key: string, value: string | null, configPath?: string
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const encoded = value === null ? null : encodeTomlBasicString(value);
 
+  // Multiline TOML strings ("""...""" / '''...''') span multiple lines and the
+  // single-line table editor cannot rewrite or remove them without corrupting
+  // the document (scanTomlValueEnd stops at the second quote). Refuse the edit
+  // rather than write invalid TOML; the user can convert the value to a single
+  // line first. Single-line literals and basic strings are unaffected.
+  const multilinePrefix = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*("""|''')`, "m");
+  if (multilinePrefix.test(content)) {
+    return { ok: false, error: `multi-line TOML string for ${key} is not editable; convert it to a single-line string first` };
+  }
+
   if (tomlTableBody(content, "features.multi_agent_v2") !== null) {
     const next = editScalarInTable(content, "features.multi_agent_v2", key, encoded);
     if (next === content) return { ok: true, changed: false };

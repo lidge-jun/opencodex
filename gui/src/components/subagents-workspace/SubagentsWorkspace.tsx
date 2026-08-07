@@ -46,6 +46,7 @@ export interface SubagentsWorkspaceProps {
     saving: boolean;
     onSave: (patch: DelegationPatch) => void;
     ultraMode: UltraModeState;
+    ultraSaving: boolean;
     onUltraModeSave: (patch: UltraModePatch) => void;
   };
 }
@@ -227,6 +228,7 @@ export default function SubagentsWorkspace({
             saving={delegation.saving}
             onSave={delegation.onSave}
             ultraMode={delegation.ultraMode}
+            ultraSaving={delegation.ultraSaving}
             onUltraModeSave={delegation.onUltraModeSave}
           />
         </section>

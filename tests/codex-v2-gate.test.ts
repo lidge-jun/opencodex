@@ -310,6 +310,14 @@ describe("multi_agent_mode_hint_text reader/writer", () => {
     expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"\r\n`);
     expect(out).not.toMatch(/[^\r]\n/);
   });
+
+  test("writer refuses to edit an existing multi-line TOML string (would corrupt the doc)", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\"\nProactive\nmulti-line\n\"\"\"\n");
+    const before = readFileSync(path, "utf8");
+    expect(setMultiAgentModeHintText(PRESET, path)).toMatchObject({ ok: false });
+    expect(setMultiAgentModeHintText(null, path)).toMatchObject({ ok: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
 });
 
 describe("thread-limit-preserving v1/v2 transition", () => {
@@ -1112,6 +1120,30 @@ describe("cli surface", () => {
       expect(getMultiAgentModeHintText(path)).toBe("Proactive multi-agent delegation is active.");
       expect(await cmdV2(["status"], { log })).toBe(0);
       expect(logs.join("\n")).toContain('multi_agent_mode_hint_text: "Proactive multi-agent delegation is active."');
+      expect(await cmdV2(["mode-hint", "--clear"], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe(null);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
+  });
+
+  test("mode-hint preserves raw whitespace in nonblank hints and rejects blank/missing args", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    const logs: string[] = [];
+    const log = { log: (m?: unknown) => { logs.push(String(m)); }, error: (m?: unknown) => { logs.push(String(m)); } };
+    try {
+      // Raw leading/trailing whitespace is preserved, matching the API contract.
+      expect(await cmdV2(["mode-hint", "  spaced hint  "], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe("  spaced hint  ");
+      // A present whitespace-only value is rejected (API rejects it with 400).
+      expect(await cmdV2(["mode-hint", "   "], { log })).toBe(1);
+      expect(getMultiAgentModeHintText(path)).toBe("  spaced hint  ");
+      // A missing argument is a usage error, never a destructive clear.
+      expect(await cmdV2(["mode-hint"], { log })).toBe(1);
+      expect(getMultiAgentModeHintText(path)).toBe("  spaced hint  ");
+      // Explicit --clear still removes the hint.
       expect(await cmdV2(["mode-hint", "--clear"], { log })).toBe(0);
       expect(getMultiAgentModeHintText(path)).toBe(null);
     } finally {
