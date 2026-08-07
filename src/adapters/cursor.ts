@@ -7,6 +7,7 @@ import { isCursorBenignCancelError, isCursorInvalidArgumentError, safeCursorErro
 import { isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
+import { cursorIsTrailingToolResultContinuation } from "./cursor/images";
 import { createCursorRequest } from "./cursor/request-builder";
 import {
   createLiveCursorTransport,
@@ -111,7 +112,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         _parsed._cursorConversationId = request.conversationId;
         let emittedOutput = false;
         let replayUnsafe = false;
-        const lastRawIsToolResult = _parsed.context.messages.at(-1)?.role === "toolResult";
+        // Desktop multi_agent developer suffixes trail toolResult; treat those as continuations
+        // so invalid_argument does not force a fresh conversation mid tool resume.
+        const lastRawIsToolResult = cursorIsTrailingToolResultContinuation(_parsed.context.messages);
 
         const runOnce = async (activeRequest: ReturnType<typeof createCursorRequest>) => {
           await runCursorTurnWithRetry(

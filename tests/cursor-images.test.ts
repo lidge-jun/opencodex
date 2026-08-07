@@ -25,6 +25,8 @@ import {
   handleCursorNativeKv,
   resetCursorBlobStateForTests,
 } from "../src/adapters/cursor/native-exec";
+import { cursorRequestMessagesFromRaw } from "../src/adapters/cursor/request-builder";
+import { activePromptText } from "../src/adapters/cursor/protobuf-request";
 import {
   AgentClientMessageSchema,
   GetBlobArgsSchema,
@@ -274,6 +276,25 @@ describe("Cursor image resolver", () => {
     expect(resolved[0]?.data.byteLength).toBeGreaterThan(0);
   });
 
+  test("non-multi_agent developer after toolResult is not transparent", async () => {
+    const messages = [
+      { role: "user" as const, content: "first", timestamp: 1 },
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_view",
+        toolName: "view_image",
+        content: [{ type: "image" as const, imageUrl: PNG_DATA_URL }],
+        isError: false,
+        timestamp: 2,
+      },
+      { role: "developer" as const, content: "Answer with the forced web-search result only.", timestamp: 3 },
+    ];
+    expect(isTransparentCursorVisionSuffix(messages[2]!)).toBe(false);
+    expect(stripTrailingTransparentDeveloperMessages(messages)).toBe(messages);
+    const resolved = await resolveActiveCursorImages(messages);
+    expect(resolved).toEqual([]);
+  });
+
   test("user message after toolResult is not transparent (does not promote stale tool images)", async () => {
     const resolved = await resolveActiveCursorImages([
       { role: "user", content: "first", timestamp: 1 },
@@ -513,5 +534,25 @@ describe("Cursor image resolver", () => {
     expect(user?.role).toBe("user");
     if (user?.role !== "user" || typeof user.content === "string") throw new Error("expected parts");
     expect(user.content).toEqual([{ type: "text", text: CURSOR_VISION_IMAGE_OMITTED }]);
+  });
+
+  test("cursorRequestMessagesFromRaw surfaces omission text after prepare", async () => {
+    const bmpUrl = `data:image/bmp;base64,${Buffer.from([0x42, 0x4d, 0, 0]).toString("base64")}`;
+    const raw = await prepareCursorRawMessages([
+      {
+        role: "user",
+        content: [{ type: "image", imageUrl: bmpUrl }],
+        timestamp: 1,
+      },
+    ]);
+    const messages = cursorRequestMessagesFromRaw(raw);
+    expect(messages).toEqual([{ role: "user", content: CURSOR_VISION_IMAGE_OMITTED }]);
+    expect(activePromptText({
+      modelId: "grok-4.5",
+      conversationId: "cursor_test",
+      system: [],
+      messages,
+      rawMessages: raw,
+    })).toBe(CURSOR_VISION_IMAGE_OMITTED);
   });
 });

@@ -215,6 +215,19 @@ function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
   }
 }
 
+/**
+ * Rebuild the text `messages` channel from prepared `rawMessages` so omission markers
+ * and JPEG-rewritten tool results stay visible to {@link activePromptText}.
+ */
+export function cursorRequestMessagesFromRaw(
+  messages: readonly OcxMessage[] | undefined,
+): CursorRequestMessage[] {
+  if (!messages?.length) return [];
+  return messages
+    .map(requestMessage)
+    .filter((message): message is CursorRequestMessage => !!message);
+}
+
 export function generatedCursorConversationId(): string {
   return `cursor_${crypto.randomUUID().replace(/-/g, "")}`;
 }
@@ -265,9 +278,7 @@ export function createCursorRequest(
   parsed: OcxParsedRequest,
   options: CreateCursorRequestOptions = {},
 ): CursorRunRequest {
-  const messages = parsed.context.messages
-    .map(requestMessage)
-    .filter((message): message is CursorRequestMessage => !!message);
+  const messages = cursorRequestMessagesFromRaw(parsed.context.messages);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);

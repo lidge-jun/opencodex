@@ -296,9 +296,8 @@ export async function resolveCursorImages(
       ...(options?.details?.[i] ? { detail: options.details[i] } : {}),
     });
     if (outcome.status === "omitted") continue;
-    if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) {
-      throw new CursorImageError("Image input is too large (max 1 MiB). Resize and retry.");
-    }
+    // Match prepareCursorImageDataUrl: drop the attachment rather than failing the turn.
+    if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) continue;
     out.push(outcome.image);
   }
   return out;
@@ -561,14 +560,25 @@ export function extractTrailingToolResultImageParts(
   return { parts, omittedOlder };
 }
 
+function developerMessagePlainText(content: OcxMessage["content"] | string): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map(part => (part.type === "text" ? part.text : ""))
+    .filter(text => text.length > 0)
+    .join("\n");
+}
+
 /**
- * Trailing non-image developer messages (Codex Desktop multi-agent guidance) are
- * transparent for Cursor vision / tool-continuation detection so `view_image`
- * still promotes onto SelectedImage.
+ * Codex Desktop multi-agent guidance injected after tool results is transparent for
+ * Cursor vision / tool-continuation detection so `view_image` still promotes onto
+ * SelectedImage. Other developer turns (terminal-guard, web-search nudges, etc.) are not.
  */
 export function isTransparentCursorVisionSuffix(message: OcxMessage): boolean {
   if (message.role !== "developer") return false;
-  return extractCursorImageParts(message.content).length === 0;
+  if (extractCursorImageParts(message.content).length > 0) return false;
+  const text = developerMessagePlainText(message.content);
+  return text.includes("<multi_agent_mode>") && text.includes("</multi_agent_mode>");
 }
 
 /** Drop trailing transparent developers; returns the same array reference when unchanged. */
