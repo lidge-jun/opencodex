@@ -210,6 +210,40 @@ describe("OpenAI provider option migration matrix", () => {
     expect(result.config.providers.openai.modelCosts).toEqual(multiCosts);
   });
 
+  test("rewrites legacy openai-multi/ modelCosts keys into the merged row", () => {
+    const multiCosts = {
+      "openai-multi/gpt-5.6-sol": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+    };
+    const costs = { "gpt-4.1": { input: 3, output: 4, cacheRead: 0.2, cacheWrite: 0 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    // The prefixed legacy key resolves to the bare model id after canonicalization.
+    expect(result.config.providers.openai.modelCosts).toEqual({
+      ...{ "gpt-5.6-sol": multiCosts["openai-multi/gpt-5.6-sol"] },
+      ...costs,
+    });
+  });
+
+  test("canonical openai modelCosts still wins after legacy key rewrite collision", () => {
+    const costs = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const multiCosts = {
+      "openai-multi/gpt-5.6": { input: 9, output: 9, cacheRead: 0.9, cacheWrite: 0.9 },
+    };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual(costs);
+  });
+
   test("legacy multi with an out-of-bound overlay rate collides", () => {
     const input = cfg({
       openaiProviderTierVersion: 1,
