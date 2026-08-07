@@ -146,13 +146,13 @@ ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-不使用 `--json` 时，JSON 会先输出，随后是规范目标路径、合并警告、客户端专属的启动前提示，以及一个模型计数，并标明有多少行省略了上下文限制（客户端会对这些项应用自己的默认值）。
+不使用 `--json` 时，会先输出所选客户端原生格式的生成配置，随后是规范目标路径、合并警告、客户端专属的启动前提示，以及一个模型计数，并标明有多少行省略了上下文限制（客户端会对这些项应用自己的默认值）。
 
 | 客户端 | 规范目标路径 | 下载文件名 | 环境变量 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json`（设置了 `XDG_CONFIG_HOME` 时以其为准） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 无 - 块中携带字面值 `opencodex-loopback` |
-| `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | 无 - loopback placeholder |
+| `omp` | `~/.omp/agent/models.yml`（默认路径；即使为空，`OMP_PROFILE` 也优先于 `PI_PROFILE`） | `omp-models.yaml` | 无 - 字面值 `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 无 - loopback placeholder |

@@ -176,15 +176,16 @@ ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-Без `--json` сначала идёт JSON, затем канонический путь назначения, предупреждение о merge,
-клиентская подсказка перед запуском и количество моделей с указанием, сколько строк не имеют
-context limit'а (для них клиент применяет собственные default'ы).
+Без `--json` сначала идёт сгенерированная конфигурация в нативном формате выбранного клиента,
+затем канонический путь назначения, предупреждение о merge, клиентская подсказка перед запуском
+и количество моделей с указанием, сколько строк не имеют context limit'а (для них клиент применяет
+собственные default'ы).
 
 | Клиент | Канонический путь | Имя скачиваемого файла | Переменная окружения |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` имеет приоритет, если задан) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | нет — блок несёт литерал `opencodex-loopback` |
-| `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | нет — loopback placeholder |
+| `omp` | `~/.omp/agent/models.yml` (по умолчанию; `OMP_PROFILE` имеет приоритет над `PI_PROFILE`, даже если пуст) | `omp-models.yaml` | нет — литерал `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | нет — loopback placeholder |

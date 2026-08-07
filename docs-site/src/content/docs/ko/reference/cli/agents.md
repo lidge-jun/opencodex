@@ -151,13 +151,13 @@ ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-`--json`이 없으면 JSON이 먼저 나오고, 그다음 표준 대상 경로, merge 경고, 해당 client에 env 변수가 있는 경우 env export 줄, 그리고 context limit을 생략한 row 수를 포함한 model count가 이어집니다(이 경우 client는 자체 기본값을 적용합니다).
+`--json`이 없으면 선택한 client의 네이티브 형식으로 생성된 config가 먼저 나오고, 그다음 표준 대상 경로, merge 경고, 해당 client에 env 변수가 있는 경우 env export 줄, 그리고 context limit을 생략한 row 수를 포함한 model count가 이어집니다(이 경우 client는 자체 기본값을 적용합니다).
 
 | 클라이언트 | 표준 대상 경로 | 다운로드 파일명 | 환경 변수 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME`이 설정되어 있으면 우선합니다) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 없음 - 블록에 리터럴 `opencodex-loopback`이 들어갑니다 |
-| `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | 없음 - loopback placeholder |
+| `omp` | `~/.omp/agent/models.yml` (기본값. 빈 값이어도 `OMP_PROFILE`이 `PI_PROFILE`보다 우선합니다) | `omp-models.yaml` | 없음 - 리터럴 `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 없음 - loopback placeholder |

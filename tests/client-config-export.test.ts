@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
@@ -465,25 +466,38 @@ describe("EXPORT_CLIENTS registry", () => {
   });
 
   test("the OMP destination follows its global agent directory and profile selectors", () => {
-    expect(EXPORT_CLIENTS.omp.destination({} as NodeJS.ProcessEnv)).toBe(
-      join(homedir(), ".omp", "agent", "models.yml"),
-    );
-    const profiled = { OMP_PROFILE: "work", PI_CONFIG_DIR: ".custom-omp" } as NodeJS.ProcessEnv;
-    expect(EXPORT_CLIENTS.omp.destination(profiled)).toBe(
-      join(homedir(), ".custom-omp", "profiles", "work", "agent", "models.yml"),
-    );
-    expect(EXPORT_CLIENTS.omp.destination(profiled)).toBe(ompModelsConfigPath(profiled));
-    expect(EXPORT_CLIENTS.omp.destination({ PI_CONFIG_DIR: "/srv/omp" } as NodeJS.ProcessEnv)).toBe(
-      join("/srv/omp", "agent", "models.yml"),
-    );
-    // OMP_PROFILE wins by presence, so an explicit blank selects the default
-    // profile instead of inheriting a legacy PI_PROFILE.
-    expect(EXPORT_CLIENTS.omp.destination({
-      OMP_PROFILE: "  ",
-      PI_PROFILE: "legacy",
-    } as NodeJS.ProcessEnv)).toBe(
-      join(homedir(), ".omp", "agent", "models.yml"),
-    );
+    const home = mkdtempSync(join(tmpdir(), "ocx-omp-destination-"));
+    try {
+      const defaultAgentDir = join(home, ".omp", "agent");
+      expect(ompModelsConfigPath({} as NodeJS.ProcessEnv, home)).toBe(join(defaultAgentDir, "models.yml"));
+
+      mkdirSync(defaultAgentDir, { recursive: true });
+      writeFileSync(join(defaultAgentDir, "models.yaml"), "providers: {}\n");
+      expect(ompModelsConfigPath({} as NodeJS.ProcessEnv, home)).toBe(join(defaultAgentDir, "models.yaml"));
+      writeFileSync(join(defaultAgentDir, "models.yml"), "providers: {}\n");
+      expect(ompModelsConfigPath({} as NodeJS.ProcessEnv, home)).toBe(join(defaultAgentDir, "models.yml"));
+
+      const configRoot = join(home, "custom-omp");
+      const profiled = { OMP_PROFILE: "work", PI_CONFIG_DIR: configRoot } as NodeJS.ProcessEnv;
+      expect(EXPORT_CLIENTS.omp.destination(profiled)).toBe(
+        join(configRoot, "profiles", "work", "agent", "models.yml"),
+      );
+      expect(EXPORT_CLIENTS.omp.destination(profiled)).toBe(ompModelsConfigPath(profiled));
+      expect(EXPORT_CLIENTS.omp.destination({ PI_CONFIG_DIR: configRoot } as NodeJS.ProcessEnv)).toBe(
+        join(configRoot, "agent", "models.yml"),
+      );
+      // OMP_PROFILE wins by presence, so an explicit blank selects the default
+      // profile instead of inheriting a legacy PI_PROFILE.
+      expect(EXPORT_CLIENTS.omp.destination({
+        OMP_PROFILE: "  ",
+        PI_PROFILE: "legacy",
+        PI_CONFIG_DIR: configRoot,
+      } as NodeJS.ProcessEnv)).toBe(
+        join(configRoot, "agent", "models.yml"),
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("apiKeyEnv and exportHint name the variable the config references", () => {

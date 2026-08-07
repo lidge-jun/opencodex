@@ -145,13 +145,13 @@ ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-`--json` がない場合、JSON が先頭に続き、正規の宛先パス、マージ警告、クライアント固有の起動前ガイダンス、およびコンテキスト制限を省略する行数を含むモデル数が続きます (クライアントはこれらに対して独自のデフォルトを適用します)。
+`--json` がない場合、選択したクライアントのネイティブ形式で生成された設定が先頭に続き、正規の宛先パス、マージ警告、クライアント固有の起動前ガイダンス、およびコンテキスト制限を省略する行数を含むモデル数が続きます (クライアントはこれらに対して独自のデフォルトを適用します)。
 
 |クライアント |正規の宛先 |ダウンロードファイル名 |環境変数 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (設定すると `XDG_CONFIG_HOME` が勝ち) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | なし - ブロックにリテラル `opencodex-loopback` が入ります |
-| `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | なし - loopback placeholder |
+| `omp` | `~/.omp/agent/models.yml` (デフォルト。空の場合も `OMP_PROFILE` が `PI_PROFILE` より優先されます) | `omp-models.yaml` | なし - リテラル `opencodex-loopback` |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | なし - loopback placeholder |

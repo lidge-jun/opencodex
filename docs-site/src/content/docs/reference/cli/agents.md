@@ -187,7 +187,8 @@ opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and O
 not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
 This is load-bearing because both clients resolve `apiKey` while building their model lists and
 hide the whole provider when an existing config contains an unset env reference. The proxy never
-checks the generated placeholder on loopback.
+checks the generated placeholder on loopback. OMP supports provider-level headers, but this initial
+integration deliberately remains loopback-only; remote `x-opencodex-api-key` wiring is deferred.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by

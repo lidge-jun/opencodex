@@ -19,8 +19,10 @@ file, and removes it again. Seven clients work this way, each with a switch:
 Paths honor each client's own environment override where it has one. For OMP,
 `OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile
 uses `PI_CONFIG_DIR` as its root and ignores `PI_CODING_AGENT_DIR`; without a named profile,
-`PI_CODING_AGENT_DIR` wins. Relocated `HERMES_HOME`, `KIMI_CODE_HOME`, and `XDG_CONFIG_HOME`
-paths are likewise followed rather than guessed at. The table lists each client's default.
+`PI_CODING_AGENT_DIR` wins. OMP supports provider-level headers, but this initial integration
+is deliberately loopback-only; remote `x-opencodex-api-key` wiring is deferred. Relocated
+`HERMES_HOME`, `KIMI_CODE_HOME`, and `XDG_CONFIG_HOME` paths are likewise followed rather than
+guessed at. The table lists each client's default.
 
 OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects the
 file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state

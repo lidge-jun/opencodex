@@ -445,14 +445,13 @@ export interface ExportClientSpec {
    */
   buildContribution: BuildContribution;
   /**
-   * True when this client can only reach a loopback bind.
+   * True when the generated integration deliberately supports loopback only.
    *
    * `/v1/chat/completions` rejects bearer credentials and requires the
    * dedicated `x-opencodex-api-key` header (AUTH_MATRIX in
-   * src/server/auth-cors.ts). A client whose schema has no place to put that
-   * header therefore cannot authenticate against a remote bind at all — so we
-   * say so rather than exporting a config that 401s. Same reasoning as the
-   * Grok managed block's non-loopback refusal.
+   * src/server/auth-cors.ts). If this exporter cannot safely emit that header,
+   * it refuses a remote bind rather than generating a config that 401s. Same
+   * reasoning as the Grok managed block's non-loopback refusal.
    */
   loopbackOnly: boolean;
 }
@@ -1009,12 +1008,13 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     filename: "omp-models.yaml",
     destination: env => ompModelsConfigPath(env),
     apiKeyEnv: "",
-    exportHint: "OMP reads credentials from models.yml; loopback needs no key.",
+    exportHint: "OMP reads a non-secret placeholder from models.yml; loopback needs no key.",
     build: buildPiClientConfig,
     format: "yaml",
     summarize: summarizePi,
     buildContribution: buildOmpContribution,
-    // OMP's provider block has no dedicated admission-header field.
+    // OMP supports provider-level headers, but remote credential wiring is
+    // intentionally deferred from this initial loopback-only integration.
     loopbackOnly: true,
   },
   hermes: {
