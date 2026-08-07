@@ -4,7 +4,7 @@ import {
   OpenAiTierMigrationCollisionError,
   projectOpenAiTierMigration,
 } from "../src/providers/openai-tiers";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../src/types";
 
 const forward: OcxProviderConfig = {
   adapter: "openai-responses",
@@ -260,6 +260,38 @@ describe("OpenAI provider option migration matrix", () => {
       },
     }));
     expect(result.config.providers.openai.modelCosts).toEqual({ "gpt-5.6": bare });
+  });
+
+  test("prototype-named modelCosts keys survive migration as own properties", () => {
+    // JSON.parse creates an own "__proto__" data property (an object literal
+    // would route through the inherited setter and not create one).
+    const overlay = JSON.parse(
+      '{"__proto__": {"input": 1, "output": 2, "cacheRead": 0.1, "cacheWrite": 0}}',
+    ) as Record<string, ProviderCostOverlay>;
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts: overlay },
+      },
+    }));
+    const merged = result.config.providers.openai.modelCosts!;
+    expect(Object.hasOwn(merged, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(merged, "__proto__")?.value).toEqual(overlay["__proto__"]);
+  });
+
+  test("openai-multi/__proto__ key rewrites to an own __proto__ entry", () => {
+    const overlay = JSON.parse(
+      '{"openai-multi/__proto__": {"input": 3, "output": 4, "cacheRead": 0.2, "cacheWrite": 0}}',
+    ) as Record<string, ProviderCostOverlay>;
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts: overlay },
+      },
+    }));
+    const merged = result.config.providers.openai.modelCosts!;
+    expect(Object.hasOwn(merged, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(merged, "__proto__")?.value).toEqual(overlay["openai-multi/__proto__"]);
   });
 
   test("legacy multi with an out-of-bound overlay rate collides", () => {
