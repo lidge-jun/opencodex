@@ -4,7 +4,7 @@ import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
-import type { OcxProviderConfig } from "../types";
+import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
@@ -123,6 +123,25 @@ export function mergeKeyLoginProviderRow(
   };
 }
 
+/**
+ * Commit a fresh key-login provider row: merge operator-owned fields from the
+ * existing row (currently the modelCosts overlay), persist the merged row, and
+ * push the SAME merged row to a running proxy so its live config cannot diverge
+ * from disk (e.g. by replacing the overlay with catalog prices until reload).
+ * Returns the merged row that was persisted and notified.
+ */
+export async function commitKeyLoginProvider(
+  config: OcxConfig,
+  name: string,
+  provider: OcxProviderConfig,
+): Promise<OcxProviderConfig> {
+  const mergedProvider = mergeKeyLoginProviderRow(provider, config.providers[name]);
+  config.providers[name] = mergedProvider;
+  saveConfig(config);
+  await notifyRunningProxy(name, mergedProvider);
+  return mergedProvider;
+}
+
 async function handleKeyLogin(name: string): Promise<void> {
   const def = KEY_LOGIN_PROVIDERS[name];
   const preflightConfig = loadConfig();
@@ -165,9 +184,7 @@ async function handleKeyLogin(name: string): Promise<void> {
     console.error(`Error: ${commitCollision}.`);
     process.exit(1);
   }
-  config.providers[name] = mergeKeyLoginProviderRow(provider, config.providers[name]);
-  saveConfig(config);
-  await notifyRunningProxy(name, provider);
+  await commitKeyLoginProvider(config, name, provider);
   console.log(`✅ ${def.label} added. Try: ocx sync`);
 }
 
