@@ -8,7 +8,7 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
+import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
@@ -210,7 +210,14 @@ async function handleAdd(args: string[]): Promise<void> {
     provConfig.apiKeyTransport = apiKeyTransport;
   }
 
+  const existingProvider = config.providers[name];
   config.providers[name] = provConfig;
+  // A --force overwrite rotates the key/endpoint but must not drop a
+  // user-configured price overlay (same rule as the /api/providers path and
+  // the login paths); there is no explicit clear/replace flag yet.
+  if (existingProvider?.modelCosts !== undefined && provConfig.modelCosts === undefined) {
+    provConfig.modelCosts = existingProvider.modelCosts;
+  }
   if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
   if (setDefault) config.defaultProvider = name;
 
@@ -349,6 +356,7 @@ function handleShow(args: string[]): void {
   const prov = config.providers[name];
   const display = {
     ...prov,
+    ...(prov.modelCosts !== undefined ? { modelCosts: sanitizeModelCostsForDisplay(prov.modelCosts) } : {}),
     ...(prov.apiKey ? { apiKey: maskSecret(prov.apiKey) } : {}),
     ...(prov.apiKeyPool ? { apiKeyPool: prov.apiKeyPool.map(e => ({ ...e, key: maskSecret(e.key) })) } : {}),
   };

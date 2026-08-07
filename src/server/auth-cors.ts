@@ -13,13 +13,13 @@ import {
   providerModelCostsConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   retryOn429PolicyConfigError,
+  sanitizeModelCostsForDisplay,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
-import { MAX_COST4_RATE } from "../usage/expected-prices";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
-import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
+import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 
@@ -555,41 +555,6 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
   if (value !== undefined) out[key as string] = value as unknown;
 }
 
-/** True when `value` is a non-negative finite USD-per-1M-token rate. */
-function validRate(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_COST4_RATE;
-}
-
-/**
- * Serialize `providers.<name>.modelCosts` for the dashboard, copying ONLY the
- * four numeric rate fields per model. Extra hand-edited fields (which the load
- * validator ignores) must never reach the client, so secrets accidentally
- * nested under a cost row cannot leak through the DTO.
- */
-function sanitizeModelCosts(costs: unknown): Record<string, ProviderCostOverlay> | undefined {
-  if (!costs || typeof costs !== "object" || Array.isArray(costs)) return undefined;
-  // Null prototype so a model id like "__proto__" becomes an own row instead
-  // of mutating the map's prototype and vanishing from Object.keys().
-  const out: Record<string, ProviderCostOverlay> = Object.create(null) as Record<string, ProviderCostOverlay>;
-  for (const [modelId, entry] of Object.entries(costs)) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const rates = entry as Record<string, unknown>;
-    const input = rates.input;
-    const output = rates.output;
-    const cacheRead = rates.cacheRead;
-    const cacheWrite = rates.cacheWrite;
-    if (validRate(input) && validRate(output) && validRate(cacheRead) && validRate(cacheWrite)) {
-      // The DTO is served to the dashboard; a model id shaped like a pasted key
-      // must not be echoed back (validation errors already redact these).
-      // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
-      // distinct rows cannot collapse into one placeholder key.
-      if (redactSecretString(modelId) !== modelId) continue;
-      out[modelId] = { input, output, cacheRead, cacheWrite };
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 /** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
 export function safeConfigDTO(config: OcxConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
@@ -631,7 +596,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
-    const modelCosts = sanitizeModelCosts(provider.modelCosts);
+    const modelCosts = sanitizeModelCostsForDisplay(provider.modelCosts);
     if (modelCosts) dto.modelCosts = modelCosts;
     // Resolve the note by DESTINATION, not by name. A preset saved under a custom name is
     // still pointed at the same vendor route, and a usage restriction the user needs to see

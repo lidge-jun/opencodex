@@ -64,6 +64,7 @@ import {
   type OcxConfig,
   type OcxApiKeyEntry,
   type OcxProviderConfig,
+  type ProviderCostOverlay,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import {
@@ -743,6 +744,34 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
     }
   }
   return null;
+}
+
+/**
+ * Serialize `providers.<name>.modelCosts` for display: copy ONLY the four
+ * numeric rate fields per model and DROP secret-shaped model ids, so a pasted
+ * API key in a key position cannot be echoed back by CLI/DTO display paths.
+ * The result uses a null prototype so "__proto__" remains an own row.
+ */
+export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, ProviderCostOverlay> | undefined {
+  if (!costs || typeof costs !== "object" || Array.isArray(costs)) return undefined;
+  const out = Object.create(null) as Record<string, ProviderCostOverlay>;
+  for (const [modelId, entry] of Object.entries(costs)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const rates = entry as Record<string, unknown>;
+    const input = rates.input;
+    const output = rates.output;
+    const cacheRead = rates.cacheRead;
+    const cacheWrite = rates.cacheWrite;
+    const valid = (rate: unknown): rate is number =>
+      typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate <= MAX_COST4_RATE;
+    if (valid(input) && valid(output) && valid(cacheRead) && valid(cacheWrite)) {
+      // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
+      // distinct rows cannot collapse into one placeholder key.
+      if (redactSecretString(modelId) !== modelId) continue;
+      out[modelId] = { input, output, cacheRead, cacheWrite };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
@@ -2501,15 +2530,19 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
 function persistConfigUnlocked(config: OcxConfig): boolean {
   const configPath = getConfigPath();
   const bytes = JSON.stringify(config, null, 2) + "\n";
+  let unchanged = false;
   try {
-    if (readFileSync(configPath, "utf8") === bytes) return false;
+    unchanged = readFileSync(configPath, "utf8") === bytes;
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
   }
-  atomicWriteFile(configPath, bytes);
-  // Keep the runtime overlay registry in sync with every persist path
-  // (saveConfig and mutatePersistedConfig both funnel through here).
+  // Keep the runtime overlay registry in sync with EVERY persist path,
+  // including byte-identical saves: a cooperating CLI process may have written
+  // the same bytes (e.g. before a proxy notification), and Logs/Usage must
+  // adopt the overlay without waiting for a changed save or restart.
   refreshUserCostOverlays(config);
+  if (unchanged) return false;
+  atomicWriteFile(configPath, bytes);
   return true;
 }
 
