@@ -253,6 +253,25 @@ describe("Cursor request builder", () => {
     expect(request.messages.at(-1)?.role).toBe("user");
   });
 
+  test("omits assistant messages that carry only tool calls", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          { role: "user", content: "read it", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/composer-2.5",
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+            timestamp: 2,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([{ role: "user", content: "read it" }]);
+  });
+
   test("preserves Responses tools and tool choice for Cursor request context", () => {
     const tool = {
       name: "read_file",

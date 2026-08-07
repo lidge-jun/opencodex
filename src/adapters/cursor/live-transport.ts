@@ -14,6 +14,7 @@ import {
 } from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
 import { prepareCursorRawMessages, resolveActiveCursorImages, cursorIsTrailingToolResultContinuation } from "./images";
+import { cursorRequestMessagesFromRaw } from "./request-builder";
 import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
@@ -571,9 +572,14 @@ class LiveCursorTransport implements CursorTransport {
       storeCheckpoints: request.contextUsageStoreCheckpoints !== false,
     });
     // JPEG soft-cap rewrite for attach + view_image tool-result data URLs before encode.
+    // Rebuild text messages from the prepared raw channel so omission markers replace
+    // stale pre-rewrite content that activePromptText would otherwise prefer.
     const rawMessages = await prepareCursorRawMessages(request.rawMessages);
+    const messages = rawMessages === request.rawMessages
+      ? request.messages
+      : cursorRequestMessagesFromRaw(rawMessages);
     const selectedImages = await resolveActiveCursorImages(rawMessages, signal);
-    const preparedRequest = { ...request, rawMessages, selectedImages };
+    const preparedRequest = { ...request, messages, rawMessages, selectedImages };
     // Build the payload once. The estimate is only worth deriving when there is no
     // carry-forward to fall back on — with a carry present it would never be used (#373).
     const prepared = prepareCursorRunRequest(preparedRequest, {
